@@ -653,29 +653,60 @@ impl DynamicOcrService {
         match result {
             Ok(output) if output.status.success() => {
                 // Read all generated page images
-                let mut images = Vec::new();
-                let mut page = 1;
+                // pdftoppm creates files with zero-padded numbers: {output}-01.jpg, {output}-02.jpg, etc.
+                let mut page_files: Vec<String> = Vec::new();
 
-                loop {
-                    // pdftoppm creates files like: temp_output-1.jpg, temp_output-2.jpg, etc.
-                    let page_file = format!("{}-{}.jpg", temp_output, page);
-                    match fs::read(&page_file).await {
+                // Get just the filename part for matching
+                let output_basename = temp_output.rsplit('/').next().unwrap_or(&temp_output);
+
+                if let Ok(entries) = std::fs::read_dir(&self.storage_path) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            // Match files like: temp_ocr_UUID-01.jpg, temp_ocr_UUID-02.jpg
+                            if name.starts_with(output_basename)
+                                && name.ends_with(".jpg")
+                                && name.len() > output_basename.len()
+                            {
+                                page_files.push(path.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+
+                // Sort files to ensure correct page order
+                page_files.sort();
+
+                debug!(
+                    "Found {} page files for prefix {}",
+                    page_files.len(),
+                    output_basename
+                );
+
+                let mut images = Vec::new();
+                for page_file in &page_files {
+                    match fs::read(page_file).await {
                         Ok(image_data) => {
                             images.push(image_data);
-                            let _ = fs::remove_file(&page_file).await;
-                            page += 1;
+                            let _ = fs::remove_file(page_file).await;
                         }
-                        Err(_) => break,
+                        Err(e) => {
+                            warn!("Failed to read page image {}: {}", page_file, e);
+                        }
                     }
                 }
 
                 if images.is_empty() {
-                    warn!("pdftoppm produced no output files");
+                    warn!(
+                        "pdftoppm produced no output files (looked for prefix: {} in {})",
+                        output_basename, self.storage_path
+                    );
                     return Err(Error::AiService(
                         "PDF conversion produced no images".to_string(),
                     ));
                 }
 
+                debug!("Converted PDF to {} page images", images.len());
                 Ok(images)
             }
             Ok(output) => {
