@@ -47,6 +47,114 @@
             </header>
 
             <section class="doc-meta-section">
+                <h2 class="doc-section-title">Classification</h2>
+                <div class="doc-classification-grid">
+                    <div class="doc-classification-item">
+                        <label class="doc-classification-label">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            Correspondent
+                        </label>
+                        <form action="/documents/{{ document.id }}/correspondent" method="post" class="doc-classification-form" data-turbo="false">
+                            <select name="correspondent_id" class="doc-select" onchange="this.form.requestSubmit()">
+                                <option value="">None</option>
+                                {% for c in all_correspondents %}
+                                <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </form>
+                    </div>
+
+                    <div class="doc-classification-item">
+                        <label class="doc-classification-label">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                                <polyline points="14 2 14 8 20 8"/>
+                            </svg>
+                            Document Type
+                        </label>
+                        <form action="/documents/{{ document.id }}/document_type" method="post" class="doc-classification-form" data-turbo="false">
+                            <select name="document_type_id" class="doc-select" onchange="this.form.requestSubmit()">
+                                <option value="">None</option>
+                                {% for dt in all_document_types %}
+                                <option value="{{ dt.id }}" {% match document_type %}{% when Some with (dtype) %}{% if dt.id == dtype.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ dt.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="doc-tags-section" data-controller="tags" data-tags-document-id-value="{{ document.id }}">
+                    <label class="doc-classification-label">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                            <line x1="7" y1="7" x2="7.01" y2="7"/>
+                        </svg>
+                        Tags
+                    </label>
+                    <div class="doc-tags-list" data-tags-target="list">
+                        {% if tags.is_empty() %}
+                        <span class="doc-tags-empty" data-tags-target="empty">No tags</span>
+                        {% else %}
+                        {% for tag in tags %}
+                        <span class="doc-tag" data-tag-id="{{ tag.id }}" {% match tag.color %}{% when Some with (color) %}style="background-color: {{ color }}; color: white;"{% when None %}{% endmatch %}>
+                            {{ tag.name }}
+                            <button type="button" class="doc-tag-remove" title="Remove tag" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
+                        </span>
+                        {% endfor %}
+                        {% endif %}
+                    </div>
+                    <button type="button" class="doc-btn-manage-tags" data-action="click->tags#openModal">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19"/>
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                        </svg>
+                        Manage Tags
+                    </button>
+
+                    <!-- Tags Modal -->
+                    <div class="tags-modal" data-tags-target="modal" data-action="click->tags#backdropClick">
+                        <div class="tags-modal-content">
+                            <div class="tags-modal-header">
+                                <h3>Manage Tags</h3>
+                                <button type="button" class="tags-modal-close" data-action="click->tags#closeModal">&times;</button>
+                            </div>
+                            <div class="tags-modal-body">
+                                <div class="tags-modal-section">
+                                    <h4>Current Tags</h4>
+                                    <div class="tags-modal-current" data-tags-target="currentTags">
+                                        {% if tags.is_empty() %}
+                                        <span class="doc-tags-empty">No tags assigned</span>
+                                        {% else %}
+                                        {% for tag in tags %}
+                                        <span class="doc-tag" data-tag-id="{{ tag.id }}" {% match tag.color %}{% when Some with (color) %}style="background-color: {{ color }}; color: white;"{% when None %}{% endmatch %}>
+                                            {{ tag.name }}
+                                            <button type="button" class="doc-tag-remove" title="Remove tag" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
+                                        </span>
+                                        {% endfor %}
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="tags-modal-section">
+                                    <h4>Available Tags</h4>
+                                    <div class="tags-modal-available" data-tags-target="availableTags">
+                                        {% for t in all_tags %}
+                                        <button type="button" class="tag-option" data-action="click->tags#addTag" data-tag-id="{{ t.id }}" data-tag-name="{{ t.name }}" {% match t.color %}{% when Some with (color) %}data-tag-color="{{ color }}"{% when None %}{% endmatch %}>
+                                            <span class="tag-option-dot" {% match t.color %}{% when Some with (color) %}style="background-color: {{ color }}"{% when None %}style="background-color: #64748b"{% endmatch %}></span>
+                                            {{ t.name }}
+                                        </button>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="doc-meta-section">
                 <h2 class="doc-section-title">Properties</h2>
                 <div class="doc-meta-grid">
                     <div class="doc-meta-item">

@@ -551,6 +551,149 @@
                 }
             }
         });
+
+        // Tags Controller (manage document tags via modal)
+        Stimulus.register("tags", class extends Controller {
+            static targets = ["modal", "list", "currentTags", "availableTags", "empty"]
+            static values = { documentId: String }
+
+            openModal() {
+                if (this.hasModalTarget) {
+                    this.modalTarget.classList.add("active");
+                    document.body.style.overflow = "hidden";
+                }
+            }
+
+            closeModal() {
+                if (this.hasModalTarget) {
+                    this.modalTarget.classList.remove("active");
+                    document.body.style.overflow = "";
+                }
+            }
+
+            backdropClick(event) {
+                if (event.target === this.modalTarget) {
+                    this.closeModal();
+                }
+            }
+
+            async addTag(event) {
+                const tagId = event.currentTarget.dataset.tagId;
+                const tagName = event.currentTarget.dataset.tagName;
+                const tagColor = event.currentTarget.dataset.tagColor;
+
+                try {
+                    const formData = new FormData();
+                    formData.append("tag_id", tagId);
+
+                    const response = await fetch(`/documents/${this.documentIdValue}/tags`, {
+                        method: "POST",
+                        body: formData
+                    });
+
+                    if (response.ok || response.redirected) {
+                        // Add tag to UI
+                        this.addTagToUI(tagId, tagName, tagColor);
+                        window.showToast?.(`Tag "${tagName}" added`, "success");
+                    } else {
+                        throw new Error("Failed to add tag");
+                    }
+                } catch (error) {
+                    console.error("Error adding tag:", error);
+                    window.showToast?.("Failed to add tag", "error");
+                }
+            }
+
+            async removeTag(event) {
+                const tagId = event.currentTarget.dataset.tagId;
+
+                try {
+                    const response = await fetch(`/documents/${this.documentIdValue}/tags/${tagId}`, {
+                        method: "POST"
+                    });
+
+                    if (response.ok || response.redirected) {
+                        // Remove tag from UI
+                        this.removeTagFromUI(tagId);
+                        window.showToast?.("Tag removed", "success");
+                    } else {
+                        throw new Error("Failed to remove tag");
+                    }
+                } catch (error) {
+                    console.error("Error removing tag:", error);
+                    window.showToast?.("Failed to remove tag", "error");
+                }
+            }
+
+            addTagToUI(tagId, tagName, tagColor) {
+                // Remove "No tags" placeholder
+                if (this.hasEmptyTarget) {
+                    this.emptyTarget.remove();
+                }
+                const emptyInModal = this.currentTagsTarget?.querySelector(".doc-tags-empty");
+                if (emptyInModal) {
+                    emptyInModal.remove();
+                }
+
+                // Create tag element
+                const tagHtml = `
+                    <span class="doc-tag" data-tag-id="${tagId}" ${tagColor ? `style="background-color: ${tagColor}; color: white;"` : ""}>
+                        ${this.escapeHtml(tagName)}
+                        <button type="button" class="doc-tag-remove" title="Remove tag" data-action="click->tags#removeTag" data-tag-id="${tagId}">&times;</button>
+                    </span>
+                `;
+
+                // Add to main list
+                if (this.hasListTarget) {
+                    this.listTarget.insertAdjacentHTML("beforeend", tagHtml);
+                }
+
+                // Add to modal current tags
+                if (this.hasCurrentTagsTarget) {
+                    this.currentTagsTarget.insertAdjacentHTML("beforeend", tagHtml);
+                }
+
+                // Hide the tag in available tags
+                const availableTag = this.availableTagsTarget?.querySelector(`[data-tag-id="${tagId}"]`);
+                if (availableTag) {
+                    availableTag.style.display = "none";
+                }
+            }
+
+            removeTagFromUI(tagId) {
+                // Remove from main list
+                const tagInList = this.listTarget?.querySelector(`[data-tag-id="${tagId}"]`);
+                if (tagInList) {
+                    tagInList.remove();
+                }
+
+                // Remove from modal current tags
+                const tagInModal = this.currentTagsTarget?.querySelector(`[data-tag-id="${tagId}"]`);
+                if (tagInModal) {
+                    tagInModal.remove();
+                }
+
+                // Show the tag in available tags again
+                const availableTag = this.availableTagsTarget?.querySelector(`[data-tag-id="${tagId}"]`);
+                if (availableTag) {
+                    availableTag.style.display = "";
+                }
+
+                // Show "No tags" if empty
+                if (this.hasListTarget && this.listTarget.children.length === 0) {
+                    this.listTarget.innerHTML = '<span class="doc-tags-empty" data-tags-target="empty">No tags</span>';
+                }
+                if (this.hasCurrentTagsTarget && this.currentTagsTarget.querySelectorAll(".doc-tag").length === 0) {
+                    this.currentTagsTarget.innerHTML = '<span class="doc-tags-empty">No tags assigned</span>';
+                }
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement("div");
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        });
     </script>
 </head>
 <body data-controller="dropzone sse toast upload-modal"
@@ -635,6 +778,12 @@
                 </form>
             </div>
             <nav class="header-nav">
+                <a href="/manage" class="nav-link" aria-label="Manage">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                        <line x1="7" y1="7" x2="7.01" y2="7"/>
+                    </svg>
+                </a>
                 <a href="/settings" class="nav-link" aria-label="Settings">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="3"/>

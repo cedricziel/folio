@@ -4,14 +4,16 @@ use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::header,
-    response::{Html, IntoResponse, Response},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use folio_core::models::{CreateDocument, Document};
+use folio_core::models::{
+    Correspondent, CreateDocument, Document, DocumentType, Tag, UpdateDocument,
+};
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
@@ -28,6 +30,13 @@ pub fn router() -> Router<AppState> {
         .route("/documents/:id", get(document_detail))
         .route("/documents/:id/thumbnail", get(document_thumbnail))
         .route("/documents/:id/delete", post(delete_document))
+        .route(
+            "/documents/:id/correspondent",
+            post(set_document_correspondent),
+        )
+        .route("/documents/:id/document_type", post(set_document_type))
+        .route("/documents/:id/tags", post(add_document_tag))
+        .route("/documents/:id/tags/:tag_id", post(remove_document_tag))
 }
 
 /// Index page template
@@ -36,15 +45,71 @@ pub fn router() -> Router<AppState> {
 struct IndexTemplate {
     title: String,
     documents: Vec<Document>,
+    correspondents: Vec<Correspondent>,
+    document_types: Vec<DocumentType>,
+    tags: Vec<Tag>,
+    filter_correspondent_id: Option<String>,
+    filter_document_type_id: Option<String>,
+    filter_tag_id: Option<String>,
+}
+
+/// Query parameters for filtering documents
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct FilterQuery {
+    correspondent_id: Option<String>,
+    document_type_id: Option<String>,
+    tag_id: Option<String>,
 }
 
 /// Main index page
-async fn index_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    let documents = state.document_repo.list(None).await?;
+async fn index_page(
+    State(state): State<AppState>,
+    Query(filter_query): Query<FilterQuery>,
+) -> ApiResult<Html<String>> {
+    use folio_core::models::DocumentFilter;
+
+    // Parse UUIDs from strings, treating empty strings as None
+    let correspondent_id = filter_query
+        .correspondent_id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let document_type_id = filter_query
+        .document_type_id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let tag_id = filter_query
+        .tag_id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(s).ok());
+
+    let filter = if correspondent_id.is_some() || document_type_id.is_some() || tag_id.is_some() {
+        Some(DocumentFilter {
+            correspondent_id,
+            document_type_id,
+            tag_ids: tag_id.map(|id| vec![id]),
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
+    let documents = state.document_repo.list(filter).await?;
+    let correspondents = state.correspondent_repo.list().await?;
+    let document_types = state.document_type_repo.list().await?;
+    let tags = state.tag_repo.list().await?;
 
     let template = IndexTemplate {
         title: "Folio - Document Management".to_string(),
         documents,
+        correspondents,
+        document_types,
+        tags,
+        filter_correspondent_id: correspondent_id.map(|id| id.to_string()),
+        filter_document_type_id: document_type_id.map(|id| id.to_string()),
+        filter_tag_id: tag_id.map(|id| id.to_string()),
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -75,6 +140,12 @@ async fn documents_list(State(state): State<AppState>) -> ApiResult<Html<String>
 #[template(path = "document_view.html")]
 struct DocumentViewTemplate {
     document: Document,
+    correspondent: Option<Correspondent>,
+    document_type: Option<DocumentType>,
+    tags: Vec<Tag>,
+    all_correspondents: Vec<Correspondent>,
+    all_document_types: Vec<DocumentType>,
+    all_tags: Vec<Tag>,
 }
 
 /// Document detail (full page view)
@@ -88,7 +159,41 @@ async fn document_detail(
         .await?
         .ok_or_else(|| crate::error::ApiError::not_found("Document not found"))?;
 
-    let template = DocumentViewTemplate { document };
+    // Fetch related entities
+    let correspondent = if let Some(correspondent_id) = document.correspondent_id {
+        state
+            .correspondent_repo
+            .find_by_id(correspondent_id)
+            .await?
+    } else {
+        None
+    };
+
+    let document_type = if let Some(document_type_id) = document.document_type_id {
+        state
+            .document_type_repo
+            .find_by_id(document_type_id)
+            .await?
+    } else {
+        None
+    };
+
+    let tags = state.document_repo.get_tags(document.id).await?;
+
+    // Fetch all options for editing
+    let all_correspondents = state.correspondent_repo.list().await?;
+    let all_document_types = state.document_type_repo.list().await?;
+    let all_tags = state.tag_repo.list().await?;
+
+    let template = DocumentViewTemplate {
+        document,
+        correspondent,
+        document_type,
+        tags,
+        all_correspondents,
+        all_document_types,
+        all_tags,
+    };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering document view: {}", e)
@@ -371,4 +476,108 @@ async fn search_documents(
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering search results: {}", e)
     })))
+}
+
+// =============================================================================
+// Document metadata form handlers (for page forms with redirects)
+// =============================================================================
+
+/// Form data for setting correspondent
+#[derive(Debug, serde::Deserialize)]
+pub struct SetCorrespondentForm {
+    correspondent_id: Option<String>,
+}
+
+/// Set document correspondent (form handler with redirect)
+async fn set_document_correspondent(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<SetCorrespondentForm>,
+) -> ApiResult<Response> {
+    let correspondent_id = form
+        .correspondent_id
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(&s).ok());
+
+    state
+        .document_repo
+        .update(
+            id,
+            UpdateDocument {
+                correspondent_id: Some(correspondent_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+}
+
+/// Form data for setting document type
+#[derive(Debug, serde::Deserialize)]
+pub struct SetDocumentTypeForm {
+    document_type_id: Option<String>,
+}
+
+/// Set document type (form handler with redirect)
+async fn set_document_type(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<SetDocumentTypeForm>,
+) -> ApiResult<Response> {
+    let document_type_id = form
+        .document_type_id
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(&s).ok());
+
+    state
+        .document_repo
+        .update(
+            id,
+            UpdateDocument {
+                document_type_id: Some(document_type_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+}
+
+/// Form data for adding a tag
+#[derive(Debug, serde::Deserialize)]
+pub struct AddTagForm {
+    tag_id: Option<String>,
+}
+
+/// Add a tag to a document (form handler with redirect)
+async fn add_document_tag(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<AddTagForm>,
+) -> ApiResult<Response> {
+    if let Some(tag_id_str) = form.tag_id.filter(|s| !s.is_empty()) {
+        if let Ok(tag_id) = Uuid::parse_str(&tag_id_str) {
+            state.document_repo.add_tag(id, tag_id).await?;
+        }
+    }
+
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+}
+
+/// Path parameters for removing a tag
+#[derive(Debug, serde::Deserialize)]
+pub struct RemoveTagPath {
+    id: Uuid,
+    tag_id: Uuid,
+}
+
+/// Remove a tag from a document (form handler with redirect)
+async fn remove_document_tag(
+    State(state): State<AppState>,
+    Path(path): Path<RemoveTagPath>,
+) -> ApiResult<Response> {
+    state.document_repo.remove_tag(path.id, path.tag_id).await?;
+
+    Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
 }

@@ -1,7 +1,10 @@
 //! API routes
 
+mod correspondents;
+mod document_types;
 mod documents;
 mod events;
+mod manage;
 mod pages;
 mod settings;
 mod tags;
@@ -18,6 +21,8 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", api_router())
         // Page routes (HTMX)
         .merge(pages::router())
+        // Management routes (correspondents, document types, tags)
+        .merge(manage::router())
         // Settings routes
         .merge(settings::router())
         // SSE events
@@ -44,4 +49,6 @@ fn api_router() -> Router<AppState> {
     Router::new()
         .nest("/documents", documents::router())
         .nest("/tags", tags::router())
+        .nest("/correspondents", correspondents::router())
+        .nest("/document_types", document_types::router())
 }

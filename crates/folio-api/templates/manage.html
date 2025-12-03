@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="manage-section">
+    <div class="manage-header">
+        <h2>Manage</h2>
+        <a href="/" class="btn-secondary">Back to Documents</a>
+    </div>
+
+    <div class="manage-grid">
+        <!-- Correspondents -->
+        <div class="manage-card">
+            <div class="manage-card-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    Correspondents
+                </h3>
+                <span class="manage-count">{{ correspondents.len() }}</span>
+            </div>
+            <p class="manage-description">People or organizations that send or receive documents.</p>
+
+            <form action="/manage/correspondents/create" method="post" class="manage-add-form">
+                <input type="text" name="name" placeholder="New correspondent name" required>
+                <button type="submit">Add</button>
+            </form>
+
+            <turbo-frame id="correspondents-list">
+                {% include "partials/correspondents_list.html" %}
+            </turbo-frame>
+        </div>
+
+        <!-- Document Types -->
+        <div class="manage-card">
+            <div class="manage-card-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
+                    Document Types
+                </h3>
+                <span class="manage-count">{{ document_types.len() }}</span>
+            </div>
+            <p class="manage-description">Categories to classify your documents.</p>
+
+            <form action="/manage/document_types/create" method="post" class="manage-add-form">
+                <input type="text" name="name" placeholder="New document type" required>
+                <button type="submit">Add</button>
+            </form>
+
+            <turbo-frame id="document-types-list">
+                {% include "partials/document_types_list.html" %}
+            </turbo-frame>
+        </div>
+
+        <!-- Tags -->
+        <div class="manage-card">
+            <div class="manage-card-header">
+                <h3>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                        <line x1="7" y1="7" x2="7.01" y2="7"/>
+                    </svg>
+                    Tags
+                </h3>
+                <span class="manage-count">{{ tags.len() }}</span>
+            </div>
+            <p class="manage-description">Labels to organize and filter documents.</p>
+
+            <form action="/manage/tags/create" method="post" class="manage-add-form">
+                <div class="tag-form-row">
+                    <input type="text" name="name" placeholder="New tag name" required>
+                    <input type="color" name="color" value="#2563eb" class="color-picker" title="Tag color">
+                </div>
+                <button type="submit">Add</button>
+            </form>
+
+            <turbo-frame id="tags-list">
+                {% include "partials/tags_list.html" %}
+            </turbo-frame>
+        </div>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,10 @@
+<div class="manage-edit-inline">
+    <form action="/manage/correspondents/{{ correspondent.id }}/update" method="post"
+          data-turbo-frame="correspondents-list">
+        <input type="text" name="name" value="{{ correspondent.name }}" required autofocus>
+        <div class="manage-edit-actions">
+            <button type="submit" class="btn-small">Save</button>
+            <a href="/manage/correspondents" class="btn-small btn-secondary" data-turbo-frame="correspondents-list">Cancel</a>
+        </div>
+    </form>
+</div>

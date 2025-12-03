@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use folio_core::models::{CreateDocument, Document, DocumentFilter};
+use axum::response::{IntoResponse, Redirect, Response};
+
+use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -18,6 +20,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_documents).post(create_document))
         .route("/{id}", get(get_document).delete(delete_document))
+        .route("/{id}/download", get(download_document))
+        .route("/{id}/correspondent", post(set_correspondent))
+        .route("/{id}/document_type", post(set_document_type))
+        .route("/{id}/tags", post(add_tag))
+        .route("/{id}/tags/{tag_id}", post(remove_tag))
         .route("/upload", post(upload_document))
         .route("/search", post(search_documents))
 }
@@ -264,4 +271,146 @@ async fn search_documents(
     }
 
     Ok(Json(SearchResponse { results }))
+}
+
+/// Download a document file
+async fn download_document(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Response> {
+    let document = state
+        .document_repo
+        .find_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))?;
+
+    let file_path = document
+        .file_path
+        .ok_or_else(|| ApiError::not_found("Document has no file"))?;
+
+    let storage = folio_infra::FileStorage::new(&state.storage_path);
+    let data = storage
+        .read(&file_path)
+        .await
+        .map_err(|_| ApiError::internal("Failed to read file"))?;
+
+    let mime_type = document
+        .mime_type
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+
+    let filename = document
+        .original_filename
+        .unwrap_or_else(|| format!("document-{}", id));
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, mime_type),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", filename),
+            ),
+        ],
+        data,
+    )
+        .into_response())
+}
+
+/// Form data for setting correspondent
+#[derive(Debug, Deserialize)]
+pub struct SetCorrespondentForm {
+    correspondent_id: Option<String>,
+}
+
+/// Set document correspondent (form handler with redirect)
+async fn set_correspondent(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<SetCorrespondentForm>,
+) -> ApiResult<Response> {
+    let correspondent_id = form
+        .correspondent_id
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(&s).ok());
+
+    state
+        .document_repo
+        .update(
+            id,
+            UpdateDocument {
+                correspondent_id: Some(correspondent_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+}
+
+/// Form data for setting document type
+#[derive(Debug, Deserialize)]
+pub struct SetDocumentTypeForm {
+    document_type_id: Option<String>,
+}
+
+/// Set document type (form handler with redirect)
+async fn set_document_type(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<SetDocumentTypeForm>,
+) -> ApiResult<Response> {
+    let document_type_id = form
+        .document_type_id
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(&s).ok());
+
+    state
+        .document_repo
+        .update(
+            id,
+            UpdateDocument {
+                document_type_id: Some(document_type_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+}
+
+/// Form data for adding a tag
+#[derive(Debug, Deserialize)]
+pub struct AddTagForm {
+    tag_id: Option<String>,
+}
+
+/// Add a tag to a document (form handler with redirect)
+async fn add_tag(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<AddTagForm>,
+) -> ApiResult<Response> {
+    if let Some(tag_id_str) = form.tag_id.filter(|s| !s.is_empty()) {
+        if let Ok(tag_id) = Uuid::parse_str(&tag_id_str) {
+            state.document_repo.add_tag(id, tag_id).await?;
+        }
+    }
+
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+}
+
+/// Path parameters for removing a tag
+#[derive(Debug, Deserialize)]
+pub struct RemoveTagPath {
+    id: Uuid,
+    tag_id: Uuid,
+}
+
+/// Remove a tag from a document (form handler with redirect)
+async fn remove_tag(
+    State(state): State<AppState>,
+    Path(path): Path<RemoveTagPath>,
+) -> ApiResult<Response> {
+    state.document_repo.remove_tag(path.id, path.tag_id).await?;
+
+    Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
 }

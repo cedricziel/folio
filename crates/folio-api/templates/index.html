@@ -3,22 +3,13 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="documents-section" data-controller="view-toggle">
+<section class="documents-section" data-controller="view-toggle filter">
     <div class="section-header">
         <div class="section-title-group">
             <h2>Documents</h2>
             <span class="document-count">{{ documents.len() }} {% if documents.len() == 1 %}document{% else %}documents{% endif %}</span>
         </div>
         <div class="section-controls">
-            <div class="sort-control">
-                <label for="sort-select" class="visually-hidden">Sort by</label>
-                <select id="sort-select" class="sort-select" onchange="window.location.href='/?sort=' + this.value">
-                    <option value="newest">Newest first</option>
-                    <option value="oldest">Oldest first</option>
-                    <option value="name-asc">Name A-Z</option>
-                    <option value="name-desc">Name Z-A</option>
-                </select>
-            </div>
             <div class="view-toggle">
                 <button type="button" class="view-btn active"
                         data-view-toggle-target="listBtn"
@@ -41,6 +32,67 @@
             </div>
         </div>
     </div>
+
+    <!-- Filters -->
+    <div class="filters-bar">
+        <form action="/" method="get" class="filters-form" id="filter-form">
+            <div class="filter-group">
+                <label for="filter-correspondent" class="filter-label">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    Correspondent
+                </label>
+                <select id="filter-correspondent" name="correspondent_id" class="filter-select" onchange="document.getElementById('filter-form').submit()">
+                    <option value="">All</option>
+                    {% for c in correspondents %}
+                    {% let c_id = c.id.to_string() %}
+                    <option value="{{ c_id }}" {% match filter_correspondent_id %}{% when Some with (fid) %}{% if c_id.as_str() == fid.as_str() %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="filter-doctype" class="filter-label">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                    </svg>
+                    Type
+                </label>
+                <select id="filter-doctype" name="document_type_id" class="filter-select" onchange="document.getElementById('filter-form').submit()">
+                    <option value="">All</option>
+                    {% for dt in document_types %}
+                    {% let dt_id = dt.id.to_string() %}
+                    <option value="{{ dt_id }}" {% match filter_document_type_id %}{% when Some with (fid) %}{% if dt_id.as_str() == fid.as_str() %}selected{% endif %}{% when None %}{% endmatch %}>{{ dt.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label for="filter-tag" class="filter-label">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+                        <line x1="7" y1="7" x2="7.01" y2="7"/>
+                    </svg>
+                    Tag
+                </label>
+                <select id="filter-tag" name="tag_id" class="filter-select" onchange="document.getElementById('filter-form').submit()">
+                    <option value="">All</option>
+                    {% for t in tags %}
+                    {% let t_id = t.id.to_string() %}
+                    <option value="{{ t_id }}" {% match filter_tag_id %}{% when Some with (fid) %}{% if t_id.as_str() == fid.as_str() %}selected{% endif %}{% when None %}{% endmatch %}>{{ t.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            {% if filter_correspondent_id.is_some() || filter_document_type_id.is_some() || filter_tag_id.is_some() %}
+            <a href="/" class="filter-clear">Clear filters</a>
+            {% endif %}
+        </form>
+    </div>
+
     <turbo-frame id="documents-list">
         <div class="documents-container view-list" data-view-toggle-target="list">
             {% include "partials/documents_list.html" %}
