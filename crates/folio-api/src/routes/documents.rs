@@ -26,7 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/tags", post(add_tag))
         .route("/{id}/tags/{tag_id}", post(remove_tag))
         .route("/upload", post(upload_document))
-        .route("/search", post(search_documents))
+        .route("/search", get(search_documents_get).post(search_documents))
 }
 
 /// Query parameters for listing documents
@@ -218,10 +218,18 @@ async fn upload_document(
     Ok(Json(document))
 }
 
-/// Search request body
+/// Search request body (for POST)
 #[derive(Debug, Deserialize)]
 pub struct SearchRequest {
     query: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
+}
+
+/// Search query parameters (for GET)
+#[derive(Debug, Deserialize)]
+pub struct SearchQueryParams {
+    q: String,
     #[serde(default = "default_limit")]
     limit: usize,
 }
@@ -257,6 +265,37 @@ async fn search_documents(
     let search_results = state
         .search_service
         .search(&query_embedding, req.limit)
+        .await?;
+
+    // Fetch full document details
+    let mut results = Vec::new();
+    for result in search_results {
+        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
+            results.push(SearchResultWithDocument {
+                document,
+                score: result.score,
+            });
+        }
+    }
+
+    Ok(Json(SearchResponse { results }))
+}
+
+/// Search documents by semantic similarity (GET handler for command palette)
+async fn search_documents_get(
+    State(state): State<AppState>,
+    Query(params): Query<SearchQueryParams>,
+) -> ApiResult<Json<SearchResponse>> {
+    // Generate embedding for query
+    let query_embedding = state
+        .embedding_service
+        .generate_embedding(&params.q)
+        .await?;
+
+    // Search for similar documents
+    let search_results = state
+        .search_service
+        .search(&query_embedding, params.limit)
         .await?;
 
     // Fetch full document details
