@@ -15,9 +15,9 @@
 
     <div class="doc-view-layout">
         <!-- Document Preview -->
-        <div class="doc-preview">
+        <div class="doc-preview" data-controller="page-viewer" data-page-viewer-document-id-value="{{ document.id }}" data-page-viewer-page-count-value="{% match document.page_count %}{% when Some with (count) %}{{ count }}{% when None %}1{% endmatch %}">
             <div class="doc-preview-frame">
-                <img src="/documents/{{ document.id }}/thumbnail" alt="{{ document.title }}" class="doc-preview-image" />
+                <img src="/documents/{{ document.id }}/page/1/thumbnail" alt="{{ document.title }}" class="doc-preview-image" data-page-viewer-target="image" />
                 <div class="doc-preview-overlay">
                     {% if document.file_path.is_some() %}
                     <a href="/api/documents/{{ document.id }}/download" class="doc-download-btn" download>
@@ -31,6 +31,27 @@
                     {% endif %}
                 </div>
             </div>
+            {% if show_page_nav %}
+            {% match document.page_count %}
+            {% when Some with (page_count) %}
+            <div class="doc-page-nav">
+                <button type="button" class="doc-page-nav-btn" data-action="click->page-viewer#prevPage" data-page-viewer-target="prevBtn" disabled>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                </button>
+                <span class="doc-page-info">
+                    <span data-page-viewer-target="currentPage">1</span> / {{ page_count }}
+                </span>
+                <button type="button" class="doc-page-nav-btn" data-action="click->page-viewer#nextPage" data-page-viewer-target="nextBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="9 18 15 12 9 6"/>
+                    </svg>
+                </button>
+            </div>
+            {% when None %}
+            {% endmatch %}
+            {% endif %}
         </div>
 
         <!-- Document Details -->
@@ -182,6 +203,15 @@
                         <span class="doc-meta-label">Last Modified</span>
                         <span class="doc-meta-value">{{ document.updated_at.format("%B %d, %Y at %H:%M") }}</span>
                     </div>
+
+                    {% match document.page_count %}
+                    {% when Some with (count) %}
+                    <div class="doc-meta-item">
+                        <span class="doc-meta-label">Pages</span>
+                        <span class="doc-meta-value">{{ count }}</span>
+                    </div>
+                    {% when None %}
+                    {% endmatch %}
                 </div>
             </section>
 
@@ -222,6 +252,16 @@
                         </svg>
                         Download
                     </a>
+                    <form action="/documents/{{ document.id }}/reprocess" method="post" class="doc-action-form" data-turbo="false">
+                        <button type="submit" class="doc-action-btn doc-action-secondary">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M23 4v6h-6"/>
+                                <path d="M1 20v-6h6"/>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                            </svg>
+                            Reprocess
+                        </button>
+                    </form>
                     {% endif %}
                     <form action="/documents/{{ document.id }}/delete" method="post"
                           data-controller="confirm"

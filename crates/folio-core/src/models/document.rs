@@ -32,6 +32,9 @@ pub struct Document {
     /// Document type classification
     pub document_type_id: Option<Id>,
 
+    /// Number of pages in the document (for PDFs and multi-page images)
+    pub page_count: Option<u32>,
+
     /// When the document was created in the system
     pub created_at: DateTime<Utc>,
 
@@ -52,6 +55,7 @@ impl Document {
             mime_type: None,
             correspondent_id: None,
             document_type_id: None,
+            page_count: None,
             created_at: now,
             updated_at: now,
         }

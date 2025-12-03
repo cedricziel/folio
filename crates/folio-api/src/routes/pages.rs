@@ -29,6 +29,10 @@ pub fn router() -> Router<AppState> {
         // Parameterized routes come last
         .route("/documents/:id", get(document_detail))
         .route("/documents/:id/thumbnail", get(document_thumbnail))
+        .route(
+            "/documents/:id/page/:page/thumbnail",
+            get(document_page_thumbnail),
+        )
         .route("/documents/:id/delete", post(delete_document))
         .route(
             "/documents/:id/correspondent",
@@ -37,6 +41,7 @@ pub fn router() -> Router<AppState> {
         .route("/documents/:id/document_type", post(set_document_type))
         .route("/documents/:id/tags", post(add_document_tag))
         .route("/documents/:id/tags/:tag_id", post(remove_document_tag))
+        .route("/documents/:id/reprocess", post(reprocess_document))
 }
 
 /// Index page template
@@ -146,6 +151,7 @@ struct DocumentViewTemplate {
     all_correspondents: Vec<Correspondent>,
     all_document_types: Vec<DocumentType>,
     all_tags: Vec<Tag>,
+    show_page_nav: bool,
 }
 
 /// Document detail (full page view)
@@ -185,6 +191,8 @@ async fn document_detail(
     let all_document_types = state.document_type_repo.list().await?;
     let all_tags = state.tag_repo.list().await?;
 
+    let show_page_nav = document.page_count.map(|c| c > 1).unwrap_or(false);
+
     let template = DocumentViewTemplate {
         document,
         correspondent,
@@ -193,6 +201,7 @@ async fn document_detail(
         all_correspondents,
         all_document_types,
         all_tags,
+        show_page_nav,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -259,6 +268,49 @@ async fn document_thumbnail(
             <text x="50" y="60" text-anchor="middle" fill="white" font-family="sans-serif" font-size="12" font-weight="bold">FILE</text>
         </svg>"##
     };
+
+    Ok(([(header::CONTENT_TYPE, "image/svg+xml")], placeholder).into_response())
+}
+
+/// Document page thumbnail (serves generated thumbnail for a specific page)
+async fn document_page_thumbnail(
+    State(state): State<AppState>,
+    Path((id, page)): Path<(Uuid, u32)>,
+) -> ApiResult<Response> {
+    let document = state
+        .document_repo
+        .find_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))?;
+
+    // Validate page number
+    if page == 0 {
+        return Err(ApiError::bad_request("Page number must be at least 1"));
+    }
+
+    if let Some(page_count) = document.page_count {
+        if page > page_count {
+            return Err(ApiError::not_found("Page not found"));
+        }
+    }
+
+    // Try to serve generated page thumbnail
+    if state.thumbnail_service.page_exists(id, page).await {
+        if let Ok(data) = state.thumbnail_service.read_page(id, page).await {
+            return Ok(([(header::CONTENT_TYPE, "image/jpeg")], data).into_response());
+        }
+    }
+
+    // Fallback: return a placeholder SVG for the page
+    let placeholder = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 140" width="100" height="140">
+            <rect width="100" height="140" fill="#f1f5f9"/>
+            <path d="M15 10h50l15 15v100a5 5 0 01-5 5H15a5 5 0 01-5-5V15a5 5 0 015-5z" fill="#94a3b8"/>
+            <path d="M65 10v15h15" fill="#64748b"/>
+            <text x="50" y="80" text-anchor="middle" fill="white" font-family="sans-serif" font-size="16" font-weight="bold">{}</text>
+        </svg>"##,
+        page
+    );
 
     Ok(([(header::CONTENT_TYPE, "image/svg+xml")], placeholder).into_response())
 }
@@ -407,6 +459,33 @@ async fn delete_document(
         .unwrap_or_else(|e| format!("Error rendering delete success: {}", e));
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
+}
+
+/// Reprocess a document (re-run OCR, thumbnails, embeddings)
+async fn reprocess_document(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Response> {
+    // Verify document exists and has a file
+    let document = state
+        .document_repo
+        .find_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))?;
+
+    if document.file_path.is_none() {
+        return Err(ApiError::bad_request("Document has no file to process"));
+    }
+
+    // Queue a reprocessing job
+    state
+        .job_queue
+        .enqueue(JobType::ProcessDocument { document_id: id })
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to queue reprocessing: {}", e)))?;
+
+    // Redirect back to document with a success message
+    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
 }
 
 /// Search query parameters

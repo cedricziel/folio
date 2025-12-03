@@ -694,6 +694,60 @@
                 return div.innerHTML;
             }
         });
+
+        // Page Viewer Controller (multi-page document navigation)
+        Stimulus.register("page-viewer", class extends Controller {
+            static targets = ["image", "currentPage", "prevBtn", "nextBtn"]
+            static values = { documentId: String, pageCount: { type: Number, default: 1 } }
+
+            connect() {
+                this.currentPage = 1;
+                this.updateButtons();
+            }
+
+            prevPage() {
+                if (this.currentPage > 1) {
+                    this.currentPage--;
+                    this.loadPage();
+                }
+            }
+
+            nextPage() {
+                if (this.currentPage < this.pageCountValue) {
+                    this.currentPage++;
+                    this.loadPage();
+                }
+            }
+
+            loadPage() {
+                if (this.hasImageTarget) {
+                    // Add loading state
+                    this.imageTarget.style.opacity = "0.5";
+
+                    const newSrc = `/documents/${this.documentIdValue}/page/${this.currentPage}/thumbnail`;
+                    this.imageTarget.src = newSrc;
+
+                    this.imageTarget.onload = () => {
+                        this.imageTarget.style.opacity = "1";
+                    };
+                }
+
+                if (this.hasCurrentPageTarget) {
+                    this.currentPageTarget.textContent = this.currentPage;
+                }
+
+                this.updateButtons();
+            }
+
+            updateButtons() {
+                if (this.hasPrevBtnTarget) {
+                    this.prevBtnTarget.disabled = this.currentPage <= 1;
+                }
+                if (this.hasNextBtnTarget) {
+                    this.nextBtnTarget.disabled = this.currentPage >= this.pageCountValue;
+                }
+            }
+        });
     </script>
 </head>
 <body data-controller="dropzone sse toast upload-modal"

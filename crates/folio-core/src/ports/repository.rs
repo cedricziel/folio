@@ -30,6 +30,9 @@ pub trait DocumentRepository: Send + Sync {
     /// Update the file path for a document
     async fn set_file_path(&self, id: Id, file_path: &str) -> Result<()>;
 
+    /// Update the page count for a document
+    async fn set_page_count(&self, id: Id, page_count: u32) -> Result<()>;
+
     /// Get tags for a document
     async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>>;
 

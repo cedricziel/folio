@@ -894,6 +894,55 @@ button:active {
     transform: translateY(-1px);
 }
 
+/* Page Navigation */
+.doc-page-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    border-radius: 8px;
+    margin-top: 1rem;
+}
+
+.doc-page-nav-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.15);
+    color: white;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+}
+
+.doc-page-nav-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.25);
+    transform: scale(1.05);
+}
+
+.doc-page-nav-btn:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.doc-page-nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.doc-page-info {
+    color: white;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.875rem;
+    min-width: 80px;
+    text-align: center;
+}
+
 /* Document Details Panel */
 .doc-details {
     padding: 3rem;
@@ -1278,6 +1327,17 @@ button:active {
 .doc-action-danger:hover {
     background: #fef2f2;
     border-color: #dc2626;
+}
+
+.doc-action-secondary {
+    background: white;
+    color: var(--doc-ink);
+    border: 1px solid var(--doc-border);
+}
+
+.doc-action-secondary:hover {
+    background: var(--doc-cream);
+    border-color: var(--doc-ink);
 }
 
 /* Responsive adjustments */

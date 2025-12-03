@@ -358,22 +358,78 @@ impl Worker {
             .as_deref()
             .unwrap_or("application/octet-stream");
 
-        // Step 1: Generate thumbnail
-        let thumbnail_ok = match self
-            .thumbnail_service
-            .generate(document_id, &data, mime_type, document.content.as_deref())
-            .await
-        {
-            Ok(_) => {
-                self.event_broadcaster
-                    .send(DocumentEvent::ThumbnailReady { document_id });
-                true
+        // Step 1: Generate thumbnail(s) and get page count for PDFs
+        let (thumbnail_ok, page_count) = if mime_type == "application/pdf" {
+            // Get page count
+            let count = match self.thumbnail_service.get_pdf_page_count(&data).await {
+                Ok(c) => c,
+                Err(e) => {
+                    debug!("Failed to get PDF page count: {}", e);
+                    1
+                }
+            };
+
+            // Store page count
+            if let Err(e) = self.document_repo.set_page_count(document_id, count).await {
+                debug!("Failed to set page count: {}", e);
             }
-            Err(e) => {
-                debug!("Thumbnail generation failed: {}", e);
-                false
+
+            // Generate thumbnails for all pages (limit to first 50 for performance)
+            let max_pages = count.min(50);
+            let mut success = false;
+
+            for page in 1..=max_pages {
+                match self
+                    .thumbnail_service
+                    .generate_page(document_id, &data, page)
+                    .await
+                {
+                    Ok(_) => {
+                        if page == 1 {
+                            self.event_broadcaster
+                                .send(DocumentEvent::ThumbnailReady { document_id });
+                            success = true;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Thumbnail generation failed for page {}: {}", page, e);
+                    }
+                }
             }
+
+            (success, Some(count))
+        } else {
+            // Non-PDF: use original single-thumbnail generation
+            let ok = match self
+                .thumbnail_service
+                .generate(document_id, &data, mime_type, document.content.as_deref())
+                .await
+            {
+                Ok(_) => {
+                    self.event_broadcaster
+                        .send(DocumentEvent::ThumbnailReady { document_id });
+                    true
+                }
+                Err(e) => {
+                    debug!("Thumbnail generation failed: {}", e);
+                    false
+                }
+            };
+
+            // Images have 1 page
+            if mime_type.starts_with("image/") {
+                if let Err(e) = self.document_repo.set_page_count(document_id, 1).await {
+                    debug!("Failed to set page count: {}", e);
+                }
+            }
+
+            (ok, None)
         };
+
+        // Log page count if available
+        if let Some(count) = page_count {
+            debug!("Document {} has {} pages", document_id, count);
+        }
 
         // Step 2: Extract text if needed
         let content = if document.content.is_none() {

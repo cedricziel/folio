@@ -55,6 +55,7 @@ struct DocumentRow {
     mime_type: Option<String>,
     correspondent_id: Option<String>,
     document_type_id: Option<String>,
+    page_count: Option<i64>,
     created_at: String,
     updated_at: String,
 }
@@ -72,6 +73,7 @@ impl TryFrom<DocumentRow> for Document {
             mime_type: row.mime_type,
             correspondent_id: parse_optional_uuid(row.correspondent_id)?,
             document_type_id: parse_optional_uuid(row.document_type_id)?,
+            page_count: row.page_count.map(|c| c as u32),
             created_at: row
                 .created_at
                 .parse::<DateTime<Utc>>()
@@ -158,7 +160,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let id_str = id.to_string();
         let row: Option<DocumentRow> = sqlx::query_as(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, created_at, updated_at
+                    correspondent_id, document_type_id, page_count, created_at, updated_at
              FROM documents WHERE id = ?",
         )
         .bind(&id_str)
@@ -175,7 +177,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             if let Some(correspondent_id) = filter.correspondent_id {
                 sqlx::query_as(
                     "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, created_at, updated_at
+                            correspondent_id, document_type_id, page_count, created_at, updated_at
                      FROM documents WHERE correspondent_id = ? ORDER BY created_at DESC",
                 )
                 .bind(correspondent_id.to_string())
@@ -185,7 +187,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             } else if let Some(document_type_id) = filter.document_type_id {
                 sqlx::query_as(
                     "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, created_at, updated_at
+                            correspondent_id, document_type_id, page_count, created_at, updated_at
                      FROM documents WHERE document_type_id = ? ORDER BY created_at DESC",
                 )
                 .bind(document_type_id.to_string())
@@ -195,7 +197,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             } else {
                 sqlx::query_as(
                     "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, created_at, updated_at
+                            correspondent_id, document_type_id, page_count, created_at, updated_at
                      FROM documents ORDER BY created_at DESC",
                 )
                 .fetch_all(&self.pool)
@@ -205,7 +207,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         } else {
             sqlx::query_as(
                 "SELECT id, title, content, original_filename, file_path, mime_type,
-                        correspondent_id, document_type_id, created_at, updated_at
+                        correspondent_id, document_type_id, page_count, created_at, updated_at
                  FROM documents ORDER BY created_at DESC",
             )
             .fetch_all(&self.pool)
@@ -247,6 +249,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             mime_type: params.mime_type,
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,
+            page_count: None,
             created_at: now,
             updated_at: now,
         })
@@ -288,6 +291,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             mime_type: existing.mime_type,
             correspondent_id,
             document_type_id,
+            page_count: existing.page_count,
             created_at: existing.created_at,
             updated_at: now,
         })
@@ -319,6 +323,27 @@ impl DocumentRepository for SqliteDocumentRepository {
             .execute(&self.pool)
             .await
             .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn set_page_count(&self, id: Id, page_count: u32) -> Result<()> {
+        let now = Utc::now();
+        let result =
+            sqlx::query("UPDATE documents SET page_count = ?, updated_at = ? WHERE id = ?")
+                .bind(page_count as i64)
+                .bind(now.to_rfc3339())
+                .bind(id.to_string())
+                .execute(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
 
         if result.rows_affected() == 0 {
             return Err(Error::NotFound {
