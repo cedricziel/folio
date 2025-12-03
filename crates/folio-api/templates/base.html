@@ -73,6 +73,11 @@
                 this.updateView();
             }
 
+            // Re-apply view when list target is replaced (e.g., after Turbo frame reload)
+            listTargetConnected() {
+                this.updateView();
+            }
+
             showList() {
                 this.viewValue = "list";
                 this.save();
@@ -103,9 +108,198 @@
                 }
             }
         });
+
+        // Dropzone Controller (full-page drag and drop)
+        Stimulus.register("dropzone", class extends Controller {
+            static targets = ["overlay", "fileInput", "queue", "queueList"]
+            static values = { uploading: { type: Boolean, default: false } }
+
+            connect() {
+                this.dragCounter = 0;
+                this.uploadQueue = [];
+                this.isProcessing = false;
+            }
+
+            dragenter(event) {
+                event.preventDefault();
+                this.dragCounter++;
+                if (this.dragCounter === 1) {
+                    this.showOverlay();
+                }
+            }
+
+            dragleave(event) {
+                event.preventDefault();
+                this.dragCounter--;
+                if (this.dragCounter === 0) {
+                    this.hideOverlay();
+                }
+            }
+
+            dragover(event) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+            }
+
+            drop(event) {
+                event.preventDefault();
+                this.dragCounter = 0;
+                this.hideOverlay();
+
+                const files = Array.from(event.dataTransfer.files);
+                if (files.length > 0) {
+                    this.queueFiles(files);
+                }
+            }
+
+            showOverlay() {
+                if (this.hasOverlayTarget) {
+                    this.overlayTarget.classList.add("active");
+                }
+            }
+
+            hideOverlay() {
+                if (this.hasOverlayTarget) {
+                    this.overlayTarget.classList.remove("active");
+                }
+            }
+
+            queueFiles(files) {
+                files.forEach(file => {
+                    const id = Date.now() + Math.random().toString(36).substr(2, 9);
+                    this.uploadQueue.push({ id, file, status: "pending" });
+                    this.addToQueueUI(id, file);
+                });
+
+                this.showQueue();
+                this.processQueue();
+            }
+
+            addToQueueUI(id, file) {
+                if (!this.hasQueueListTarget) return;
+
+                const item = document.createElement("div");
+                item.className = "queue-item";
+                item.dataset.queueId = id;
+                item.innerHTML = `
+                    <span class="queue-item-name">${this.escapeHtml(file.name)}</span>
+                    <span class="queue-item-status">Pending</span>
+                `;
+                this.queueListTarget.appendChild(item);
+            }
+
+            updateQueueItemStatus(id, status, message) {
+                const item = this.queueListTarget?.querySelector(`[data-queue-id="${id}"]`);
+                if (item) {
+                    const statusEl = item.querySelector(".queue-item-status");
+                    statusEl.textContent = message;
+                    statusEl.className = `queue-item-status ${status}`;
+                }
+            }
+
+            showQueue() {
+                if (this.hasQueueTarget) {
+                    this.queueTarget.classList.add("active");
+                }
+            }
+
+            hideQueue() {
+                if (this.hasQueueTarget) {
+                    this.queueTarget.classList.remove("active");
+                }
+            }
+
+            clearQueue() {
+                this.uploadQueue = [];
+                if (this.hasQueueListTarget) {
+                    this.queueListTarget.innerHTML = "";
+                }
+                this.hideQueue();
+            }
+
+            async processQueue() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                while (this.uploadQueue.length > 0) {
+                    const item = this.uploadQueue.find(i => i.status === "pending");
+                    if (!item) break;
+
+                    item.status = "uploading";
+                    this.updateQueueItemStatus(item.id, "uploading", "Uploading...");
+
+                    try {
+                        await this.uploadFile(item.file);
+                        item.status = "done";
+                        this.updateQueueItemStatus(item.id, "done", "Done");
+                    } catch (error) {
+                        item.status = "error";
+                        this.updateQueueItemStatus(item.id, "error", "Failed");
+                        console.error("Upload failed:", error);
+                    }
+                }
+
+                this.isProcessing = false;
+
+                // Refresh the document list
+                const frame = document.querySelector("turbo-frame#documents-list");
+                if (frame) {
+                    frame.src = "/documents";
+                }
+            }
+
+            async uploadFile(file) {
+                const formData = new FormData();
+                formData.append("file", file);
+                formData.append("title", file.name);
+
+                const response = await fetch("/documents/upload", {
+                    method: "POST",
+                    body: formData,
+                    headers: {
+                        "Accept": "text/vnd.turbo-stream.html"
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Upload failed: ${response.status}`);
+                }
+
+                return response;
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement("div");
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        });
     </script>
 </head>
-<body>
+<body data-controller="dropzone"
+      data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop">
+
+    <!-- Drop overlay -->
+    <div class="dropzone-overlay" data-dropzone-target="overlay">
+        <div class="dropzone-overlay-content">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>Drop files to upload</p>
+        </div>
+    </div>
+
+    <!-- Upload queue panel -->
+    <div class="upload-queue" data-dropzone-target="queue">
+        <div class="upload-queue-header">
+            <h3>Upload Queue</h3>
+            <button type="button" class="upload-queue-close" data-action="click->dropzone#clearQueue">&times;</button>
+        </div>
+        <div class="upload-queue-list" data-dropzone-target="queueList"></div>
+    </div>
+
     <header>
         <h1><a href="/">📄 Folio</a></h1>
         <p>AI-native document management</p>

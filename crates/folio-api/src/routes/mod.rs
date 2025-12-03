@@ -11,7 +11,7 @@ use crate::state::AppState;
 
 /// Create the main application router
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         // API routes
         .nest("/api", api_router())
         // Page routes (HTMX)
@@ -24,7 +24,13 @@ pub fn create_router(state: AppState) -> Router {
         // Allow larger file uploads (50MB)
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         // State
-        .with_state(state)
+        .with_state(state);
+
+    // Add livereload in debug mode
+    #[cfg(debug_assertions)]
+    let router = router.layer(tower_livereload::LiveReloadLayer::new());
+
+    router
 }
 
 /// API router for JSON endpoints

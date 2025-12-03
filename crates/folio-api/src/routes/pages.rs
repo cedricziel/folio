@@ -54,8 +54,8 @@ async fn index_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
 
 /// Documents list template (Turbo Frame partial)
 #[derive(Template)]
-#[template(path = "partials/documents_list.html")]
-struct DocumentsListTemplate {
+#[template(path = "partials/documents_frame.html")]
+struct DocumentsFrameTemplate {
     documents: Vec<Document>,
 }
 
@@ -63,7 +63,7 @@ struct DocumentsListTemplate {
 async fn documents_list(State(state): State<AppState>) -> ApiResult<Html<String>> {
     let documents = state.document_repo.list(None).await?;
 
-    let template = DocumentsListTemplate { documents };
+    let template = DocumentsFrameTemplate { documents };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
