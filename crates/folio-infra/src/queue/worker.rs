@@ -341,18 +341,31 @@ impl Worker {
         &self,
         document_id: uuid::Uuid,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Starting document processing for {}", document_id);
+
         let document = self
             .document_repo
             .find_by_id(document_id)
             .await?
             .ok_or("Document not found")?;
 
+        info!(
+            "Processing document: id={}, title={}, mime_type={:?}",
+            document_id, document.title, document.mime_type
+        );
+
         let file_path = match &document.file_path {
             Some(p) => p.clone(),
-            None => return Err("No file path".into()),
+            None => {
+                error!("Document {} has no file path", document_id);
+                return Err("No file path".into());
+            }
         };
 
+        info!("Reading file from: {}", file_path);
         let data = self.storage.read(&file_path).await?;
+        info!("File read successfully, size: {} bytes", data.len());
+
         let mime_type = document
             .mime_type
             .as_deref()
@@ -432,9 +445,22 @@ impl Worker {
         }
 
         // Step 2: Extract text if needed
+        info!(
+            "Step 2: OCR - document has existing content: {}",
+            document.content.is_some()
+        );
         let content = if document.content.is_none() {
+            info!(
+                "Calling OCR service for document {} (mime: {})",
+                document_id, mime_type
+            );
             match self.ocr_service.extract_text(&data, mime_type).await {
                 Ok(text) if !text.is_empty() => {
+                    info!(
+                        "OCR successful for document {}, extracted {} characters",
+                        document_id,
+                        text.len()
+                    );
                     // Update document with extracted content
                     self.document_repo
                         .update(
@@ -451,33 +477,58 @@ impl Worker {
 
                     Some(text)
                 }
-                Ok(_) => None,
+                Ok(_) => {
+                    info!("OCR returned empty text for document {}", document_id);
+                    None
+                }
                 Err(e) => {
-                    debug!("OCR failed: {}", e);
+                    error!("OCR failed for document {}: {}", document_id, e);
                     None
                 }
             }
         } else {
+            info!(
+                "Skipping OCR - document {} already has content",
+                document_id
+            );
             document.content.clone()
         };
 
         // Step 3: Generate embedding if we have content
+        info!(
+            "Step 3: Embedding - have content: {}",
+            content.as_ref().map(|c| c.len()).unwrap_or(0)
+        );
         if let Some(text) = content {
             if !text.is_empty() {
+                info!(
+                    "Generating embedding for document {} ({} chars)",
+                    document_id,
+                    text.len()
+                );
                 match self.embedding_service.generate_embedding(&text).await {
                     Ok(embedding) => {
+                        info!(
+                            "Embedding generated for document {}, dimension: {}",
+                            document_id,
+                            embedding.len()
+                        );
                         self.search_service
                             .store_embedding(document_id, &embedding)
                             .await?;
+                        info!("Embedding stored for document {}", document_id);
                     }
                     Err(e) => {
-                        debug!("Embedding generation failed: {}", e);
+                        error!(
+                            "Embedding generation failed for document {}: {}",
+                            document_id, e
+                        );
                     }
                 }
             }
         }
 
-        info!("Processed document {}", document_id);
+        info!("Completed processing document {}", document_id);
 
         // Emit final updated event if any processing happened
         if thumbnail_ok {

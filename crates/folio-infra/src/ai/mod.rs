@@ -4,11 +4,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, instrument};
+use tokio::sync::RwLock;
+use tracing::{debug, info, instrument};
 
 use folio_core::error::{Error, Result};
 use folio_core::models::Id;
-use folio_core::ports::{EmbeddingService, OcrService, SearchResult, SearchService};
+use folio_core::ports::{
+    EmbeddingService, OcrService, SearchResult, SearchService, SettingsRepository,
+};
 
 use crate::config::AiConfig;
 
@@ -409,6 +412,415 @@ impl EmbeddingService for NoOpEmbeddingService {
 
     fn embedding_dimension(&self) -> usize {
         384
+    }
+}
+
+// ============================================================================
+// Dynamic AI services (read settings from database)
+// ============================================================================
+
+/// Dynamic OCR service that reads settings from the database on each request
+pub struct DynamicOcrService {
+    settings_repo: Arc<dyn SettingsRepository>,
+    fallback_config: AiConfig,
+    client: reqwest::Client,
+    /// Cache for settings to avoid reading DB on every request
+    cached_settings: RwLock<Option<CachedAiSettings>>,
+}
+
+/// Dynamic embedding service that reads settings from the database on each request
+pub struct DynamicEmbeddingService {
+    settings_repo: Arc<dyn SettingsRepository>,
+    fallback_config: AiConfig,
+    client: reqwest::Client,
+    /// Cache for settings to avoid reading DB on every request
+    cached_settings: RwLock<Option<CachedAiSettings>>,
+}
+
+#[derive(Clone)]
+struct CachedAiSettings {
+    provider: String,
+    openai_api_key: Option<String>,
+    anthropic_api_key: Option<String>,
+    cached_at: std::time::Instant,
+}
+
+impl CachedAiSettings {
+    fn is_expired(&self) -> bool {
+        // Cache for 5 seconds to balance freshness vs DB load
+        self.cached_at.elapsed() > std::time::Duration::from_secs(5)
+    }
+}
+
+impl DynamicOcrService {
+    pub fn new(settings_repo: Arc<dyn SettingsRepository>, fallback_config: AiConfig) -> Self {
+        Self {
+            settings_repo,
+            fallback_config,
+            client: reqwest::Client::new(),
+            cached_settings: RwLock::new(None),
+        }
+    }
+
+    async fn get_settings(&self) -> CachedAiSettings {
+        // Check cache first
+        {
+            let cache = self.cached_settings.read().await;
+            if let Some(ref cached) = *cache {
+                if !cached.is_expired() {
+                    return cached.clone();
+                }
+            }
+        }
+
+        // Fetch from database
+        let settings = self.fetch_settings_from_db().await;
+
+        // Update cache
+        {
+            let mut cache = self.cached_settings.write().await;
+            *cache = Some(settings.clone());
+        }
+
+        settings
+    }
+
+    async fn fetch_settings_from_db(&self) -> CachedAiSettings {
+        let db_settings = self
+            .settings_repo
+            .list_by_prefix("ai.")
+            .await
+            .unwrap_or_default();
+
+        let provider = db_settings
+            .iter()
+            .find(|s| s.key == "ai.provider")
+            .map(|s| s.value.clone())
+            .unwrap_or_else(|| self.fallback_config.provider.clone());
+
+        let openai_api_key = db_settings
+            .iter()
+            .find(|s| s.key == "ai.openai_api_key")
+            .map(|s| s.value.clone())
+            .filter(|k| !k.is_empty())
+            .or_else(|| self.fallback_config.openai_api_key.clone());
+
+        let anthropic_api_key = db_settings
+            .iter()
+            .find(|s| s.key == "ai.anthropic_api_key")
+            .map(|s| s.value.clone())
+            .filter(|k| !k.is_empty())
+            .or_else(|| self.fallback_config.anthropic_api_key.clone());
+
+        info!(
+            "Loaded AI settings: provider={}, openai_key={}, anthropic_key={}",
+            provider,
+            if openai_api_key
+                .as_ref()
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                "configured"
+            } else {
+                "not set"
+            },
+            if anthropic_api_key
+                .as_ref()
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                "configured"
+            } else {
+                "not set"
+            }
+        );
+
+        CachedAiSettings {
+            provider,
+            openai_api_key,
+            anthropic_api_key,
+            cached_at: std::time::Instant::now(),
+        }
+    }
+}
+
+#[async_trait]
+impl OcrService for DynamicOcrService {
+    #[instrument(skip(self, data))]
+    async fn extract_text(&self, data: &[u8], mime_type: &str) -> Result<String> {
+        let settings = self.get_settings().await;
+
+        match settings.provider.as_str() {
+            "openai" => {
+                let api_key = settings.openai_api_key.unwrap_or_default();
+                if api_key.is_empty() {
+                    return Err(Error::AiService(
+                        "OpenAI API key not configured".to_string(),
+                    ));
+                }
+                self.openai_ocr(data, mime_type, &api_key).await
+            }
+            "anthropic" => {
+                let api_key = settings.anthropic_api_key.unwrap_or_default();
+                if api_key.is_empty() {
+                    return Err(Error::AiService(
+                        "Anthropic API key not configured".to_string(),
+                    ));
+                }
+                self.anthropic_ocr(data, mime_type, &api_key).await
+            }
+            _ => {
+                debug!("No AI provider configured, returning empty text");
+                Ok(String::new())
+            }
+        }
+    }
+}
+
+impl DynamicOcrService {
+    async fn openai_ocr(&self, data: &[u8], mime_type: &str, api_key: &str) -> Result<String> {
+        let base64_data = base64_encode(data);
+        let data_url = format!("data:{};base64,{}", mime_type, base64_data);
+
+        let request = OpenAiChatRequest {
+            model: "gpt-4o-mini".to_string(),
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: vec![
+                    OpenAiContent::Text {
+                        text: "Extract all text from this document image. Return only the extracted text, nothing else.".to_string(),
+                    },
+                    OpenAiContent::ImageUrl {
+                        image_url: ImageUrl { url: data_url },
+                    },
+                ],
+            }],
+            max_tokens: 4096,
+        };
+
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::AiService(format!("OpenAI request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::AiService(format!(
+                "OpenAI API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let result: OpenAiChatResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiService(format!("Failed to parse OpenAI response: {}", e)))?;
+
+        result
+            .choices
+            .first()
+            .map(|c| c.message.content.clone())
+            .ok_or_else(|| Error::AiService("No response from OpenAI".to_string()))
+    }
+
+    async fn anthropic_ocr(&self, data: &[u8], mime_type: &str, api_key: &str) -> Result<String> {
+        let base64_data = base64_encode(data);
+
+        let request = AnthropicRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: vec![
+                    AnthropicContent::Image {
+                        source: ImageSource {
+                            source_type: "base64".to_string(),
+                            media_type: mime_type.to_string(),
+                            data: base64_data,
+                        },
+                    },
+                    AnthropicContent::Text {
+                        text: "Extract all text from this document image. Return only the extracted text, nothing else.".to_string(),
+                    },
+                ],
+            }],
+        };
+
+        let response = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::AiService(format!("Anthropic request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::AiService(format!(
+                "Anthropic API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let result: AnthropicResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiService(format!("Failed to parse Anthropic response: {}", e)))?;
+
+        result
+            .content
+            .first()
+            .map(|c| c.text.clone())
+            .ok_or_else(|| Error::AiService("No response from Anthropic".to_string()))
+    }
+}
+
+impl DynamicEmbeddingService {
+    pub fn new(settings_repo: Arc<dyn SettingsRepository>, fallback_config: AiConfig) -> Self {
+        Self {
+            settings_repo,
+            fallback_config,
+            client: reqwest::Client::new(),
+            cached_settings: RwLock::new(None),
+        }
+    }
+
+    async fn get_settings(&self) -> CachedAiSettings {
+        // Check cache first
+        {
+            let cache = self.cached_settings.read().await;
+            if let Some(ref cached) = *cache {
+                if !cached.is_expired() {
+                    return cached.clone();
+                }
+            }
+        }
+
+        // Fetch from database
+        let settings = self.fetch_settings_from_db().await;
+
+        // Update cache
+        {
+            let mut cache = self.cached_settings.write().await;
+            *cache = Some(settings.clone());
+        }
+
+        settings
+    }
+
+    async fn fetch_settings_from_db(&self) -> CachedAiSettings {
+        let db_settings = self
+            .settings_repo
+            .list_by_prefix("ai.")
+            .await
+            .unwrap_or_default();
+
+        let provider = db_settings
+            .iter()
+            .find(|s| s.key == "ai.provider")
+            .map(|s| s.value.clone())
+            .unwrap_or_else(|| self.fallback_config.provider.clone());
+
+        let openai_api_key = db_settings
+            .iter()
+            .find(|s| s.key == "ai.openai_api_key")
+            .map(|s| s.value.clone())
+            .filter(|k| !k.is_empty())
+            .or_else(|| self.fallback_config.openai_api_key.clone());
+
+        let anthropic_api_key = db_settings
+            .iter()
+            .find(|s| s.key == "ai.anthropic_api_key")
+            .map(|s| s.value.clone())
+            .filter(|k| !k.is_empty())
+            .or_else(|| self.fallback_config.anthropic_api_key.clone());
+
+        CachedAiSettings {
+            provider,
+            openai_api_key,
+            anthropic_api_key,
+            cached_at: std::time::Instant::now(),
+        }
+    }
+}
+
+#[async_trait]
+impl EmbeddingService for DynamicEmbeddingService {
+    #[instrument(skip(self, text))]
+    async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
+        let embeddings = self.generate_embeddings(&[text]).await?;
+        embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::AiService("No embedding returned".to_string()))
+    }
+
+    #[instrument(skip(self, texts))]
+    async fn generate_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let settings = self.get_settings().await;
+
+        match settings.provider.as_str() {
+            "openai" => {
+                let api_key = settings.openai_api_key.unwrap_or_default();
+                if api_key.is_empty() {
+                    return Err(Error::AiService(
+                        "OpenAI API key not configured".to_string(),
+                    ));
+                }
+                self.openai_embeddings(texts, &api_key).await
+            }
+            _ => {
+                debug!("No embedding provider configured, returning zero vectors");
+                Ok(texts.iter().map(|_| vec![0.0; 1536]).collect())
+            }
+        }
+    }
+
+    fn embedding_dimension(&self) -> usize {
+        1536 // text-embedding-3-small dimension
+    }
+}
+
+impl DynamicEmbeddingService {
+    async fn openai_embeddings(&self, texts: &[&str], api_key: &str) -> Result<Vec<Vec<f32>>> {
+        let request = OpenAiEmbeddingRequest {
+            model: "text-embedding-3-small".to_string(),
+            input: texts.iter().map(|s| s.to_string()).collect(),
+        };
+
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/embeddings")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::AiService(format!("OpenAI request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::AiService(format!(
+                "OpenAI API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let result: OpenAiEmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiService(format!("Failed to parse OpenAI response: {}", e)))?;
+
+        Ok(result.data.into_iter().map(|d| d.embedding).collect())
     }
 }
 

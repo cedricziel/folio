@@ -466,6 +466,8 @@ async fn reprocess_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
+    debug!("Reprocess requested for document {}", id);
+
     // Verify document exists and has a file
     let document = state
         .document_repo
@@ -473,16 +475,28 @@ async fn reprocess_document(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
+    debug!(
+        "Document found: title={}, file_path={:?}, mime_type={:?}",
+        document.title, document.file_path, document.mime_type
+    );
+
     if document.file_path.is_none() {
+        error!("Cannot reprocess document {} - no file path", id);
         return Err(ApiError::bad_request("Document has no file to process"));
     }
 
     // Queue a reprocessing job
+    debug!("Queuing ProcessDocument job for {}", id);
     state
         .job_queue
         .enqueue(JobType::ProcessDocument { document_id: id })
         .await
-        .map_err(|e| ApiError::internal(format!("Failed to queue reprocessing: {}", e)))?;
+        .map_err(|e| {
+            error!("Failed to queue reprocessing job for {}: {}", id, e);
+            ApiError::internal(format!("Failed to queue reprocessing: {}", e))
+        })?;
+
+    debug!("Successfully queued reprocessing job for document {}", id);
 
     // Redirect back to document with a success message
     Ok(Redirect::to(&format!("/documents/{}", id)).into_response())

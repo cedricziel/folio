@@ -15,7 +15,7 @@ pub mod queue;
 pub mod storage;
 pub mod thumbnail;
 
-pub use ai::{AiServiceFactory, SqliteSearchService};
+pub use ai::{AiServiceFactory, DynamicEmbeddingService, DynamicOcrService, SqliteSearchService};
 pub use config::Config;
 pub use database::{
     create_pool, run_migrations, SqliteCorrespondentRepository, SqliteDocumentRepository,

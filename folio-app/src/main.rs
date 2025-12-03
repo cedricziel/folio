@@ -10,10 +10,10 @@ use tracing_subscriber::FmtSubscriber;
 use folio_api::{create_router, AppState};
 use folio_core::EventBroadcaster;
 use folio_infra::{
-    create_pool, run_migrations, AiServiceFactory, Config, FileStorage, JobQueue,
-    SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, ThumbnailService, Worker,
-    WorkerConfig,
+    create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, FileStorage,
+    JobQueue, SqliteCorrespondentRepository, SqliteDocumentRepository,
+    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
+    SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
 };
 
 #[tokio::main]
@@ -71,9 +71,15 @@ async fn main() -> Result<()> {
     let document_type_repo = Arc::new(SqliteDocumentTypeRepository::new(pool.clone()));
     let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
 
-    // Create AI services
-    let ocr_service = AiServiceFactory::create_ocr_service(&config.ai);
-    let embedding_service = AiServiceFactory::create_embedding_service(&config.ai);
+    // Create AI services (dynamic - reads from database settings with config.toml fallback)
+    let ocr_service = Arc::new(DynamicOcrService::new(
+        settings_repo.clone(),
+        config.ai.clone(),
+    ));
+    let embedding_service = Arc::new(DynamicEmbeddingService::new(
+        settings_repo.clone(),
+        config.ai.clone(),
+    ));
     let search_service = Arc::new(SqliteSearchService::new(pool.clone()));
 
     // Create job queue
