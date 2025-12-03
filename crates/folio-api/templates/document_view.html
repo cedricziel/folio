@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}{{ document.title }} - Folio{% endblock %}
+
+{% block content %}
+<div class="doc-view">
+    <nav class="doc-view-nav">
+        <a href="/" class="back-link">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+            Back to Documents
+        </a>
+    </nav>
+
+    <div class="doc-view-layout">
+        <!-- Document Preview -->
+        <div class="doc-preview">
+            <div class="doc-preview-frame">
+                <img src="/documents/{{ document.id }}/thumbnail" alt="{{ document.title }}" class="doc-preview-image" />
+                <div class="doc-preview-overlay">
+                    {% if document.file_path.is_some() %}
+                    <a href="/api/documents/{{ document.id }}/download" class="doc-download-btn" download>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        Download Original
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Document Details -->
+        <div class="doc-details">
+            <header class="doc-header">
+                <h1 class="doc-title">{{ document.title }}</h1>
+                <div class="doc-subtitle">
+                    {% match document.original_filename %}
+                    {% when Some with (filename) %}
+                    <span class="doc-filename">{{ filename }}</span>
+                    {% when None %}
+                    {% endmatch %}
+                </div>
+            </header>
+
+            <section class="doc-meta-section">
+                <h2 class="doc-section-title">Properties</h2>
+                <div class="doc-meta-grid">
+                    <div class="doc-meta-item">
+                        <span class="doc-meta-label">Document ID</span>
+                        <span class="doc-meta-value doc-meta-mono">{{ document.id }}</span>
+                    </div>
+
+                    {% match document.mime_type %}
+                    {% when Some with (mime) %}
+                    <div class="doc-meta-item">
+                        <span class="doc-meta-label">File Type</span>
+                        <span class="doc-meta-value">
+                            <span class="doc-type-badge">{{ mime }}</span>
+                        </span>
+                    </div>
+                    {% when None %}
+                    {% endmatch %}
+
+                    <div class="doc-meta-item">
+                        <span class="doc-meta-label">Created</span>
+                        <span class="doc-meta-value">{{ document.created_at.format("%B %d, %Y at %H:%M") }}</span>
+                    </div>
+
+                    <div class="doc-meta-item">
+                        <span class="doc-meta-label">Last Modified</span>
+                        <span class="doc-meta-value">{{ document.updated_at.format("%B %d, %Y at %H:%M") }}</span>
+                    </div>
+                </div>
+            </section>
+
+            {% match document.content %}
+            {% when Some with (content) %}
+            <section class="doc-content-section">
+                <h2 class="doc-section-title">
+                    Extracted Content
+                    <span class="doc-content-length">{{ content.len() }} characters</span>
+                </h2>
+                <div class="doc-content-box">
+                    <pre class="doc-content-text">{{ content }}</pre>
+                </div>
+            </section>
+            {% when None %}
+            <section class="doc-content-section">
+                <h2 class="doc-section-title">Content</h2>
+                <div class="doc-content-empty">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    <p>Text extraction pending...</p>
+                    <span>Content will appear here once OCR processing is complete.</span>
+                </div>
+            </section>
+            {% endmatch %}
+
+            <section class="doc-actions-section">
+                <h2 class="doc-section-title">Actions</h2>
+                <div class="doc-actions-grid">
+                    {% if document.file_path.is_some() %}
+                    <a href="/api/documents/{{ document.id }}/download" class="doc-action-btn doc-action-primary" download>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                        Download
+                    </a>
+                    {% endif %}
+                    <form action="/documents/{{ document.id }}/delete" method="post"
+                          data-controller="confirm"
+                          data-confirm-message-value="Are you sure you want to delete '{{ document.title }}'? This action cannot be undone."
+                          data-action="submit->confirm#confirm"
+                          class="doc-action-form">
+                        <button type="submit" class="doc-action-btn doc-action-danger">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="3 6 5 6 21 6"/>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                                <line x1="10" y1="11" x2="10" y2="17"/>
+                                <line x1="14" y1="11" x2="14" y2="17"/>
+                            </svg>
+                            Delete
+                        </button>
+                    </form>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}

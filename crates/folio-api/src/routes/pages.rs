@@ -70,14 +70,14 @@ async fn documents_list(State(state): State<AppState>) -> ApiResult<Html<String>
     })))
 }
 
-/// Document detail template (Turbo Frame partial)
+/// Document view template (full page)
 #[derive(Template)]
-#[template(path = "document_detail.html")]
-struct DocumentDetailTemplate {
+#[template(path = "document_view.html")]
+struct DocumentViewTemplate {
     document: Document,
 }
 
-/// Document detail (for Turbo Frame)
+/// Document detail (full page view)
 async fn document_detail(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -88,10 +88,10 @@ async fn document_detail(
         .await?
         .ok_or_else(|| crate::error::ApiError::not_found("Document not found"))?;
 
-    let template = DocumentDetailTemplate { document };
+    let template = DocumentViewTemplate { document };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
-        format!("Error rendering detail: {}", e)
+        format!("Error rendering document view: {}", e)
     })))
 }
 
