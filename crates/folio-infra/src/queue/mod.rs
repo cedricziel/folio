@@ -351,4 +351,84 @@ impl JobQueue {
 
         Ok(result.rows_affected() as i64)
     }
+
+    /// Find active jobs (pending or processing) for a specific document
+    #[allow(clippy::type_complexity)]
+    pub async fn find_active_jobs_for_document(&self, document_id: Uuid) -> Result<Vec<Job>> {
+        // The document_id is stored in the JSON payload, so we search with LIKE
+        let search_pattern = format!("%\"document_id\":\"{}\"%", document_id);
+
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            i32,
+            i32,
+            Option<String>,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            r#"
+            SELECT id, job_type, payload, status, attempts, max_attempts, error,
+                   created_at, updated_at, scheduled_at, started_at, completed_at
+            FROM jobs
+            WHERE payload LIKE ?
+            AND status IN ('pending', 'processing')
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(&search_pattern)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(format!("Failed to find jobs for document: {}", e)))?;
+
+        let mut jobs = Vec::new();
+        for row in rows {
+            let job_type: JobType = serde_json::from_str(&row.2)
+                .map_err(|e| Error::Repository(format!("Failed to deserialize job: {}", e)))?;
+
+            jobs.push(Job {
+                id: Uuid::parse_str(&row.0).unwrap(),
+                job_type,
+                status: JobStatus::from(row.3),
+                attempts: row.4,
+                max_attempts: row.5,
+                error: row.6,
+                created_at: DateTime::parse_from_rfc3339(&row.7).unwrap().into(),
+                updated_at: DateTime::parse_from_rfc3339(&row.8).unwrap().into(),
+                scheduled_at: DateTime::parse_from_rfc3339(&row.9).unwrap().into(),
+                started_at: row
+                    .10
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(Into::into)),
+                completed_at: row
+                    .11
+                    .and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(Into::into)),
+            });
+        }
+
+        Ok(jobs)
+    }
+
+    /// Check if a document has any failed jobs (for displaying error state)
+    pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
+        let search_pattern = format!("%\"document_id\":\"{}\"%", document_id);
+
+        let row: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM jobs
+            WHERE payload LIKE ?
+            AND status = 'failed'
+            "#,
+        )
+        .bind(&search_pattern)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(format!("Failed to check failed jobs: {}", e)))?;
+
+        Ok(row.0 > 0)
+    }
 }

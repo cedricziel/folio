@@ -59,6 +59,155 @@
             }
         });
 
+        // Toast Controller (notification system)
+        Stimulus.register("toast", class extends Controller {
+            static targets = ["container"]
+
+            show(message, type = "info", duration = 5000) {
+                const toast = document.createElement("div");
+                toast.className = `toast toast-${type}`;
+                toast.innerHTML = `
+                    <span class="toast-message">${this.escapeHtml(message)}</span>
+                    <button type="button" class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+                `;
+                this.containerTarget.appendChild(toast);
+
+                // Animate in
+                requestAnimationFrame(() => toast.classList.add("toast-visible"));
+
+                // Auto dismiss
+                if (duration > 0) {
+                    setTimeout(() => {
+                        toast.classList.remove("toast-visible");
+                        setTimeout(() => toast.remove(), 300);
+                    }, duration);
+                }
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement("div");
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        });
+
+        // Global toast helper
+        window.showToast = (message, type = "info", duration = 5000) => {
+            const toastController = document.querySelector("[data-controller~='toast']");
+            if (toastController) {
+                const controller = window.Stimulus.getControllerForElementAndIdentifier(toastController, "toast");
+                controller?.show(message, type, duration);
+            }
+        };
+
+        // Search Controller (header search with clear)
+        Stimulus.register("search", class extends Controller {
+            static targets = ["input", "clear", "form"]
+
+            connect() {
+                this.updateClearButton();
+            }
+
+            input() {
+                this.updateClearButton();
+            }
+
+            updateClearButton() {
+                if (this.hasClearTarget) {
+                    this.clearTarget.style.display = this.inputTarget.value ? "flex" : "none";
+                }
+            }
+
+            clear() {
+                this.inputTarget.value = "";
+                this.updateClearButton();
+                this.inputTarget.focus();
+                // Reset to show all documents
+                const frame = document.querySelector("turbo-frame#documents-list");
+                if (frame) {
+                    frame.src = "/documents";
+                }
+            }
+
+            submit(event) {
+                if (!this.inputTarget.value.trim()) {
+                    event.preventDefault();
+                    this.clear();
+                }
+            }
+        });
+
+        // Upload Modal Controller
+        Stimulus.register("upload-modal", class extends Controller {
+            static targets = ["modal", "form", "button", "status"]
+
+            open() {
+                if (this.hasModalTarget) {
+                    this.modalTarget.classList.add("active");
+                    document.body.style.overflow = "hidden";
+                }
+            }
+
+            close() {
+                if (this.hasModalTarget) {
+                    this.modalTarget.classList.remove("active");
+                    document.body.style.overflow = "";
+                }
+            }
+
+            backdropClick(event) {
+                if (event.target === this.modalTarget) {
+                    this.close();
+                }
+            }
+
+            submit(event) {
+                if (this.hasButtonTarget) {
+                    this.buttonTarget.disabled = true;
+                    this.buttonTarget.textContent = "Uploading...";
+                }
+                if (this.hasStatusTarget) {
+                    this.statusTarget.textContent = "Processing document...";
+                }
+            }
+
+            reset() {
+                if (this.hasButtonTarget) {
+                    this.buttonTarget.disabled = false;
+                    this.buttonTarget.textContent = "Upload";
+                }
+                if (this.hasStatusTarget) {
+                    this.statusTarget.textContent = "";
+                }
+                if (this.hasFormTarget) {
+                    this.formTarget.reset();
+                }
+                this.close();
+                window.showToast("Document uploaded successfully!", "success");
+            }
+        });
+
+        // Password Toggle Controller
+        Stimulus.register("password-toggle", class extends Controller {
+            static targets = ["input", "icon"]
+
+            toggle() {
+                const isPassword = this.inputTarget.type === "password";
+                this.inputTarget.type = isPassword ? "text" : "password";
+                if (this.hasIconTarget) {
+                    this.iconTarget.innerHTML = isPassword ? this.hideIcon() : this.showIcon();
+                }
+            }
+
+            showIcon() {
+                return `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+            }
+
+            hideIcon() {
+                return `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`;
+            }
+        });
+
         // Settings Form Controller
         Stimulus.register("settings-form", class extends Controller {
             static targets = ["provider", "openaiFields", "anthropicFields", "button", "status"]
@@ -217,6 +366,9 @@
                 item.dataset.queueId = id;
                 item.innerHTML = `
                     <span class="queue-item-name">${this.escapeHtml(file.name)}</span>
+                    <div class="queue-item-progress">
+                        <div class="queue-item-progress-bar" style="width: 0%"></div>
+                    </div>
                     <span class="queue-item-status">Pending</span>
                 `;
                 this.queueListTarget.appendChild(item);
@@ -228,6 +380,16 @@
                     const statusEl = item.querySelector(".queue-item-status");
                     statusEl.textContent = message;
                     statusEl.className = `queue-item-status ${status}`;
+                }
+            }
+
+            updateQueueItemProgress(id, percent) {
+                const item = this.queueListTarget?.querySelector(`[data-queue-id="${id}"]`);
+                if (item) {
+                    const progressBar = item.querySelector(".queue-item-progress-bar");
+                    if (progressBar) {
+                        progressBar.style.width = `${percent}%`;
+                    }
                 }
             }
 
@@ -260,15 +422,18 @@
                     if (!item) break;
 
                     item.status = "uploading";
-                    this.updateQueueItemStatus(item.id, "uploading", "Uploading...");
+                    this.updateQueueItemStatus(item.id, "uploading", "0%");
 
                     try {
-                        await this.uploadFile(item.file);
+                        await this.uploadFile(item.file, item.id);
                         item.status = "done";
+                        this.updateQueueItemProgress(item.id, 100);
                         this.updateQueueItemStatus(item.id, "done", "Done");
+                        window.showToast?.(`"${item.file.name}" uploaded successfully`, "success");
                     } catch (error) {
                         item.status = "error";
                         this.updateQueueItemStatus(item.id, "error", "Failed");
+                        window.showToast?.(`Failed to upload "${item.file.name}"`, "error");
                         console.error("Upload failed:", error);
                     }
                 }
@@ -282,24 +447,38 @@
                 }
             }
 
-            async uploadFile(file) {
-                const formData = new FormData();
-                formData.append("file", file);
-                formData.append("title", file.name);
+            async uploadFile(file, id) {
+                return new Promise((resolve, reject) => {
+                    const formData = new FormData();
+                    formData.append("file", file);
+                    formData.append("title", file.name);
 
-                const response = await fetch("/documents/upload", {
-                    method: "POST",
-                    body: formData,
-                    headers: {
-                        "Accept": "text/vnd.turbo-stream.html"
-                    }
+                    const xhr = new XMLHttpRequest();
+
+                    xhr.upload.addEventListener("progress", (e) => {
+                        if (e.lengthComputable) {
+                            const percent = Math.round((e.loaded / e.total) * 100);
+                            this.updateQueueItemProgress(id, percent);
+                            this.updateQueueItemStatus(id, "uploading", `${percent}%`);
+                        }
+                    });
+
+                    xhr.addEventListener("load", () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            resolve(xhr.response);
+                        } else {
+                            reject(new Error(`Upload failed: ${xhr.status}`));
+                        }
+                    });
+
+                    xhr.addEventListener("error", () => {
+                        reject(new Error("Upload failed: Network error"));
+                    });
+
+                    xhr.open("POST", "/documents/upload");
+                    xhr.setRequestHeader("Accept", "text/vnd.turbo-stream.html");
+                    xhr.send(formData);
                 });
-
-                if (!response.ok) {
-                    throw new Error(`Upload failed: ${response.status}`);
-                }
-
-                return response;
             }
 
             escapeHtml(text) {
@@ -374,8 +553,11 @@
         });
     </script>
 </head>
-<body data-controller="dropzone sse"
+<body data-controller="dropzone sse toast upload-modal"
       data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop">
+
+    <!-- Toast container -->
+    <div class="toast-container" data-toast-target="container"></div>
 
     <!-- Drop overlay -->
     <div class="dropzone-overlay" data-dropzone-target="overlay">
@@ -398,23 +580,78 @@
         <div class="upload-queue-list" data-dropzone-target="queueList"></div>
     </div>
 
+    <!-- Upload modal -->
+    <div class="upload-modal" data-upload-modal-target="modal" data-action="click->upload-modal#backdropClick">
+        <div class="upload-modal-content">
+            <div class="upload-modal-header">
+                <h2>Upload Document</h2>
+                <button type="button" class="upload-modal-close" data-action="click->upload-modal#close">&times;</button>
+            </div>
+            <form action="/documents/upload" method="post" enctype="multipart/form-data"
+                  data-upload-modal-target="form"
+                  data-action="turbo:submit-start->upload-modal#submit turbo:submit-end->upload-modal#reset">
+                <div class="form-group">
+                    <label for="modal-title">Title (optional)</label>
+                    <input type="text" id="modal-title" name="title" placeholder="Document title">
+                </div>
+                <div class="form-group">
+                    <label for="modal-file">File</label>
+                    <input type="file" id="modal-file" name="file" required accept="image/*,.pdf">
+                    <span class="form-hint">Supports images and PDFs with automatic text extraction</span>
+                </div>
+                <div class="upload-modal-actions">
+                    <button type="button" class="btn-secondary" data-action="click->upload-modal#close">Cancel</button>
+                    <button type="submit" data-upload-modal-target="button">Upload</button>
+                </div>
+                <span data-upload-modal-target="status" class="upload-status"></span>
+            </form>
+        </div>
+    </div>
+
     <header>
         <div class="header-content">
             <div class="header-brand">
                 <h1><a href="/">📄 Folio</a></h1>
-                <p>AI-native document management</p>
+            </div>
+            <div class="header-search" data-controller="search">
+                <form action="/documents/search" method="get" data-turbo-frame="documents-list"
+                      data-search-target="form" data-action="submit->search#submit">
+                    <div class="search-input-wrapper">
+                        <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                        </svg>
+                        <input type="text" name="q" placeholder="Search documents..."
+                               data-search-target="input" data-action="input->search#input"
+                               autocomplete="off">
+                        <button type="button" class="search-clear" data-search-target="clear"
+                                data-action="click->search#clear" style="display: none;" aria-label="Clear search">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="18" y1="6" x2="6" y2="18"/>
+                                <line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                        </button>
+                    </div>
+                </form>
             </div>
             <nav class="header-nav">
-                <a href="/settings" class="nav-link">
+                <a href="/settings" class="nav-link" aria-label="Settings">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="3"/>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                     </svg>
-                    Settings
                 </a>
             </nav>
         </div>
     </header>
+
+    <!-- FAB Upload Button -->
+    <button type="button" class="fab" data-action="click->upload-modal#open" aria-label="Upload document">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+    </button>
 
     {% block flash %}{% endblock %}
 

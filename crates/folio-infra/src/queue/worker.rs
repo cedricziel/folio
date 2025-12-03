@@ -23,6 +23,8 @@ pub struct WorkerConfig {
     pub stuck_check_interval_secs: u64,
     /// Jobs processing for longer than this are considered stuck (in minutes)
     pub stuck_threshold_mins: i64,
+    /// How often to check for orphaned documents (in seconds)
+    pub repair_check_interval_secs: u64,
 }
 
 impl Default for WorkerConfig {
@@ -31,6 +33,7 @@ impl Default for WorkerConfig {
             poll_interval_ms: 1000,
             stuck_check_interval_secs: 60,
             stuck_threshold_mins: 5,
+            repair_check_interval_secs: 300, // Every 5 minutes
         }
     }
 }
@@ -79,7 +82,13 @@ impl Worker {
     pub async fn run(&self, mut shutdown: watch::Receiver<bool>) {
         info!("Job worker started");
 
+        // Run repair immediately on startup to catch any orphaned documents
+        if let Err(e) = self.repair_orphaned_documents().await {
+            error!("Failed initial document repair: {}", e);
+        }
+
         let mut stuck_check_counter = 0u64;
+        let mut repair_check_counter = 0u64;
 
         loop {
             // Check for shutdown
@@ -98,6 +107,15 @@ impl Worker {
                     .await
                 {
                     error!("Failed to reset stuck jobs: {}", e);
+                }
+            }
+
+            // Periodically repair orphaned documents (documents without content and without jobs)
+            repair_check_counter += self.config.poll_interval_ms;
+            if repair_check_counter >= self.config.repair_check_interval_secs * 1000 {
+                repair_check_counter = 0;
+                if let Err(e) = self.repair_orphaned_documents().await {
+                    error!("Failed to repair orphaned documents: {}", e);
                 }
             }
 
@@ -140,6 +158,47 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// Find and re-queue orphaned documents (documents with no content and no active jobs)
+    async fn repair_orphaned_documents(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Get all documents
+        let documents = self.document_repo.list(None).await?;
+        let mut repaired_count = 0;
+
+        for doc in documents {
+            // Skip documents that already have content
+            if doc.content.is_some() {
+                continue;
+            }
+
+            // Skip documents without a file path (nothing to process)
+            if doc.file_path.is_none() {
+                continue;
+            }
+
+            // Check if there's already an active job for this document
+            let active_jobs = self.queue.find_active_jobs_for_document(doc.id).await?;
+
+            if active_jobs.is_empty() {
+                // No active jobs and no content - this document is orphaned, re-queue it
+                info!("Repairing orphaned document {} ({})", doc.id, doc.title);
+                self.queue
+                    .enqueue(JobType::ProcessDocument {
+                        document_id: doc.id,
+                    })
+                    .await?;
+                repaired_count += 1;
+            }
+        }
+
+        if repaired_count > 0 {
+            info!("Repaired {} orphaned documents", repaired_count);
+        }
+
+        Ok(())
     }
 
     /// Process a single job

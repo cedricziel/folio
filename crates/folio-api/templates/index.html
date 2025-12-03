@@ -3,58 +3,42 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="upload-section">
-    <h2>Upload Document</h2>
-    <turbo-frame id="upload-form">
-        <form action="/documents/upload" method="post" enctype="multipart/form-data"
-              data-controller="upload"
-              data-action="turbo:submit-start->upload#submit turbo:submit-end->upload#reset"
-              data-upload-target="form">
-            <div class="form-group">
-                <label for="title">Title (optional)</label>
-                <input type="text" id="title" name="title" placeholder="Document title">
-            </div>
-            <div class="form-group">
-                <label for="file">File</label>
-                <input type="file" id="file" name="file" required accept="image/*,.pdf">
-            </div>
-            <button type="submit" data-upload-target="button">Upload</button>
-            <span data-upload-target="status" class="upload-status"></span>
-        </form>
-    </turbo-frame>
-</section>
-
-<section class="search-section">
-    <h2>Search Documents</h2>
-    <form action="/documents/search" method="get" data-turbo-frame="documents-list">
-        <div class="form-group">
-            <input type="text" name="q" placeholder="Search documents..." required>
-        </div>
-        <button type="submit">Search</button>
-        <a href="/" class="btn-secondary">Clear</a>
-    </form>
-</section>
-
 <section class="documents-section" data-controller="view-toggle">
     <div class="section-header">
-        <h2>All Documents</h2>
-        <div class="view-toggle">
-            <button type="button" class="view-btn active"
-                    data-view-toggle-target="listBtn"
-                    data-action="click->view-toggle#showList"
-                    title="List view">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M2 4h12v1H2V4zm0 3.5h12v1H2v-1zm0 3.5h12v1H2V11z"/>
-                </svg>
-            </button>
-            <button type="button" class="view-btn"
-                    data-view-toggle-target="galleryBtn"
-                    data-action="click->view-toggle#showGallery"
-                    title="Gallery view">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M1 2h4v4H1V2zm5 0h4v4H6V2zm5 0h4v4h-4V2zM1 7h4v4H1V7zm5 0h4v4H6V7zm5 0h4v4h-4V7zM1 12h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z"/>
-                </svg>
-            </button>
+        <div class="section-title-group">
+            <h2>Documents</h2>
+            <span class="document-count">{{ documents.len() }} {% if documents.len() == 1 %}document{% else %}documents{% endif %}</span>
+        </div>
+        <div class="section-controls">
+            <div class="sort-control">
+                <label for="sort-select" class="visually-hidden">Sort by</label>
+                <select id="sort-select" class="sort-select" onchange="window.location.href='/?sort=' + this.value">
+                    <option value="newest">Newest first</option>
+                    <option value="oldest">Oldest first</option>
+                    <option value="name-asc">Name A-Z</option>
+                    <option value="name-desc">Name Z-A</option>
+                </select>
+            </div>
+            <div class="view-toggle">
+                <button type="button" class="view-btn active"
+                        data-view-toggle-target="listBtn"
+                        data-action="click->view-toggle#showList"
+                        title="List view"
+                        aria-label="Switch to list view">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M2 4h12v1H2V4zm0 3.5h12v1H2v-1zm0 3.5h12v1H2V11z"/>
+                    </svg>
+                </button>
+                <button type="button" class="view-btn"
+                        data-view-toggle-target="galleryBtn"
+                        data-action="click->view-toggle#showGallery"
+                        title="Gallery view"
+                        aria-label="Switch to gallery view">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M1 2h4v4H1V2zm5 0h4v4H6V2zm5 0h4v4h-4V2zM1 7h4v4H1V7zm5 0h4v4H6V7zm5 0h4v4h-4V7zM1 12h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z"/>
+                    </svg>
+                </button>
+            </div>
         </div>
     </div>
     <turbo-frame id="documents-list">
