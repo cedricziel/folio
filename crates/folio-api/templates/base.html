@@ -100,16 +100,60 @@
             }
         };
 
-        // Search Controller (header search with clear)
+        // Search Controller (header search with clear + live search)
         Stimulus.register("search", class extends Controller {
             static targets = ["input", "clear", "form"]
 
             connect() {
                 this.updateClearButton();
+                this.debounceTimeout = null;
+
+                // Check for search query in URL on page load
+                const urlParams = new URLSearchParams(window.location.search);
+                const searchQuery = urlParams.get("search");
+                if (searchQuery && this.hasInputTarget) {
+                    this.inputTarget.value = searchQuery;
+                    this.updateClearButton();
+                    this.performSearch();
+                }
             }
 
             input() {
                 this.updateClearButton();
+                this.debouncedSearch();
+            }
+
+            debouncedSearch() {
+                // Clear any pending search
+                if (this.debounceTimeout) {
+                    clearTimeout(this.debounceTimeout);
+                }
+
+                // Debounce: wait 300ms after user stops typing
+                this.debounceTimeout = setTimeout(() => {
+                    this.performSearch();
+                }, 300);
+            }
+
+            performSearch() {
+                const query = this.inputTarget.value.trim();
+                const frame = document.querySelector("turbo-frame#documents-list");
+
+                if (!frame) {
+                    // On document view page, redirect to home with search
+                    if (query) {
+                        window.location.href = `/?search=${encodeURIComponent(query)}`;
+                    }
+                    return;
+                }
+
+                if (!query) {
+                    // Empty query - show all documents
+                    frame.src = "/documents";
+                } else {
+                    // Search for documents
+                    frame.src = `/documents/search?q=${encodeURIComponent(query)}`;
+                }
             }
 
             updateClearButton() {
@@ -122,6 +166,12 @@
                 this.inputTarget.value = "";
                 this.updateClearButton();
                 this.inputTarget.focus();
+
+                // Clear search param from URL
+                const url = new URL(window.location);
+                url.searchParams.delete("search");
+                window.history.replaceState({}, "", url);
+
                 // Reset to show all documents
                 const frame = document.querySelector("turbo-frame#documents-list");
                 if (frame) {
@@ -130,10 +180,14 @@
             }
 
             submit(event) {
-                if (!this.inputTarget.value.trim()) {
-                    event.preventDefault();
-                    this.clear();
+                // Prevent form submission - we handle search via live updates
+                event.preventDefault();
+
+                // Cancel any pending debounced search and search immediately
+                if (this.debounceTimeout) {
+                    clearTimeout(this.debounceTimeout);
                 }
+                this.performSearch();
             }
         });
 
