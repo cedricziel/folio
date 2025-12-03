@@ -75,6 +75,7 @@ async fn main() -> Result<()> {
     let ocr_service = Arc::new(DynamicOcrService::new(
         settings_repo.clone(),
         config.ai.clone(),
+        &config.storage.path,
     ));
     let embedding_service = Arc::new(DynamicEmbeddingService::new(
         settings_repo.clone(),

@@ -1,11 +1,14 @@
 //! AI service implementations
 
+use std::process::Command;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::fs;
 use tokio::sync::RwLock;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, warn};
+use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 use folio_core::models::Id;
@@ -426,6 +429,8 @@ pub struct DynamicOcrService {
     client: reqwest::Client,
     /// Cache for settings to avoid reading DB on every request
     cached_settings: RwLock<Option<CachedAiSettings>>,
+    /// Storage path for temp files during PDF conversion
+    storage_path: String,
 }
 
 /// Dynamic embedding service that reads settings from the database on each request
@@ -453,12 +458,17 @@ impl CachedAiSettings {
 }
 
 impl DynamicOcrService {
-    pub fn new(settings_repo: Arc<dyn SettingsRepository>, fallback_config: AiConfig) -> Self {
+    pub fn new(
+        settings_repo: Arc<dyn SettingsRepository>,
+        fallback_config: AiConfig,
+        storage_path: impl Into<String>,
+    ) -> Self {
         Self {
             settings_repo,
             fallback_config,
             client: reqwest::Client::new(),
             cached_settings: RwLock::new(None),
+            storage_path: storage_path.into(),
         }
     }
 
@@ -579,6 +589,122 @@ impl OcrService for DynamicOcrService {
 
 impl DynamicOcrService {
     async fn openai_ocr(&self, data: &[u8], mime_type: &str, api_key: &str) -> Result<String> {
+        // Handle PDFs by converting to images first
+        if mime_type == "application/pdf" {
+            return self.openai_ocr_pdf(data, api_key).await;
+        }
+
+        self.openai_ocr_image(data, mime_type, api_key).await
+    }
+
+    /// OCR a PDF by converting pages to images and processing each
+    async fn openai_ocr_pdf(&self, data: &[u8], api_key: &str) -> Result<String> {
+        let page_images = self.convert_pdf_to_images(data).await?;
+
+        if page_images.is_empty() {
+            return Err(Error::AiService(
+                "Failed to convert PDF to images".to_string(),
+            ));
+        }
+
+        info!("Processing {} PDF pages for OCR", page_images.len());
+
+        let mut all_text = Vec::new();
+        for (i, image_data) in page_images.iter().enumerate() {
+            debug!("Processing page {} of {}", i + 1, page_images.len());
+            match self
+                .openai_ocr_image(image_data, "image/jpeg", api_key)
+                .await
+            {
+                Ok(text) => {
+                    if !text.is_empty() {
+                        all_text.push(text);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to OCR page {}: {}", i + 1, e);
+                    // Continue with other pages
+                }
+            }
+        }
+
+        Ok(all_text.join("\n\n--- Page Break ---\n\n"))
+    }
+
+    /// Convert PDF to a vector of JPEG images (one per page)
+    async fn convert_pdf_to_images(&self, data: &[u8]) -> Result<Vec<Vec<u8>>> {
+        let temp_id = Uuid::new_v4();
+        let temp_pdf = format!("{}/temp_ocr_{}.pdf", self.storage_path, temp_id);
+        let temp_output = format!("{}/temp_ocr_{}", self.storage_path, temp_id);
+
+        // Write PDF to temp file
+        fs::write(&temp_pdf, data)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
+
+        // Use pdftoppm to convert all pages to JPEG images
+        let result = Command::new("pdftoppm")
+            .args(["-jpeg", "-r", "150", &temp_pdf, &temp_output])
+            .output();
+
+        // Clean up temp PDF
+        let _ = fs::remove_file(&temp_pdf).await;
+
+        match result {
+            Ok(output) if output.status.success() => {
+                // Read all generated page images
+                let mut images = Vec::new();
+                let mut page = 1;
+
+                loop {
+                    // pdftoppm creates files like: temp_output-1.jpg, temp_output-2.jpg, etc.
+                    let page_file = format!("{}-{}.jpg", temp_output, page);
+                    match fs::read(&page_file).await {
+                        Ok(image_data) => {
+                            images.push(image_data);
+                            let _ = fs::remove_file(&page_file).await;
+                            page += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
+
+                if images.is_empty() {
+                    warn!("pdftoppm produced no output files");
+                    return Err(Error::AiService(
+                        "PDF conversion produced no images".to_string(),
+                    ));
+                }
+
+                Ok(images)
+            }
+            Ok(output) => {
+                warn!(
+                    "pdftoppm failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                Err(Error::AiService(format!(
+                    "PDF conversion failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                )))
+            }
+            Err(e) => {
+                warn!("pdftoppm not available: {}", e);
+                Err(Error::AiService(format!(
+                    "PDF conversion tool (pdftoppm) not available: {}. Install poppler-utils.",
+                    e
+                )))
+            }
+        }
+    }
+
+    /// OCR a single image
+    async fn openai_ocr_image(
+        &self,
+        data: &[u8],
+        mime_type: &str,
+        api_key: &str,
+    ) -> Result<String> {
         let base64_data = base64_encode(data);
         let data_url = format!("data:{};base64,{}", mime_type, base64_data);
 
@@ -629,6 +755,58 @@ impl DynamicOcrService {
     }
 
     async fn anthropic_ocr(&self, data: &[u8], mime_type: &str, api_key: &str) -> Result<String> {
+        // Handle PDFs by converting to images first
+        if mime_type == "application/pdf" {
+            return self.anthropic_ocr_pdf(data, api_key).await;
+        }
+
+        self.anthropic_ocr_image(data, mime_type, api_key).await
+    }
+
+    /// OCR a PDF using Anthropic by converting pages to images and processing each
+    async fn anthropic_ocr_pdf(&self, data: &[u8], api_key: &str) -> Result<String> {
+        let page_images = self.convert_pdf_to_images(data).await?;
+
+        if page_images.is_empty() {
+            return Err(Error::AiService(
+                "Failed to convert PDF to images".to_string(),
+            ));
+        }
+
+        info!(
+            "Processing {} PDF pages for OCR with Anthropic",
+            page_images.len()
+        );
+
+        let mut all_text = Vec::new();
+        for (i, image_data) in page_images.iter().enumerate() {
+            debug!("Processing page {} of {}", i + 1, page_images.len());
+            match self
+                .anthropic_ocr_image(image_data, "image/jpeg", api_key)
+                .await
+            {
+                Ok(text) => {
+                    if !text.is_empty() {
+                        all_text.push(text);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to OCR page {}: {}", i + 1, e);
+                    // Continue with other pages
+                }
+            }
+        }
+
+        Ok(all_text.join("\n\n--- Page Break ---\n\n"))
+    }
+
+    /// OCR a single image using Anthropic
+    async fn anthropic_ocr_image(
+        &self,
+        data: &[u8],
+        mime_type: &str,
+        api_key: &str,
+    ) -> Result<String> {
         let base64_data = base64_encode(data);
 
         let request = AnthropicRequest {
