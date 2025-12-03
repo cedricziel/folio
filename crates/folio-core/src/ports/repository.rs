@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument, UpdateDocumentType,
-    UpdateTag,
+    DocumentFilter, DocumentType, Id, Setting, Tag, UpdateCorrespondent, UpdateDocument,
+    UpdateDocumentType, UpdateTag,
 };
 
 /// Repository for document operations
@@ -107,4 +107,26 @@ pub trait DocumentTypeRepository: Send + Sync {
 
     /// Delete a document type by ID
     async fn delete(&self, id: Id) -> Result<()>;
+}
+
+/// Repository for application settings
+#[async_trait]
+pub trait SettingsRepository: Send + Sync {
+    /// Get a setting by key
+    async fn get(&self, key: &str) -> Result<Option<Setting>>;
+
+    /// Get all settings
+    async fn list(&self) -> Result<Vec<Setting>>;
+
+    /// Get settings by prefix (e.g., "ai." for all AI settings)
+    async fn list_by_prefix(&self, prefix: &str) -> Result<Vec<Setting>>;
+
+    /// Set a setting value
+    async fn set(&self, key: &str, value: &str) -> Result<Setting>;
+
+    /// Set multiple settings at once
+    async fn set_many(&self, settings: &[(String, String)]) -> Result<()>;
+
+    /// Delete a setting
+    async fn delete(&self, key: &str) -> Result<()>;
 }

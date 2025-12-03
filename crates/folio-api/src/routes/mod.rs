@@ -2,6 +2,7 @@
 
 mod documents;
 mod pages;
+mod settings;
 mod tags;
 
 use axum::{extract::DefaultBodyLimit, Router};
@@ -16,6 +17,8 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", api_router())
         // Page routes (HTMX)
         .merge(pages::router())
+        // Settings routes
+        .merge(settings::router())
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         // Middleware

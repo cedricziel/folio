@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    OcrService, SearchService, TagRepository,
+    OcrService, SearchService, SettingsRepository, TagRepository,
 };
 use folio_infra::{JobQueue, ThumbnailService};
 
@@ -15,6 +15,7 @@ pub struct AppState {
     pub tag_repo: Arc<dyn TagRepository>,
     pub correspondent_repo: Arc<dyn CorrespondentRepository>,
     pub document_type_repo: Arc<dyn DocumentTypeRepository>,
+    pub settings_repo: Arc<dyn SettingsRepository>,
     pub ocr_service: Arc<dyn OcrService>,
     pub embedding_service: Arc<dyn EmbeddingService>,
     pub search_service: Arc<dyn SearchService>,
@@ -30,6 +31,7 @@ impl AppState {
         tag_repo: Arc<dyn TagRepository>,
         correspondent_repo: Arc<dyn CorrespondentRepository>,
         document_type_repo: Arc<dyn DocumentTypeRepository>,
+        settings_repo: Arc<dyn SettingsRepository>,
         ocr_service: Arc<dyn OcrService>,
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
@@ -42,6 +44,7 @@ impl AppState {
             tag_repo,
             correspondent_repo,
             document_type_repo,
+            settings_repo,
             ocr_service,
             embedding_service,
             search_service,

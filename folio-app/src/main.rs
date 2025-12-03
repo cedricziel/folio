@@ -11,7 +11,8 @@ use folio_api::{create_router, AppState};
 use folio_infra::{
     create_pool, run_migrations, AiServiceFactory, Config, FileStorage, JobQueue,
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
+    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, ThumbnailService, Worker,
+    WorkerConfig,
 };
 
 #[tokio::main]
@@ -67,6 +68,7 @@ async fn main() -> Result<()> {
     let tag_repo = Arc::new(SqliteTagRepository::new(pool.clone()));
     let correspondent_repo = Arc::new(SqliteCorrespondentRepository::new(pool.clone()));
     let document_type_repo = Arc::new(SqliteDocumentTypeRepository::new(pool.clone()));
+    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
 
     // Create AI services
     let ocr_service = AiServiceFactory::create_ocr_service(&config.ai);
@@ -105,6 +107,7 @@ async fn main() -> Result<()> {
         tag_repo,
         correspondent_repo,
         document_type_repo,
+        settings_repo,
         ocr_service,
         embedding_service,
         search_service,

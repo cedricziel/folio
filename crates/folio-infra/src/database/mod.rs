@@ -1,6 +1,7 @@
 //! Database adapters (SQLite)
 
 mod document_repo;
+mod settings_repo;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -10,6 +11,7 @@ pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
 };
+pub use settings_repo::SqliteSettingsRepository;
 
 /// Create a new SQLite connection pool
 pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {

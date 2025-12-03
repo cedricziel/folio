@@ -139,6 +139,7 @@ impl JobQueue {
 
     /// Dequeue the next available job
     #[instrument(skip(self))]
+    #[allow(clippy::type_complexity)]
     pub async fn dequeue(&self) -> Result<Option<Job>> {
         let now = Utc::now();
 

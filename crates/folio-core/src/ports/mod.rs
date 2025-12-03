@@ -7,5 +7,6 @@ mod repository;
 
 pub use ai::{EmbeddingService, OcrService, SearchResult, SearchService};
 pub use repository::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
+    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
+    TagRepository,
 };
