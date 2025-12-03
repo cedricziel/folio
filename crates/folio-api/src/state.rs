@@ -6,6 +6,7 @@ use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
     OcrService, SearchService, TagRepository,
 };
+use folio_infra::{JobQueue, ThumbnailService};
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -17,6 +18,8 @@ pub struct AppState {
     pub ocr_service: Arc<dyn OcrService>,
     pub embedding_service: Arc<dyn EmbeddingService>,
     pub search_service: Arc<dyn SearchService>,
+    pub thumbnail_service: Arc<ThumbnailService>,
+    pub job_queue: JobQueue,
     pub storage_path: String,
 }
 
@@ -30,6 +33,8 @@ impl AppState {
         ocr_service: Arc<dyn OcrService>,
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
+        thumbnail_service: Arc<ThumbnailService>,
+        job_queue: JobQueue,
         storage_path: String,
     ) -> Self {
         Self {
@@ -40,6 +45,8 @@ impl AppState {
             ocr_service,
             embedding_service,
             search_service,
+            thumbnail_service,
+            job_queue,
             storage_path,
         }
     }

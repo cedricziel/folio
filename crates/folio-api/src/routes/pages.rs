@@ -12,6 +12,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use folio_core::models::{CreateDocument, Document};
+use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -25,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/documents/search", get(search_documents))
         // Parameterized routes come last
         .route("/documents/:id", get(document_detail))
+        .route("/documents/:id/thumbnail", get(document_thumbnail))
         .route("/documents/:id/delete", post(delete_document))
 }
 
@@ -93,6 +95,69 @@ async fn document_detail(
     })))
 }
 
+/// Document thumbnail (serves generated thumbnail or placeholder)
+async fn document_thumbnail(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Response> {
+    let document = state
+        .document_repo
+        .find_by_id(id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Document not found"))?;
+
+    // Try to serve generated thumbnail first
+    if state.thumbnail_service.exists(id).await {
+        if let Ok(data) = state.thumbnail_service.read(id).await {
+            return Ok(([(header::CONTENT_TYPE, "image/jpeg")], data).into_response());
+        }
+    }
+
+    // Fallback: try to serve the original image if it's an image
+    let is_image = document
+        .mime_type
+        .as_ref()
+        .map(|m| m.starts_with("image/"))
+        .unwrap_or(false);
+
+    if is_image {
+        if let Some(ref file_path) = document.file_path {
+            let storage = folio_infra::FileStorage::new(&state.storage_path);
+            if let Ok(data) = storage.read(file_path).await {
+                let mime = document
+                    .mime_type
+                    .unwrap_or_else(|| "application/octet-stream".to_string());
+                return Ok(([(header::CONTENT_TYPE, mime)], data).into_response());
+            }
+        }
+    }
+
+    // Return a placeholder SVG for non-images or missing files
+    let is_pdf = document
+        .mime_type
+        .as_ref()
+        .map(|m| m == "application/pdf")
+        .unwrap_or(false);
+
+    let placeholder = if is_pdf {
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+            <rect width="100" height="100" fill="#f1f5f9"/>
+            <path d="M25 10h35l15 15v60a5 5 0 01-5 5H25a5 5 0 01-5-5V15a5 5 0 015-5z" fill="#ef4444"/>
+            <path d="M60 10v15h15" fill="#dc2626"/>
+            <text x="50" y="60" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14" font-weight="bold">PDF</text>
+        </svg>"##
+    } else {
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+            <rect width="100" height="100" fill="#f1f5f9"/>
+            <path d="M25 10h35l15 15v60a5 5 0 01-5 5H25a5 5 0 01-5-5V15a5 5 0 015-5z" fill="#64748b"/>
+            <path d="M60 10v15h15" fill="#475569"/>
+            <text x="50" y="60" text-anchor="middle" fill="white" font-family="sans-serif" font-size="12" font-weight="bold">FILE</text>
+        </svg>"##
+    };
+
+    Ok(([(header::CONTENT_TYPE, "image/svg+xml")], placeholder).into_response())
+}
+
 /// Upload success template (Turbo Stream response)
 #[derive(Template)]
 #[template(path = "partials/upload_success.html")]
@@ -151,19 +216,12 @@ async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Extract text from document using OCR
-    let content = state
-        .ocr_service
-        .extract_text(&file_data, &mime_type)
-        .await
-        .ok();
-
-    // Create document record
+    // Create document record (OCR will be done by background worker)
     let document = state
         .document_repo
         .create(CreateDocument {
             title,
-            content: content.clone(),
+            content: None,
             original_filename: filename.clone(),
             mime_type: Some(mime_type),
             correspondent_id: None,
@@ -182,16 +240,15 @@ async fn upload_document(
         }
     }
 
-    // Generate and store embedding for search
-    if let Some(ref text) = content {
-        if !text.is_empty() {
-            if let Ok(embedding) = state.embedding_service.generate_embedding(text).await {
-                let _ = state
-                    .search_service
-                    .store_embedding(document.id, &embedding)
-                    .await;
-            }
-        }
+    // Enqueue background job for thumbnail, OCR, and embedding
+    if let Err(e) = state
+        .job_queue
+        .enqueue(JobType::ProcessDocument {
+            document_id: document.id,
+        })
+        .await
+    {
+        error!("Failed to enqueue document processing job: {}", e);
     }
 
     // Re-fetch to get updated document with file_path

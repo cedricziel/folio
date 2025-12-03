@@ -58,6 +58,51 @@
                 this.element.remove();
             }
         });
+
+        // View Toggle Controller (list/gallery)
+        Stimulus.register("view-toggle", class extends Controller {
+            static targets = ["list", "listBtn", "galleryBtn"]
+            static values = { view: { type: String, default: "list" } }
+
+            connect() {
+                // Load saved preference
+                const saved = localStorage.getItem("folio-view-mode");
+                if (saved) {
+                    this.viewValue = saved;
+                }
+                this.updateView();
+            }
+
+            showList() {
+                this.viewValue = "list";
+                this.save();
+                this.updateView();
+            }
+
+            showGallery() {
+                this.viewValue = "gallery";
+                this.save();
+                this.updateView();
+            }
+
+            save() {
+                localStorage.setItem("folio-view-mode", this.viewValue);
+            }
+
+            updateView() {
+                const isList = this.viewValue === "list";
+
+                if (this.hasListTarget) {
+                    this.listTarget.classList.toggle("view-list", isList);
+                    this.listTarget.classList.toggle("view-gallery", !isList);
+                }
+
+                if (this.hasListBtnTarget && this.hasGalleryBtnTarget) {
+                    this.listBtnTarget.classList.toggle("active", isList);
+                    this.galleryBtnTarget.classList.toggle("active", !isList);
+                }
+            }
+        });
     </script>
 </head>
 <body>

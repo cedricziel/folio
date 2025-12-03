@@ -5,20 +5,25 @@
     {% for doc in documents %}
     <li class="document-item" id="document-{{ doc.id }}">
         <a href="/documents/{{ doc.id }}" data-turbo-frame="document-detail">
-            <div class="document-title">{{ doc.title }}</div>
-            <div class="document-meta">
-                <span class="date">{{ doc.created_at }}</span>
-                {% match doc.mime_type %}
-                {% when Some with (mime) %}
-                <span class="mime-type">{{ mime }}</span>
+            <div class="document-thumbnail">
+                <img src="/documents/{{ doc.id }}/thumbnail" alt="{{ doc.title }}" loading="lazy">
+            </div>
+            <div class="document-info-block">
+                <div class="document-title">{{ doc.title }}</div>
+                <div class="document-meta">
+                    <span class="date">{{ doc.created_at }}</span>
+                    {% match doc.mime_type %}
+                    {% when Some with (mime) %}
+                    <span class="mime-type">{{ mime }}</span>
+                    {% when None %}
+                    {% endmatch %}
+                </div>
+                {% match doc.content %}
+                {% when Some with (content) %}
+                <div class="document-preview-text">{{ content|truncate(150) }}</div>
                 {% when None %}
                 {% endmatch %}
             </div>
-            {% match doc.content %}
-            {% when Some with (content) %}
-            <div class="document-preview">{{ content|truncate(200) }}</div>
-            {% when None %}
-            {% endmatch %}
         </a>
     </li>
     {% endfor %}

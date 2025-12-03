@@ -38,3 +38,6 @@ chrono = { workspace = true }
 
 # HTTP client (for AI APIs)
 reqwest = { workspace = true }
+
+# Image processing
+image = { workspace = true }

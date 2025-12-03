@@ -35,10 +35,32 @@
     </form>
 </section>
 
-<section class="documents-section">
-    <h2>All Documents</h2>
+<section class="documents-section" data-controller="view-toggle">
+    <div class="section-header">
+        <h2>All Documents</h2>
+        <div class="view-toggle">
+            <button type="button" class="view-btn active"
+                    data-view-toggle-target="listBtn"
+                    data-action="click->view-toggle#showList"
+                    title="List view">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M2 4h12v1H2V4zm0 3.5h12v1H2v-1zm0 3.5h12v1H2V11z"/>
+                </svg>
+            </button>
+            <button type="button" class="view-btn"
+                    data-view-toggle-target="galleryBtn"
+                    data-action="click->view-toggle#showGallery"
+                    title="Gallery view">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M1 2h4v4H1V2zm5 0h4v4H6V2zm5 0h4v4h-4V2zM1 7h4v4H1V7zm5 0h4v4H6V7zm5 0h4v4h-4V7zM1 12h4v4H1v-4zm5 0h4v4H6v-4zm5 0h4v4h-4v-4z"/>
+                </svg>
+            </button>
+        </div>
+    </div>
     <turbo-frame id="documents-list">
-        {% include "partials/documents_list.html" %}
+        <div class="documents-container view-list" data-view-toggle-target="list">
+            {% include "partials/documents_list.html" %}
+        </div>
     </turbo-frame>
     <turbo-frame id="document-detail">
     </turbo-frame>
