@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/folio-core",
+    "crates/folio-infra",
+    "crates/folio-api",
+    "folio-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Folio Contributors"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["macros", "multipart"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+
+# HTML templating (for HTMX responses)
+askama = "0.12"
+askama_axum = "0.4"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Configuration
+figment = { version = "0.10", features = ["toml", "env"] }
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP client (for AI APIs)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Workspace crates
+folio-core = { path = "crates/folio-core" }
+folio-infra = { path = "crates/folio-infra" }
+folio-api = { path = "crates/folio-api" }

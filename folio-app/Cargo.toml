@@ -1,0 +1,28 @@
+[package]
+name = "folio-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "folio-app"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace crates
+folio-core = { workspace = true }
+folio-infra = { workspace = true }
+folio-api = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

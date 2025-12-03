@@ -1,0 +1,739 @@
+//! SQLite document repository implementation
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::SqlitePool;
+use uuid::Uuid;
+
+use folio_core::error::{Error, Result};
+use folio_core::models::{
+    Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
+    DocumentFilter, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument, UpdateDocumentType,
+    UpdateTag,
+};
+use folio_core::ports::{
+    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
+};
+
+/// SQLite implementation of DocumentRepository
+pub struct SqliteDocumentRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteDocumentRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+// Helper to convert sqlx error to domain error
+fn map_sqlx_error(e: sqlx::Error) -> Error {
+    Error::Repository(e.to_string())
+}
+
+// Helper to parse UUID from string
+fn parse_uuid(s: &str) -> Result<Uuid> {
+    Uuid::parse_str(s).map_err(|e| Error::Repository(format!("Invalid UUID: {}", e)))
+}
+
+// Helper to parse optional UUID
+fn parse_optional_uuid(s: Option<String>) -> Result<Option<Uuid>> {
+    match s {
+        Some(s) => Ok(Some(parse_uuid(&s)?)),
+        None => Ok(None),
+    }
+}
+
+// Row types for SQLx queries
+#[derive(sqlx::FromRow)]
+struct DocumentRow {
+    id: String,
+    title: String,
+    content: Option<String>,
+    original_filename: Option<String>,
+    file_path: Option<String>,
+    mime_type: Option<String>,
+    correspondent_id: Option<String>,
+    document_type_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl TryFrom<DocumentRow> for Document {
+    type Error = Error;
+
+    fn try_from(row: DocumentRow) -> Result<Self> {
+        Ok(Document {
+            id: parse_uuid(&row.id)?,
+            title: row.title,
+            content: row.content,
+            original_filename: row.original_filename,
+            file_path: row.file_path,
+            mime_type: row.mime_type,
+            correspondent_id: parse_optional_uuid(row.correspondent_id)?,
+            document_type_id: parse_optional_uuid(row.document_type_id)?,
+            created_at: row
+                .created_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+            updated_at: row
+                .updated_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct TagRow {
+    id: String,
+    name: String,
+    color: Option<String>,
+    created_at: String,
+}
+
+impl TryFrom<TagRow> for Tag {
+    type Error = Error;
+
+    fn try_from(row: TagRow) -> Result<Self> {
+        Ok(Tag {
+            id: parse_uuid(&row.id)?,
+            name: row.name,
+            color: row.color,
+            created_at: row
+                .created_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct CorrespondentRow {
+    id: String,
+    name: String,
+    created_at: String,
+}
+
+impl TryFrom<CorrespondentRow> for Correspondent {
+    type Error = Error;
+
+    fn try_from(row: CorrespondentRow) -> Result<Self> {
+        Ok(Correspondent {
+            id: parse_uuid(&row.id)?,
+            name: row.name,
+            created_at: row
+                .created_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct DocumentTypeRow {
+    id: String,
+    name: String,
+    created_at: String,
+}
+
+impl TryFrom<DocumentTypeRow> for DocumentType {
+    type Error = Error;
+
+    fn try_from(row: DocumentTypeRow) -> Result<Self> {
+        Ok(DocumentType {
+            id: parse_uuid(&row.id)?,
+            name: row.name,
+            created_at: row
+                .created_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+        })
+    }
+}
+
+#[async_trait]
+impl DocumentRepository for SqliteDocumentRepository {
+    async fn find_by_id(&self, id: Id) -> Result<Option<Document>> {
+        let id_str = id.to_string();
+        let row: Option<DocumentRow> = sqlx::query_as(
+            "SELECT id, title, content, original_filename, file_path, mime_type,
+                    correspondent_id, document_type_id, created_at, updated_at
+             FROM documents WHERE id = ?",
+        )
+        .bind(&id_str)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
+        // Base query - for simplicity, we'll handle basic filtering
+        let rows: Vec<DocumentRow> = if let Some(filter) = filter {
+            if let Some(correspondent_id) = filter.correspondent_id {
+                sqlx::query_as(
+                    "SELECT id, title, content, original_filename, file_path, mime_type,
+                            correspondent_id, document_type_id, created_at, updated_at
+                     FROM documents WHERE correspondent_id = ? ORDER BY created_at DESC",
+                )
+                .bind(correspondent_id.to_string())
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?
+            } else if let Some(document_type_id) = filter.document_type_id {
+                sqlx::query_as(
+                    "SELECT id, title, content, original_filename, file_path, mime_type,
+                            correspondent_id, document_type_id, created_at, updated_at
+                     FROM documents WHERE document_type_id = ? ORDER BY created_at DESC",
+                )
+                .bind(document_type_id.to_string())
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?
+            } else {
+                sqlx::query_as(
+                    "SELECT id, title, content, original_filename, file_path, mime_type,
+                            correspondent_id, document_type_id, created_at, updated_at
+                     FROM documents ORDER BY created_at DESC",
+                )
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?
+            }
+        } else {
+            sqlx::query_as(
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, created_at, updated_at
+                 FROM documents ORDER BY created_at DESC",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?
+        };
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn create(&self, params: CreateDocument) -> Result<Document> {
+        let id = Id::new_v4();
+        let now = Utc::now();
+
+        sqlx::query(
+            "INSERT INTO documents (id, title, content, original_filename, mime_type,
+                                    correspondent_id, document_type_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id.to_string())
+        .bind(&params.title)
+        .bind(&params.content)
+        .bind(&params.original_filename)
+        .bind(&params.mime_type)
+        .bind(params.correspondent_id.map(|id| id.to_string()))
+        .bind(params.document_type_id.map(|id| id.to_string()))
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(Document {
+            id,
+            title: params.title,
+            content: params.content,
+            original_filename: params.original_filename,
+            file_path: None,
+            mime_type: params.mime_type,
+            correspondent_id: params.correspondent_id,
+            document_type_id: params.document_type_id,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    async fn update(&self, id: Id, params: UpdateDocument) -> Result<Document> {
+        let existing = self.find_by_id(id).await?.ok_or_else(|| Error::NotFound {
+            entity_type: "Document",
+            id: id.to_string(),
+        })?;
+
+        let title = params.title.unwrap_or(existing.title);
+        let content = params.content.or(existing.content);
+        let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
+        let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
+        let now = Utc::now();
+
+        sqlx::query(
+            "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
+                                  document_type_id = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(&title)
+        .bind(&content)
+        .bind(correspondent_id.map(|id| id.to_string()))
+        .bind(document_type_id.map(|id| id.to_string()))
+        .bind(now.to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        Ok(Document {
+            id,
+            title,
+            content,
+            original_filename: existing.original_filename,
+            file_path: existing.file_path,
+            mime_type: existing.mime_type,
+            correspondent_id,
+            document_type_id,
+            created_at: existing.created_at,
+            updated_at: now,
+        })
+    }
+
+    async fn delete(&self, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM documents WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn set_file_path(&self, id: Id, file_path: &str) -> Result<()> {
+        let now = Utc::now();
+        let result = sqlx::query("UPDATE documents SET file_path = ?, updated_at = ? WHERE id = ?")
+            .bind(file_path)
+            .bind(now.to_rfc3339())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>> {
+        let rows: Vec<TagRow> = sqlx::query_as(
+            "SELECT t.id, t.name, t.color, t.created_at
+             FROM tags t
+             INNER JOIN document_tags dt ON t.id = dt.tag_id
+             WHERE dt.document_id = ?",
+        )
+        .bind(document_id.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn set_tags(&self, document_id: Id, tag_ids: &[Id]) -> Result<()> {
+        let doc_id_str = document_id.to_string();
+
+        // Delete existing tags
+        sqlx::query("DELETE FROM document_tags WHERE document_id = ?")
+            .bind(&doc_id_str)
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        // Insert new tags
+        for tag_id in tag_ids {
+            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)")
+                .bind(&doc_id_str)
+                .bind(tag_id.to_string())
+                .execute(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
+
+        Ok(())
+    }
+
+    async fn add_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
+        sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)")
+            .bind(document_id.to_string())
+            .bind(tag_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        Ok(())
+    }
+
+    async fn remove_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
+        sqlx::query("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?")
+            .bind(document_id.to_string())
+            .bind(tag_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        Ok(())
+    }
+}
+
+/// SQLite implementation of TagRepository
+pub struct SqliteTagRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteTagRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl TagRepository for SqliteTagRepository {
+    async fn find_by_id(&self, id: Id) -> Result<Option<Tag>> {
+        let row: Option<TagRow> =
+            sqlx::query_as("SELECT id, name, color, created_at FROM tags WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<Tag>> {
+        let row: Option<TagRow> =
+            sqlx::query_as("SELECT id, name, color, created_at FROM tags WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<Tag>> {
+        let rows: Vec<TagRow> =
+            sqlx::query_as("SELECT id, name, color, created_at FROM tags ORDER BY name")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn create(&self, params: CreateTag) -> Result<Tag> {
+        let id = Id::new_v4();
+        let now = Utc::now();
+
+        sqlx::query("INSERT INTO tags (id, name, color, created_at) VALUES (?, ?, ?, ?)")
+            .bind(id.to_string())
+            .bind(&params.name)
+            .bind(&params.color)
+            .bind(now.to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("UNIQUE constraint failed") {
+                    Error::Duplicate {
+                        entity_type: "Tag",
+                        field: "name",
+                        value: params.name.clone(),
+                    }
+                } else {
+                    map_sqlx_error(e)
+                }
+            })?;
+
+        Ok(Tag {
+            id,
+            name: params.name,
+            color: params.color,
+            created_at: now,
+        })
+    }
+
+    async fn update(&self, id: Id, params: UpdateTag) -> Result<Tag> {
+        let existing = self.find_by_id(id).await?.ok_or_else(|| Error::NotFound {
+            entity_type: "Tag",
+            id: id.to_string(),
+        })?;
+
+        let name = params.name.unwrap_or(existing.name);
+        let color = params.color.unwrap_or(existing.color);
+
+        sqlx::query("UPDATE tags SET name = ?, color = ? WHERE id = ?")
+            .bind(&name)
+            .bind(&color)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        Ok(Tag {
+            id,
+            name,
+            color,
+            created_at: existing.created_at,
+        })
+    }
+
+    async fn delete(&self, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM tags WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Tag",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// SQLite implementation of CorrespondentRepository
+pub struct SqliteCorrespondentRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteCorrespondentRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl CorrespondentRepository for SqliteCorrespondentRepository {
+    async fn find_by_id(&self, id: Id) -> Result<Option<Correspondent>> {
+        let row: Option<CorrespondentRow> =
+            sqlx::query_as("SELECT id, name, created_at FROM correspondents WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<Correspondent>> {
+        let row: Option<CorrespondentRow> =
+            sqlx::query_as("SELECT id, name, created_at FROM correspondents WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<Correspondent>> {
+        let rows: Vec<CorrespondentRow> =
+            sqlx::query_as("SELECT id, name, created_at FROM correspondents ORDER BY name")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn create(&self, params: CreateCorrespondent) -> Result<Correspondent> {
+        let id = Id::new_v4();
+        let now = Utc::now();
+
+        sqlx::query("INSERT INTO correspondents (id, name, created_at) VALUES (?, ?, ?)")
+            .bind(id.to_string())
+            .bind(&params.name)
+            .bind(now.to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("UNIQUE constraint failed") {
+                    Error::Duplicate {
+                        entity_type: "Correspondent",
+                        field: "name",
+                        value: params.name.clone(),
+                    }
+                } else {
+                    map_sqlx_error(e)
+                }
+            })?;
+
+        Ok(Correspondent {
+            id,
+            name: params.name,
+            created_at: now,
+        })
+    }
+
+    async fn update(&self, id: Id, params: UpdateCorrespondent) -> Result<Correspondent> {
+        let existing = self.find_by_id(id).await?.ok_or_else(|| Error::NotFound {
+            entity_type: "Correspondent",
+            id: id.to_string(),
+        })?;
+
+        let name = params.name.unwrap_or(existing.name);
+
+        sqlx::query("UPDATE correspondents SET name = ? WHERE id = ?")
+            .bind(&name)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        Ok(Correspondent {
+            id,
+            name,
+            created_at: existing.created_at,
+        })
+    }
+
+    async fn delete(&self, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM correspondents WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Correspondent",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// SQLite implementation of DocumentTypeRepository
+pub struct SqliteDocumentTypeRepository {
+    pool: SqlitePool,
+}
+
+impl SqliteDocumentTypeRepository {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl DocumentTypeRepository for SqliteDocumentTypeRepository {
+    async fn find_by_id(&self, id: Id) -> Result<Option<DocumentType>> {
+        let row: Option<DocumentTypeRow> =
+            sqlx::query_as("SELECT id, name, created_at FROM document_types WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn find_by_name(&self, name: &str) -> Result<Option<DocumentType>> {
+        let row: Option<DocumentTypeRow> =
+            sqlx::query_as("SELECT id, name, created_at FROM document_types WHERE name = ?")
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list(&self) -> Result<Vec<DocumentType>> {
+        let rows: Vec<DocumentTypeRow> =
+            sqlx::query_as("SELECT id, name, created_at FROM document_types ORDER BY name")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn create(&self, params: CreateDocumentType) -> Result<DocumentType> {
+        let id = Id::new_v4();
+        let now = Utc::now();
+
+        sqlx::query("INSERT INTO document_types (id, name, created_at) VALUES (?, ?, ?)")
+            .bind(id.to_string())
+            .bind(&params.name)
+            .bind(now.to_rfc3339())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("UNIQUE constraint failed") {
+                    Error::Duplicate {
+                        entity_type: "DocumentType",
+                        field: "name",
+                        value: params.name.clone(),
+                    }
+                } else {
+                    map_sqlx_error(e)
+                }
+            })?;
+
+        Ok(DocumentType {
+            id,
+            name: params.name,
+            created_at: now,
+        })
+    }
+
+    async fn update(&self, id: Id, params: UpdateDocumentType) -> Result<DocumentType> {
+        let existing = self.find_by_id(id).await?.ok_or_else(|| Error::NotFound {
+            entity_type: "DocumentType",
+            id: id.to_string(),
+        })?;
+
+        let name = params.name.unwrap_or(existing.name);
+
+        sqlx::query("UPDATE document_types SET name = ? WHERE id = ?")
+            .bind(&name)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        Ok(DocumentType {
+            id,
+            name,
+            created_at: existing.created_at,
+        })
+    }
+
+    async fn delete(&self, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM document_types WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "DocumentType",
+                id: id.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}

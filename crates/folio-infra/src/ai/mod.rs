@@ -1,0 +1,558 @@
+//! AI service implementations
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, instrument};
+
+use folio_core::error::{Error, Result};
+use folio_core::models::Id;
+use folio_core::ports::{EmbeddingService, OcrService, SearchResult, SearchService};
+
+use crate::config::AiConfig;
+
+/// Factory for creating AI services based on configuration
+pub struct AiServiceFactory;
+
+impl AiServiceFactory {
+    /// Create OCR service based on provider configuration
+    pub fn create_ocr_service(config: &AiConfig) -> Arc<dyn OcrService> {
+        match config.provider.as_str() {
+            "openai" => Arc::new(OpenAiOcrService::new(
+                config.openai_api_key.clone().unwrap_or_default(),
+            )),
+            "anthropic" => Arc::new(AnthropicOcrService::new(
+                config.anthropic_api_key.clone().unwrap_or_default(),
+            )),
+            _ => Arc::new(NoOpOcrService),
+        }
+    }
+
+    /// Create embedding service based on provider configuration
+    pub fn create_embedding_service(config: &AiConfig) -> Arc<dyn EmbeddingService> {
+        match config.provider.as_str() {
+            "openai" => Arc::new(OpenAiEmbeddingService::new(
+                config.openai_api_key.clone().unwrap_or_default(),
+            )),
+            _ => Arc::new(NoOpEmbeddingService),
+        }
+    }
+}
+
+// ============================================================================
+// OpenAI implementations
+// ============================================================================
+
+/// OpenAI OCR service using GPT-4 Vision
+pub struct OpenAiOcrService {
+    api_key: String,
+    client: reqwest::Client,
+}
+
+impl OpenAiOcrService {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct OpenAiChatRequest {
+    model: String,
+    messages: Vec<OpenAiMessage>,
+    max_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct OpenAiMessage {
+    role: String,
+    content: Vec<OpenAiContent>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum OpenAiContent {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: ImageUrl },
+}
+
+#[derive(Serialize)]
+struct ImageUrl {
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChatResponse {
+    choices: Vec<OpenAiChoice>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiChoice {
+    message: OpenAiResponseMessage,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponseMessage {
+    content: String,
+}
+
+#[async_trait]
+impl OcrService for OpenAiOcrService {
+    #[instrument(skip(self, data))]
+    async fn extract_text(&self, data: &[u8], mime_type: &str) -> Result<String> {
+        if self.api_key.is_empty() {
+            return Err(Error::AiService(
+                "OpenAI API key not configured".to_string(),
+            ));
+        }
+
+        // For now, we only support images via base64 encoding
+        let base64_data = base64_encode(data);
+        let data_url = format!("data:{};base64,{}", mime_type, base64_data);
+
+        let request = OpenAiChatRequest {
+            model: "gpt-4o-mini".to_string(),
+            messages: vec![OpenAiMessage {
+                role: "user".to_string(),
+                content: vec![
+                    OpenAiContent::Text {
+                        text: "Extract all text from this document image. Return only the extracted text, nothing else.".to_string(),
+                    },
+                    OpenAiContent::ImageUrl {
+                        image_url: ImageUrl { url: data_url },
+                    },
+                ],
+            }],
+            max_tokens: 4096,
+        };
+
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::AiService(format!("OpenAI request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::AiService(format!(
+                "OpenAI API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let result: OpenAiChatResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiService(format!("Failed to parse OpenAI response: {}", e)))?;
+
+        result
+            .choices
+            .first()
+            .map(|c| c.message.content.clone())
+            .ok_or_else(|| Error::AiService("No response from OpenAI".to_string()))
+    }
+}
+
+/// OpenAI embedding service
+pub struct OpenAiEmbeddingService {
+    api_key: String,
+    client: reqwest::Client,
+}
+
+impl OpenAiEmbeddingService {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct OpenAiEmbeddingRequest {
+    model: String,
+    input: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiEmbeddingResponse {
+    data: Vec<EmbeddingData>,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingData {
+    embedding: Vec<f32>,
+}
+
+#[async_trait]
+impl EmbeddingService for OpenAiEmbeddingService {
+    #[instrument(skip(self, text))]
+    async fn generate_embedding(&self, text: &str) -> Result<Vec<f32>> {
+        if self.api_key.is_empty() {
+            return Err(Error::AiService(
+                "OpenAI API key not configured".to_string(),
+            ));
+        }
+
+        let embeddings = self.generate_embeddings(&[text]).await?;
+        embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::AiService("No embedding returned".to_string()))
+    }
+
+    #[instrument(skip(self, texts))]
+    async fn generate_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if self.api_key.is_empty() {
+            return Err(Error::AiService(
+                "OpenAI API key not configured".to_string(),
+            ));
+        }
+
+        let request = OpenAiEmbeddingRequest {
+            model: "text-embedding-3-small".to_string(),
+            input: texts.iter().map(|s| s.to_string()).collect(),
+        };
+
+        let response = self
+            .client
+            .post("https://api.openai.com/v1/embeddings")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::AiService(format!("OpenAI request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::AiService(format!(
+                "OpenAI API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let result: OpenAiEmbeddingResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiService(format!("Failed to parse OpenAI response: {}", e)))?;
+
+        Ok(result.data.into_iter().map(|d| d.embedding).collect())
+    }
+
+    fn embedding_dimension(&self) -> usize {
+        1536 // text-embedding-3-small dimension
+    }
+}
+
+// ============================================================================
+// Anthropic implementations
+// ============================================================================
+
+/// Anthropic OCR service using Claude Vision
+pub struct AnthropicOcrService {
+    api_key: String,
+    client: reqwest::Client,
+}
+
+impl AnthropicOcrService {
+    pub fn new(api_key: String) -> Self {
+        Self {
+            api_key,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AnthropicRequest {
+    model: String,
+    max_tokens: u32,
+    messages: Vec<AnthropicMessage>,
+}
+
+#[derive(Serialize)]
+struct AnthropicMessage {
+    role: String,
+    content: Vec<AnthropicContent>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum AnthropicContent {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: ImageSource },
+}
+
+#[derive(Serialize)]
+struct ImageSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    media_type: String,
+    data: String,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponse {
+    content: Vec<AnthropicResponseContent>,
+}
+
+#[derive(Deserialize)]
+struct AnthropicResponseContent {
+    text: String,
+}
+
+#[async_trait]
+impl OcrService for AnthropicOcrService {
+    #[instrument(skip(self, data))]
+    async fn extract_text(&self, data: &[u8], mime_type: &str) -> Result<String> {
+        if self.api_key.is_empty() {
+            return Err(Error::AiService(
+                "Anthropic API key not configured".to_string(),
+            ));
+        }
+
+        let base64_data = base64_encode(data);
+
+        let request = AnthropicRequest {
+            model: "claude-sonnet-4-20250514".to_string(),
+            max_tokens: 4096,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: vec![
+                    AnthropicContent::Image {
+                        source: ImageSource {
+                            source_type: "base64".to_string(),
+                            media_type: mime_type.to_string(),
+                            data: base64_data,
+                        },
+                    },
+                    AnthropicContent::Text {
+                        text: "Extract all text from this document image. Return only the extracted text, nothing else.".to_string(),
+                    },
+                ],
+            }],
+        };
+
+        let response = self
+            .client
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| Error::AiService(format!("Anthropic request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::AiService(format!(
+                "Anthropic API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let result: AnthropicResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::AiService(format!("Failed to parse Anthropic response: {}", e)))?;
+
+        result
+            .content
+            .first()
+            .map(|c| c.text.clone())
+            .ok_or_else(|| Error::AiService("No response from Anthropic".to_string()))
+    }
+}
+
+// ============================================================================
+// No-op implementations (for local/testing)
+// ============================================================================
+
+/// No-op OCR service that returns empty text
+pub struct NoOpOcrService;
+
+#[async_trait]
+impl OcrService for NoOpOcrService {
+    async fn extract_text(&self, _data: &[u8], _mime_type: &str) -> Result<String> {
+        debug!("NoOpOcrService: returning empty text");
+        Ok(String::new())
+    }
+}
+
+/// No-op embedding service that returns zero vectors
+pub struct NoOpEmbeddingService;
+
+#[async_trait]
+impl EmbeddingService for NoOpEmbeddingService {
+    async fn generate_embedding(&self, _text: &str) -> Result<Vec<f32>> {
+        debug!("NoOpEmbeddingService: returning zero vector");
+        Ok(vec![0.0; 384])
+    }
+
+    async fn generate_embeddings(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![0.0; 384]).collect())
+    }
+
+    fn embedding_dimension(&self) -> usize {
+        384
+    }
+}
+
+// ============================================================================
+// SQLite-based search service
+// ============================================================================
+
+use sqlx::SqlitePool;
+
+/// SQLite-based search service storing embeddings as JSON
+pub struct SqliteSearchService {
+    pool: SqlitePool,
+}
+
+impl SqliteSearchService {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl SearchService for SqliteSearchService {
+    async fn store_embedding(&self, document_id: Id, embedding: &[f32]) -> Result<()> {
+        let embedding_json = serde_json::to_string(embedding)
+            .map_err(|e| Error::AiService(format!("Failed to serialize embedding: {}", e)))?;
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO document_embeddings (document_id, embedding) VALUES (?, ?)",
+        )
+        .bind(document_id.to_string())
+        .bind(&embedding_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn delete_embedding(&self, document_id: Id) -> Result<()> {
+        sqlx::query("DELETE FROM document_embeddings WHERE document_id = ?")
+            .bind(document_id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| Error::Repository(e.to_string()))?;
+
+        Ok(())
+    }
+
+    #[instrument(skip(self, query_embedding))]
+    async fn search(&self, query_embedding: &[f32], limit: usize) -> Result<Vec<SearchResult>> {
+        // Fetch all embeddings (simple approach - for production, use a vector DB)
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT document_id, embedding FROM document_embeddings")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| Error::Repository(e.to_string()))?;
+
+        let mut results: Vec<SearchResult> = rows
+            .into_iter()
+            .filter_map(|(doc_id, embedding_json)| {
+                let embedding: Vec<f32> = serde_json::from_str(&embedding_json).ok()?;
+                let score = cosine_similarity(query_embedding, &embedding);
+                let document_id = uuid::Uuid::parse_str(&doc_id).ok()?;
+
+                Some(SearchResult {
+                    document_id,
+                    score,
+                    snippet: None,
+                })
+            })
+            .collect();
+
+        // Sort by score descending
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Limit results
+        results.truncate(limit);
+
+        Ok(results)
+    }
+}
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+/// Simple base64 encoding (no extra dependencies)
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    let mut result = String::new();
+    let mut i = 0;
+
+    while i < data.len() {
+        let b0 = data[i] as usize;
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as usize
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as usize
+        } else {
+            0
+        };
+
+        result.push(ALPHABET[b0 >> 2] as char);
+        result.push(ALPHABET[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+
+        if i + 1 < data.len() {
+            result.push(ALPHABET[((b1 & 0x0f) << 2) | (b2 >> 6)] as char);
+        } else {
+            result.push('=');
+        }
+
+        if i + 2 < data.len() {
+            result.push(ALPHABET[b2 & 0x3f] as char);
+        } else {
+            result.push('=');
+        }
+
+        i += 3;
+    }
+
+    result
+}
+
+/// Compute cosine similarity between two vectors
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+
+    dot / (norm_a * norm_b)
+}

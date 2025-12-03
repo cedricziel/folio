@@ -1,0 +1,35 @@
+[package]
+name = "folio-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Core domain
+folio-core = { workspace = true }
+folio-infra = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# HTML templating
+askama = { workspace = true }
+askama_axum = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }

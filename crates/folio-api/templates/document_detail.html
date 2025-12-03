@@ -1,0 +1,53 @@
+<turbo-frame id="document-detail">
+    <div class="document-detail-panel">
+        <header>
+            <h3>{{ document.title }}</h3>
+            <a href="/" class="close-btn" data-turbo-frame="_top">×</a>
+        </header>
+
+        <div class="document-info">
+            <dl>
+                <dt>ID</dt>
+                <dd>{{ document.id }}</dd>
+
+                <dt>Created</dt>
+                <dd>{{ document.created_at }}</dd>
+
+                <dt>Updated</dt>
+                <dd>{{ document.updated_at }}</dd>
+
+                {% match document.original_filename %}
+                {% when Some with (filename) %}
+                <dt>Original File</dt>
+                <dd>{{ filename }}</dd>
+                {% when None %}
+                {% endmatch %}
+
+                {% match document.mime_type %}
+                {% when Some with (mime) %}
+                <dt>Type</dt>
+                <dd>{{ mime }}</dd>
+                {% when None %}
+                {% endmatch %}
+            </dl>
+        </div>
+
+        {% match document.content %}
+        {% when Some with (content) %}
+        <div class="document-content">
+            <h4>Content</h4>
+            <pre>{{ content }}</pre>
+        </div>
+        {% when None %}
+        {% endmatch %}
+
+        <div class="document-actions">
+            <form action="/documents/{{ document.id }}/delete" method="post"
+                  data-controller="confirm"
+                  data-confirm-message-value="Are you sure you want to delete this document?"
+                  data-action="submit->confirm#confirm">
+                <button type="submit" class="btn-danger">Delete</button>
+            </form>
+        </div>
+    </div>
+</turbo-frame>

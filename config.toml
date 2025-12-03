@@ -1,0 +1,16 @@
+[server]
+host = "127.0.0.1"
+port = 3000
+
+[database]
+url = "sqlite:folio.db?mode=rwc"
+
+[storage]
+path = "./data"
+
+[ai]
+# Provider: "openai", "anthropic", or "local"
+provider = "openai"
+# API keys are loaded from environment variables:
+# - FOLIO_AI_OPENAI_API_KEY
+# - FOLIO_AI_ANTHROPIC_API_KEY

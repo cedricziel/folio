@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Folio{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script type="module">
+        import * as Turbo from 'https://esm.sh/@hotwired/turbo@8.0.12';
+        import { Application, Controller } from 'https://esm.sh/@hotwired/stimulus@3.2.2';
+
+        // Initialize Stimulus
+        window.Stimulus = Application.start();
+
+        // Upload Controller
+        Stimulus.register("upload", class extends Controller {
+            static targets = ["form", "button", "status"]
+
+            submit(event) {
+                this.buttonTarget.disabled = true;
+                this.buttonTarget.textContent = "Uploading...";
+                if (this.hasStatusTarget) {
+                    this.statusTarget.textContent = "Processing document...";
+                }
+            }
+
+            reset() {
+                this.buttonTarget.disabled = false;
+                this.buttonTarget.textContent = "Upload";
+                if (this.hasStatusTarget) {
+                    this.statusTarget.textContent = "";
+                }
+                this.formTarget.reset();
+            }
+        });
+
+        // Confirm Controller
+        Stimulus.register("confirm", class extends Controller {
+            static values = { message: String }
+
+            confirm(event) {
+                if (!window.confirm(this.messageValue || "Are you sure?")) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                }
+            }
+        });
+
+        // Flash Controller (auto-dismiss)
+        Stimulus.register("flash", class extends Controller {
+            static values = { delay: { type: Number, default: 5000 } }
+
+            connect() {
+                setTimeout(() => this.dismiss(), this.delayValue);
+            }
+
+            dismiss() {
+                this.element.remove();
+            }
+        });
+    </script>
+</head>
+<body>
+    <header>
+        <h1><a href="/">📄 Folio</a></h1>
+        <p>AI-native document management</p>
+    </header>
+
+    {% block flash %}{% endblock %}
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>Folio - A stripped-down, AI-native document management system</p>
+    </footer>
+</body>
+</html>

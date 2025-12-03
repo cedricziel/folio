@@ -1,0 +1,40 @@
+[package]
+name = "folio-infra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Core domain
+folio-core = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Database
+sqlx = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Configuration
+figment = { workspace = true }
+dotenvy = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# HTTP client (for AI APIs)
+reqwest = { workspace = true }
