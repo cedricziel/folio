@@ -644,7 +644,7 @@ impl DynamicOcrService {
 
         // Use pdftoppm to convert all pages to JPEG images
         let result = Command::new("pdftoppm")
-            .args(["-jpeg", "-r", "150", &temp_pdf, &temp_output])
+            .args(["-jpeg", "-r", "300", &temp_pdf, &temp_output])
             .output();
 
         // Clean up temp PDF
