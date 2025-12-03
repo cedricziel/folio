@@ -8,6 +8,8 @@ use folio_core::ports::{
 };
 use folio_infra::{JobQueue, ThumbnailService};
 
+use folio_core::EventBroadcaster;
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -22,6 +24,7 @@ pub struct AppState {
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
     pub storage_path: String,
+    pub event_broadcaster: EventBroadcaster,
 }
 
 impl AppState {
@@ -38,6 +41,7 @@ impl AppState {
         thumbnail_service: Arc<ThumbnailService>,
         job_queue: JobQueue,
         storage_path: String,
+        event_broadcaster: EventBroadcaster,
     ) -> Self {
         Self {
             document_repo,
@@ -51,6 +55,7 @@ impl AppState {
             thumbnail_service,
             job_queue,
             storage_path,
+            event_broadcaster,
         }
     }
 }

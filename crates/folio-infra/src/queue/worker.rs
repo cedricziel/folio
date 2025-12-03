@@ -7,6 +7,7 @@ use tokio::sync::watch;
 use tokio::time::sleep;
 use tracing::{debug, error, info, instrument};
 
+use folio_core::events::{DocumentEvent, EventBroadcaster};
 use folio_core::ports::{DocumentRepository, EmbeddingService, OcrService, SearchService};
 
 use super::{JobQueue, JobType};
@@ -44,6 +45,7 @@ pub struct Worker {
     thumbnail_service: Arc<ThumbnailService>,
     storage: FileStorage,
     config: WorkerConfig,
+    event_broadcaster: EventBroadcaster,
 }
 
 impl Worker {
@@ -58,6 +60,7 @@ impl Worker {
         thumbnail_service: Arc<ThumbnailService>,
         storage_path: &str,
         config: WorkerConfig,
+        event_broadcaster: EventBroadcaster,
     ) -> Self {
         Self {
             queue,
@@ -68,6 +71,7 @@ impl Worker {
             thumbnail_service,
             storage: FileStorage::new(storage_path),
             config,
+            event_broadcaster,
         }
     }
 
@@ -181,6 +185,11 @@ impl Worker {
             .await?;
 
         info!("Generated thumbnail for document {}", document_id);
+
+        // Emit event
+        self.event_broadcaster
+            .send(DocumentEvent::ThumbnailReady { document_id });
+
         Ok(())
     }
 
@@ -230,6 +239,10 @@ impl Worker {
                 document_id,
                 content.len()
             );
+
+            // Emit event
+            self.event_broadcaster
+                .send(DocumentEvent::OcrComplete { document_id });
         }
 
         Ok(())
@@ -287,13 +300,21 @@ impl Worker {
             .unwrap_or("application/octet-stream");
 
         // Step 1: Generate thumbnail
-        if let Err(e) = self
+        let thumbnail_ok = match self
             .thumbnail_service
             .generate(document_id, &data, mime_type, document.content.as_deref())
             .await
         {
-            debug!("Thumbnail generation failed: {}", e);
-        }
+            Ok(_) => {
+                self.event_broadcaster
+                    .send(DocumentEvent::ThumbnailReady { document_id });
+                true
+            }
+            Err(e) => {
+                debug!("Thumbnail generation failed: {}", e);
+                false
+            }
+        };
 
         // Step 2: Extract text if needed
         let content = if document.content.is_none() {
@@ -309,6 +330,10 @@ impl Worker {
                             },
                         )
                         .await?;
+
+                    self.event_broadcaster
+                        .send(DocumentEvent::OcrComplete { document_id });
+
                     Some(text)
                 }
                 Ok(_) => None,
@@ -338,6 +363,13 @@ impl Worker {
         }
 
         info!("Processed document {}", document_id);
+
+        // Emit final updated event if any processing happened
+        if thumbnail_ok {
+            self.event_broadcaster
+                .send(DocumentEvent::Updated { document_id });
+        }
+
         Ok(())
     }
 }

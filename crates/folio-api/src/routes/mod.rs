@@ -1,6 +1,7 @@
 //! API routes
 
 mod documents;
+mod events;
 mod pages;
 mod settings;
 mod tags;
@@ -19,6 +20,8 @@ pub fn create_router(state: AppState) -> Router {
         .merge(pages::router())
         // Settings routes
         .merge(settings::router())
+        // SSE events
+        .merge(events::router())
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         // Middleware

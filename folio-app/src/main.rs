@@ -8,6 +8,7 @@ use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
 use folio_api::{create_router, AppState};
+use folio_core::EventBroadcaster;
 use folio_infra::{
     create_pool, run_migrations, AiServiceFactory, Config, FileStorage, JobQueue,
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
@@ -78,6 +79,9 @@ async fn main() -> Result<()> {
     // Create job queue
     let job_queue = JobQueue::new(pool.clone());
 
+    // Create event broadcaster for SSE
+    let event_broadcaster = EventBroadcaster::new(100);
+
     info!("Services initialized");
 
     // Create shutdown channel for worker
@@ -93,6 +97,7 @@ async fn main() -> Result<()> {
         thumbnail_service.clone(),
         &config.storage.path,
         WorkerConfig::default(),
+        event_broadcaster.clone(),
     );
 
     let worker_handle = tokio::spawn(async move {
@@ -114,6 +119,7 @@ async fn main() -> Result<()> {
         thumbnail_service,
         job_queue,
         config.storage.path.clone(),
+        event_broadcaster,
     );
 
     // Create router

@@ -11,6 +11,8 @@ folio-infra = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
 
 # Web framework
 axum = { workspace = true }

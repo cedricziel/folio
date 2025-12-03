@@ -308,9 +308,73 @@
                 return div.innerHTML;
             }
         });
+
+        // SSE Controller for real-time updates
+        Stimulus.register("sse", class extends Controller {
+            connect() {
+                this.connectSSE();
+            }
+
+            disconnect() {
+                this.closeSSE();
+            }
+
+            connectSSE() {
+                this.eventSource = new EventSource("/events");
+
+                this.eventSource.addEventListener("thumbnail_ready", (e) => {
+                    this.handleDocumentUpdate(e);
+                });
+
+                this.eventSource.addEventListener("ocr_complete", (e) => {
+                    this.handleDocumentUpdate(e);
+                });
+
+                this.eventSource.addEventListener("updated", (e) => {
+                    this.handleDocumentUpdate(e);
+                });
+
+                this.eventSource.addEventListener("created", (e) => {
+                    this.handleDocumentUpdate(e);
+                });
+
+                this.eventSource.addEventListener("deleted", (e) => {
+                    this.handleDocumentUpdate(e);
+                });
+
+                this.eventSource.onerror = (e) => {
+                    console.log("SSE connection error, will retry...");
+                    this.closeSSE();
+                    // Reconnect after 5 seconds
+                    setTimeout(() => this.connectSSE(), 5000);
+                };
+            }
+
+            closeSSE() {
+                if (this.eventSource) {
+                    this.eventSource.close();
+                    this.eventSource = null;
+                }
+            }
+
+            handleDocumentUpdate(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log("Document event:", event.type, data);
+
+                    // Refresh the documents list frame
+                    const frame = document.querySelector("turbo-frame#documents-list");
+                    if (frame) {
+                        frame.src = "/documents";
+                    }
+                } catch (e) {
+                    console.error("Failed to parse SSE event:", e);
+                }
+            }
+        });
     </script>
 </head>
-<body data-controller="dropzone"
+<body data-controller="dropzone sse"
       data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop">
 
     <!-- Drop overlay -->
