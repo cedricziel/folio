@@ -38,6 +38,29 @@ crates/
 - **Real-time updates**: SSE via `EventBroadcaster` - worker emits events, clients receive via `/events` endpoint
 - **Web UI**: Server-rendered HTML with Turbo + Stimulus (in `base.html`), templates use Askama
 
+### Routes Structure
+
+- `pages.rs` - HTML page routes (`/`, `/documents/:id`, `/manage`) with form handlers that redirect
+- `documents.rs`, `tags.rs`, `correspondents.rs`, `document_types.rs` - JSON API routes under `/api/`
+- `events.rs` - SSE endpoint at `/events`
+- `settings.rs` - Settings page and API
+
+### Askama Templates
+
+Templates in `crates/folio-api/templates/`. Key patterns:
+- Use `{% match %}` blocks for Option handling (not closures)
+- For string comparisons in templates: `{% let id = item.id.to_string() %}` then compare with `id.as_str() == other.as_str()`
+- Form handlers in page routes return `Redirect::to()` for POST→GET redirects
+
+### Turbo + Stimulus
+
+Frontend uses Hotwire (Turbo + Stimulus) loaded from ESM in `base.html`:
+- **Turbo Frames**: `<turbo-frame id="...">` for partial page updates
+- **Turbo Streams**: Server can return `text/vnd.turbo-stream.html` for DOM updates
+- **Stimulus Controllers**: Defined inline in `base.html` - `upload`, `confirm`, `search`, `view-toggle`, `dropzone`, `sse`, `tags`, `toast`, `upload-modal`, `settings-form`
+- To disable Turbo on forms: `data-turbo="false"` and use `this.form.requestSubmit()` (not `submit()`) for proper event handling
+- AJAX in Stimulus: Use `fetch()` with form data, check `response.ok || response.redirected` for success
+
 ### Configuration
 
 - `config.toml` for server/database/storage/AI settings
