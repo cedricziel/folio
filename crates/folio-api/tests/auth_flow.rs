@@ -749,6 +749,7 @@ mod enforcement {
 mod forward {
     use super::*;
     use axum::extract::ConnectInfo;
+    use axum::http::HeaderMap;
     use folio_api::{enforce_auth, forward_auth};
     use folio_auth::{AuthStore, ForwardAuth, ForwardConfig, GroupSource};
     use folio_infra::Database;
@@ -781,7 +782,19 @@ mod forward {
         let forward = ForwardAuth::new(config).unwrap();
         let auth = AuthState::new(store.clone(), Some(BASE.into())).with_forward(forward);
         let router = auth_router(auth.clone())
-            .merge(Router::new().route("/", get(|| async { "home" })))
+            .merge(
+                Router::new()
+                    .route("/", get(|| async { "home" }))
+                    .route(
+                        "/static/echo",
+                        get(|headers: HeaderMap| async move {
+                            let mut names: Vec<_> =
+                                headers.keys().map(|k| k.as_str().to_string()).collect();
+                            names.sort();
+                            names.join(",")
+                        }),
+                    ),
+            )
             .layer(middleware::from_fn_with_state(auth.clone(), enforce_auth))
             .layer(middleware::from_fn_with_state(auth, forward_auth));
         Fwd {
@@ -1026,6 +1039,40 @@ mod forward {
             .unwrap()
             .unwrap();
         assert!(!first.is_admin);
+    }
+
+    fn all_identity_headers(c: &mut ForwardConfig) {
+        c.groups_header = "Remote-Groups".into();
+        c.role_header = "Remote-Role".into();
+        c.admin_group = Some("admins".into());
+    }
+
+    #[tokio::test]
+    async fn every_identity_header_is_stripped_from_untrusted_peers() {
+        let f = fwd_app(all_identity_headers).await;
+        // No user header at all: the other headers must still not get through.
+        let req = Request::get("/static/echo")
+            .header("Remote-Email", "x@example.com")
+            .header("Remote-Name", "X")
+            .header("Remote-Groups", "admins")
+            .header("Remote-Role", "admin")
+            .header("X-Keep", "1")
+            .body(Body::empty())
+            .unwrap();
+        let res = send_from(&f.app, UNTRUSTED, req).await;
+        assert_eq!(res.body, "x-keep");
+    }
+
+    #[tokio::test]
+    async fn trusted_requests_without_a_user_header_lose_the_other_identity_headers() {
+        let f = fwd_app(all_identity_headers).await;
+        let req = Request::get("/static/echo")
+            .header("Remote-Email", "x@example.com")
+            .header("Remote-Groups", "admins")
+            .body(Body::empty())
+            .unwrap();
+        let res = send_from(&f.app, TRUSTED, req).await;
+        assert_eq!(res.body, "");
     }
 
     #[tokio::test]

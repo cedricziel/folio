@@ -16,8 +16,9 @@ use crate::routes::auth::{
 
 /// Logs in the user named by the forward-auth headers.
 ///
-/// Headers are honoured only when the TCP peer is in `trusted_proxies`; from
-/// any other peer they are removed and logged. For a trusted request the user
+/// Headers are honoured only when the TCP peer is in `trusted_proxies`. Every
+/// configured identity header is removed from the request either way, so later
+/// layers never see an unverified value. For a trusted request the user
 /// is linked or created, their groups are refreshed, and a normal session
 /// cookie is set (and injected into the request), so every later layer and
 /// handler sees an ordinary logged-in user. Install it outside
@@ -30,23 +31,23 @@ pub async fn forward_auth(
     let Some(forward) = auth.forward.clone() else {
         return next.run(request).await;
     };
-    if !forward.has_identity(request.headers()) {
-        return next.run(request).await;
-    }
     let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
     if !peer.is_some_and(|ip| forward.is_trusted(ip)) {
-        tracing::warn!(
-            peer = ?peer,
-            "ignoring forward-auth headers from a peer that is not a trusted proxy"
-        );
+        if forward.has_identity(request.headers()) {
+            tracing::warn!(
+                peer = ?peer,
+                "ignoring forward-auth headers from a peer that is not a trusted proxy"
+            );
+        }
         forward.strip(request.headers_mut());
         return next.run(request).await;
     }
-    let Some(identity) = forward.identity(request.headers()) else {
-        forward.strip(request.headers_mut());
+    let identity = forward.identity(request.headers());
+    forward.strip(request.headers_mut());
+    let Some(identity) = identity else {
         return next.run(request).await;
     };
 
@@ -64,7 +65,6 @@ pub async fn forward_auth(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    forward.strip(request.headers_mut());
 
     let has_session = match auth.current_user(request.headers()).await {
         Some(current) => current.id == user.id,
