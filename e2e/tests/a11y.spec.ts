@@ -18,26 +18,6 @@ const known: { rule: string; target: string; issue: string }[] = [
     issue: "https://github.com/cedricziel/folio/issues/64",
   },
   {
-    rule: "aria-required-children",
-    target: ".palette-results",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "aria-required-parent",
-    target: "data-index",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "aria-input-field-name",
-    target: ".palette-results",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "listitem",
-    target: ".palette-results",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
     rule: "label",
     target: "email_to",
     issue: "https://github.com/cedricziel/folio/issues/63",

@@ -50,6 +50,56 @@ test.describe("dialogs", () => {
   });
 });
 
+test.describe("command palette", () => {
+  test("keeps Tab inside, closes on Escape and restores focus", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const trigger = page.getByRole("button", { name: /Search documents/ });
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+
+    const input = page.getByRole("combobox", { name: "Search documents" });
+    await expect(input).toBeFocused();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press("Tab");
+      expect(await page.evaluate(focusIsInside("dialog[open]"))).toBe(true);
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(input).toBeHidden();
+    await expect(trigger).toBeFocused();
+  });
+
+  test("is a combobox over a named listbox with the first result selected", async ({
+    page,
+  }) => {
+    const title = uniqueTitle("palette");
+    await uploadViaUi(page, title);
+    await page.getByRole("button", { name: /Search documents/ }).click();
+
+    const input = page.getByRole("combobox", { name: "Search documents" });
+    await expect(input).toHaveAttribute("aria-controls", "palette-results");
+    await input.fill(title);
+
+    const list = page.getByRole("listbox", { name: "Documents" });
+    const first = list.getByRole("option").first();
+    await expect(first).toContainText(title);
+    await expect(first).toHaveAttribute("aria-selected", "true");
+    await expect(input).toHaveAttribute(
+      "aria-activedescendant",
+      (await first.getAttribute("id"))!,
+    );
+    await expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await list.evaluate((el) =>
+        [...el.children].every((c) => c.getAttribute("role") === "option"),
+      ),
+    ).toBe(true);
+  });
+});
+
+
 test.describe("mobile drawer", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 

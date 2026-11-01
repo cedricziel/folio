@@ -282,14 +282,15 @@ Stimulus.register(
 Stimulus.register(
   "command-palette",
   class extends Controller {
-    static targets = ["modal", "input", "results", "body"];
+    static targets = ["modal", "input", "heading", "results", "note"];
 
     connect() {
       this.debounceTimeout = null;
       this.selectedIndex = -1;
       this.results = [];
-
       this.opener = null;
+      this.names = null;
+
       this.onGlobalKeydown = this.handleGlobalKeydown.bind(this);
       document.addEventListener("keydown", this.onGlobalKeydown);
 
@@ -333,7 +334,7 @@ Stimulus.register(
     closed() {
       dialogClosed();
       this.inputTarget.value = "";
-      this.bodyTarget.innerHTML = "";
+      this.clearResults();
       clearTimeout(this.debounceTimeout);
       if (this.opener?.isConnected) this.opener.focus();
       this.opener = null;
@@ -363,12 +364,29 @@ Stimulus.register(
     }
 
     input() {
+      if (this.inputTarget.value.trim()) {
+        this.clearResults();
+        this.say("Searching…");
+      }
       this.debouncedSearch();
     }
 
     debouncedSearch() {
       clearTimeout(this.debounceTimeout);
       this.debounceTimeout = setTimeout(() => this.search(), 200);
+    }
+
+    clearResults() {
+      this.resultsTarget.innerHTML = "";
+      this.headingTarget.textContent = "";
+      this.noteTarget.textContent = "";
+      this.selectedIndex = -1;
+      this.inputTarget.setAttribute("aria-expanded", "false");
+      this.inputTarget.removeAttribute("aria-activedescendant");
+    }
+
+    say(text) {
+      this.noteTarget.textContent = text;
     }
 
     async search() {
@@ -379,16 +397,15 @@ Stimulus.register(
         return;
       }
 
-      this.bodyTarget.innerHTML = '<p class="palette-note">Searching...</p>';
-
       try {
         const response = await fetch(
           `/api/documents/search?q=${encodeURIComponent(query)}`,
         );
+        if (query !== this.inputTarget.value.trim()) return;
         if (response.ok) {
           const data = await response.json();
           this.results = data.results;
-          this.renderResults(this.results, "Search results");
+          await this.renderResults(this.results, "Search results");
         } else {
           this.showRecentDocuments(query);
         }
@@ -415,58 +432,85 @@ Stimulus.register(
 
           data = data.slice(0, 10);
           this.results = data.map((doc) => ({ document: doc, score: 1.0 }));
-          this.renderResults(
+          await this.renderResults(
             this.results,
             filterQuery ? "Matching documents" : "Recent documents",
           );
         }
       } catch (error) {
-        this.bodyTarget.innerHTML =
-          '<p class="palette-note">Could not load documents.</p>';
+        this.clearResults();
+        this.say("Could not load documents.");
       }
     }
 
-    renderResults(results, title) {
-      this.selectedIndex = -1;
+    // id -> name for correspondents and document types, loaded once per page
+    async loadNames() {
+      if (!this.names) {
+        const get = async (url) => {
+          try {
+            const response = await fetch(url);
+            return response.ok ? await response.json() : [];
+          } catch (error) {
+            return [];
+          }
+        };
+        const [from, types] = await Promise.all([
+          get("/api/correspondents"),
+          get("/api/document_types"),
+        ]);
+        const byId = (list) =>
+          new Map((list.items || list).map((item) => [item.id, item.name]));
+        this.names = { from: byId(from), types: byId(types) };
+      }
+      return this.names;
+    }
+
+    async renderResults(results, title) {
+      const names = await this.loadNames();
+      this.clearResults();
 
       if (results.length === 0) {
-        this.bodyTarget.innerHTML =
-          '<p class="palette-note">No documents found.</p>';
+        this.say("No documents found.");
         return;
       }
 
-      const items = results
+      this.headingTarget.textContent = title;
+      this.resultsTarget.innerHTML = results
         .map((result, index) => {
           const doc = result.document || result;
-          const score =
-            result.score && result.score < 1
-              ? Math.round(result.score * 100)
-              : null;
+          const sub = [
+            names.from.get(doc.correspondent_id),
+            names.types.get(doc.document_type_id),
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          const date = (doc.created_at || "").slice(0, 10);
 
           return `
-                        <li>
-                            <a href="/documents/${doc.id}"
-                               class="palette-item"
-                               role="option"
-                               aria-selected="false"
-                               data-index="${index}"
-                               data-action="click->command-palette#navigate mouseenter->command-palette#hover">
+                        <a href="/documents/${doc.id}"
+                           id="palette-opt-${index}"
+                           class="palette-item"
+                           role="option"
+                           aria-selected="false"
+                           data-index="${index}"
+                           data-action="click->command-palette#navigate mouseenter->command-palette#hover">
+                            <span class="palette-item-main">
                                 <span class="palette-item-title">${escapeHtml(doc.title)}</span>
-                                <span class="f-meta">${escapeHtml(doc.mime_type || "document")}${score ? ` · ${score}%` : ""}</span>
-                            </a>
-                        </li>
+                                ${sub ? `<span class="f-row-sub">${escapeHtml(sub)}</span>` : ""}
+                            </span>
+                            <span class="f-meta">${escapeHtml(date)}</span>
+                        </a>
                     `;
         })
         .join("");
 
-      this.bodyTarget.innerHTML = `
-                    <p class="f-label palette-heading">${title}</p>
-                    <ul class="palette-results" role="listbox" data-command-palette-target="results">${items}</ul>
-                `;
+      this.inputTarget.setAttribute("aria-expanded", "true");
+      this.selectedIndex = 0;
+      this.updateSelection(this.items());
     }
 
     items() {
-      return this.bodyTarget.querySelectorAll(".palette-item");
+      return this.resultsTarget.querySelectorAll(".palette-item");
     }
 
     selectNext() {
@@ -492,7 +536,11 @@ Stimulus.register(
           String(index === this.selectedIndex),
         );
       });
-      items[this.selectedIndex]?.scrollIntoView({ block: "nearest" });
+      const current = items[this.selectedIndex];
+      if (current) {
+        this.inputTarget.setAttribute("aria-activedescendant", current.id);
+        current.scrollIntoView({ block: "nearest" });
+      }
     }
 
     hover(event) {
@@ -502,11 +550,7 @@ Stimulus.register(
 
     activateSelected() {
       const items = this.items();
-      if (this.selectedIndex >= 0 && this.selectedIndex < items.length) {
-        items[this.selectedIndex].click();
-      } else if (items.length > 0) {
-        items[0].click();
-      }
+      items[Math.max(this.selectedIndex, 0)]?.click();
     }
 
     navigate() {
@@ -1180,6 +1224,10 @@ if ("serviceWorker" in navigator) {
           <input
             type="text"
             class="palette-input"
+            role="combobox"
+            aria-expanded="false"
+            aria-controls="palette-results"
+            aria-autocomplete="list"
             placeholder="Search documents"
             aria-label="Search documents"
             data-command-palette-target="input"
@@ -1188,7 +1236,23 @@ if ("serviceWorker" in navigator) {
           />
           <kbd class="f-kbd">Esc</kbd>
         </div>
-        <div class="palette-body" data-command-palette-target="body"></div>
+        <div class="palette-body">
+          <p
+            class="f-label palette-heading"
+            data-command-palette-target="heading"
+          ></p>
+          <div
+            id="palette-results"
+            role="listbox"
+            aria-label="Documents"
+            data-command-palette-target="results"
+          ></div>
+          <p
+            class="palette-note"
+            role="status"
+            data-command-palette-target="note"
+          ></p>
+        </div>
         <div class="palette-footer">
           <span
             ><kbd class="f-kbd">&uarr;</kbd>

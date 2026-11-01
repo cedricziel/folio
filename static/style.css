@@ -761,15 +761,14 @@ dialog.palette {
   padding: var(--space-4);
   color: var(--ink-muted);
 }
-.palette-results {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.palette-note:empty,
+.palette-heading:empty {
+  display: none;
 }
 .palette-item {
   position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   min-height: 40px;
@@ -777,6 +776,11 @@ dialog.palette {
   border-radius: var(--radius-md);
   color: var(--ink);
   text-decoration: none;
+}
+.palette-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 .palette-item-title {
   min-width: 0;
