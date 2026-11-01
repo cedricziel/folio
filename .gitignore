@@ -50,3 +50,4 @@ DerivedData/
 # Ruby / fastlane local state
 apple/.bundle/
 apple/vendor/
+/target-linux/
