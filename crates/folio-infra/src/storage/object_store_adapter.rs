@@ -1,7 +1,8 @@
 //! `DocumentStore` over any `object_store` backend
 
+use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,6 +20,7 @@ use folio_core::ports::{DocumentStore, StoredObject};
 
 use super::storage_err;
 use crate::config::S3Config;
+use crate::telemetry::metrics;
 
 pub struct ObjectStoreDocumentStore {
     store: Arc<dyn ObjectStore>,
@@ -103,6 +105,14 @@ impl ObjectStoreDocumentStore {
         }
     }
 
+    /// Run a store operation and record its latency by backend.
+    async fn timed<T>(&self, operation: &'static str, work: impl Future<Output = T>) -> T {
+        let started = Instant::now();
+        let result = work.await;
+        metrics().storage_operation(operation, self.backend, started);
+        result
+    }
+
     fn path(key: &str) -> Result<Path> {
         Path::parse(key).map_err(|e| Error::Storage(format!("Invalid object key {key:?}: {e}")))
     }
@@ -125,41 +135,53 @@ impl DocumentStore for ObjectStoreDocumentStore {
     }
 
     async fn put(&self, key: &str, data: Bytes) -> Result<()> {
-        self.store
-            .put(&Self::path(key)?, data.into())
-            .await
-            .map_err(|e| storage_err(&format!("Failed to write {key}"), e))?;
-        Ok(())
+        self.timed("put", async {
+            self.store
+                .put(&Self::path(key)?, data.into())
+                .await
+                .map_err(|e| storage_err(&format!("Failed to write {key}"), e))?;
+            Ok(())
+        })
+        .await
     }
 
     async fn get(&self, key: &str) -> Result<StoredObject> {
-        let result = self
-            .store
-            .get(&Self::path(key)?)
-            .await
-            .map_err(|e| Self::map_get_error(key, e))?;
-        let size = Some(result.meta.size);
-        let owned_key = key.to_string();
-        let stream = result
-            .into_stream()
-            .map_err(move |e| storage_err(&format!("Failed to read {owned_key}"), e))
-            .boxed();
-        Ok(StoredObject { size, stream })
+        self.timed("get", async {
+            let result = self
+                .store
+                .get(&Self::path(key)?)
+                .await
+                .map_err(|e| Self::map_get_error(key, e))?;
+            let size = Some(result.meta.size);
+            let owned_key = key.to_string();
+            let stream = result
+                .into_stream()
+                .map_err(move |e| storage_err(&format!("Failed to read {owned_key}"), e))
+                .boxed();
+            Ok(StoredObject { size, stream })
+        })
+        .await
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
-        match self.store.head(&Self::path(key)?).await {
-            Ok(_) => Ok(true),
-            Err(object_store::Error::NotFound { .. }) => Ok(false),
-            Err(e) => Err(storage_err(&format!("Failed to stat {key}"), e)),
-        }
+        self.timed("exists", async {
+            match self.store.head(&Self::path(key)?).await {
+                Ok(_) => Ok(true),
+                Err(object_store::Error::NotFound { .. }) => Ok(false),
+                Err(e) => Err(storage_err(&format!("Failed to stat {key}"), e)),
+            }
+        })
+        .await
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
-        match self.store.delete(&Self::path(key)?).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
-            Err(e) => Err(storage_err(&format!("Failed to delete {key}"), e)),
-        }
+        self.timed("delete", async {
+            match self.store.delete(&Self::path(key)?).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+                Err(e) => Err(storage_err(&format!("Failed to delete {key}"), e)),
+            }
+        })
+        .await
     }
 
     async fn delete_prefix(&self, prefix: &str) -> Result<u64> {
@@ -173,13 +195,16 @@ impl DocumentStore for ObjectStoreDocumentStore {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>> {
-        let prefix = Self::path(prefix.trim_end_matches('/'))?;
-        self.store
-            .list(Some(&prefix))
-            .map_ok(|meta| meta.location.to_string())
-            .try_collect()
-            .await
-            .map_err(|e| storage_err(&format!("Failed to list {prefix}"), e))
+        self.timed("list", async {
+            let prefix = Self::path(prefix.trim_end_matches('/'))?;
+            self.store
+                .list(Some(&prefix))
+                .map_ok(|meta| meta.location.to_string())
+                .try_collect()
+                .await
+                .map_err(|e| storage_err(&format!("Failed to list {prefix}"), e))
+        })
+        .await
     }
 
     async fn presigned_url(&self, key: &str, expires_in: Duration) -> Result<Option<String>> {

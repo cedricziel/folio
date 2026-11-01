@@ -557,7 +557,13 @@ impl OcrService for DynamicOcrService {
                         "OpenAI API key not configured".to_string(),
                     ));
                 }
-                self.openai_ocr(data, mime_type, &api_key).await
+                observe_ai(
+                    "ocr",
+                    "openai",
+                    "api.openai.com",
+                    self.openai_ocr(data, mime_type, &api_key),
+                )
+                .await
             }
             "anthropic" => {
                 let api_key = settings.anthropic_api_key.unwrap_or_default();
@@ -566,7 +572,13 @@ impl OcrService for DynamicOcrService {
                         "Anthropic API key not configured".to_string(),
                     ));
                 }
-                self.anthropic_ocr(data, mime_type, &api_key).await
+                observe_ai(
+                    "ocr",
+                    "anthropic",
+                    "api.anthropic.com",
+                    self.anthropic_ocr(data, mime_type, &api_key),
+                )
+                .await
             }
             _ => {
                 debug!("No AI provider configured, returning empty text");
@@ -952,7 +964,13 @@ impl EmbeddingService for DynamicEmbeddingService {
                         "OpenAI API key not configured".to_string(),
                     ));
                 }
-                self.openai_embeddings(texts, &api_key).await
+                observe_ai(
+                    "embedding",
+                    "openai",
+                    "api.openai.com",
+                    self.openai_embeddings(texts, &api_key),
+                )
+                .await
             }
             _ => {
                 debug!("No embedding provider configured, returning zero vectors");
@@ -998,6 +1016,28 @@ impl DynamicEmbeddingService {
 
         Ok(result.data.into_iter().map(|d| d.embedding).collect())
     }
+}
+
+/// Run an outbound call to an AI provider inside a client span and record its latency.
+async fn observe_ai<T>(
+    operation: &'static str,
+    provider: &'static str,
+    host: &'static str,
+    call: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let span = tracing::info_span!(
+        "ai request",
+        otel.name = %format!("{operation} {provider}"),
+        otel.kind = "client",
+        gen_ai.system = provider,
+        gen_ai.operation.name = operation,
+        server.address = host,
+        http.request.method = "POST",
+    );
+    let started = std::time::Instant::now();
+    let result = tracing::Instrument::instrument(call, span).await;
+    crate::telemetry::metrics().ai_request(operation, provider, result.is_ok(), started);
+    result
 }
 
 // ============================================================================

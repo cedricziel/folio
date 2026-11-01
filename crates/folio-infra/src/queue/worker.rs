@@ -1,11 +1,11 @@
 //! Background job worker
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 use tokio::time::sleep;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, info_span, Instrument};
 
 use folio_core::events::{DocumentEvent, EventBroadcaster};
 use folio_core::ports::{
@@ -13,6 +13,7 @@ use folio_core::ports::{
 };
 
 use super::{JobQueue, JobType};
+use crate::telemetry::metrics;
 use crate::thumbnail::ThumbnailService;
 
 /// Configuration for the job worker
@@ -125,17 +126,39 @@ impl Worker {
                 Ok(Some(job)) => {
                     debug!("Processing job {}: {:?}", job.id, job.job_type.type_name());
 
-                    let result = self.process_job(&job.job_type).await;
+                    let type_name = job.job_type.type_name();
+                    let span = info_span!(
+                        "job",
+                        otel.name = %format!("job {type_name}"),
+                        otel.kind = "consumer",
+                        job.id = %job.id,
+                        job.r#type = type_name,
+                        job.attempt = job.attempts,
+                        document.id = %job.job_type.document_id(),
+                    );
+                    let started = Instant::now();
+                    let result = self
+                        .process_job(&job.job_type)
+                        .instrument(span.clone())
+                        .await;
+                    metrics().job_finished(type_name, result.is_ok(), started);
 
                     match result {
                         Ok(()) => {
-                            if let Err(e) = self.queue.complete(job.id).await {
+                            if let Err(e) =
+                                self.queue.complete(job.id).instrument(span.clone()).await
+                            {
                                 error!("Failed to mark job {} as complete: {}", job.id, e);
                             }
                         }
                         Err(e) => {
                             let error_msg = e.to_string();
-                            if let Err(e) = self.queue.fail(job.id, &error_msg, true).await {
+                            if let Err(e) = self
+                                .queue
+                                .fail(job.id, &error_msg, true)
+                                .instrument(span.clone())
+                                .await
+                            {
                                 error!("Failed to mark job {} as failed: {}", job.id, e);
                             }
                         }
@@ -203,7 +226,6 @@ impl Worker {
     }
 
     /// Process a single job
-    #[instrument(skip(self))]
     async fn process_job(
         &self,
         job_type: &JobType,

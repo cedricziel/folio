@@ -63,6 +63,16 @@ pub enum JobType {
 }
 
 impl JobType {
+    /// The document this job works on.
+    pub fn document_id(&self) -> Uuid {
+        match self {
+            JobType::GenerateThumbnail { document_id }
+            | JobType::ExtractText { document_id }
+            | JobType::GenerateEmbedding { document_id }
+            | JobType::ProcessDocument { document_id } => *document_id,
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             JobType::GenerateThumbnail { .. } => "generate_thumbnail",
