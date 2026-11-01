@@ -1,6 +1,6 @@
 //! Login, setup and the OAuth 2.1 authorization server endpoints.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use askama::Template;
 use axum::{
@@ -51,7 +51,6 @@ const LOGIN_FAILURES_PER_IP: u32 = 10;
 const REGISTER_BODY_LIMIT: usize = 16 * 1024;
 
 fn login_limiter(free_attempts: u32) -> FailureLimiter {
-    use std::time::Duration;
     FailureLimiter::new(
         free_attempts,
         Duration::from_secs(30),
@@ -107,7 +106,7 @@ impl AuthState {
     pub fn spawn_maintenance(&self) -> tokio::task::JoinHandle<()> {
         let server = self.server.clone();
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+            let mut tick = tokio::time::interval(Duration::from_secs(600));
             loop {
                 tick.tick().await;
                 if let Err(e) = server.purge().await {
@@ -166,7 +165,7 @@ impl AuthState {
     }
 
     fn secure(&self) -> bool {
-        is_secure(&self.base())
+        self.base().starts_with("https://")
     }
 
     fn session_cookie_name(&self) -> &'static str {
@@ -476,10 +475,6 @@ async fn start_session(auth: &AuthState, user: &User) -> Option<String> {
         SESSION_TTL_SECS,
         auth.secure(),
     ))
-}
-
-fn is_secure(base: &str) -> bool {
-    base.starts_with("https://")
 }
 
 // ---- templates --------------------------------------------------------------
