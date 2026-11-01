@@ -8,10 +8,11 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, instrument};
 
 use folio_core::events::{DocumentEvent, EventBroadcaster};
-use folio_core::ports::{DocumentRepository, EmbeddingService, OcrService, SearchService};
+use folio_core::ports::{
+    DocumentRepository, DocumentStore, EmbeddingService, OcrService, SearchService,
+};
 
 use super::{JobQueue, JobType};
-use crate::storage::FileStorage;
 use crate::thumbnail::ThumbnailService;
 
 /// Configuration for the job worker
@@ -46,7 +47,7 @@ pub struct Worker {
     embedding_service: Arc<dyn EmbeddingService>,
     search_service: Arc<dyn SearchService>,
     thumbnail_service: Arc<ThumbnailService>,
-    storage: FileStorage,
+    store: Arc<dyn DocumentStore>,
     config: WorkerConfig,
     event_broadcaster: EventBroadcaster,
 }
@@ -61,7 +62,7 @@ impl Worker {
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
         thumbnail_service: Arc<ThumbnailService>,
-        storage_path: &str,
+        store: Arc<dyn DocumentStore>,
         config: WorkerConfig,
         event_broadcaster: EventBroadcaster,
     ) -> Self {
@@ -72,7 +73,7 @@ impl Worker {
             embedding_service,
             search_service,
             thumbnail_service,
-            storage: FileStorage::new(storage_path),
+            store,
             config,
             event_broadcaster,
         }
@@ -232,7 +233,7 @@ impl Worker {
 
         // Read the file
         let file_path = document.file_path.as_ref().ok_or("No file path")?;
-        let data = self.storage.read(file_path).await?;
+        let data = self.store.get_bytes(file_path).await?;
 
         let mime_type = document
             .mime_type
@@ -271,7 +272,7 @@ impl Worker {
 
         // Read the file
         let file_path = document.file_path.as_ref().ok_or("No file path")?;
-        let data = self.storage.read(file_path).await?;
+        let data = self.store.get_bytes(file_path).await?;
 
         let mime_type = document
             .mime_type
@@ -363,7 +364,7 @@ impl Worker {
         };
 
         info!("Reading file from: {}", file_path);
-        let data = self.storage.read(&file_path).await?;
+        let data = self.store.get_bytes(&file_path).await?;
         info!("File read successfully, size: {} bytes", data.len());
 
         let mime_type = document

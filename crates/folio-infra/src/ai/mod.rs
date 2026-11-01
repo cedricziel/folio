@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tokio::sync::RwLock;
 use tracing::{debug, info, instrument, warn};
-use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 use folio_core::ports::{EmbeddingService, OcrService, SettingsRepository};
@@ -426,8 +425,6 @@ pub struct DynamicOcrService {
     client: reqwest::Client,
     /// Cache for settings to avoid reading DB on every request
     cached_settings: RwLock<Option<CachedAiSettings>>,
-    /// Storage path for temp files during PDF conversion
-    storage_path: String,
 }
 
 /// Dynamic embedding service that reads settings from the database on each request
@@ -455,17 +452,12 @@ impl CachedAiSettings {
 }
 
 impl DynamicOcrService {
-    pub fn new(
-        settings_repo: Arc<dyn SettingsRepository>,
-        fallback_config: AiConfig,
-        storage_path: impl Into<String>,
-    ) -> Self {
+    pub fn new(settings_repo: Arc<dyn SettingsRepository>, fallback_config: AiConfig) -> Self {
         Self {
             settings_repo,
             fallback_config,
             client: reqwest::Client::new(),
             cached_settings: RwLock::new(None),
-            storage_path: storage_path.into(),
         }
     }
 
@@ -630,74 +622,52 @@ impl DynamicOcrService {
 
     /// Convert PDF to a vector of JPEG images (one per page)
     async fn convert_pdf_to_images(&self, data: &[u8]) -> Result<Vec<Vec<u8>>> {
-        let temp_id = Uuid::new_v4();
-        let temp_pdf = format!("{}/temp_ocr_{}.pdf", self.storage_path, temp_id);
-        let temp_output = format!("{}/temp_ocr_{}", self.storage_path, temp_id);
+        let dir = tempfile::tempdir()
+            .map_err(|e| Error::Storage(format!("Failed to create temp dir: {}", e)))?;
+        let temp_pdf = dir.path().join("input.pdf");
+        let output_prefix = dir.path().join("page");
 
-        // Write PDF to temp file
         fs::write(&temp_pdf, data)
             .await
             .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
 
         // Use pdftoppm to convert all pages to JPEG images
         let result = Command::new("pdftoppm")
-            .args(["-jpeg", "-r", "300", &temp_pdf, &temp_output])
+            .args(["-jpeg", "-r", "300"])
+            .arg(&temp_pdf)
+            .arg(&output_prefix)
             .output();
-
-        // Clean up temp PDF
-        let _ = fs::remove_file(&temp_pdf).await;
 
         match result {
             Ok(output) if output.status.success() => {
-                // Read all generated page images
-                // pdftoppm creates files with zero-padded numbers: {output}-01.jpg, {output}-02.jpg, etc.
-                let mut page_files: Vec<String> = Vec::new();
-
-                // Get just the filename part for matching
-                let output_basename = temp_output.rsplit('/').next().unwrap_or(&temp_output);
-
-                if let Ok(entries) = std::fs::read_dir(&self.storage_path) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            // Match files like: temp_ocr_UUID-01.jpg, temp_ocr_UUID-02.jpg
-                            if name.starts_with(output_basename)
-                                && name.ends_with(".jpg")
-                                && name.len() > output_basename.len()
-                            {
-                                page_files.push(path.to_string_lossy().to_string());
-                            }
-                        }
-                    }
-                }
+                // pdftoppm creates zero-padded files: page-01.jpg, page-02.jpg, ...
+                let mut page_files: Vec<std::path::PathBuf> = std::fs::read_dir(dir.path())
+                    .map_err(|e| Error::Storage(format!("Failed to list temp dir: {}", e)))?
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.starts_with("page-") && n.ends_with(".jpg"))
+                    })
+                    .collect();
 
                 // Sort files to ensure correct page order
                 page_files.sort();
-
-                debug!(
-                    "Found {} page files for prefix {}",
-                    page_files.len(),
-                    output_basename
-                );
+                debug!("Found {} page files", page_files.len());
 
                 let mut images = Vec::new();
                 for page_file in &page_files {
                     match fs::read(page_file).await {
-                        Ok(image_data) => {
-                            images.push(image_data);
-                            let _ = fs::remove_file(page_file).await;
-                        }
+                        Ok(image_data) => images.push(image_data),
                         Err(e) => {
-                            warn!("Failed to read page image {}: {}", page_file, e);
+                            warn!("Failed to read page image {}: {}", page_file.display(), e);
                         }
                     }
                 }
 
                 if images.is_empty() {
-                    warn!(
-                        "pdftoppm produced no output files (looked for prefix: {} in {})",
-                        output_basename, self.storage_path
-                    );
+                    warn!("pdftoppm produced no output files");
                     return Err(Error::AiService(
                         "PDF conversion produced no images".to_string(),
                     ));

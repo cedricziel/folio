@@ -2,15 +2,16 @@
 
 use std::io::Cursor;
 use std::path::Path;
-use std::process::Command;
+use std::sync::Arc;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat, ImageReader, Rgba, RgbaImage};
-use tokio::fs;
+use tokio::process::Command;
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
+use folio_core::ports::{keys, DocumentStore};
 
 /// Default thumbnail dimensions
 pub const THUMBNAIL_WIDTH: u32 = 300;
@@ -22,30 +23,16 @@ pub const PAGE_HEIGHT: u32 = 1100;
 
 /// Thumbnail service for generating document previews
 pub struct ThumbnailService {
-    storage_path: String,
-    thumbnail_path: String,
+    store: Arc<dyn DocumentStore>,
 }
 
 impl ThumbnailService {
-    /// Create a new thumbnail service
-    pub fn new(storage_path: impl Into<String>) -> Self {
-        let storage = storage_path.into();
-        let thumbnail_path = format!("{}/thumbnails", storage);
-        Self {
-            storage_path: storage,
-            thumbnail_path,
-        }
+    /// Create a new thumbnail service writing through `store`
+    pub fn new(store: Arc<dyn DocumentStore>) -> Self {
+        Self { store }
     }
 
-    /// Initialize the thumbnail directory
-    pub async fn init(&self) -> Result<()> {
-        fs::create_dir_all(&self.thumbnail_path)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to create thumbnail directory: {}", e)))?;
-        Ok(())
-    }
-
-    /// Generate a thumbnail for a document
+    /// Generate a thumbnail for a document and return its object key
     #[instrument(skip(self, data))]
     pub async fn generate(
         &self,
@@ -57,7 +44,7 @@ impl ThumbnailService {
         let thumbnail_data = if mime_type.starts_with("image/") {
             self.generate_image_thumbnail(data)?
         } else if mime_type == "application/pdf" {
-            self.generate_pdf_thumbnail(document_id, data).await?
+            self.generate_pdf_thumbnail(data).await?
         } else if let Some(text) = text_content {
             self.generate_text_thumbnail(text)?
         } else {
@@ -66,16 +53,11 @@ impl ThumbnailService {
             ));
         };
 
-        // Save thumbnail
-        let thumbnail_filename = format!("{}.jpg", document_id);
-        let thumbnail_path = format!("{}/{}", self.thumbnail_path, thumbnail_filename);
+        let key = keys::thumbnail(document_id);
+        self.store.put(&key, thumbnail_data.into()).await?;
 
-        fs::write(&thumbnail_path, &thumbnail_data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to save thumbnail: {}", e)))?;
-
-        debug!("Generated thumbnail: {}", thumbnail_path);
-        Ok(format!("thumbnails/{}", thumbnail_filename))
+        debug!("Generated thumbnail: {}", key);
+        Ok(key)
     }
 
     /// Generate thumbnail from an image
@@ -97,96 +79,11 @@ impl ThumbnailService {
     }
 
     /// Generate thumbnail from a PDF (first page)
-    async fn generate_pdf_thumbnail(&self, document_id: Uuid, data: &[u8]) -> Result<Vec<u8>> {
-        // Save PDF temporarily
-        let temp_pdf = format!("{}/temp_{}.pdf", self.storage_path, document_id);
-        let temp_output = format!("{}/temp_{}", self.storage_path, document_id);
-
-        fs::write(&temp_pdf, data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
-
-        // Try pdftoppm (poppler-utils) first
-        let result = Command::new("pdftoppm")
-            .args([
-                "-jpeg",
-                "-f",
-                "1",
-                "-l",
-                "1",
-                "-scale-to",
-                &THUMBNAIL_WIDTH.to_string(),
-                &temp_pdf,
-                &temp_output,
-            ])
-            .output();
-
-        // Clean up temp PDF
-        let _ = fs::remove_file(&temp_pdf).await;
-
-        match result {
-            Ok(output) if output.status.success() => {
-                // pdftoppm creates file with -1 suffix
-                let output_file = format!("{}-1.jpg", temp_output);
-                if let Ok(thumbnail_data) = fs::read(&output_file).await {
-                    let _ = fs::remove_file(&output_file).await;
-                    return Ok(thumbnail_data);
-                }
-            }
-            Ok(output) => {
-                warn!(
-                    "pdftoppm failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            Err(e) => {
-                warn!("pdftoppm not available: {}", e);
-            }
+    async fn generate_pdf_thumbnail(&self, data: &[u8]) -> Result<Vec<u8>> {
+        match render_pdf_page(data, 1, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT).await {
+            Some(jpeg) => Ok(jpeg),
+            None => self.generate_placeholder_thumbnail("PDF", (239, 68, 68)), // Red color
         }
-
-        // Try ImageMagick convert as fallback
-        let output_file = format!("{}.jpg", temp_output);
-
-        // Need to re-save temp PDF since we removed it
-        fs::write(&temp_pdf, data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
-
-        let result = Command::new("convert")
-            .args([
-                "-density",
-                "150",
-                &format!("{}[0]", temp_pdf),
-                "-resize",
-                &format!("{}x{}", THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT),
-                "-quality",
-                "85",
-                &output_file,
-            ])
-            .output();
-
-        let _ = fs::remove_file(&temp_pdf).await;
-
-        match result {
-            Ok(output) if output.status.success() => {
-                if let Ok(thumbnail_data) = fs::read(&output_file).await {
-                    let _ = fs::remove_file(&output_file).await;
-                    return Ok(thumbnail_data);
-                }
-            }
-            Ok(output) => {
-                warn!(
-                    "ImageMagick convert failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            Err(e) => {
-                warn!("ImageMagick not available: {}", e);
-            }
-        }
-
-        // Fallback: generate a placeholder image for PDF
-        self.generate_placeholder_thumbnail("PDF", (239, 68, 68)) // Red color
     }
 
     /// Generate thumbnail from text content
@@ -318,240 +215,166 @@ impl ThumbnailService {
         Ok(buffer)
     }
 
-    /// Get the path to a thumbnail
-    pub fn get_thumbnail_path(&self, document_id: Uuid) -> String {
-        format!("{}/thumbnails/{}.jpg", self.storage_path, document_id)
-    }
-
     /// Check if a thumbnail exists
     pub async fn exists(&self, document_id: Uuid) -> bool {
-        let path = self.get_thumbnail_path(document_id);
-        Path::new(&path).exists()
+        self.store
+            .exists(&keys::thumbnail(document_id))
+            .await
+            .unwrap_or(false)
     }
 
     /// Read a thumbnail
     pub async fn read(&self, document_id: Uuid) -> Result<Vec<u8>> {
-        let path = self.get_thumbnail_path(document_id);
-        fs::read(&path)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to read thumbnail: {}", e)))
+        self.read_page(document_id, 1).await
     }
 
     /// Delete a thumbnail
     pub async fn delete(&self, document_id: Uuid) -> Result<()> {
-        let path = self.get_thumbnail_path(document_id);
-        if Path::new(&path).exists() {
-            fs::remove_file(&path)
-                .await
-                .map_err(|e| Error::Storage(format!("Failed to delete thumbnail: {}", e)))?;
-        }
-        Ok(())
+        self.store.delete(&keys::thumbnail(document_id)).await
     }
 
     /// Get the number of pages in a PDF
     pub async fn get_pdf_page_count(&self, data: &[u8]) -> Result<u32> {
-        // Save PDF temporarily
-        let temp_id = Uuid::new_v4();
-        let temp_pdf = format!("{}/temp_{}.pdf", self.storage_path, temp_id);
+        let dir = temp_dir()?;
+        let pdf = dir.path().join("input.pdf");
+        write_file(&pdf, data).await?;
 
-        fs::write(&temp_pdf, data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
-
-        // Try pdfinfo first (from poppler-utils)
-        let result = Command::new("pdfinfo").arg(&temp_pdf).output();
-
-        let _ = fs::remove_file(&temp_pdf).await;
-
-        match result {
+        match Command::new("pdfinfo").arg(&pdf).output().await {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if line.starts_with("Pages:") {
-                        if let Some(count_str) = line.split(':').nth(1) {
-                            if let Ok(count) = count_str.trim().parse::<u32>() {
-                                return Ok(count);
-                            }
-                        }
-                    }
-                }
+                let pages = stdout
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Pages:"))
+                    .and_then(|count| count.trim().parse::<u32>().ok());
                 // Default to 1 if we can't parse
-                Ok(1)
+                Ok(pages.unwrap_or(1))
             }
             _ => {
-                // Fallback: try pdftoppm to see how many pages it generates
-                // This is more expensive but works as a fallback
                 warn!("pdfinfo not available, assuming 1 page");
                 Ok(1)
             }
         }
     }
 
-    /// Generate a page thumbnail for a specific page
+    /// Generate a page thumbnail for a specific page and return its object key
     #[instrument(skip(self, data))]
     pub async fn generate_page(&self, document_id: Uuid, data: &[u8], page: u32) -> Result<String> {
-        let thumbnail_data = self
-            .generate_pdf_page_thumbnail(document_id, data, page)
-            .await?;
-
-        // Save thumbnail - page 1 uses the default path for backwards compatibility
-        let thumbnail_filename = if page == 1 {
-            format!("{}.jpg", document_id)
-        } else {
-            format!("{}-p{}.jpg", document_id, page)
+        let thumbnail_data = match render_pdf_page(data, page, PAGE_WIDTH, PAGE_HEIGHT).await {
+            Some(jpeg) => jpeg,
+            None => {
+                self.generate_placeholder_thumbnail(&format!("Page {}", page), (239, 68, 68))?
+            }
         };
-        let thumbnail_path = format!("{}/{}", self.thumbnail_path, thumbnail_filename);
 
-        fs::write(&thumbnail_path, &thumbnail_data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to save page thumbnail: {}", e)))?;
+        let key = keys::page(document_id, page);
+        self.store.put(&key, thumbnail_data.into()).await?;
 
-        debug!("Generated page {} thumbnail: {}", page, thumbnail_path);
-        Ok(format!("thumbnails/{}", thumbnail_filename))
-    }
-
-    /// Generate thumbnail from a specific PDF page
-    async fn generate_pdf_page_thumbnail(
-        &self,
-        document_id: Uuid,
-        data: &[u8],
-        page: u32,
-    ) -> Result<Vec<u8>> {
-        // Save PDF temporarily
-        let temp_pdf = format!("{}/temp_{}.pdf", self.storage_path, document_id);
-        let temp_output = format!("{}/temp_{}_p{}", self.storage_path, document_id, page);
-
-        fs::write(&temp_pdf, data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
-
-        // Try pdftoppm (poppler-utils) first
-        let page_str = page.to_string();
-        let result = Command::new("pdftoppm")
-            .args([
-                "-jpeg",
-                "-f",
-                &page_str,
-                "-l",
-                &page_str,
-                "-scale-to",
-                &PAGE_WIDTH.to_string(),
-                &temp_pdf,
-                &temp_output,
-            ])
-            .output();
-
-        // Clean up temp PDF
-        let _ = fs::remove_file(&temp_pdf).await;
-
-        match result {
-            Ok(output) if output.status.success() => {
-                // pdftoppm creates file with -{page} suffix
-                let output_file = format!("{}-{}.jpg", temp_output, page);
-                if let Ok(thumbnail_data) = fs::read(&output_file).await {
-                    let _ = fs::remove_file(&output_file).await;
-                    return Ok(thumbnail_data);
-                }
-            }
-            Ok(output) => {
-                warn!(
-                    "pdftoppm failed for page {}: {}",
-                    page,
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            Err(e) => {
-                warn!("pdftoppm not available: {}", e);
-            }
-        }
-
-        // Try ImageMagick convert as fallback
-        let output_file = format!("{}.jpg", temp_output);
-
-        // Need to re-save temp PDF since we removed it
-        fs::write(&temp_pdf, data)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {}", e)))?;
-
-        let result = Command::new("convert")
-            .args([
-                "-density",
-                "150",
-                &format!("{}[{}]", temp_pdf, page - 1), // ImageMagick uses 0-based index
-                "-resize",
-                &format!("{}x{}", PAGE_WIDTH, PAGE_HEIGHT),
-                "-quality",
-                "85",
-                &output_file,
-            ])
-            .output();
-
-        let _ = fs::remove_file(&temp_pdf).await;
-
-        match result {
-            Ok(output) if output.status.success() => {
-                if let Ok(thumbnail_data) = fs::read(&output_file).await {
-                    let _ = fs::remove_file(&output_file).await;
-                    return Ok(thumbnail_data);
-                }
-            }
-            Ok(output) => {
-                warn!(
-                    "ImageMagick convert failed for page {}: {}",
-                    page,
-                    String::from_utf8_lossy(&output.stderr)
-                );
-            }
-            Err(e) => {
-                warn!("ImageMagick not available: {}", e);
-            }
-        }
-
-        // Fallback: generate a placeholder image for this page
-        self.generate_placeholder_thumbnail(&format!("Page {}", page), (239, 68, 68))
-    }
-
-    /// Get the path to a page thumbnail
-    pub fn get_page_thumbnail_path(&self, document_id: Uuid, page: u32) -> String {
-        if page == 1 {
-            self.get_thumbnail_path(document_id)
-        } else {
-            format!(
-                "{}/thumbnails/{}-p{}.jpg",
-                self.storage_path, document_id, page
-            )
-        }
+        debug!("Generated page {} thumbnail: {}", page, key);
+        Ok(key)
     }
 
     /// Check if a page thumbnail exists
     pub async fn page_exists(&self, document_id: Uuid, page: u32) -> bool {
-        let path = self.get_page_thumbnail_path(document_id, page);
-        Path::new(&path).exists()
+        self.store
+            .exists(&keys::page(document_id, page))
+            .await
+            .unwrap_or(false)
     }
 
     /// Read a page thumbnail
     pub async fn read_page(&self, document_id: Uuid, page: u32) -> Result<Vec<u8>> {
-        let path = self.get_page_thumbnail_path(document_id, page);
-        fs::read(&path)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to read page thumbnail: {}", e)))
+        self.store.get_bytes(&keys::page(document_id, page)).await
     }
 
     /// Delete all thumbnails for a document (including page thumbnails)
-    pub async fn delete_all(&self, document_id: Uuid, page_count: Option<u32>) -> Result<()> {
-        // Delete main thumbnail
-        self.delete(document_id).await?;
+    pub async fn delete_all(&self, document_id: Uuid) -> Result<()> {
+        self.store
+            .delete_prefix(&keys::document_prefix(document_id))
+            .await
+            .map(|_| ())
+    }
+}
 
-        // Delete page thumbnails if we know the count
-        if let Some(count) = page_count {
-            for page in 2..=count {
-                let path = self.get_page_thumbnail_path(document_id, page);
-                if Path::new(&path).exists() {
-                    let _ = fs::remove_file(&path).await;
-                }
+fn temp_dir() -> Result<tempfile::TempDir> {
+    tempfile::tempdir().map_err(|e| Error::Storage(format!("Failed to create temp dir: {}", e)))
+}
+
+async fn write_file(path: &Path, data: &[u8]) -> Result<()> {
+    tokio::fs::write(path, data)
+        .await
+        .map_err(|e| Error::Storage(format!("Failed to write temp file: {}", e)))
+}
+
+/// Render one PDF page to JPEG with poppler, falling back to ImageMagick.
+/// Returns `None` when neither tool produced an image.
+async fn render_pdf_page(data: &[u8], page: u32, width: u32, height: u32) -> Option<Vec<u8>> {
+    let dir = temp_dir().ok()?;
+    let pdf = dir.path().join("input.pdf");
+    write_file(&pdf, data).await.ok()?;
+
+    let page_str = page.to_string();
+    let out_prefix = dir.path().join("out");
+    let result = Command::new("pdftoppm")
+        .args(["-jpeg", "-f", &page_str, "-l", &page_str, "-scale-to"])
+        .arg(width.to_string())
+        .arg(&pdf)
+        .arg(&out_prefix)
+        .output()
+        .await;
+    match result {
+        Ok(output) if output.status.success() => {
+            // pdftoppm appends a zero-padded page number to the prefix.
+            if let Some(jpeg) = read_first_jpeg(dir.path()).await {
+                return Some(jpeg);
             }
         }
-
-        Ok(())
+        Ok(output) => warn!(
+            "pdftoppm failed for page {}: {}",
+            page,
+            String::from_utf8_lossy(&output.stderr)
+        ),
+        Err(e) => warn!("pdftoppm not available: {}", e),
     }
+
+    let fallback = dir.path().join("fallback.jpg");
+    let result = Command::new("convert")
+        .args(["-density", "150"])
+        // ImageMagick uses a 0-based page index
+        .arg(format!("{}[{}]", pdf.display(), page.saturating_sub(1)))
+        .args([
+            "-resize",
+            &format!("{}x{}", width, height),
+            "-quality",
+            "85",
+        ])
+        .arg(&fallback)
+        .output()
+        .await;
+    match result {
+        Ok(output) if output.status.success() => tokio::fs::read(&fallback).await.ok(),
+        Ok(output) => {
+            warn!(
+                "ImageMagick convert failed for page {}: {}",
+                page,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            None
+        }
+        Err(e) => {
+            warn!("ImageMagick not available: {}", e);
+            None
+        }
+    }
+}
+
+async fn read_first_jpeg(dir: &Path) -> Option<Vec<u8>> {
+    let mut entries = tokio::fs::read_dir(dir).await.ok()?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("out") && name.ends_with(".jpg") {
+            return tokio::fs::read(entry.path()).await.ok();
+        }
+    }
+    None
 }
