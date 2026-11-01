@@ -95,6 +95,16 @@ The system SHALL list documents newest first. `GET /api/documents` SHALL return 
 - **THEN** the page lists only matching documents
 - **AND** empty or malformed IDs are ignored
 
+#### Scenario: Several filters on the home page
+
+- **WHEN** a user opens `/` with both `correspondent_id` and `document_type_id`
+- **THEN** only the correspondent filter applies
+
+#### Scenario: Tag filter on the home page
+
+- **WHEN** a user opens `/` with a `tag_id` query parameter
+- **THEN** the parameter is accepted but ignored, and all documents are listed
+
 ### Requirement: Deleting a document
 
 The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. Deleting a document SHALL also remove its tag assignments and stored embedding.
