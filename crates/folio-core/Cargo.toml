@@ -31,6 +31,11 @@ tokio = { workspace = true }
 # Webhook URL validation
 url = "2"
 
+# Source conditions and content hashing
+regex = "1"
+sha2 = { workspace = true }
+hex = { workspace = true }
+
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }

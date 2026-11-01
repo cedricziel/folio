@@ -4,9 +4,11 @@
 //! domain operations using the port traits.
 
 mod eventing;
+mod ingest;
 mod workflow_engine;
 
 pub use eventing::EventingDocumentRepository;
+pub use ingest::{content_key, IngestPipeline, IngestScheduler};
 pub use workflow_engine::WorkflowEngine;
 
 use std::sync::Arc;
@@ -96,8 +98,7 @@ impl IngestService {
                 content: Some(content.clone()),
                 original_filename: filename,
                 mime_type: Some(mime_type),
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await?;
 
