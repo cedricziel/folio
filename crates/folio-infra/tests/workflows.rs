@@ -222,8 +222,7 @@ impl Harness {
                 content: None,
                 original_filename: Some(filename.into()),
                 mime_type: Some(mime.into()),
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await
             .unwrap()

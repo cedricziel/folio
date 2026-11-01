@@ -4,6 +4,8 @@
 
 use std::fmt::Display;
 
+pub mod ingest;
+
 /// Unwrap a container start result, or decide what an unreachable Docker means.
 ///
 /// Without `FOLIO_REQUIRE_DOCKER` the test is skipped with a message; with it

@@ -11,8 +11,11 @@ use axum::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use folio_core::models::{Correspondent, CreateDocument, Document, DocumentType, UpdateDocument};
+use folio_core::models::{
+    Correspondent, Document, DocumentSource, DocumentType, SourceKind, UpdateDocument,
+};
 use folio_core::ports::{keys, DocumentStore, StoredObject};
+use folio_core::services::NewUpload;
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
@@ -508,41 +511,20 @@ pub(super) async fn store_upload(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Create document record (OCR will be done by background worker)
+    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
     let document = state
-        .document_repo
-        .create(CreateDocument {
-            title,
-            content: None,
-            original_filename: filename.clone(),
+        .importer
+        .import(NewUpload {
+            title: Some(title),
+            filename: filename.unwrap_or_else(|| "upload".to_string()),
             mime_type: Some(mime_type),
-            correspondent_id: None,
-            document_type_id: None,
+            data: file_data,
+            source: DocumentSource::of(SourceKind::Upload),
+            tag_ids: Vec::new(),
         })
         .await?;
 
-    // Store the file
     folio_infra::telemetry::metrics().documents_changed(1);
-
-    super::documents::store_original(state, document.id, file_data).await;
-
-    // Enqueue background job for thumbnail, OCR, and embedding
-    if let Err(e) = state
-        .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        })
-        .await
-    {
-        error!("Failed to enqueue document processing job: {}", e);
-    }
-
-    // Re-fetch to get updated document with file_path
-    let document = state
-        .document_repo
-        .find_by_id(document.id)
-        .await?
-        .unwrap_or(document);
 
     Ok(document)
 }

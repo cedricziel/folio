@@ -257,8 +257,7 @@ async fn legacy_migration_scenario(store: &dyn DocumentStore) {
         content: None,
         original_filename: Some("scan.pdf".into()),
         mime_type: Some("application/pdf".into()),
-        correspondent_id: None,
-        document_type_id: None,
+        ..Default::default()
     };
 
     let legacy = repos

@@ -9,7 +9,7 @@ use axum::{
     routing::post,
     Router,
 };
-use folio_api::{create_router, AppState, AuthState};
+use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::{
     models::{WorkflowAction, WorkflowRun, WorkflowTrigger},
     ports::DocumentStore,
@@ -54,6 +54,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let ai = Config::default().ai;
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
+    let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
     let state = AppState::new(
         repos.documents,
         repos.tags,
@@ -71,6 +72,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         repos.workflows,
         WebhookClient::new(),
         "http://folio.test".to_string(),
+        ingestion,
     );
 
     TestApp {

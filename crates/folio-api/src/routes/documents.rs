@@ -14,11 +14,10 @@ use uuid::Uuid;
 
 use axum::response::{IntoResponse, Redirect, Response};
 
-use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
-use folio_core::ports::keys;
-use folio_core::services::SearchServiceFacade;
-
-use folio_infra::JobType;
+use folio_core::models::{
+    CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
+};
+use folio_core::services::{NewUpload, SearchServiceFacade};
 
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
@@ -144,10 +143,10 @@ pub(crate) async fn create_document(
         .create(CreateDocument {
             title: req.title,
             content: req.content,
-            original_filename: None,
-            mime_type: None,
             correspondent_id: req.correspondent_id,
             document_type_id: req.document_type_id,
+            source: DocumentSource::of(SourceKind::Api),
+            ..Default::default()
         })
         .await?;
 
@@ -249,41 +248,19 @@ pub(crate) async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Create document record
     let document = state
-        .document_repo
-        .create(CreateDocument {
-            title,
-            content: None,
-            original_filename: filename.clone(),
+        .importer
+        .import(NewUpload {
+            title: Some(title),
+            filename: filename.unwrap_or_else(|| "upload".to_string()),
             mime_type: Some(mime_type),
-            correspondent_id: None,
-            document_type_id: None,
+            data: file_data,
+            source: DocumentSource::of(SourceKind::Api),
+            tag_ids: Vec::new(),
         })
         .await?;
 
     folio_infra::telemetry::metrics().documents_changed(1);
-
-    // Store the file
-    store_original(&state, document.id, file_data).await;
-
-    // OCR and embedding run in the background pipeline
-    if let Err(e) = state
-        .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        })
-        .await
-    {
-        error!("Failed to enqueue document processing job: {}", e);
-    }
-
-    // Re-fetch to get updated document with file_path
-    let document = state
-        .document_repo
-        .find_by_id(document.id)
-        .await?
-        .unwrap_or(document);
 
     Ok(Json(document))
 }
@@ -449,19 +426,6 @@ pub(crate) async fn download_document(
     response
         .body(Body::from_stream(object.stream))
         .map_err(|_| ApiError::internal("Failed to build response"))
-}
-
-/// Store the uploaded bytes under the document's original key and record it.
-/// Failures are logged: the document row already exists and can be re-uploaded.
-pub(crate) async fn store_original(state: &AppState, id: Uuid, data: Vec<u8>) {
-    let key = keys::original(id);
-    if let Err(e) = state.store.put(&key, data.into()).await {
-        tracing::error!("Failed to store {key}: {e}");
-        return;
-    }
-    if let Err(e) = state.document_repo.set_file_path(id, &key).await {
-        tracing::error!("Failed to record {key}: {e}");
-    }
 }
 
 /// `Content-Disposition: attachment` with an ASCII fallback and an RFC 6266

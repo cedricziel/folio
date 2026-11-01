@@ -13,8 +13,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use folio_core::models::{
-    Id, RunStatus, WebhookMethod, Workflow, WorkflowAction, WorkflowConditions, WorkflowInput,
-    WorkflowRun, WorkflowTrigger,
+    Id, RunStatus, SourceConditions, SourceKind, TextMatch, WebhookMethod, Workflow,
+    WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
 use super::workflows::{find, send_test, SECRET_MASK};
@@ -133,6 +133,16 @@ struct FormValues {
     correspondent_id: String,
     document_type_id: String,
     filename_glob: String,
+    source_kind: String,
+    folder_path_glob: String,
+    email_from_mode: String,
+    email_from: String,
+    email_to_mode: String,
+    email_to: String,
+    email_subject_mode: String,
+    email_subject: String,
+    email_attachment_glob: String,
+    email_mailbox_glob: String,
     webhook_url: String,
     webhook_secret: String,
     clear_secret: Option<String>,
@@ -179,6 +189,20 @@ impl FormValues {
                 .map(|i| i.to_string())
                 .unwrap_or_default(),
             filename_glob: c.filename_glob.clone().unwrap_or_default(),
+            source_kind: c
+                .source
+                .kind
+                .map(|k| k.as_str().to_string())
+                .unwrap_or_default(),
+            folder_path_glob: c.source.folder_path_glob.clone().unwrap_or_default(),
+            email_from_mode: mode_of(&c.source.email_from),
+            email_from: text_of(&c.source.email_from),
+            email_to_mode: mode_of(&c.source.email_to),
+            email_to: text_of(&c.source.email_to),
+            email_subject_mode: mode_of(&c.source.email_subject),
+            email_subject: text_of(&c.source.email_subject),
+            email_attachment_glob: c.source.email_attachment_glob.clone().unwrap_or_default(),
+            email_mailbox_glob: c.source.email_mailbox_glob.clone().unwrap_or_default(),
             webhook_url,
             webhook_headers,
             ..Default::default()
@@ -200,7 +224,29 @@ impl FormValues {
             correspondent_id: id(&self.correspondent_id, "correspondent")?,
             document_type_id: id(&self.document_type_id, "document type")?,
             filename_glob: optional(&self.filename_glob),
+            source: SourceConditions {
+                kind: optional(&self.source_kind).map(|k| SourceKind::parse(&k)),
+                folder_path_glob: optional(&self.folder_path_glob),
+                email_from: text_match(&self.email_from_mode, &self.email_from),
+                email_to: text_match(&self.email_to_mode, &self.email_to),
+                email_subject: text_match(&self.email_subject_mode, &self.email_subject),
+                email_attachment_glob: optional(&self.email_attachment_glob),
+                email_mailbox_glob: optional(&self.email_mailbox_glob),
+            },
         };
+
+        if trigger == WorkflowTrigger::IngestReceived {
+            return Ok(WorkflowInput {
+                name: self.name.trim().to_string(),
+                enabled: self.enabled.is_some(),
+                trigger,
+                conditions,
+                actions: vec![WorkflowAction::SkipImport],
+            });
+        }
+        if self.webhook_url.trim().is_empty() {
+            return Err("Enter the webhook URL.".to_string());
+        }
 
         let mut headers = BTreeMap::new();
         for line in self
@@ -271,6 +317,34 @@ impl FormValues {
             actions,
         })
     }
+}
+
+fn mode_of(m: &Option<TextMatch>) -> String {
+    match m {
+        Some(TextMatch::Contains(_)) => "contains",
+        Some(TextMatch::Regex(_)) => "regex",
+        _ => "glob",
+    }
+    .to_string()
+}
+
+fn text_of(m: &Option<TextMatch>) -> String {
+    match m {
+        Some(TextMatch::Glob(t) | TextMatch::Contains(t) | TextMatch::Regex(t)) => t.clone(),
+        None => String::new(),
+    }
+}
+
+fn text_match(mode: &str, value: &str) -> Option<TextMatch> {
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return None;
+    }
+    Some(match mode {
+        "contains" => TextMatch::Contains(value),
+        "regex" => TextMatch::Regex(value),
+        _ => TextMatch::Glob(value),
+    })
 }
 
 fn first_webhook(actions: &[WorkflowAction]) -> Option<(usize, &WorkflowAction)> {

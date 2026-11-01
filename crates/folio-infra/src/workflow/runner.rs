@@ -212,6 +212,8 @@ impl WorkflowRunner {
                 .await
                 .map(|_| ()),
             WorkflowAction::Webhook { .. } => unreachable!("webhooks are handled by the caller"),
+            // Only valid before import, where the pipeline handles it; nothing to do on a stored document.
+            WorkflowAction::SkipImport => Ok(()),
         };
 
         result.map_err(|e| ActionFailure {

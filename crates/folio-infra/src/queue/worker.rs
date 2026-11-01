@@ -735,8 +735,7 @@ mod tests {
                 content: None,
                 original_filename: Some("scan.png".into()),
                 mime_type: Some("image/png".into()),
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -882,8 +881,7 @@ mod tests {
                 content: None,
                 original_filename: None,
                 mime_type: Some("image/png".into()),
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await
             .unwrap();

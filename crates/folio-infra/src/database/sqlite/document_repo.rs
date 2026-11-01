@@ -8,8 +8,8 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag, UpdateCorrespondent,
-    UpdateDocument, UpdateDocumentType, UpdateTag,
+    DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -76,6 +76,8 @@ struct DocumentRow {
     correspondent_id: Option<String>,
     document_type_id: Option<String>,
     page_count: Option<i64>,
+    source_type: String,
+    source_meta: Option<String>,
     ocr_status: String,
     embed_status: String,
     created_at: String,
@@ -96,6 +98,7 @@ impl TryFrom<DocumentRow> for Document {
             correspondent_id: parse_optional_uuid(row.correspondent_id)?,
             document_type_id: parse_optional_uuid(row.document_type_id)?,
             page_count: row.page_count.map(|c| c as u32),
+            source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
             ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
             embed_status: row.embed_status.parse().map_err(Error::Repository)?,
             created_at: row
@@ -184,7 +187,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let id_str = id.to_string();
         let row: Option<DocumentRow> = sqlx::query_as(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, ocr_status, embed_status, created_at, updated_at
+                    correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status, created_at, updated_at
              FROM documents WHERE id = ?",
         )
         .bind(&id_str)
@@ -198,7 +201,7 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
         let mut qb = QueryBuilder::<Sqlite>::new(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                    correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status,
                      created_at, updated_at
              FROM documents WHERE 1 = 1",
         );
@@ -262,12 +265,13 @@ impl DocumentRepository for SqliteDocumentRepository {
         } else {
             ProcessingStatus::Pending
         };
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
 
         sqlx::query(
             "INSERT INTO documents (id, title, content, original_filename, mime_type,
                                     correspondent_id, document_type_id, ocr_status,
-                                    created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    source_type, source_meta, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&params.title)
@@ -277,11 +281,26 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(params.correspondent_id.map(|id| id.to_string()))
         .bind(params.document_type_id.map(|id| id.to_string()))
         .bind(ocr_status.as_str())
+        .bind(params.source.kind.as_str())
+        .bind(params.source.metadata_json())
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+
+        for tag_id in &params.tag_ids {
+            sqlx::query(
+                "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(id.to_string())
+            .bind(tag_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        }
+        tx.commit().await.map_err(map_sqlx_error)?;
 
         Ok(Document {
             id,
@@ -293,6 +312,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,
             page_count: None,
+            source: params.source,
             ocr_status,
             embed_status: ProcessingStatus::Pending,
             created_at: now,
@@ -337,6 +357,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             correspondent_id,
             document_type_id,
             page_count: existing.page_count,
+            source: existing.source,
             ocr_status: existing.ocr_status,
             embed_status: existing.embed_status,
             created_at: existing.created_at,
@@ -445,13 +466,13 @@ impl DocumentRepository for SqliteDocumentRepository {
         let sql = match stage {
             ProcessingStage::Ocr => {
                 "SELECT id, title, content, original_filename, file_path, mime_type,
-                        correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                        correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status,
                         created_at, updated_at
                  FROM documents WHERE ocr_status = 'pending' ORDER BY created_at"
             }
             ProcessingStage::Embed => {
                 "SELECT id, title, content, original_filename, file_path, mime_type,
-                        correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                        correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status,
                         created_at, updated_at
                  FROM documents WHERE embed_status = 'pending' ORDER BY created_at"
             }

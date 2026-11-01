@@ -19,8 +19,8 @@ use sqlx::{PgPool, SqlitePool};
 
 use folio_auth::AuthStore;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SearchService,
-    SettingsRepository, TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, IngestLedger,
+    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
 
 use crate::queue::JobQueue;
@@ -28,13 +28,15 @@ use crate::queue::JobQueue;
 pub use health::DatabaseHealthCheck;
 pub use postgres::{
     PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
-    PostgresDocumentTypeRepository, PostgresSearchService, PostgresSettingsRepository,
-    PostgresTagRepository, PostgresWorkflowRepository,
+    PostgresDocumentTypeRepository, PostgresIngestLedger, PostgresSearchService,
+    PostgresSettingsRepository, PostgresSourceRepository, PostgresTagRepository,
+    PostgresWorkflowRepository,
 };
 pub use sqlite::{
     create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
-    SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger,
+    SqliteSearchService, SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
+    SqliteWorkflowRepository,
 };
 
 /// Supported database backends
@@ -94,6 +96,8 @@ pub struct Repositories {
     pub document_types: Arc<dyn DocumentTypeRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     pub workflows: Arc<dyn WorkflowRepository>,
+    pub sources: Arc<dyn SourceRepository>,
+    pub ledger: Arc<dyn IngestLedger>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
     pub auth: Arc<dyn AuthStore>,
@@ -135,6 +139,8 @@ impl Database {
                 document_types: Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
                 settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
                 workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
+                sources: Arc::new(SqliteSourceRepository::new(pool.clone())),
+                ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
                 search: Arc::new(SqliteSearchService::new(pool.clone())),
                 jobs: JobQueue::sqlite(pool.clone()),
                 auth: Arc::new(SqliteAuthStore::new(pool.clone())),
@@ -146,6 +152,8 @@ impl Database {
                 document_types: Arc::new(PostgresDocumentTypeRepository::new(pool.clone())),
                 settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
                 workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
+                sources: Arc::new(PostgresSourceRepository::new(pool.clone())),
+                ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
                 search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                 jobs: JobQueue::postgres(pool.clone()),
                 auth: Arc::new(PostgresAuthStore::new(pool.clone())),
