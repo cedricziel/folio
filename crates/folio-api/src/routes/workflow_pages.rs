@@ -1,6 +1,6 @@
 //! Server-rendered workflow pages: list, create/edit form, test, and run history
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use askama::Template;
 use axum::{
@@ -47,7 +47,7 @@ struct Notice {
 }
 
 struct RunView {
-    event: String,
+    event: &'static str,
     document: String,
     status_class: &'static str,
     status_label: &'static str,
@@ -66,7 +66,7 @@ impl From<&WorkflowRun> for RunView {
             RunStatus::Failed => ("f-status-failed", "Failed"),
         };
         Self {
-            event: run.event.as_str().to_string(),
+            event: run.event.label(),
             document: run
                 .document_id
                 .map(|id| id.to_string()[..8].to_string())
@@ -147,9 +147,24 @@ struct FormValues {
     webhook_secret: String,
     clear_secret: Option<String>,
     webhook_headers: String,
+    action_correspondent_id: String,
+    action_document_type_id: String,
+    /// `action_tag_<id>` checkboxes: the urlencoded form cannot repeat a key
+    #[serde(flatten)]
+    checkboxes: HashMap<String, String>,
 }
 
+const TAG_FIELD: &str = "action_tag_";
+
 impl FormValues {
+    fn action_tag_ids(&self) -> Vec<Id> {
+        self.checkboxes
+            .keys()
+            .filter_map(|k| k.strip_prefix(TAG_FIELD))
+            .filter_map(|id| Uuid::parse_str(id).ok())
+            .collect()
+    }
+
     fn blank() -> Self {
         Self {
             trigger: WorkflowTrigger::DocumentUploaded.as_str().into(),
@@ -174,7 +189,28 @@ impl FormValues {
             ),
             _ => Default::default(),
         };
+        let mut checkboxes = HashMap::new();
+        let (mut action_correspondent_id, mut action_document_type_id) = Default::default();
+        for action in &workflow.actions {
+            match action {
+                WorkflowAction::AddTags { tag_ids } => checkboxes.extend(
+                    tag_ids
+                        .iter()
+                        .map(|id| (format!("{TAG_FIELD}{id}"), "on".to_string())),
+                ),
+                WorkflowAction::SetCorrespondent { correspondent_id } => {
+                    action_correspondent_id = correspondent_id.to_string()
+                }
+                WorkflowAction::SetDocumentType { document_type_id } => {
+                    action_document_type_id = document_type_id.to_string()
+                }
+                WorkflowAction::Webhook { .. } | WorkflowAction::SkipImport => {}
+            }
+        }
         Self {
+            checkboxes,
+            action_correspondent_id,
+            action_document_type_id,
             name: workflow.name.clone(),
             trigger: workflow.trigger.as_str().into(),
             enabled: workflow.enabled.then(|| "on".to_string()),
@@ -244,10 +280,6 @@ impl FormValues {
                 actions: vec![WorkflowAction::SkipImport],
             });
         }
-        if self.webhook_url.trim().is_empty() {
-            return Err("Enter the webhook URL.".to_string());
-        }
-
         let mut headers = BTreeMap::new();
         for line in self
             .webhook_headers
@@ -287,8 +319,8 @@ impl FormValues {
             return Err("Enter the header values; the mask only keeps stored ones.".into());
         }
 
-        let mut actions = existing.map(|w| w.actions.clone()).unwrap_or_default();
-        let stored = first_webhook(&actions).map(|(index, _)| index);
+        let mut tag_ids = self.action_tag_ids();
+        tag_ids.sort();
         // A stored secret is only kept while the URL stays the same, so it
         // cannot be sent to a new destination by editing the URL alone.
         let secret = if self.clear_secret.is_some() {
@@ -298,15 +330,39 @@ impl FormValues {
         } else {
             stored_hook.and_then(|(_, secret)| secret.clone())
         };
-        let webhook = WorkflowAction::Webhook {
-            url: self.webhook_url.trim().to_string(),
-            method: WebhookMethod::Post,
-            headers,
-            secret,
-        };
-        match stored {
-            Some(index) => actions[index] = webhook,
-            None => actions.insert(0, webhook),
+
+        // The form edits one action of each kind: it replaces the first stored
+        // one, or removes it when the section was emptied. Anything else stays.
+        let mut actions = existing.map(|w| w.actions.clone()).unwrap_or_default();
+        set_action(
+            &mut actions,
+            |a| matches!(a, WorkflowAction::AddTags { .. }),
+            (!tag_ids.is_empty()).then_some(WorkflowAction::AddTags { tag_ids }),
+        );
+        set_action(
+            &mut actions,
+            |a| matches!(a, WorkflowAction::SetCorrespondent { .. }),
+            id(&self.action_correspondent_id, "correspondent")?
+                .map(|correspondent_id| WorkflowAction::SetCorrespondent { correspondent_id }),
+        );
+        set_action(
+            &mut actions,
+            |a| matches!(a, WorkflowAction::SetDocumentType { .. }),
+            id(&self.action_document_type_id, "document type")?
+                .map(|document_type_id| WorkflowAction::SetDocumentType { document_type_id }),
+        );
+        set_action(
+            &mut actions,
+            WorkflowAction::is_webhook,
+            (!new_url.is_empty()).then(|| WorkflowAction::Webhook {
+                url: new_url.to_string(),
+                method: WebhookMethod::Post,
+                headers,
+                secret,
+            }),
+        );
+        if actions.is_empty() {
+            return Err("Choose what Folio should do: tag, file or send a webhook.".to_string());
         }
 
         Ok(WorkflowInput {
@@ -316,6 +372,21 @@ impl FormValues {
             conditions,
             actions,
         })
+    }
+}
+
+fn set_action(
+    actions: &mut Vec<WorkflowAction>,
+    is_kind: fn(&WorkflowAction) -> bool,
+    wanted: Option<WorkflowAction>,
+) {
+    match (actions.iter().position(is_kind), wanted) {
+        (Some(i), Some(action)) => actions[i] = action,
+        (Some(i), None) => {
+            actions.remove(i);
+        }
+        (None, Some(action)) => actions.push(action),
+        (None, None) => {}
     }
 }
 
@@ -364,6 +435,12 @@ struct FormTemplate {
     tags: Vec<Choice>,
     correspondents: Vec<Choice>,
     document_types: Vec<Choice>,
+    source_kinds: Vec<Choice>,
+    action_tags: Vec<Choice>,
+    action_correspondents: Vec<Choice>,
+    action_document_types: Vec<Choice>,
+    show_folder: bool,
+    show_email: bool,
     runs: Vec<RunView>,
     notice: Option<Notice>,
 }
@@ -383,6 +460,13 @@ async fn build_form(
                 label,
             })
             .collect::<Vec<_>>()
+    };
+    let chosen_tags = values.action_tag_ids();
+    let pairs = |names: Vec<(Id, String)>| -> Vec<(String, String)> {
+        names
+            .into_iter()
+            .map(|(id, name)| (id.to_string(), name))
+            .collect()
     };
     let tags = state.tag_repo.list().await?;
     let correspondents = state.correspondent_repo.list().await?;
@@ -417,28 +501,65 @@ async fn build_form(
         triggers: choices(
             WorkflowTrigger::ALL
                 .iter()
-                .map(|t| (t.as_str().to_string(), t.as_str().to_string()))
+                .map(|t| (t.as_str().to_string(), t.label().to_string()))
                 .collect(),
             &values.trigger,
         ),
-        tags: choices(
-            tags.into_iter()
-                .map(|t| (t.id.to_string(), t.name))
-                .collect(),
-            &values.tag_id,
+        source_kinds: choices(
+            [
+                ("upload", "Uploaded in the browser"),
+                ("api", "Sent through the API"),
+                ("folder", "A watched folder"),
+                ("email", "A mail account"),
+            ]
+            .map(|(value, label)| (value.to_string(), label.to_string()))
+            .to_vec(),
+            &values.source_kind,
         ),
+        action_tags: tags
+            .iter()
+            .map(|t| Choice {
+                selected: chosen_tags.contains(&t.id),
+                value: t.id.to_string(),
+                label: t.name.clone(),
+            })
+            .collect(),
+        action_correspondents: choices(
+            pairs(
+                correspondents
+                    .iter()
+                    .map(|c| (c.id, c.name.clone()))
+                    .collect(),
+            ),
+            &values.action_correspondent_id,
+        ),
+        action_document_types: choices(
+            pairs(
+                document_types
+                    .iter()
+                    .map(|d| (d.id, d.name.clone()))
+                    .collect(),
+            ),
+            &values.action_document_type_id,
+        ),
+        show_folder: values.source_kind == "folder" || !values.folder_path_glob.is_empty(),
+        show_email: values.source_kind == "email"
+            || [
+                &values.email_from,
+                &values.email_to,
+                &values.email_subject,
+                &values.email_attachment_glob,
+                &values.email_mailbox_glob,
+            ]
+            .iter()
+            .any(|v| !v.is_empty()),
+        tags: choices(pairs(tags.iter().map(|t| (t.id, t.name.clone())).collect()), &values.tag_id),
         correspondents: choices(
-            correspondents
-                .into_iter()
-                .map(|c| (c.id.to_string(), c.name))
-                .collect(),
+            pairs(correspondents.iter().map(|c| (c.id, c.name.clone())).collect()),
             &values.correspondent_id,
         ),
         document_types: choices(
-            document_types
-                .into_iter()
-                .map(|d| (d.id.to_string(), d.name))
-                .collect(),
+            pairs(document_types.iter().map(|d| (d.id, d.name.clone())).collect()),
             &values.document_type_id,
         ),
         values,

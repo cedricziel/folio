@@ -17,16 +17,6 @@ const known: { rule: string; target: string; issue: string }[] = [
     target: ".f-tag",
     issue: "https://github.com/cedricziel/folio/issues/64",
   },
-  {
-    rule: "label",
-    target: "email_to",
-    issue: "https://github.com/cedricziel/folio/issues/63",
-  },
-  {
-    rule: "select-name",
-    target: "_mode",
-    issue: "https://github.com/cedricziel/folio/issues/63",
-  },
 ];
 
 const isKnown = (rule: string, target: string) =>

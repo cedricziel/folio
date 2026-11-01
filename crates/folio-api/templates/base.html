@@ -638,6 +638,38 @@ Stimulus.register(
   },
 );
 
+// Workflow form: only show the fields that apply to the chosen trigger and source
+Stimulus.register(
+  "workflow-form",
+  class extends Controller {
+    static targets = [
+      "trigger",
+      "source",
+      "folder",
+      "email",
+      "actions",
+      "discard",
+    ];
+
+    connect() {
+      this.sync();
+    }
+
+    sync() {
+      const ingest = this.triggerTarget.value === "ingest.received";
+      this.actionsTarget.hidden = ingest;
+      this.discardTarget.hidden = !ingest;
+
+      const source = this.sourceTarget.value;
+      const filled = (group) =>
+        [...group.querySelectorAll("input")].some((input) => input.value);
+      this.folderTarget.hidden =
+        source !== "folder" && !filled(this.folderTarget);
+      this.emailTarget.hidden = source !== "email" && !filled(this.emailTarget);
+    }
+  },
+);
+
 // Settings Form Controller
 Stimulus.register(
   "settings-form",

@@ -611,6 +611,61 @@ a:not([class]):hover,
   display: flex;
   gap: var(--space-2);
 }
+.input-row .match-mode {
+  flex: none;
+  width: auto;
+}
+.input-row .input {
+  flex: 1;
+  min-width: 0;
+}
+fieldset.field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+.legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.workflow-form {
+  max-width: 640px;
+}
+.action-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--paper-raised);
+}
+.action-card > .heading {
+  font-size: 14px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 400;
+}
+.check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+.push-end {
+  margin-left: auto;
+}
 .form-actions {
   display: flex;
   align-items: center;
