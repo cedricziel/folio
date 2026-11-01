@@ -242,6 +242,7 @@ async fn main() -> Result<()> {
             name_header: forward.name_header.clone(),
             groups_header: forward.groups_header.clone(),
             role_header: forward.role_header.clone(),
+            user_id_header: forward.user_id_header.clone(),
             trusted_proxies: forward.trusted_proxies.clone(),
             admin_group: forward.admin_group.clone(),
             admin_role: forward.admin_role.clone(),

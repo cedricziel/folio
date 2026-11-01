@@ -128,6 +128,8 @@ pub struct ForwardAuthConfig {
     pub groups_header: String,
     /// Empty (the default) means role headers are ignored.
     pub role_header: String,
+    /// Empty (the default) links accounts by the user header.
+    pub user_id_header: String,
     /// CIDRs or addresses of the proxies whose headers are honoured.
     pub trusted_proxies: Vec<String>,
     /// Members of this (external) group become admins; needs `groups_header`.
@@ -148,6 +150,7 @@ impl Default for ForwardAuthConfig {
             name_header: "Remote-Name".to_string(),
             groups_header: String::new(),
             role_header: String::new(),
+            user_id_header: String::new(),
             trusted_proxies: Vec::new(),
             admin_group: None,
             admin_role: None,
@@ -269,6 +272,12 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "auth.forward.role_header",
         env: "FOLIO_AUTH__FORWARD__ROLE_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.user_id_header",
+        env: "FOLIO_AUTH__FORWARD__USER_ID_HEADER",
         legacy_env: &[],
         kind: ValueKind::Str,
     },

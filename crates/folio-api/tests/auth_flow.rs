@@ -1152,6 +1152,43 @@ mod forward {
     }
 
     #[tokio::test]
+    async fn a_stable_id_header_links_the_account_and_the_name_is_display_only() {
+        let f = fwd_app(|c| c.user_id_header = "Remote-User-Id".into()).await;
+        let as_user = |id: Option<&str>, name: &str| {
+            let mut b = Request::get("/")
+                .header("Accept", "text/html")
+                .header("Remote-User", name);
+            if let Some(id) = id {
+                b = b.header("Remote-User-Id", id);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        let first = send_from(&f.app, TRUSTED, as_user(Some("u-1"), "alice")).await;
+        assert_eq!(first.status, StatusCode::OK);
+        let alice = f
+            .store
+            .find_user_by_external("forward", "u-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(alice.username, "alice");
+
+        // The same id under another display name is still the same account.
+        let renamed = send_from(&f.app, TRUSTED, as_user(Some("u-1"), "alice-renamed")).await;
+        assert_eq!(renamed.status, StatusCode::OK);
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+
+        // Another id cannot take over the name.
+        let clash = send_from(&f.app, TRUSTED, as_user(Some("u-2"), "alice")).await;
+        assert_eq!(clash.status, StatusCode::FORBIDDEN);
+
+        // Without the id header there is no identity at all.
+        let anonymous = send_from(&f.app, TRUSTED, as_user(None, "alice")).await;
+        assert_eq!(anonymous.status, StatusCode::SEE_OTHER);
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
         let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;
         send_from(

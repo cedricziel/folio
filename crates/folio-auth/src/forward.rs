@@ -20,6 +20,9 @@ pub struct ForwardAuth {
     pub groups_header: Option<HeaderName>,
     /// `None` means the role header is never read.
     pub role_header: Option<HeaderName>,
+    /// When set, accounts are linked by this header and the user header is
+    /// only the display username.
+    pub user_id_header: Option<HeaderName>,
     admin_group: Option<String>,
     admin_role: Option<String>,
     secret: Option<(HeaderName, String)>,
@@ -36,6 +39,9 @@ pub struct ForwardConfig {
     pub groups_header: String,
     /// Empty disables roles.
     pub role_header: String,
+    /// A stable account id (Pangolin: `Remote-User-Id`). Empty links accounts
+    /// by the lower-cased user header, which breaks when a name is reused.
+    pub user_id_header: String,
     /// CIDRs (`10.0.0.0/8`) and bare addresses of the trusted proxies.
     pub trusted_proxies: Vec<String>,
     /// Only effective together with `groups_header`.
@@ -55,6 +61,7 @@ impl Default for ForwardConfig {
             name_header: "Remote-Name".into(),
             groups_header: String::new(),
             role_header: String::new(),
+            user_id_header: String::new(),
             trusted_proxies: Vec::new(),
             admin_group: None,
             admin_role: None,
@@ -103,6 +110,7 @@ impl ForwardAuth {
             name_header: header(&config.name_header)?,
             groups_header,
             role_header,
+            user_id_header: optional(&config.user_id_header)?,
             admin_group,
             admin_role,
             secret,
@@ -128,6 +136,7 @@ impl ForwardAuth {
             .into_iter()
             .chain(&self.groups_header)
             .chain(&self.role_header)
+            .chain(&self.user_id_header)
             .chain(self.secret.as_ref().map(|(name, _)| name))
     }
 
@@ -168,6 +177,10 @@ impl ForwardAuth {
                 .map(str::to_string)
         };
         let username = value(&self.user_header)?;
+        let external_id = match &self.user_id_header {
+            Some(name) => value(name)?,
+            None => username.to_lowercase(),
+        };
         let groups: Vec<String> = self
             .groups_header
             .as_ref()
@@ -192,7 +205,7 @@ impl ForwardAuth {
         };
         Some(ExternalIdentity {
             source: SOURCE_FORWARD.to_string(),
-            external_id: username.to_lowercase(),
+            external_id,
             username,
             email: value(&self.email_header),
             display_name: value(&self.name_header),

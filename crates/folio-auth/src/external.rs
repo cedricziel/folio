@@ -8,6 +8,7 @@ use crate::{
 };
 
 const MAX_USERNAME_LEN: usize = 64;
+const MAX_EXTERNAL_ID_LEN: usize = 255;
 const MAX_GROUPS: usize = 200;
 const MAX_GROUP_LEN: usize = 200;
 
@@ -47,7 +48,12 @@ pub async fn sync_external_user(
 ) -> Result<User, ExternalError> {
     identity.username = identity.username.trim().to_string();
     let name = &identity.username;
-    if name.is_empty() || name.len() > MAX_USERNAME_LEN || name.chars().any(char::is_control) {
+    if name.is_empty()
+        || name.len() > MAX_USERNAME_LEN
+        || name.chars().any(char::is_control)
+        || identity.external_id.is_empty()
+        || identity.external_id.len() > MAX_EXTERNAL_ID_LEN
+    {
         return Err(ExternalError::Invalid);
     }
     identity

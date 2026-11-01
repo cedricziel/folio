@@ -63,6 +63,7 @@ in headers. Folio logs that user in without asking for a password.
 [auth.forward]
 enabled = true
 trusted_proxies = ["172.18.0.5"]   # a single proxy address, see Trust below
+# user_id_header = "Remote-User-Id" # stable id, recommended when available
 # user_header = "Remote-User"      # defaults: Remote-User, Remote-Email,
 # email_header = "Remote-Email"    # Remote-Name
 # name_header = "Remote-Name"
@@ -89,7 +90,11 @@ Environment: `FOLIO_AUTH__FORWARD__ENABLED=true`,
   `/oauth/register`, `/oauth/revoke`, `/.well-known/*`, `/mcp` and on `/api`
   requests that carry a bearer token. Those use OAuth, not the gateway.
 - **Users.** The first request for a name creates the account (no local
-  password) and links it by name. A name that already belongs to another
+  password) and links it by name. With `user_id_header` set, accounts are
+  linked by that stable id instead, and the user header is only the username
+  shown in Folio (it is taken from the first request and does not follow later
+  renames). Prefer this whenever your gateway offers an id: names can be
+  reused, ids cannot. A name that already belongs to another
   account, such as the local owner, is refused with `403`.
 - **Admins.** The first user of a fresh install is the owner and admin. With
   `admin_group` (and `groups_header`) or `admin_role` (and `role_header`) set,
@@ -119,6 +124,7 @@ services:
       FOLIO_SERVER__PUBLIC_URL: https://folio.example.com
       FOLIO_AUTH__FORWARD__ENABLED: "true"
       FOLIO_AUTH__FORWARD__TRUSTED_PROXIES: 172.18.0.5   # the Newt container
+      FOLIO_AUTH__FORWARD__USER_ID_HEADER: Remote-User-Id
       FOLIO_AUTH__FORWARD__ROLE_HEADER: Remote-Role
       FOLIO_AUTH__FORWARD__ADMIN_ROLE: admin
 ```
