@@ -91,6 +91,40 @@ impl AuthStore for SqliteAuthStore {
         })
     }
 
+    async fn create_external_user(
+        &self,
+        user: User,
+        admin_if_first: bool,
+    ) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO users
+             (id, username, username_normalized, password_hash, created_at,
+              email, display_name, is_admin, auth_source, external_id)
+             SELECT $1, $2, $3, $4, $5, $6, $7,
+                    CASE WHEN $8 = 1 OR ($11 = 1 AND NOT EXISTS (SELECT 1 FROM users))
+                         THEN 1 ELSE 0 END,
+                    $9, $10",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(user.username.to_lowercase())
+        .bind(&user.password_hash)
+        .bind(user.created_at)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(i64::from(user.is_admin))
+        .bind(&user.auth_source)
+        .bind(&user.external_id)
+        .bind(i64::from(admin_if_first))
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
+            other => err(other),
+        })
+    }
+
     async fn find_user_by_external(
         &self,
         source: &str,

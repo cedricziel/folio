@@ -955,17 +955,65 @@ async fn auth_contract(r: &Repositories) {
     };
 
     assert_eq!(auth.count_users().await.unwrap(), 0);
-    let owner = auth
-        .create_first_user(user("Owner"))
-        .await
-        .unwrap()
-        .unwrap();
+    // Simultaneous first logins (setup form and external providers): the
+    // emptiness check is atomic with the insert, so exactly one becomes owner.
+    let external = |i: usize| User {
+        auth_source: "forward".into(),
+        external_id: Some(format!("ext{i}")),
+        ..user(&format!("ext{i}"))
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    {
+        let auth = r.auth.clone();
+        let owner = user("Owner");
+        tasks.spawn(async move { auth.create_first_user(owner).await.map(|u| u.is_some()) });
+    }
+    for i in 0..16 {
+        let auth = r.auth.clone();
+        let u = external(i);
+        tasks.spawn(async move { auth.create_external_user(u, true).await.map(|()| true) });
+    }
+    while let Some(done) = tasks.join_next().await {
+        done.unwrap().unwrap();
+    }
+    let mut admins = 0;
+    for name in ["Owner"]
+        .into_iter()
+        .map(String::from)
+        .chain((0..16).map(|i| format!("ext{i}")))
+    {
+        if let Some(u) = auth.find_user_by_username(&name).await.unwrap() {
+            admins += i32::from(u.is_admin);
+        }
+    }
+    assert_eq!(admins, 1, "exactly one first user is admin");
+    let owner = match auth.find_user_by_username("Owner").await.unwrap() {
+        Some(owner) => owner,
+        None => {
+            auth.create_user(user("Owner")).await.unwrap();
+            auth.find_user_by_username("Owner").await.unwrap().unwrap()
+        }
+    };
     assert!(auth
         .create_first_user(user("second"))
         .await
         .unwrap()
         .is_none());
-    assert_eq!(auth.count_users().await.unwrap(), 1);
+    // Later external users stay plain, and a repeated identity conflicts.
+    auth.create_external_user(external(100), true)
+        .await
+        .unwrap();
+    let late = auth
+        .find_user_by_external("forward", "ext100")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!late.is_admin);
+    assert!(matches!(
+        auth.create_external_user(external(100), true).await,
+        Err(folio_auth::AuthError::Conflict)
+    ));
+    assert_eq!(auth.count_users().await.unwrap(), 18);
     let by_name = auth.find_user_by_username("oWnEr").await.unwrap().unwrap();
     assert_eq!(by_name.id, owner.id);
     assert_eq!(by_name.username, "Owner");
@@ -981,16 +1029,6 @@ async fn auth_contract(r: &Repositories) {
             .unwrap()
             .username,
         "Owner"
-    );
-
-    assert!(
-        owner.is_admin
-            || auth
-                .find_user_by_id(&owner.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_admin
     );
 
     // External users: linked by (source, external id), usernames stay unique

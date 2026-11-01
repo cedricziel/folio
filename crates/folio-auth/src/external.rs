@@ -80,7 +80,6 @@ pub async fn sync_external_user(
             user
         }
         None => {
-            let first = store.count_users().await? == 0;
             let user = User {
                 id: uuid::Uuid::new_v4().to_string(),
                 username: identity.username.clone(),
@@ -88,12 +87,19 @@ pub async fn sync_external_user(
                 created_at: now(),
                 email: identity.email.clone(),
                 display_name: identity.display_name.clone(),
-                is_admin: identity.admin.unwrap_or(false) || first,
+                is_admin: identity.admin.unwrap_or(false),
                 auth_source: identity.source.clone(),
                 external_id: Some(identity.external_id.clone()),
             };
-            match store.create_user(user.clone()).await {
-                Ok(()) => user,
+            // Only without a provider-side mapping may the first user become owner.
+            match store
+                .create_external_user(user.clone(), identity.admin.is_none())
+                .await
+            {
+                Ok(()) => store
+                    .find_user_by_external(&identity.source, &identity.external_id)
+                    .await?
+                    .unwrap_or(user),
                 // Either a concurrent first request created this very identity
                 // (use it) or the username belongs to someone else.
                 Err(AuthError::Conflict) => store

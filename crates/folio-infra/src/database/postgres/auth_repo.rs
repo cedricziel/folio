@@ -21,6 +21,16 @@ fn err(e: sqlx::Error) -> AuthError {
     AuthError::Store(e.to_string())
 }
 
+/// READ COMMITTED lets parallel inserts all see an empty `users` table; the
+/// lock makes the emptiness check and the insert one critical section.
+async fn lock_first_user(tx: &mut sqlx::PgConnection) -> Result<(), AuthError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(7101)")
+        .execute(tx)
+        .await
+        .map(|_| ())
+        .map_err(err)
+}
+
 fn split(scopes: &str) -> Vec<String> {
     scopes.split_whitespace().map(String::from).collect()
 }
@@ -49,6 +59,8 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn create_first_user(&self, user: User) -> Result<Option<User>, AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        lock_first_user(&mut tx).await?;
         let result = sqlx::query(
             "INSERT INTO users
              (id, username, username_normalized, password_hash, created_at, is_admin, auth_source)
@@ -59,9 +71,10 @@ impl AuthStore for PostgresAuthStore {
         .bind(user.username.to_lowercase())
         .bind(&user.password_hash)
         .bind(user.created_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(err)?;
+        tx.commit().await.map_err(err)?;
         Ok((result.rows_affected() == 1).then_some(user))
     }
 
@@ -89,6 +102,41 @@ impl AuthStore for PostgresAuthStore {
             sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
             other => err(other),
         })
+    }
+
+    async fn create_external_user(
+        &self,
+        user: User,
+        admin_if_first: bool,
+    ) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        lock_first_user(&mut tx).await?;
+        sqlx::query(
+            "INSERT INTO users
+             (id, username, username_normalized, password_hash, created_at,
+              email, display_name, is_admin, auth_source, external_id)
+             SELECT $1, $2, $3, $4, $5, $6, $7,
+                    $8::boolean OR ($11::boolean AND NOT EXISTS (SELECT 1 FROM users)),
+                    $9, $10",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(user.username.to_lowercase())
+        .bind(&user.password_hash)
+        .bind(user.created_at)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(user.is_admin)
+        .bind(&user.auth_source)
+        .bind(&user.external_id)
+        .bind(admin_if_first)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
+            other => err(other),
+        })?;
+        tx.commit().await.map_err(err)
     }
 
     async fn find_user_by_external(

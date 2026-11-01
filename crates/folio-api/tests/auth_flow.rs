@@ -977,9 +977,9 @@ mod forward {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn simultaneous_first_requests_for_one_user_all_succeed() {
         let f = fwd_app(|_| {}).await;
-        let statuses: Vec<StatusCode> = futures::future::join_all((0..16).map(|_| {
-            send_from(&f.app, TRUSTED, with_identity("/", "newcomer", &[]))
-        }))
+        let statuses: Vec<StatusCode> = futures::future::join_all(
+            (0..16).map(|_| send_from(&f.app, TRUSTED, with_identity("/", "newcomer", &[]))),
+        )
         .await
         .into_iter()
         .map(|r| r.status)
@@ -989,6 +989,43 @@ mod forward {
             "{statuses:?}"
         );
         assert_eq!(f.store.count_users().await.unwrap(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn only_one_of_several_simultaneous_first_users_becomes_admin() {
+        let f = fwd_app(|_| {}).await;
+        futures::future::join_all((0..16).map(|i| {
+            send_from(
+                &f.app,
+                TRUSTED,
+                with_identity("/", &format!("user{i}"), &[]),
+            )
+        }))
+        .await;
+        let admins: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        assert_eq!(f.store.count_users().await.unwrap(), 16);
+        assert_eq!(admins, 1);
+    }
+
+    #[tokio::test]
+    async fn the_first_user_is_not_admin_when_a_mapping_decides() {
+        let f = fwd_app(|c| {
+            c.role_header = "Remote-Role".into();
+            c.admin_role = Some("admin".into());
+        })
+        .await;
+        let req = with_identity("/", "first", &[("Remote-Role", "member")]);
+        send_from(&f.app, TRUSTED, req).await;
+        let first = f
+            .store
+            .find_user_by_external("forward", "first")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!first.is_admin);
     }
 
     #[tokio::test]
