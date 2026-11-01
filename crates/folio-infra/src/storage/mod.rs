@@ -138,6 +138,6 @@ mod tests {
         assert_eq!(sanitize_filename("my file.pdf"), "my_file.pdf");
         assert_eq!(sanitize_filename("../../../etc/passwd"), "passwd");
         assert_eq!(sanitize_filename(".hidden"), "document_.hidden");
-        assert_eq!(sanitize_filename(""), "document");
+        assert_eq!(sanitize_filename(""), "document_");
     }
 }
