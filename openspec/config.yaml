@@ -5,7 +5,7 @@ context: |
   Rust 2021 Cargo workspace, hexagonal: domain models and ports in crates/folio-core, adapters
   (SQLite via sqlx, file storage, job queue, AI providers, thumbnails) in crates/folio-infra, axum 0.7
   HTTP with Askama templates and Hotwire (Turbo + Stimulus) in crates/folio-api, binary in folio-app.
-  Settings live in two places: config.toml (FOLIO_* env vars override keys without underscores) and the settings table,
+  Settings live in two places: config.toml (optional; FOLIO_* env vars override it, nested keys use a double underscore) and the settings table,
   edited at /settings. Database values win; config.toml is the fallback.
   Document processing (thumbnails, OCR, embeddings) runs in a background worker fed by the jobs table;
   the worker announces progress on the SSE stream at /events.

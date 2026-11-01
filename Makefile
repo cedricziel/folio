@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup openapi e2e
+.PHONY: build run test lint format clean dev setup openapi apple apple-test apple-tokens apple-project e2e
 
 # Default target
 all: build
@@ -64,6 +64,23 @@ migrate-new:
 # Check project (lint + test + format-check)
 check: lint format-check test
 	@echo "All checks passed!"
+
+# Apple app: test FolioKit, generate the Xcode project, build for macOS
+apple: apple-test apple-project
+	cd apple/Folio && xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio \
+		-destination 'platform=macOS' -skipPackagePluginValidation -skipMacroValidation \
+		CODE_SIGNING_ALLOWED=NO
+
+apple-test:
+	cd apple/FolioKit && xcrun swift test
+
+# Generate apple/Folio/Folio.xcodeproj from project.yml (requires `brew install xcodegen`)
+apple-project:
+	cd apple/Folio && xcodegen generate
+
+# Regenerate FolioTheme.swift and the color asset catalog from design/tokens.json
+apple-tokens:
+	cd apple/FolioKit && xcrun swift run folio-tokengen ../../design/tokens.json .
 
 # End-to-end tests (Playwright) against an ephemeral instance; rebuilds folio-app first
 e2e: build

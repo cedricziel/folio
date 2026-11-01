@@ -22,16 +22,15 @@ ln -s "$repo/static" "$dir/static"
 
 # Run from $dir with a scrubbed environment: Config::load() reads ./config.toml
 # and dotenvy walks up from the cwd looking for .env, so neither the repo's nor
-# the user's files are ever seen. Config extension point: when the config PR
-# lands, these names move to `__` nesting (FOLIO_SERVER__PORT, ...).
+# the user's files are ever seen. FOLIO_CONFIG is left unset for the same reason.
 (
   cd "$dir"
   exec env -i PATH="$PATH" HOME="$dir" RUST_LOG="${RUST_LOG:-info}" \
-    FOLIO_SERVER_HOST=127.0.0.1 \
-    FOLIO_SERVER_PORT="$port" \
-    FOLIO_DATABASE_URL="sqlite:$dir/folio.db?mode=rwc" \
-    FOLIO_STORAGE_PATH="$dir/storage" \
-    FOLIO_AI_PROVIDER=local \
+    FOLIO_SERVER__HOST=127.0.0.1 \
+    FOLIO_SERVER__PORT="$port" \
+    FOLIO_DATABASE__URL="sqlite:$dir/folio.db?mode=rwc" \
+    FOLIO_STORAGE__PATH="$dir/storage" \
+    FOLIO_AI__PROVIDER=local \
     "$bin"
 ) >"$dir/server.log" 2>&1 &
 pid=$!

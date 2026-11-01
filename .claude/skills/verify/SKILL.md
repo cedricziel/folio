@@ -28,7 +28,7 @@ $S/with-instance.sh bash -c "$S/smoke.sh \$FOLIO_VERIFY_ENV"
 
 Why the instance is isolated: `Config::load()` reads `./config.toml` from the working directory and `dotenvy` walks up from it looking for `.env`. `up.sh` therefore runs the app from the temp dir with a scrubbed environment (`env -i`) and symlinks `static/` in, since the app serves `./static` relative to the working directory.
 
-Config names today are `FOLIO_SERVER_HOST`, `FOLIO_SERVER_PORT`, `FOLIO_DATABASE_URL`, `FOLIO_STORAGE_PATH`, `FOLIO_AI_PROVIDER=local` (no AI calls). Extension point: when the env-first config change lands these move to `__` nesting (`FOLIO_SERVER__PORT`, ...); update the env block in `up.sh` only.
+Config names are `FOLIO_SERVER__HOST`, `FOLIO_SERVER__PORT`, `FOLIO_DATABASE__URL`, `FOLIO_STORAGE__PATH`, `FOLIO_AI__PROVIDER=local` (no AI calls). The old single-underscore names are still accepted as aliases but are deprecated. New settings go into the env block of `up.sh` only.
 
 ## 3. Drive the UI
 
