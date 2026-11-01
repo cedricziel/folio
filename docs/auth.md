@@ -4,7 +4,7 @@ Folio ships its own OAuth 2.1 authorization server. It protects the MCP
 endpoint today and is meant to serve the REST API and the native apps later.
 The web UI and `/api` require a login (session cookie) or an API-scoped bearer
 token. Set `auth.required = false` (`FOLIO_AUTH__REQUIRED=false`) to turn that
-off. Exempt either way: `/healthz`, `/readyz`, `/static`, `/login`, `/oauth/*`,
+off. Exempt either way: `/healthz`, `/readyz`, `/static`, `/login`, `/login/code`, `/auth/passkey/*`, `/oauth/*`,
 `/.well-known/*`, `/manifest.webmanifest`, `/sw.js`, `/api/openapi.json`,
 `/api/docs`, `/setup` (while no user exists, with the setup token) and `/mcp`
 (guarded by its own bearer layer).
@@ -92,6 +92,7 @@ rotating refresh token.
 | Username and password | always | The owner account from `/setup`. |
 | Forward auth (trusted headers) | `auth.forward.enabled` | For deployments behind an SSO gateway. See below. |
 | OpenID Connect | `auth.oidc.enabled` | A "Sign in with SSO" button. See [OpenID Connect](#openid-connect). |
+| Passkey | `server.public_url` with a domain name | Username-less sign-in for local accounts. See [Two-factor sign-in](#two-factor-sign-in). |
 
 All methods end in the same session cookie, so the OAuth authorize flow, the
 web UI and the MCP login work the same way with any of them.
@@ -301,6 +302,61 @@ and use your Pocket ID URL as the issuer. Pocket ID puts a user's groups in the
 `groups` claim; add the groups to the client's allowed groups and set
 `admin_group` to the admin group's name.
 
+## Two-factor sign-in
+
+Local accounts can add a second step under **Settings, Account and security**
+(`/settings/security`). Accounts from forward auth or OpenID Connect do not:
+their identity provider or proxy owns the password and the second step.
+
+**Secret key.** Authenticator-app secrets are encrypted in the database with
+XChaCha20-Poly1305 under `auth.secret_key` (`FOLIO_AUTH__SECRET_KEY`, or
+`FOLIO_AUTH__SECRET_KEY_FILE`; at least 16 characters, `openssl rand -base64 32`
+works). When it is unset, Folio generates a key on first start, keeps it in the
+database settings and logs a warning at every start. Set it yourself: a key
+stored next to the data protects nothing if only the database leaks. Changing
+the key makes every enrolled authenticator app and recovery code stop working,
+and those users cannot sign in with a password. Restore the old key, or as the
+operator clear their enrollment with
+`DELETE FROM user_totp WHERE user_id = '<id>'` (and the same for
+`user_recovery_codes`). Recovery codes are stored as keyed hashes
+under the same key.
+
+**Authenticator app (TOTP).**
+
+- Turning it on shows a QR code (drawn by the server, no external service) and
+  the key for manual entry. It only counts once you enter a valid code.
+- Folio then shows ten recovery codes once. Each works one time; entering one
+  at the code step signs you in.
+- Codes are six digits, 30 seconds, SHA-1, accepted one step before and after
+  the current one. A code is accepted once: its step is remembered, so
+  replaying it, or an older one, fails.
+- At sign-in the password is followed by a code page. The pending login lives
+  five minutes in server memory, is tied to the browser by a cookie, and
+  allows five wrong codes. Wrong codes also count against the account (5
+  free attempts, then a lockout that doubles from 30 seconds to 15 minutes)
+  and against the client address (10).
+- Turning it off or making new recovery codes needs the password and a
+  current code (or a recovery code).
+
+**Passkeys.** Register any number of named passkeys; rename and delete them on
+the same page. The login page offers "Sign in with a passkey" and, in browsers
+that support it, offers passkeys in the username field's autofill. A passkey
+signs in without a password and also satisfies the code step. Passkeys need
+`server.public_url` with a domain name (or `localhost`): the relying party id is its host
+and the origin its scheme, host and port, never taken from request headers. For
+an IP address the page says passkeys are unavailable. Passkeys do not make a
+password-only account require them: if you want a second step after the
+password, turn on the authenticator app.
+
+**Other things on the page.** Changing the password signs out the other
+devices. The session list shows where you are signed in, and "Sign out
+everywhere" ends all of them. Connected apps lists the OAuth clients (MCP
+clients, native apps) that hold live tokens and can disconnect them.
+
+Pending logins and passkey ceremonies are kept in memory, so a restart
+interrupts one that is in progress. Like the other rate limits, the lockouts are
+per process.
+
 ## Endpoints
 
 | Path | Purpose |
@@ -312,6 +368,9 @@ and use your Pocket ID URL as the issuer. Pocket ID puts a user's groups in the
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants |
 | `POST /oauth/revoke` | RFC 7009 revocation (`token`, `client_id`) |
 | `GET /auth/oidc/login`, `GET /auth/oidc/callback` | OpenID Connect sign-in |
+| `GET/POST /login/code` | Second step after the password |
+| `POST /auth/passkey/start`, `POST /auth/passkey/finish` | Passkey sign-in ceremony (JSON) |
+| `/settings/security` | Password, authenticator app, passkeys, sessions, connected apps |
 
 Scopes are `documents:read` and `documents:write` (both by default). Tokens
 are opaque, stored hashed, and bound to the `resource` (RFC 8707), which must

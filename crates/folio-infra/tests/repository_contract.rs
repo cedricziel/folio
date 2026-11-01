@@ -1251,6 +1251,8 @@ async fn auth_contract(r: &Repositories) {
         id_hash: "sess".into(),
         user_id: owner.id.clone(),
         expires_at: far,
+        created_at: 0,
+        user_agent: None,
     })
     .await
     .unwrap();
@@ -1404,6 +1406,8 @@ async fn auth_contract(r: &Repositories) {
         id_hash: "with-token".into(),
         user_id: owner.id.clone(),
         expires_at: far,
+        created_at: 0,
+        user_agent: None,
     })
     .await
     .unwrap();
@@ -1430,6 +1434,226 @@ async fn auth_contract(r: &Repositories) {
     assert!(auth.take_oidc_login("stale").await.unwrap().is_none());
 }
 
+async fn mfa_contract(r: &Repositories) {
+    use folio_auth::{
+        AccessToken, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
+    };
+    let auth = &r.auth;
+    let make = |name: &str| User {
+        id: Id::new_v4().to_string(),
+        username: name.to_string(),
+        password_hash: "hash".into(),
+        created_at: 1,
+        email: None,
+        display_name: None,
+        is_admin: false,
+        is_owner: false,
+        auth_source: "local".into(),
+        external_id: None,
+    };
+    let (ada, bob) = (make("mfa-ada"), make("mfa-bob"));
+    auth.create_user(ada.clone()).await.unwrap();
+    auth.create_user(bob.clone()).await.unwrap();
+    let hashes = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+
+    // TOTP enrollment: pending until confirmed, then protected from overwrite.
+    assert!(auth.get_totp(&ada.id).await.unwrap().is_none());
+    assert!(auth.save_pending_totp(&ada.id, "seed1", 10).await.unwrap());
+    assert!(auth.save_pending_totp(&ada.id, "seed2", 11).await.unwrap());
+    let pending = auth.get_totp(&ada.id).await.unwrap().unwrap();
+    assert_eq!(
+        (pending.secret_enc.as_str(), pending.confirmed),
+        ("seed2", false)
+    );
+    assert!(
+        !auth.advance_totp_step(&ada.id, 5).await.unwrap(),
+        "an unconfirmed enrollment accepts no logins"
+    );
+    assert!(!auth.confirm_totp(&bob.id, 7, &[]).await.unwrap());
+    assert!(auth
+        .confirm_totp(&ada.id, 7, &hashes(&["a", "b", "c"]))
+        .await
+        .unwrap());
+    assert!(
+        !auth
+            .confirm_totp(&ada.id, 8, &hashes(&["x"]))
+            .await
+            .unwrap(),
+        "confirming twice does nothing"
+    );
+    let on = auth.get_totp(&ada.id).await.unwrap().unwrap();
+    assert!((on.confirmed, on.last_step) == (true, 7));
+    assert!(
+        !auth.save_pending_totp(&ada.id, "other", 12).await.unwrap(),
+        "a confirmed seed is not replaced"
+    );
+    assert_eq!(
+        auth.get_totp(&ada.id).await.unwrap().unwrap().secret_enc,
+        "seed2"
+    );
+
+    // Replay protection: a step is accepted once, older ones never.
+    assert!(!auth.advance_totp_step(&ada.id, 7).await.unwrap());
+    assert!(!auth.advance_totp_step(&ada.id, 6).await.unwrap());
+    assert!(auth.advance_totp_step(&ada.id, 8).await.unwrap());
+    assert!(!auth.advance_totp_step(&ada.id, 8).await.unwrap());
+
+    // Recovery codes are single use and scoped to the user.
+    assert_eq!(auth.count_recovery_codes(&ada.id).await.unwrap(), 3);
+    assert!(!auth.use_recovery_code(&bob.id, "a").await.unwrap());
+    assert!(auth.use_recovery_code(&ada.id, "a").await.unwrap());
+    assert!(!auth.use_recovery_code(&ada.id, "a").await.unwrap());
+    assert_eq!(auth.count_recovery_codes(&ada.id).await.unwrap(), 2);
+    auth.replace_recovery_codes(&ada.id, &hashes(&["n1", "n2"]))
+        .await
+        .unwrap();
+    assert!(!auth.use_recovery_code(&ada.id, "b").await.unwrap());
+    assert!(auth.use_recovery_code(&ada.id, "n1").await.unwrap());
+    auth.delete_totp(&ada.id).await.unwrap();
+    assert!(auth.get_totp(&ada.id).await.unwrap().is_none());
+    assert_eq!(auth.count_recovery_codes(&ada.id).await.unwrap(), 0);
+
+    // Passkeys.
+    let key = |id: &str, cred: &str, user: &User, at: i64| PasskeyRecord {
+        id: id.into(),
+        user_id: user.id.clone(),
+        name: format!("key {id}"),
+        credential_id: cred.into(),
+        data: "{}".into(),
+        created_at: at,
+        last_used_at: None,
+    };
+    auth.insert_passkey(key("p1", "c1", &ada, 1)).await.unwrap();
+    auth.insert_passkey(key("p2", "c2", &ada, 2)).await.unwrap();
+    assert!(matches!(
+        auth.insert_passkey(key("p3", "c1", &bob, 3)).await,
+        Err(AuthError::Conflict)
+    ));
+    let listed = auth.list_passkeys(&ada.id).await.unwrap();
+    assert_eq!(
+        listed.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        ["p1", "p2"]
+    );
+    assert!(auth.list_passkeys(&bob.id).await.unwrap().is_empty());
+    auth.touch_passkey("p1", "{\"counter\":2}", 99)
+        .await
+        .unwrap();
+    let touched = &auth.list_passkeys(&ada.id).await.unwrap()[0];
+    assert_eq!(
+        (touched.data.as_str(), touched.last_used_at),
+        ("{\"counter\":2}", Some(99))
+    );
+    assert!(!auth.rename_passkey(&bob.id, "p1", "stolen").await.unwrap());
+    assert!(auth.rename_passkey(&ada.id, "p1", "Laptop").await.unwrap());
+    assert_eq!(auth.list_passkeys(&ada.id).await.unwrap()[0].name, "Laptop");
+    assert!(!auth.delete_passkey(&bob.id, "p1").await.unwrap());
+    assert!(auth.delete_passkey(&ada.id, "p1").await.unwrap());
+    assert_eq!(auth.list_passkeys(&ada.id).await.unwrap().len(), 1);
+
+    // Sessions and password.
+    let far = i64::MAX / 2;
+    for (id, user, created, expires) in [
+        ("s-old", &ada, 5, far),
+        ("s-new", &ada, 9, far),
+        ("s-dead", &ada, 1, 3),
+        ("s-bob", &bob, 2, far),
+    ] {
+        auth.create_session(Session {
+            id_hash: id.into(),
+            user_id: user.id.clone(),
+            expires_at: expires,
+            created_at: created,
+            user_agent: Some("Firefox".into()),
+        })
+        .await
+        .unwrap();
+    }
+    let live = auth.list_sessions(&ada.id, 100).await.unwrap();
+    assert_eq!(
+        live.iter().map(|s| s.id_hash.as_str()).collect::<Vec<_>>(),
+        ["s-new", "s-old"]
+    );
+    assert_eq!(live[0].user_agent.as_deref(), Some("Firefox"));
+    auth.delete_user_sessions(&ada.id, Some("s-new"))
+        .await
+        .unwrap();
+    assert!(auth.find_session("s-old").await.unwrap().is_none());
+    assert!(auth.find_session("s-new").await.unwrap().is_some());
+    assert!(auth.find_session("s-bob").await.unwrap().is_some());
+    auth.delete_user_sessions(&ada.id, None).await.unwrap();
+    assert!(auth.find_session("s-new").await.unwrap().is_none());
+    auth.set_password_hash(&ada.id, "new-hash").await.unwrap();
+    assert_eq!(
+        auth.find_user_by_id(&ada.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        "new-hash"
+    );
+
+    // Connected clients.
+    for id in ["mfa-c1", "mfa-c2"] {
+        auth.insert_client(OAuthClient {
+            client_id: id.into(),
+            client_name: format!("Client {id}"),
+            redirect_uris: vec!["app:/cb".into()],
+            created_at: 1,
+        })
+        .await
+        .unwrap();
+    }
+    let access = |hash: &str, client: &str, user: &User, exp: i64| AccessToken {
+        token_hash: hash.into(),
+        client_id: client.into(),
+        user_id: user.id.clone(),
+        scopes: vec![],
+        audience: "a".into(),
+        expires_at: exp,
+        grant_id: "mfa-g".into(),
+    };
+    auth.insert_access_token(access("mt1", "mfa-c1", &ada, 500))
+        .await
+        .unwrap();
+    auth.insert_access_token(access("mt2", "mfa-c2", &ada, 50))
+        .await
+        .unwrap();
+    auth.insert_access_token(access("mt3", "mfa-c1", &bob, 500))
+        .await
+        .unwrap();
+    auth.insert_refresh_token(RefreshToken {
+        token_hash: "mr1".into(),
+        client_id: "mfa-c1".into(),
+        user_id: ada.id.clone(),
+        scopes: vec![],
+        audience: "a".into(),
+        expires_at: 900,
+        grant_id: "mfa-g".into(),
+    })
+    .await
+    .unwrap();
+    let clients = auth.list_connected_clients(&ada.id, 100).await.unwrap();
+    assert_eq!(clients.len(), 1, "expired tokens do not count");
+    assert_eq!(
+        (clients[0].client_id.as_str(), clients[0].expires_at),
+        ("mfa-c1", 900)
+    );
+    auth.revoke_client_tokens(&ada.id, "mfa-c1").await.unwrap();
+    assert!(auth
+        .list_connected_clients(&ada.id, 100)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        auth.list_connected_clients(&bob.id, 100)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "other users keep their tokens"
+    );
+}
+
 async fn run_contract(db: &Database) {
     db.migrate().await.unwrap();
     // Migrating twice is a no-op
@@ -1448,6 +1672,7 @@ async fn run_contract(db: &Database) {
     jobs_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
     auth_contract(&repos).await;
+    mfa_contract(&repos).await;
 }
 
 #[tokio::test]

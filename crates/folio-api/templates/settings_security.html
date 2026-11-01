@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">Account and security</h1>
+        <p class="lede">Signed in as {{ username }}. <a href="/settings">Back to settings</a></p>
+    </header>
+
+    <div class="security-stack">
+    {% match notice %}{% when Some with (n) %}<div class="f-notice{% if n.danger %} f-notice-danger{% endif %}" role="status"><p>{{ n.text }}</p></div>{% when None %}{% endmatch %}
+
+    {% if !recovery_codes.is_empty() %}
+    <div class="panel settings-card">
+        <h2 class="heading">Your recovery codes</h2>
+        <p class="hint">Save these now. Each code works once if you lose your authenticator, and Folio will not show them again.</p>
+        <ol class="recovery-codes">
+            {% for code in recovery_codes %}<li>{{ code }}</li>{% endfor %}
+        </ol>
+        <div class="form-actions"><a class="f-btn f-btn-primary" href="/settings/security">I have saved them</a></div>
+    </div>
+    {% endif %}
+
+    {% if local %}
+    <div class="panel settings-card">
+        <h2 class="heading">Password</h2>
+        <p class="hint">Changing it signs you out on every other device.</p>
+        <form action="/settings/security/password" method="post" data-turbo="false">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <div class="field">
+                <label for="current_password">Current password</label>
+                <input class="input" id="current_password" name="current_password" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="field">
+                <label for="new_password">New password</label>
+                <input class="input" id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="12" required>
+                <span class="hint">At least 12 characters.</span>
+            </div>
+            <div class="field">
+                <label for="confirm_password">New password again</label>
+                <input class="input" id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required>
+            </div>
+            <div class="form-actions"><button class="f-btn f-btn-primary" type="submit">Change password</button></div>
+        </form>
+    </div>
+
+    <div class="panel settings-card">
+        <h2 class="heading">Authenticator app</h2>
+        {% if totp_pending %}
+        <p class="hint">Scan this code with an authenticator app, or type the key in by hand. Then enter the six-digit code it shows to turn two-factor sign-in on.</p>
+        <div class="qr-box" role="img" aria-label="QR code for the authenticator app">{{ qr_svg|safe }}</div>
+        <p class="hint">Key: <span class="secret-key">{{ secret_key }}</span></p>
+        <form action="/settings/security/totp/confirm" method="post" data-turbo="false" class="inline-form">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <label class="hint" for="totp_code">Code</label>
+            <input class="input" id="totp_code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" required>
+            <button class="f-btn f-btn-primary" type="submit">Turn on</button>
+        </form>
+        <form action="/settings/security/totp/cancel" method="post" data-turbo="false">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="f-btn f-btn-quiet" type="submit">Cancel</button>
+        </form>
+        {% else if totp_enabled %}
+        <p class="hint">On. Folio asks for a code after your password. {{ recovery_left }} recovery codes left.</p>
+        <form action="/settings/security/totp/recovery" method="post" data-turbo="false">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <div class="field">
+                <label for="totp_password">Password</label>
+                <input class="input" id="totp_password" name="password" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="field">
+                <label for="totp_manage_code">Current code</label>
+                <input class="input" id="totp_manage_code" name="code" type="text" autocomplete="one-time-code" required>
+                <span class="hint">An authenticator code or a recovery code.</span>
+            </div>
+            <div class="form-actions">
+                <button class="f-btn" type="submit">Make new recovery codes</button>
+                <button class="f-btn f-btn-danger" type="submit" formaction="/settings/security/totp/disable">Turn off</button>
+            </div>
+        </form>
+        {% else %}
+        <p class="hint">Add a second step to sign-in: a six-digit code from an app such as Aegis, 1Password or Google Authenticator.</p>
+        <form action="/settings/security/totp/start" method="post" data-turbo="false">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="f-btn f-btn-primary" type="submit">Set up authenticator app</button>
+        </form>
+        {% endif %}
+    </div>
+
+    <div class="panel settings-card">
+        <h2 class="heading">Passkeys</h2>
+        {% if passkeys_available %}
+        <p class="hint">Sign in with your fingerprint, face or a security key, without a password. A passkey also counts as your second step.</p>
+        {% if passkeys.is_empty() %}
+        <p class="hint">No passkeys yet.</p>
+        {% else %}
+        <div class="f-list">
+            {% for key in passkeys %}
+            <div class="f-row">
+                <div>
+                    <span class="f-row-title">{{ key.name }}</span>
+                    <div class="f-row-sub">
+                        <span class="f-meta">Added {{ key.created }}</span>
+                        <span class="f-meta">{{ key.last_used }}</span>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <form action="/settings/security/passkeys/{{ key.id }}/rename" method="post" data-turbo="false" class="inline-form">
+                        <input type="hidden" name="csrf" value="{{ csrf }}">
+                        <input class="input" name="name" type="text" value="{{ key.name }}" maxlength="64" aria-label="Name of {{ key.name }}" required>
+                        <button class="f-btn f-btn-quiet" type="submit">Rename</button>
+                    </form>
+                    <form action="/settings/security/passkeys/{{ key.id }}/delete" method="post" data-turbo="false">
+                        <input type="hidden" name="csrf" value="{{ csrf }}">
+                        <button class="f-btn f-btn-danger" type="submit">Delete</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        <div data-controller="passkey" data-passkey-csrf-value="{{ csrf }}" data-passkey-mode-value="register">
+            <div class="inline-form">
+                <label class="hint" for="passkey_name">Name</label>
+                <input class="input" id="passkey_name" type="text" maxlength="64" placeholder="Laptop, phone, security key" data-passkey-target="name">
+                <button class="f-btn f-btn-primary" type="button" data-action="passkey#register">Add a passkey</button>
+            </div>
+            <p class="f-notice f-notice-danger" role="alert" data-passkey-target="error" hidden></p>
+        </div>
+        <script type="module" src="/static/passkey.js"></script>
+        {% else %}
+        <p class="hint">Passkeys need a public address with a domain name. Set <code>server.public_url</code> to a host name such as https://folio.example.com.</p>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="panel settings-card">
+        <h2 class="heading">Password and two-factor</h2>
+        <p class="hint">You sign in through your identity provider, which handles your password and second step.</p>
+    </div>
+    {% endif %}
+
+    <div class="panel settings-card">
+        <h2 class="heading">Active sessions</h2>
+        <div class="f-list">
+            {% for s in sessions %}
+            <div class="f-row">
+                <div>
+                    <span class="f-row-title">{{ s.agent }}{% if s.current %} (this device){% endif %}</span>
+                    <div class="f-row-sub">
+                        <span class="f-meta">Signed in {{ s.created }}</span>
+                        <span class="f-meta">Expires {{ s.expires }}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <form action="/settings/security/sessions/revoke-all" method="post" data-turbo="false">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="f-btn f-btn-danger" type="submit">Sign out everywhere</button>
+        </form>
+    </div>
+
+    <div class="panel settings-card">
+        <h2 class="heading">Connected apps</h2>
+        {% if clients.is_empty() %}
+        <p class="hint">No apps or AI assistants are connected.</p>
+        {% else %}
+        <div class="f-list">
+            {% for c in clients %}
+            <div class="f-row">
+                <div>
+                    <span class="f-row-title">{{ c.name }}</span>
+                    <div class="f-row-sub"><span class="f-meta">Access until {{ c.expires }}</span></div>
+                </div>
+                <form action="/settings/security/clients/{{ c.id }}/revoke" method="post" data-turbo="false">
+                    <input type="hidden" name="csrf" value="{{ csrf }}">
+                    <button class="f-btn f-btn-danger" type="submit">Disconnect</button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    </div>
+</section>
+{% endblock %}

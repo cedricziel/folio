@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 use url::{form_urlencoded, Url};
 
-use super::oidc;
+use super::{mfa, oidc, pending::Pending};
 
 use folio_auth::{
     base_url,
@@ -28,7 +28,9 @@ use folio_auth::{
     limit::{FailureLimiter, RateLimiter},
     model::SOURCE_LOCAL,
     oidc::OidcProvider,
+    passkey::{build_webauthn, DiscoverableAuthentication, PasskeyRegistration, Webauthn},
     redirect::safe_next,
+    secret::SecretBox,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
         AuthorizeParams, OAuthError, OAuthServer, RegistrationRequest, TokenRequest,
@@ -54,8 +56,29 @@ const LOGIN_FAILURES_PER_USER: u32 = 5;
 const LOGIN_FAILURES_PER_IP: u32 = 10;
 const REGISTER_BODY_LIMIT: usize = 16 * 1024;
 const OIDC_STARTS_PER_MINUTE: u32 = 30;
+const PASSKEY_STARTS_PER_MINUTE: u32 = 30;
+/// Wrong second-factor codes tolerated per user (and per address) before lockout.
+const CODE_FAILURES_PER_USER: u32 = 5;
+const CODE_FAILURES_PER_IP: u32 = 10;
+/// Time to type the code after the password was accepted.
+const MFA_LOGIN_TTL: Duration = Duration::from_secs(300);
+const PASSKEY_CEREMONY_TTL: Duration = Duration::from_secs(300);
 
-fn login_limiter(free_attempts: u32) -> FailureLimiter {
+/// A password-verified login that still needs its second factor.
+pub(crate) struct MfaLogin {
+    pub user_id: String,
+    pub next: String,
+    pub attempts: u32,
+}
+
+/// A passkey login ceremony in flight. `mfa_user` is set when it answers a
+/// pending second-factor step, and then only that user may complete it.
+pub(crate) struct PasskeyAuth {
+    pub state: DiscoverableAuthentication,
+    pub mfa_user: Option<String>,
+}
+
+pub(crate) fn login_limiter(free_attempts: u32) -> FailureLimiter {
     FailureLimiter::new(
         free_attempts,
         Duration::from_secs(30),
@@ -79,6 +102,17 @@ pub struct AuthState {
     /// Caps how often one address can start an OIDC login; every start
     /// stores a row.
     oidc_starts: Arc<RateLimiter>,
+    /// Seals TOTP seeds and keys recovery-code hashes.
+    pub(crate) secret_box: Arc<SecretBox>,
+    /// `None` when the public URL cannot be a WebAuthn relying party.
+    pub(crate) webauthn: Option<Arc<Webauthn>>,
+    pub(crate) mfa_logins: Arc<Pending<MfaLogin>>,
+    pub(crate) passkey_auths: Arc<Pending<PasskeyAuth>>,
+    /// Registration ceremonies, keyed by user id.
+    pub(crate) passkey_regs: Arc<Pending<PasskeyRegistration>>,
+    pub(crate) passkey_starts: Arc<RateLimiter>,
+    pub(crate) code_by_ip: Arc<FailureLimiter>,
+    pub(crate) code_by_user: Arc<FailureLimiter>,
     setup_token: Arc<str>,
     csrf_secret: Arc<[u8; 32]>,
     register_limit: Arc<RateLimiter>,
@@ -93,10 +127,26 @@ impl AuthState {
         Self {
             server: OAuthServer::new(store.clone()),
             store,
-            public_url,
+            public_url: public_url.clone(),
             required: true,
             forward: None,
             oidc: None,
+            secret_box: Arc::new(
+                SecretBox::new(&SecretBox::generate_key()).expect("generated keys are long enough"),
+            ),
+            webauthn: build_webauthn(&base_url(public_url.as_deref()))
+                .map_err(|e| tracing::warn!("passkeys are unavailable: {e}"))
+                .ok()
+                .map(Arc::new),
+            mfa_logins: Arc::new(Pending::new(MFA_LOGIN_TTL)),
+            passkey_auths: Arc::new(Pending::new(PASSKEY_CEREMONY_TTL)),
+            passkey_regs: Arc::new(Pending::new(PASSKEY_CEREMONY_TTL)),
+            passkey_starts: Arc::new(RateLimiter::new(
+                PASSKEY_STARTS_PER_MINUTE,
+                PASSKEY_STARTS_PER_MINUTE as f64 / 60.0,
+            )),
+            code_by_ip: Arc::new(login_limiter(CODE_FAILURES_PER_IP)),
+            code_by_user: Arc::new(login_limiter(CODE_FAILURES_PER_USER)),
             oidc_starts: Arc::new(RateLimiter::new(
                 OIDC_STARTS_PER_MINUTE,
                 OIDC_STARTS_PER_MINUTE as f64 / 60.0,
@@ -143,6 +193,18 @@ impl AuthState {
         given.is_some_and(|g| !g.is_empty() && ct_eq(g, &self.setup_token))
     }
 
+    /// Sets the key that encrypts TOTP seeds at rest. Without it a random key
+    /// is used, which does not survive a restart.
+    pub fn with_secret_key(mut self, key: &str) -> Result<Self, String> {
+        self.secret_box = Arc::new(SecretBox::new(key)?);
+        Ok(self)
+    }
+
+    /// Whether passkeys can be offered.
+    pub(crate) fn passkeys_enabled(&self) -> bool {
+        self.webauthn.is_some()
+    }
+
     pub fn with_forward(mut self, forward: ForwardAuth) -> Self {
         self.forward = Some(Arc::new(forward));
         self
@@ -184,7 +246,7 @@ impl AuthState {
 
     /// Runs a password hash on the blocking pool, at most
     /// [`MAX_CONCURRENT_HASHES`] at a time.
-    async fn hash_work<T: Send + 'static>(
+    pub(crate) async fn hash_work<T: Send + 'static>(
         &self,
         work: impl FnOnce() -> T + Send + 'static,
     ) -> Option<T> {
@@ -195,7 +257,7 @@ impl AuthState {
     /// Cookie-authenticated writes must come from our own pages. Fetch metadata
     /// is authoritative when the browser sends it; `Origin` covers older ones.
     /// Requests with neither are not from a browser and carry no ambient cookie.
-    fn is_same_origin(&self, headers: &HeaderMap) -> bool {
+    pub(crate) fn is_same_origin(&self, headers: &HeaderMap) -> bool {
         let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
         if let Some(site) = text("sec-fetch-site") {
             return matches!(site, "same-origin" | "none");
@@ -223,7 +285,7 @@ impl AuthState {
         }
     }
 
-    fn csrf_cookie_name(&self) -> &'static str {
+    pub(crate) fn csrf_cookie_name(&self) -> &'static str {
         if self.secure() {
             "__Host-folio_csrf"
         } else {
@@ -232,7 +294,7 @@ impl AuthState {
     }
 
     /// The raw session cookie value and its user, when the session is live.
-    async fn session(&self, headers: &HeaderMap) -> Option<(String, User)> {
+    pub(crate) async fn session(&self, headers: &HeaderMap) -> Option<(String, User)> {
         let id = cookie(headers, self.session_cookie_name())?;
         let session = self.store.find_session(&hash_token(&id)).await.ok()??;
         if session.expires_at <= now() {
@@ -253,7 +315,7 @@ impl AuthState {
     /// CSRF token for a form shown before login (login, setup), plus a cookie
     /// to set when needed. It is an HMAC, under a server secret, of a random
     /// pre-session cookie, so it cannot be computed without asking the server.
-    fn csrf_pre_token(&self, headers: &HeaderMap) -> (String, Option<String>) {
+    pub(crate) fn csrf_pre_token(&self, headers: &HeaderMap) -> (String, Option<String>) {
         let (value, set) = match cookie(headers, self.csrf_cookie_name()).filter(|c| c.len() >= 32)
         {
             Some(existing) => (existing, None),
@@ -271,7 +333,7 @@ impl AuthState {
         (self.csrf_mac(&format!("pre:{value}")), set)
     }
 
-    fn csrf_pre_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
+    pub(crate) fn csrf_pre_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
         cookie(headers, self.csrf_cookie_name())
             .filter(|c| c.len() >= 32)
             .is_some_and(|c| ct_eq(&self.csrf_mac(&format!("pre:{c}")), submitted))
@@ -283,7 +345,7 @@ impl AuthState {
         self.csrf_mac(&format!("session:{session_id}"))
     }
 
-    async fn csrf_session_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
+    pub(crate) async fn csrf_session_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
         match self.session(headers).await {
             Some((id, _)) => ct_eq(&self.csrf_session_token(&id), submitted),
             None => false,
@@ -319,10 +381,11 @@ where
 }
 
 /// Router with all login, setup and OAuth endpoints.
-const EXEMPT_EXACT: [&str; 10] = [
+const EXEMPT_EXACT: [&str; 11] = [
     "/healthz",
     "/readyz",
     "/login",
+    "/login/code",
     "/logout",
     "/auth/theme.css",
     "/api/openapi.json",
@@ -331,7 +394,8 @@ const EXEMPT_EXACT: [&str; 10] = [
     "/manifest.webmanifest",
     "/sw.js",
 ];
-const EXEMPT_PREFIX: [&str; 5] = [
+const EXEMPT_PREFIX: [&str; 6] = [
+    "/auth/passkey/",
     "/static/",
     "/oauth/",
     "/.well-known/",
@@ -431,6 +495,9 @@ where
         .route("/auth/theme.css", get(theme))
         .route("/setup", get(setup_page).post(setup_submit))
         .route("/login", get(login_page).post(login_submit))
+        .route("/login/code", get(mfa::code_page).post(mfa::code_submit))
+        .route("/auth/passkey/start", post(mfa::passkey_start))
+        .route("/auth/passkey/finish", post(mfa::passkey_finish))
         .route("/logout", post(logout))
         .route("/auth/oidc/login", get(oidc::start))
         .route("/auth/oidc/callback", get(oidc::callback))
@@ -490,7 +557,7 @@ pub(crate) fn with_cookies(
     response
 }
 
-fn render<T: Template>(template: T, status: StatusCode) -> Response {
+pub(crate) fn render<T: Template>(template: T, status: StatusCode) -> Response {
     match template.render() {
         Ok(body) => {
             let mut response = (status, Html(body)).into_response();
@@ -516,7 +583,7 @@ fn login_redirect(next: &str) -> Redirect {
     Redirect::to(&format!("/login?next={encoded}"))
 }
 
-async fn start_session(auth: &AuthState, user: &User) -> Option<String> {
+pub(crate) async fn start_session(auth: &AuthState, user: &User) -> Option<String> {
     let id = create_session(auth, user, SESSION_TTL_SECS).await?;
     Some(set_cookie(
         auth.session_cookie_name(),
@@ -534,6 +601,8 @@ pub(crate) async fn create_session(auth: &AuthState, user: &User, ttl: i64) -> O
             id_hash: hash_token(&id),
             user_id: user.id.clone(),
             expires_at: now() + ttl,
+            created_at: now(),
+            user_agent: None,
         })
         .await
         .map_err(|e| tracing::error!("session create failed: {e}"))
@@ -583,6 +652,7 @@ struct LoginTemplate {
     error: Option<String>,
     sso: Option<Sso>,
     password_form: bool,
+    passkeys: bool,
 }
 
 #[derive(Template)]
@@ -742,6 +812,7 @@ async fn login_page(
                 csrf,
                 sso: sso_button(&auth, &next),
                 password_form: auth.local_login_allowed(),
+                passkeys: auth.passkeys_enabled() && auth.local_login_allowed(),
                 next,
                 error: None,
             },
@@ -781,6 +852,7 @@ async fn login_submit(
                 csrf: form.csrf,
                 sso: sso_button(&auth, &next),
                 password_form: true,
+                passkeys: auth.passkeys_enabled(),
                 next,
                 error: Some(format!(
                     "Too many failed attempts. Try again in {}.",
@@ -821,6 +893,9 @@ async fn login_submit(
     match user.filter(|_| verified) {
         Some(user) => {
             auth.login_by_user.record_success(&username);
+            if let Some(response) = mfa::challenge(&auth, &user, &next).await {
+                return response;
+            }
             // Fresh session id on login, so one planted beforehand is worthless.
             if let Some(id) = cookie(&headers, auth.session_cookie_name()) {
                 let _ = auth.store.delete_session(&hash_token(&id)).await;
@@ -838,6 +913,7 @@ async fn login_submit(
                     csrf: form.csrf,
                     sso: sso_button(&auth, &next),
                     password_form: true,
+                    passkeys: auth.passkeys_enabled(),
                     next,
                     error: Some("That username and password don't match.".into()),
                 },
@@ -847,7 +923,7 @@ async fn login_submit(
     }
 }
 
-fn wait_text(seconds: u64) -> String {
+pub(crate) fn wait_text(seconds: u64) -> String {
     match seconds {
         0..=59 => format!("{seconds} seconds"),
         s => format!("{} minutes", s.div_ceil(60)),
@@ -926,7 +1002,7 @@ fn oauth_error(e: OAuthError) -> Response {
 
 /// Peer address of the TCP connection. Proxy headers are deliberately ignored:
 /// they are client-controlled unless a trusted proxy sets them.
-struct ClientIp(String);
+pub(crate) struct ClientIp(pub(crate) String);
 
 impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
     type Rejection = std::convert::Infallible;

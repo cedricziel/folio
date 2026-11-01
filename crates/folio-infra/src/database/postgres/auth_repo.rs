@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use folio_auth::{
-    AccessToken, AuthCode, AuthError, AuthStore, Group, GroupSource, OAuthClient, OidcLogin,
-    RefreshToken, Session, User,
+    AccessToken, AuthCode, AuthError, AuthStore, ConnectedClient, Group, GroupSource, OAuthClient,
+    OidcLogin, PasskeyRecord, RefreshToken, Session, TotpRecord, User,
 };
 use sqlx::{postgres::PgRow, PgPool, Row};
 
@@ -272,29 +272,39 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn create_session(&self, s: Session) -> Result<(), AuthError> {
-        sqlx::query("INSERT INTO sessions (id_hash, user_id, expires_at) VALUES ($1, $2, $3)")
-            .bind(s.id_hash)
-            .bind(s.user_id)
-            .bind(s.expires_at)
-            .execute(&self.pool)
-            .await
-            .map(|_| ())
-            .map_err(err)
+        sqlx::query(
+            "INSERT INTO sessions (id_hash, user_id, expires_at, created_at, user_agent)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(s.id_hash)
+        .bind(s.user_id)
+        .bind(s.expires_at)
+        .bind(s.created_at)
+        .bind(s.user_agent)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(err)
     }
 
     async fn find_session(&self, id_hash: &str) -> Result<Option<Session>, AuthError> {
-        sqlx::query("SELECT id_hash, user_id, expires_at FROM sessions WHERE id_hash = $1")
-            .bind(id_hash)
-            .fetch_optional(&self.pool)
-            .await
-            .map(|r| {
-                r.map(|row| Session {
-                    id_hash: row.get("id_hash"),
-                    user_id: row.get("user_id"),
-                    expires_at: row.get("expires_at"),
-                })
+        sqlx::query(
+            "SELECT id_hash, user_id, expires_at, created_at, user_agent FROM sessions
+             WHERE id_hash = $1",
+        )
+        .bind(id_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|r| {
+            r.map(|row| Session {
+                id_hash: row.get("id_hash"),
+                user_id: row.get("user_id"),
+                expires_at: row.get("expires_at"),
+                created_at: row.get("created_at"),
+                user_agent: row.get("user_agent"),
             })
-            .map_err(err)
+        })
+        .map_err(err)
     }
 
     async fn set_session_id_token(&self, id_hash: &str, id_token: &str) -> Result<(), AuthError> {
@@ -584,6 +594,292 @@ impl AuthStore for PostgresAuthStore {
         }))
     }
 
+    async fn list_sessions(&self, user_id: &str, now: i64) -> Result<Vec<Session>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT id_hash, user_id, expires_at, created_at, user_agent FROM sessions
+             WHERE user_id = $1 AND expires_at > $2 ORDER BY created_at DESC, id_hash",
+        )
+        .bind(user_id)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Session {
+                id_hash: row.get("id_hash"),
+                user_id: row.get("user_id"),
+                expires_at: row.get("expires_at"),
+                created_at: row.get("created_at"),
+                user_agent: row.get("user_agent"),
+            })
+            .collect())
+    }
+
+    async fn delete_user_sessions(
+        &self,
+        user_id: &str,
+        keep: Option<&str>,
+    ) -> Result<(), AuthError> {
+        sqlx::query("DELETE FROM sessions WHERE user_id = $1 AND id_hash <> $2")
+            .bind(user_id)
+            .bind(keep.unwrap_or(""))
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    async fn set_password_hash(&self, user_id: &str, hash: &str) -> Result<(), AuthError> {
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(hash)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    async fn list_connected_clients(
+        &self,
+        user_id: &str,
+        now: i64,
+    ) -> Result<Vec<ConnectedClient>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT c.client_id, c.client_name, MAX(t.expires_at) AS expires_at FROM (
+                 SELECT client_id, expires_at FROM oauth_access_tokens
+                 WHERE user_id = $1 AND expires_at > $2
+                 UNION ALL
+                 SELECT client_id, expires_at FROM oauth_refresh_tokens
+                 WHERE user_id = $1 AND expires_at > $2 AND used = 0
+             ) t JOIN oauth_clients c ON c.client_id = t.client_id
+             GROUP BY c.client_id, c.client_name
+             ORDER BY expires_at DESC, c.client_id",
+        )
+        .bind(user_id)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| ConnectedClient {
+                client_id: r.get("client_id"),
+                client_name: r.get("client_name"),
+                expires_at: r.get("expires_at"),
+            })
+            .collect())
+    }
+
+    async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError> {
+        for sql in [
+            "DELETE FROM oauth_access_tokens WHERE user_id = $1 AND client_id = $2",
+            "DELETE FROM oauth_refresh_tokens WHERE user_id = $1 AND client_id = $2",
+        ] {
+            sqlx::query(sql)
+                .bind(user_id)
+                .bind(client_id)
+                .execute(&self.pool)
+                .await
+                .map_err(err)?;
+        }
+        Ok(())
+    }
+
+    async fn get_totp(&self, user_id: &str) -> Result<Option<TotpRecord>, AuthError> {
+        let row = sqlx::query(
+            "SELECT user_id, secret_enc, confirmed, last_step FROM user_totp WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(row.map(|r| TotpRecord {
+            user_id: r.get("user_id"),
+            secret_enc: r.get("secret_enc"),
+            confirmed: r.get::<i64, _>("confirmed") != 0,
+            last_step: r.get("last_step"),
+        }))
+    }
+
+    async fn save_pending_totp(
+        &self,
+        user_id: &str,
+        secret_enc: &str,
+        now: i64,
+    ) -> Result<bool, AuthError> {
+        sqlx::query(
+            "INSERT INTO user_totp (user_id, secret_enc, confirmed, last_step, created_at)
+             VALUES ($1, $2, 0, 0, $3)
+             ON CONFLICT (user_id) DO UPDATE
+             SET secret_enc = excluded.secret_enc, created_at = excluded.created_at
+             WHERE user_totp.confirmed = 0",
+        )
+        .bind(user_id)
+        .bind(secret_enc)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected() == 1)
+        .map_err(err)
+    }
+
+    async fn confirm_totp(
+        &self,
+        user_id: &str,
+        step: i64,
+        recovery_hashes: &[String],
+    ) -> Result<bool, AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        let confirmed = sqlx::query(
+            "UPDATE user_totp SET confirmed = 1, last_step = $2 WHERE user_id = $1 AND confirmed = 0",
+        )
+        .bind(user_id)
+        .bind(step)
+        .execute(&mut *tx)
+        .await
+        .map_err(err)?
+        .rows_affected()
+            == 1;
+        if !confirmed {
+            return Ok(false);
+        }
+        replace_codes(&mut tx, user_id, recovery_hashes).await?;
+        tx.commit().await.map_err(err)?;
+        Ok(true)
+    }
+
+    async fn advance_totp_step(&self, user_id: &str, step: i64) -> Result<bool, AuthError> {
+        sqlx::query(
+            "UPDATE user_totp SET last_step = $2
+             WHERE user_id = $1 AND confirmed = 1 AND last_step < $2",
+        )
+        .bind(user_id)
+        .bind(step)
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected() == 1)
+        .map_err(err)
+    }
+
+    async fn delete_totp(&self, user_id: &str) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        for sql in [
+            "DELETE FROM user_recovery_codes WHERE user_id = $1",
+            "DELETE FROM user_totp WHERE user_id = $1",
+        ] {
+            sqlx::query(sql)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(err)?;
+        }
+        tx.commit().await.map_err(err)
+    }
+
+    async fn replace_recovery_codes(
+        &self,
+        user_id: &str,
+        hashes: &[String],
+    ) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        replace_codes(&mut tx, user_id, hashes).await?;
+        tx.commit().await.map_err(err)
+    }
+
+    async fn use_recovery_code(&self, user_id: &str, hash: &str) -> Result<bool, AuthError> {
+        sqlx::query("DELETE FROM user_recovery_codes WHERE user_id = $1 AND code_hash = $2")
+            .bind(user_id)
+            .bind(hash)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected() == 1)
+            .map_err(err)
+    }
+
+    async fn count_recovery_codes(&self, user_id: &str) -> Result<i64, AuthError> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(err)
+    }
+
+    async fn list_passkeys(&self, user_id: &str) -> Result<Vec<PasskeyRecord>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT id, user_id, name, credential_id, data, created_at, last_used_at
+             FROM user_passkeys WHERE user_id = $1 ORDER BY created_at, id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| PasskeyRecord {
+                id: r.get("id"),
+                user_id: r.get("user_id"),
+                name: r.get("name"),
+                credential_id: r.get("credential_id"),
+                data: r.get("data"),
+                created_at: r.get("created_at"),
+                last_used_at: r.get("last_used_at"),
+            })
+            .collect())
+    }
+
+    async fn insert_passkey(&self, p: PasskeyRecord) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO user_passkeys (id, user_id, name, credential_id, data, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(p.id)
+        .bind(p.user_id)
+        .bind(p.name)
+        .bind(p.credential_id)
+        .bind(p.data)
+        .bind(p.created_at)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
+            other => err(other),
+        })
+    }
+
+    async fn touch_passkey(&self, id: &str, data: &str, used_at: i64) -> Result<(), AuthError> {
+        sqlx::query("UPDATE user_passkeys SET data = $2, last_used_at = $3 WHERE id = $1")
+            .bind(id)
+            .bind(data)
+            .bind(used_at)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    async fn rename_passkey(&self, user_id: &str, id: &str, name: &str) -> Result<bool, AuthError> {
+        sqlx::query("UPDATE user_passkeys SET name = $3 WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected() == 1)
+            .map_err(err)
+    }
+
+    async fn delete_passkey(&self, user_id: &str, id: &str) -> Result<bool, AuthError> {
+        sqlx::query("DELETE FROM user_passkeys WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected() == 1)
+            .map_err(err)
+    }
+
     async fn purge_expired(&self, now: i64) -> Result<(), AuthError> {
         let statements = [
             "DELETE FROM oauth_codes WHERE expires_at <= $1",
@@ -601,6 +897,30 @@ impl AuthStore for PostgresAuthStore {
         }
         Ok(())
     }
+}
+
+async fn replace_codes(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    hashes: &[String],
+) -> Result<(), AuthError> {
+    sqlx::query("DELETE FROM user_recovery_codes WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(err)?;
+    for hash in hashes {
+        sqlx::query(
+            "INSERT INTO user_recovery_codes (user_id, code_hash) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(user_id)
+        .bind(hash)
+        .execute(&mut **tx)
+        .await
+        .map_err(err)?;
+    }
+    Ok(())
 }
 
 const INSERT_ACCESS: &str = "INSERT INTO oauth_access_tokens

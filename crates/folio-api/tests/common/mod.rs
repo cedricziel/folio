@@ -21,6 +21,7 @@ use folio_infra::{
 pub struct Harness {
     pub app: Router,
     pub state: AppState,
+    pub auth_store: Arc<dyn folio_auth::AuthStore>,
 }
 
 pub async fn harness() -> Harness {
@@ -29,6 +30,17 @@ pub async fn harness() -> Harness {
 
 /// A harness whose configuration defines `configured` ingestion sources
 pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harness {
+    harness_with(configured, |store| {
+        AuthState::new(store, None).with_required(false)
+    })
+    .await
+}
+
+/// A harness whose auth state is built by `make_auth` from the auth store
+pub async fn harness_with(
+    configured: Vec<IngestionSourceDef>,
+    make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
+) -> Harness {
     let dir = std::env::temp_dir().join(format!("folio-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let storage = dir.to_string_lossy().to_string();
@@ -38,7 +50,8 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
-    let auth = AuthState::new(repos.auth.clone(), None).with_required(false);
+    let auth_store = repos.auth.clone();
+    let auth = make_auth(repos.auth.clone());
 
     let ai = folio_infra::config::AiConfig {
         provider: "local".into(),
@@ -72,6 +85,7 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
     Harness {
         app: create_router(state.clone(), auth),
         state,
+        auth_store,
     }
 }
 

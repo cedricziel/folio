@@ -222,6 +222,9 @@ pub struct AuthConfig {
     /// One-time secret for `/setup` while no user exists. A random one is
     /// generated and logged at startup when unset.
     pub setup_token: Option<String>,
+    /// Encrypts TOTP seeds at rest. When unset a key is generated on first
+    /// start and kept in the database settings.
+    pub secret_key: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -231,6 +234,7 @@ impl Default for AuthConfig {
             forward: ForwardAuthConfig::default(),
             oidc: OidcConfig::default(),
             setup_token: None,
+            secret_key: None,
         }
     }
 }
@@ -504,6 +508,12 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "auth.setup_token",
         env: "FOLIO_AUTH__SETUP_TOKEN",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.secret_key",
+        env: "FOLIO_AUTH__SECRET_KEY",
         legacy_env: &[],
         kind: ValueKind::Str,
     },

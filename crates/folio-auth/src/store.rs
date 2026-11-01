@@ -3,7 +3,8 @@
 use async_trait::async_trait;
 
 use crate::model::{
-    AccessToken, AuthCode, Group, OAuthClient, OidcLogin, RefreshToken, Session, User,
+    AccessToken, AuthCode, ConnectedClient, Group, OAuthClient, OidcLogin, PasskeyRecord,
+    RefreshToken, Session, TotpRecord, User,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +85,65 @@ pub trait AuthStore: Send + Sync {
     async fn insert_oidc_login(&self, login: OidcLogin) -> Result<(), AuthError>;
     /// Atomically removes and returns the login, making the callback single-use.
     async fn take_oidc_login(&self, state_hash: &str) -> Result<Option<OidcLogin>, AuthError>;
+
+    /// Live sessions of the user, newest first.
+    async fn list_sessions(&self, user_id: &str, now: i64) -> Result<Vec<Session>, AuthError>;
+    /// Deletes the user's sessions, except `keep` when given.
+    async fn delete_user_sessions(
+        &self,
+        user_id: &str,
+        keep: Option<&str>,
+    ) -> Result<(), AuthError>;
+    async fn set_password_hash(&self, user_id: &str, hash: &str) -> Result<(), AuthError>;
+
+    /// Clients that hold unexpired tokens of the user.
+    async fn list_connected_clients(
+        &self,
+        user_id: &str,
+        now: i64,
+    ) -> Result<Vec<ConnectedClient>, AuthError>;
+    /// Deletes every token the client holds for the user.
+    async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError>;
+
+    async fn get_totp(&self, user_id: &str) -> Result<Option<TotpRecord>, AuthError>;
+    /// Stores an unconfirmed seed, replacing any earlier unconfirmed one. A
+    /// confirmed enrollment is left alone; returns whether the seed was stored.
+    async fn save_pending_totp(
+        &self,
+        user_id: &str,
+        secret_enc: &str,
+        now: i64,
+    ) -> Result<bool, AuthError>;
+    /// Marks the pending enrollment confirmed at `step` and replaces the
+    /// recovery codes with `recovery_hashes`, in one transaction. Returns
+    /// false when there is no pending enrollment.
+    async fn confirm_totp(
+        &self,
+        user_id: &str,
+        step: i64,
+        recovery_hashes: &[String],
+    ) -> Result<bool, AuthError>;
+    /// Moves the used step forward. Returns false when `step` is not newer
+    /// than the stored one, which makes the check-and-set atomic.
+    async fn advance_totp_step(&self, user_id: &str, step: i64) -> Result<bool, AuthError>;
+    /// Removes the enrollment and every recovery code.
+    async fn delete_totp(&self, user_id: &str) -> Result<(), AuthError>;
+    async fn replace_recovery_codes(
+        &self,
+        user_id: &str,
+        hashes: &[String],
+    ) -> Result<(), AuthError>;
+    /// Deletes the code; true when it existed, so a code works once.
+    async fn use_recovery_code(&self, user_id: &str, hash: &str) -> Result<bool, AuthError>;
+    async fn count_recovery_codes(&self, user_id: &str) -> Result<i64, AuthError>;
+
+    async fn list_passkeys(&self, user_id: &str) -> Result<Vec<PasskeyRecord>, AuthError>;
+    /// [`AuthError::Conflict`] when the credential id is already registered.
+    async fn insert_passkey(&self, passkey: PasskeyRecord) -> Result<(), AuthError>;
+    /// Stores the updated credential (signature counter) after a login.
+    async fn touch_passkey(&self, id: &str, data: &str, used_at: i64) -> Result<(), AuthError>;
+    async fn rename_passkey(&self, user_id: &str, id: &str, name: &str) -> Result<bool, AuthError>;
+    async fn delete_passkey(&self, user_id: &str, id: &str) -> Result<bool, AuthError>;
 
     /// Removes expired codes, tokens and sessions.
     async fn purge_expired(&self, now: i64) -> Result<(), AuthError>;
