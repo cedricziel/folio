@@ -11,8 +11,8 @@ use std::{convert::Infallible, time::Duration};
 use tokio_stream::wrappers::BroadcastStream;
 
 use crate::error::ApiResult;
-use crate::events::DocumentEvent;
 use crate::state::AppState;
+use folio_core::events::DocumentEvent;
 
 use super::pages::DocumentStreams;
 
@@ -39,11 +39,21 @@ pub async fn turbo_streams_for(state: &AppState, event: &DocumentEvent) -> ApiRe
     Ok(streams.into_html())
 }
 
-/// SSE endpoint for real-time document updates.
+/// Subscribe to real-time document events
 ///
-/// Each event is sent twice: as the typed JSON event and as an unnamed
-/// message carrying Turbo Streams, which Turbo applies to the page as is.
-async fn sse_handler(
+/// Each SSE message has the event name from `DocumentEvent` (for example `created`)
+/// and a JSON `DocumentEvent` as data. Each event is followed by an unnamed message holding the
+/// Turbo Streams that update the web UI. Comment-only keep-alive frames are sent every 30 seconds.
+#[utoipa::path(
+    get,
+    path = "/events",
+    operation_id = "streamEvents",
+    tag = "events",
+    responses(
+        (status = 200, description = "Stream of document events", body = DocumentEvent, content_type = "text/event-stream"),
+    )
+)]
+pub(crate) async fn sse_handler(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.event_broadcaster.subscribe();

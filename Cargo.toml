@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
 license = "AGPL-3.0-only"
 authors = ["Folio Contributors"]
@@ -21,7 +21,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 
 # Web framework
-axum = { version = "0.7", features = ["macros", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["trace", "cors"] }
 tower-livereload = "0.10"
@@ -55,7 +55,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # HTTP client (for AI APIs)
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
+
+# OpenAPI
+utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
+utoipa-scalar = "0.4"
 
 # Embedded static assets
 rust-embed = { version = "8", features = ["mime-guess"] }

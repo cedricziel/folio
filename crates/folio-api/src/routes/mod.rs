@@ -1,15 +1,15 @@
 //! API routes
 
 mod assets;
-mod correspondents;
-mod document_types;
-mod documents;
-mod events;
+pub(crate) mod correspondents;
+pub(crate) mod document_types;
+pub(crate) mod documents;
+pub(crate) mod events;
 mod manage;
 mod pages;
 mod pwa;
 mod settings;
-mod tags;
+pub(crate) mod tags;
 mod view;
 
 pub use events::turbo_streams_for;
@@ -24,6 +24,8 @@ pub fn create_router(state: AppState) -> Router {
     let router = Router::new()
         // API routes
         .nest("/api", api_router())
+        // OpenAPI spec and docs viewer
+        .merge(crate::openapi::router())
         // Page routes (HTMX)
         .merge(pages::router())
         // Manifest, service worker and share target

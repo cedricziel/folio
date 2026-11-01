@@ -7,8 +7,10 @@ use super::Id;
 
 /// A tag for categorizing documents
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Tag {
     /// Unique identifier
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
 
     /// Tag name (unique)

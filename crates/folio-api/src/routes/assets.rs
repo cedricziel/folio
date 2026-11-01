@@ -18,7 +18,7 @@ use crate::state::AppState;
 struct Assets;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/static/*path", get(serve))
+    Router::new().route("/static/{*path}", get(serve))
 }
 
 /// Vendored scripts, fonts and icons only change with an upgrade, so browsers

@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup tokens assets
+.PHONY: build run test lint format clean dev setup tokens assets openapi
 
 # Default target
 all: build
@@ -39,6 +39,10 @@ tokens:
 assets:
 	npm ci --prefix web
 	npm run vendor --prefix web
+
+# Regenerate openapi/openapi.json from the Rust code
+openapi:
+	UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi
 
 # Check formatting
 format-check:
