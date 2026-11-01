@@ -13,9 +13,16 @@ struct BearerAuthMiddleware: ClientMiddleware {
         next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
     ) async throws -> (HTTPResponse, HTTPBody?) {
         var request = request
-        if let token = await provider.token() {
+        let token = await provider.token()
+        if let token {
             request.headerFields[.authorization] = "Bearer \(token)"
         }
+        let first = try await next(request, body, baseURL)
+        // A rejected token is refreshed once and the request replayed with the new one.
+        guard first.0.status == .unauthorized, let token,
+            let fresh = await provider.refresh(rejecting: token)
+        else { return first }
+        request.headerFields[.authorization] = "Bearer \(fresh)"
         return try await next(request, body, baseURL)
     }
 }
@@ -32,6 +39,7 @@ struct ErrorMappingMiddleware: ClientMiddleware {
     ) async throws -> (HTTPResponse, HTTPBody?) {
         let (response, responseBody) = try await next(request, body, baseURL)
         guard response.status.kind != .successful else { return (response, responseBody) }
+        if response.status == .unauthorized { throw FolioError.signInRequired }
         var data: Data?
         if let responseBody {
             data = try await Data(collecting: responseBody, upTo: 64 * 1024)

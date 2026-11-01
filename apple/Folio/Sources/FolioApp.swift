@@ -22,12 +22,13 @@ final class AppModel {
     private let store: any ServerConfigStore = UserDefaultsServerConfigStore.shared()
 
     init() {
-        serverURL = store.load()
+        // Without a sign-in the stored address only prefills onboarding.
+        serverURL = KeychainCredentialStore().load()?.isSignedIn == true ? store.load() : nil
         if serverURL != nil { FileProviderDomain.register() }
     }
 
     static func makeService(for url: URL) -> any FolioService {
-        LiveFolioService(baseURL: url)
+        LiveFolioService(baseURL: url, tokenProvider: SharedConfiguration.tokenProvider())
     }
 
     func connected(to url: URL) {
@@ -35,9 +36,17 @@ final class AppModel {
         FileProviderDomain.register()
     }
 
-    func changeServer() {
-        store.save(nil)
+    static func signIn(to url: URL) async throws {
+        try await OAuthSignIn(
+            store: KeychainCredentialStore(), clients: UserDefaultsClientRegistry(),
+            authenticator: SystemWebAuthenticator()
+        ).signIn(to: url)
+    }
+
+    /// Clears the tokens and returns to onboarding; the address stays to prefill the next sign-in.
+    func signOut() {
         serverURL = nil
+        Task { await SharedConfiguration.tokenProvider().signOut() }
         FileProviderDomain.unregister()
     }
 }
@@ -47,7 +56,7 @@ struct RootView: View {
 
     var body: some View {
         if let url = model.serverURL {
-            InboxView(serverURL: url, service: AppModel.makeService(for: url), onChangeServer: model.changeServer)
+            InboxView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
                 .id(url)
         } else {
             OnboardingView(model: model)

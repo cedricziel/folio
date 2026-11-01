@@ -1,0 +1,9 @@
+<turbo-frame id="processing-test">
+    {% for r in results %}
+    {% if r.ok %}
+    <div class="f-notice">{{ r.label }}: OK</div>
+    {% else %}
+    <div class="f-notice" role="alert">{{ r.label }}: {{ r.message }}</div>
+    {% endif %}
+    {% endfor %}
+</turbo-frame>

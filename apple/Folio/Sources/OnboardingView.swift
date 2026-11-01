@@ -9,6 +9,7 @@ struct OnboardingView: View {
             initialValue: OnboardingViewModel(
                 store: UserDefaultsServerConfigStore.shared(),
                 makeService: AppModel.makeService,
+                signIn: AppModel.signIn,
                 onConnected: model.connected
             )
         )
@@ -19,7 +20,7 @@ struct OnboardingView: View {
             Text("Your paperwork, filed.")
                 .font(FolioTheme.Typography.display)
                 .foregroundStyle(Color.ink)
-            Text("Enter the address of your Folio server to get started.")
+            Text("Enter the address of your Folio server, then sign in.")
                 .font(FolioTheme.Typography.body)
                 .foregroundStyle(Color.inkMuted)
 
@@ -56,7 +57,7 @@ struct OnboardingView: View {
             Button {
                 Task { await onboarding.connect() }
             } label: {
-                Text(onboarding.state == .checking ? "Connecting…" : "Connect")
+                Text(onboarding.state == .checking ? "Signing in…" : "Sign in")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)

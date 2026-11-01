@@ -14,6 +14,8 @@ mod pwa;
 mod settings;
 pub(crate) mod tags;
 mod view;
+mod workflow_pages;
+pub(crate) mod workflows;
 
 pub use events::turbo_streams_for;
 
@@ -44,6 +46,8 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(manage::router())
         // Settings routes
         .merge(settings::router())
+        // Workflow pages
+        .merge(workflow_pages::router())
         // SSE events
         .merge(events::router())
         // Login, setup and OAuth authorization server
@@ -76,4 +80,5 @@ fn api_router() -> Router<AppState> {
         .nest("/tags", tags::router())
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())
+        .nest("/workflows", workflows::router())
 }

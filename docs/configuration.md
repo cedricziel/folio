@@ -34,7 +34,7 @@ startup by the first three layers.
 | --- | --- | --- | --- |
 | `server.host` | `FOLIO_SERVER__HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` in containers. |
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
-| `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | unset | Externally visible base URL, used in OAuth metadata and redirects. Derived from the request when unset. |
+| `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | unset | Externally visible base URL, used in OAuth metadata, redirects and links in webhook payloads. Derived from the request when unset. |
 | `auth.required` | `FOLIO_AUTH__REQUIRED` | `true` | Require a login or token for the web UI and API. See [auth](auth.md). |
 | `auth.forward.enabled` | `FOLIO_AUTH__FORWARD__ENABLED` | `false` | Trust identity headers from a reverse proxy or SSO gateway. See [auth.md](auth.md#forward-auth). |
 | `auth.forward.trusted_proxies` | `FOLIO_AUTH__FORWARD__TRUSTED_PROXIES` | empty | Comma-separated CIDRs or addresses of the proxies whose headers are honoured. Headers from any other peer are ignored. |

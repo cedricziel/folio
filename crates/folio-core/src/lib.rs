@@ -13,4 +13,4 @@ pub mod ports;
 pub mod services;
 
 pub use error::{Error, Result};
-pub use events::{DocumentEvent, EventBroadcaster};
+pub use events::{DeletedDocument, DocumentEvent, EventBroadcaster};
