@@ -2,10 +2,10 @@
 
 mod assets;
 pub mod auth;
-mod error_pages;
 pub(crate) mod correspondents;
 pub(crate) mod document_types;
 pub(crate) mod documents;
+mod error_pages;
 pub(crate) mod events;
 mod file_response;
 mod health;

@@ -511,7 +511,10 @@ async fn sign_in_page_shares_the_apps_fonts_tokens_and_theme_choice() {
     ] {
         assert!(page.body.contains(asset), "{asset} is linked");
     }
-    assert!(page.body.contains("folio-theme"), "applies the chosen theme");
+    assert!(
+        page.body.contains("folio-theme"),
+        "applies the chosen theme"
+    );
     assert!(page.body.contains("auth-mark"), "shows the mark");
     assert!(!page.body.contains("f-label"), "labels are sentence case");
 }

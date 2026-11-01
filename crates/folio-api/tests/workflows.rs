@@ -569,5 +569,7 @@ async fn the_form_shows_and_edits_every_action() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.actions.len(), 1);
-    assert!(matches!(&stored.actions[0], WorkflowAction::AddTags { tag_ids } if tag_ids.len() == 1));
+    assert!(
+        matches!(&stored.actions[0], WorkflowAction::AddTags { tag_ids } if tag_ids.len() == 1)
+    );
 }

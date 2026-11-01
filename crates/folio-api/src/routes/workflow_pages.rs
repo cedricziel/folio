@@ -553,13 +553,26 @@ async fn build_form(
             ]
             .iter()
             .any(|v| !v.is_empty()),
-        tags: choices(pairs(tags.iter().map(|t| (t.id, t.name.clone())).collect()), &values.tag_id),
+        tags: choices(
+            pairs(tags.iter().map(|t| (t.id, t.name.clone())).collect()),
+            &values.tag_id,
+        ),
         correspondents: choices(
-            pairs(correspondents.iter().map(|c| (c.id, c.name.clone())).collect()),
+            pairs(
+                correspondents
+                    .iter()
+                    .map(|c| (c.id, c.name.clone()))
+                    .collect(),
+            ),
             &values.correspondent_id,
         ),
         document_types: choices(
-            pairs(document_types.iter().map(|d| (d.id, d.name.clone())).collect()),
+            pairs(
+                document_types
+                    .iter()
+                    .map(|d| (d.id, d.name.clone()))
+                    .collect(),
+            ),
             &values.document_type_id,
         ),
         values,
