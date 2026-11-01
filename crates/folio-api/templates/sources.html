@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="f-workflows">
+    <header class="f-workflows-header">
+        <h2>Sources</h2>
+        <div class="f-actions">
+            <a href="/settings/sources/new?kind=folder" class="f-btn f-btn-primary">Add folder</a>
+            <a href="/settings/sources/new?kind=email" class="f-btn f-btn-primary">Add mail account</a>
+            <a href="/settings" class="f-btn f-btn-quiet">Back to settings</a>
+        </div>
+    </header>
+    <p class="f-meta">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="/workflows">Workflows</a>.</p>
+
+    {% match notice %}
+    {% when Some with (n) %}
+    <div class="f-notice{% if n.danger %} f-notice-danger{% endif %}" role="status"><p>{{ n.text }}</p></div>
+    {% when None %}
+    {% endmatch %}
+
+    {% if rows.is_empty() %}
+    <div class="f-notice">
+        <p>No sources yet. Add a folder to watch, or a mail account to read.</p>
+    </div>
+    {% else %}
+    <div class="f-list">
+        {% for row in rows %}
+        <div class="f-row">
+            <div>
+                {% if row.read_only %}
+                <span class="f-row-title">{{ row.name }}</span>
+                {% else %}
+                <a href="/settings/sources/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
+                {% endif %}
+                <div class="f-row-sub">
+                    <span class="f-meta">{{ row.kind }}</span>
+                    <span class="f-meta">{{ row.summary }}</span>
+                    {% if row.read_only %}<span class="f-meta">From server configuration</span>{% endif %}
+                    {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
+                </div>
+                <div class="f-row-sub">
+                    {% match row.last_run %}
+                    {% when Some with (when) %}
+                    <span class="f-meta">Last run {{ when }}</span>
+                    {% when None %}
+                    <span class="f-meta">Not run yet</span>
+                    {% endmatch %}
+                    {% match row.last_result %}{% when Some with (r) %}<span class="f-meta">{{ r }}</span>{% when None %}{% endmatch %}
+                </div>
+                {% match row.error %}
+                {% when Some with (e) %}
+                <div class="f-row-sub"><span class="f-status f-status-failed">Error</span> <span class="f-meta">{{ e }}</span></div>
+                {% when None %}
+                {% endmatch %}
+            </div>
+            <div class="f-actions">
+                <form action="/settings/sources/{{ row.id }}/test" method="post" data-turbo="false">
+                    <button type="submit" class="f-btn f-btn-quiet">Test</button>
+                </form>
+                {% if !row.read_only %}
+                <form action="/settings/sources/{{ row.id }}/toggle" method="post" data-turbo="false">
+                    <button type="submit" class="f-btn f-btn-quiet">{% if row.enabled %}Turn off{% else %}Turn on{% endif %}</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
