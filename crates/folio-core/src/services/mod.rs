@@ -3,6 +3,10 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod eventing;
+
+pub use eventing::EventingDocumentRepository;
+
 use std::sync::Arc;
 
 use crate::error::Result;
