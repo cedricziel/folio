@@ -37,6 +37,8 @@ targets:
     info:
       path: Resources/Folio-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         UILaunchScreen: {}
@@ -82,6 +84,8 @@ targets:
     info:
       path: Resources/FolioShare-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Add to Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         NSExtension:
@@ -122,6 +126,8 @@ targets:
     info:
       path: Resources/FolioFileProvider-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         NSExtension:
