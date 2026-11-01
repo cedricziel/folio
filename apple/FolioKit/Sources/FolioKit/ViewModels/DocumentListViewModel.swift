@@ -38,11 +38,14 @@ public final class DocumentListViewModel {
     public private(set) var correspondents: [Correspondent.ID: String] = [:]
     public private(set) var documentTypes: [DocumentType.ID: String] = [:]
     public var searchText = ""
+    /// A failed action such as delete; shown transiently, the list stays as it was.
+    public private(set) var actionError: String?
 
     private let service: any FolioService
     private let searchDebounce: Duration
     private var documents: [Document] = []
     private var lookupsLoaded = false
+    private var latestFetch = 0
 
     public init(service: any FolioService, searchDebounce: Duration = .milliseconds(300)) {
         self.service = service
@@ -89,27 +92,34 @@ public final class DocumentListViewModel {
             documents.removeAll { $0.id == document.id }
             rebuildRows()
         } catch {
-            phase = .failed(error.localizedDescription)
+            actionError = error.localizedDescription
         }
     }
 
+    public func dismissActionError() {
+        actionError = nil
+    }
+
     private func fetch(query: String) async {
+        latestFetch += 1
+        let ticket = latestFetch
         do {
             let result = try await service.documents(matching: query)
-            guard !Task.isCancelled else { return }
+            // A newer fetch (another search, a refresh) owns the list now.
+            guard !Task.isCancelled, ticket == latestFetch else { return }
             documents = result
             phase = .loaded
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, ticket == latestFetch else { return }
             phase = .failed(error.localizedDescription)
         }
     }
 
     private func loadLookups() async {
-        lookupsLoaded = true
         async let people = try? service.correspondents()
         async let types = try? service.documentTypes()
         let (loadedPeople, loadedTypes) = await (people, types)
+        lookupsLoaded = loadedPeople != nil && loadedTypes != nil
         if let loadedPeople {
             correspondents = Dictionary(uniqueKeysWithValues: loadedPeople.map { ($0.id, $0.name) })
         }

@@ -151,3 +151,21 @@ private let documentJSON = """
         #expect(try Data(contentsOf: url) == Data("%PDF-1.4".utf8))
     }
 }
+
+struct SafeFilenameTests {
+    @Test(arguments: [
+        ("bill.pdf", "bill.pdf"),
+        ("../../etc/passwd", "passwd"),
+        ("/tmp/evil.pdf", "evil.pdf"),
+        ("..", "document.pdf"),
+        (".", "document.pdf"),
+        ("", "document.pdf"),
+    ])
+    func keepsOnlyTheLastComponent(input: String, expected: String) {
+        #expect(LiveFolioService.safeFilename(input, mimeType: "application/pdf") == expected)
+    }
+
+    @Test func fallsBackWithoutNameOrType() {
+        #expect(LiveFolioService.safeFilename(nil, mimeType: nil) == "document")
+    }
+}

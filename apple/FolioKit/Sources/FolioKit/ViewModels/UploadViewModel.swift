@@ -22,7 +22,7 @@ public final class UploadViewModel {
 
     /// Uploads one file at a time and stops at the first failure.
     public func upload(_ files: [UploadFile]) async {
-        guard !files.isEmpty else { return }
+        guard !files.isEmpty, !isUploading else { return }
         var done = 0
         do {
             for file in files {
@@ -37,6 +37,11 @@ public final class UploadViewModel {
         if done > 0 {
             onUploaded()
         }
+    }
+
+    private var isUploading: Bool {
+        if case .uploading = state { return true }
+        return false
     }
 
     public func dismiss() {

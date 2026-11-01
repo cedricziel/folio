@@ -2,6 +2,7 @@ import FolioAPI
 import Foundation
 import OpenAPIRuntime
 import OpenAPIURLSession
+import UniformTypeIdentifiers
 
 /// Talks to a Folio server. JSON endpoints go through the generated client; file transfer uses
 /// URLSession directly because the generated client cannot set per-part content types on uploads
@@ -81,7 +82,8 @@ public struct LiveFolioService: FolioService {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "folio-\(document.id.uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let destination = directory.appending(path: document.originalFilename ?? "document")
+        let destination = directory.appending(
+            path: Self.safeFilename(document.originalFilename, mimeType: document.mimeType))
         try? FileManager.default.removeItem(at: destination)
         try FileManager.default.moveItem(at: temporary, to: destination)
         return destination
@@ -105,6 +107,14 @@ public struct LiveFolioService: FolioService {
         } catch {
             throw FolioError.unreadableResponse
         }
+    }
+
+    /// The server controls the filename, so keep only its last path component and never a traversal.
+    static func safeFilename(_ name: String?, mimeType: String?) -> String {
+        let last = name.map { ($0 as NSString).lastPathComponent } ?? ""
+        if !["", ".", "..", "/"].contains(last) { return last }
+        let ext = mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
+        return ext.map { "document.\($0)" } ?? "document"
     }
 
     fileprivate static func uuid(_ string: String) throws -> UUID {
