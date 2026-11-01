@@ -1016,6 +1016,7 @@ dependencies = [
  "folio-api",
  "folio-core",
  "folio-infra",
+ "folio-mcp",
  "tokio",
  "tracing",
  "tracing-subscriber",
