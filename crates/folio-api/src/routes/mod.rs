@@ -1,5 +1,6 @@
 //! API routes
 
+pub mod auth;
 mod correspondents;
 mod document_types;
 mod documents;
@@ -15,7 +16,8 @@ use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 use crate::state::AppState;
 
 /// Create the main application router
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
+    let auth_routes = auth::router(auth);
     let router = Router::new()
         // API routes
         .nest("/api", api_router())
@@ -27,6 +29,8 @@ pub fn create_router(state: AppState) -> Router {
         .merge(settings::router())
         // SSE events
         .merge(events::router())
+        // Login, setup and OAuth authorization server
+        .merge(auth_routes)
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         // Middleware

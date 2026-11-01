@@ -8,5 +8,8 @@ pub mod routes;
 pub mod state;
 
 pub use events::{DocumentEvent, EventBroadcaster};
-pub use routes::create_router;
+pub use routes::{
+    auth::{router as auth_router, AuthState, RequireUser},
+    create_router,
+};
 pub use state::AppState;

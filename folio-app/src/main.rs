@@ -7,11 +7,11 @@ use tokio::sync::watch;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
-use folio_api::{create_router, AppState};
+use folio_api::{create_router, AppState, AuthState};
 use folio_core::EventBroadcaster;
 use folio_infra::{
     create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, FileStorage,
-    JobQueue, SqliteCorrespondentRepository, SqliteDocumentRepository,
+    JobQueue, SqliteAuthStore, SqliteCorrespondentRepository, SqliteDocumentRepository,
     SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
     SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
 };
@@ -129,8 +129,11 @@ async fn main() -> Result<()> {
         event_broadcaster,
     );
 
+    let auth_store = Arc::new(SqliteAuthStore::new(pool.clone()));
+    let auth = AuthState::new(auth_store, config.server.public_url.clone());
+
     // Create router
-    let app = create_router(state);
+    let app = create_router(state, auth);
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);
