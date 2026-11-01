@@ -18,8 +18,9 @@ pub mod thumbnail;
 pub use ai::{DynamicEmbeddingService, DynamicOcrService, PipelineContext, SqliteSearchService};
 pub use config::Config;
 pub use database::{
-    create_pool, run_migrations, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSettingsRepository, SqliteTagRepository,
+    create_pool, run_migrations, DatabaseHealthCheck, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSettingsRepository,
+    SqliteTagRepository,
 };
 pub use queue::{Job, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
 pub use storage::FileStorage;

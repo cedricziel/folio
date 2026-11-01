@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup openapi apple apple-test apple-tokens apple-project
+.PHONY: build run test lint format clean dev setup openapi apple apple-test apple-tokens apple-project e2e
 
 # Default target
 all: build
@@ -81,3 +81,7 @@ apple-project:
 # Regenerate FolioTheme.swift and the color asset catalog from design/tokens.json
 apple-tokens:
 	cd apple/FolioKit && xcrun swift run folio-tokengen ../../design/tokens.json .
+
+# End-to-end tests (Playwright) against an ephemeral instance; rebuilds folio-app first
+e2e: build
+	cd e2e && npm ci && npx playwright install chromium && npx playwright test

@@ -3,3 +3,9 @@
 DerivedData/
 .swiftpm/
 xcuserdata/
+build/
+fastlane/report.xml
+fastlane/README.md
+*.ipa
+*.dSYM.zip
+*.pkg

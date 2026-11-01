@@ -20,6 +20,9 @@ tokio = { workspace = true }
 # Web framework
 axum = { workspace = true }
 
+# HTTP client (healthcheck subcommand)
+reqwest = { workspace = true }
+
 # Error handling
 anyhow = { workspace = true }
 

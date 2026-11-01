@@ -3,12 +3,14 @@
 //! These traits define the contracts that infrastructure adapters must implement.
 
 mod ai;
+mod health;
 mod repository;
 
 pub use ai::{
     EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
     SearchService,
 };
+pub use health::HealthCheck;
 pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,
