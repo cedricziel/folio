@@ -974,6 +974,23 @@ mod forward {
         assert!(!pat().await.is_admin);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn simultaneous_first_requests_for_one_user_all_succeed() {
+        let f = fwd_app(|_| {}).await;
+        let statuses: Vec<StatusCode> = futures::future::join_all((0..16).map(|_| {
+            send_from(&f.app, TRUSTED, with_identity("/", "newcomer", &[]))
+        }))
+        .await
+        .into_iter()
+        .map(|r| r.status)
+        .collect();
+        assert!(
+            statuses.iter().all(|s| *s == StatusCode::OK),
+            "{statuses:?}"
+        );
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+    }
+
     #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
         let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;

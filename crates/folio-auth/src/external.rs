@@ -94,7 +94,12 @@ pub async fn sync_external_user(
             };
             match store.create_user(user.clone()).await {
                 Ok(()) => user,
-                Err(AuthError::Conflict) => return Err(ExternalError::UsernameTaken),
+                // Either a concurrent first request created this very identity
+                // (use it) or the username belongs to someone else.
+                Err(AuthError::Conflict) => store
+                    .find_user_by_external(&identity.source, &identity.external_id)
+                    .await?
+                    .ok_or(ExternalError::UsernameTaken)?,
                 Err(e) => return Err(e.into()),
             }
         }
