@@ -31,4 +31,6 @@
 # SQLx offline mode
 .sqlx/
 *.db
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
