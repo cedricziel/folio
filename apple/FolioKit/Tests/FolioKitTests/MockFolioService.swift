@@ -9,6 +9,9 @@ actor MockFolioService: FolioService {
     var failure: FolioError?
     var failUploadsAfter: Int?
     var failLookups = false
+    var uploadDelay: Duration?
+    var tagList: [Tag] = []
+    private(set) var tagged: [TagAssignment] = []
     private(set) var queries: [String] = []
     private(set) var uploads: [UploadFile] = []
     private(set) var deleted: [Document.ID] = []
@@ -28,6 +31,14 @@ actor MockFolioService: FolioService {
 
     func setFailUploadsAfter(_ count: Int?) {
         failUploadsAfter = count
+    }
+
+    func setTags(_ tags: [Tag]) {
+        tagList = tags
+    }
+
+    func setUploadDelay(_ delay: Duration?) {
+        uploadDelay = delay
     }
 
     func setFailLookups(_ value: Bool) {
@@ -65,6 +76,7 @@ actor MockFolioService: FolioService {
     }
 
     func upload(_ file: UploadFile) async throws -> Document {
+        if let uploadDelay { try await Task.sleep(for: uploadDelay) }
         if let failure {
             throw failure
         }
@@ -76,7 +88,20 @@ actor MockFolioService: FolioService {
     }
 
     func tags() async throws -> [Tag] {
-        []
+        tagList
+    }
+
+    func documents(correspondentID: UUID?, documentTypeID: UUID?) async throws -> [Document] {
+        if let failure { throw failure }
+        return documentList.filter {
+            (correspondentID == nil || $0.correspondentID == correspondentID)
+                && (documentTypeID == nil || $0.documentTypeID == documentTypeID)
+        }
+    }
+
+    func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
+        if let failure { throw failure }
+        tagged.append(TagAssignment(tag: tagID, document: documentID))
     }
 
     func correspondents() async throws -> [Correspondent] {
@@ -107,4 +132,9 @@ final class MemoryServerConfigStore: ServerConfigStore, @unchecked Sendable {
     func save(_ url: URL?) {
         self.url = url
     }
+}
+
+struct TagAssignment: Equatable {
+    let tag: Tag.ID
+    let document: Document.ID
 }
