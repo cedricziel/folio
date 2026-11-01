@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use folio_core::models::{WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun};
+use folio_core::models::{
+    redact_url, WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun,
+};
 use folio_core::ports::WorkflowRepository;
 use folio_infra::{workflow::WebhookRequest, WebhookClient};
 
@@ -30,52 +32,96 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_workflows).post(create_workflow))
         .route(
-            "/:id",
+            "/{id}",
             get(get_workflow)
                 .put(update_workflow)
                 .delete(delete_workflow),
         )
-        .route("/:id/test", post(test_workflow))
-        .route("/:id/runs", get(list_runs))
+        .route("/{id}/test", post(test_workflow))
+        .route("/{id}/runs", get(list_runs))
 }
 
-/// Hide webhook secrets before a workflow leaves the server
+/// Hide webhook secrets and header values before a workflow leaves the server
+///
+/// Header values often carry credentials (`Authorization`), so they get the same treatment.
 pub(crate) fn redact(mut workflow: Workflow) -> Workflow {
     for action in &mut workflow.actions {
-        if let WorkflowAction::Webhook { secret, .. } = action {
+        if let WorkflowAction::Webhook {
+            secret, headers, ..
+        } = action
+        {
             if secret.as_deref().is_some_and(|s| !s.is_empty()) {
                 *secret = Some(SECRET_MASK.to_string());
+            }
+            for value in headers.values_mut().filter(|v| !v.is_empty()) {
+                *value = SECRET_MASK.to_string();
             }
         }
     }
     workflow
 }
 
-/// Swap [`SECRET_MASK`] placeholders for the secrets stored on the workflow being replaced
+/// Swap [`SECRET_MASK`] placeholders for the values stored on the workflow being replaced
+///
+/// Values are only restored when the webhook keeps its URL, so a stored secret
+/// can never be redirected to a new destination.
 pub(crate) fn restore_secrets(
     input: &mut WorkflowInput,
     existing: &Workflow,
 ) -> Result<(), ApiError> {
     for (index, action) in input.actions.iter_mut().enumerate() {
-        let WorkflowAction::Webhook { secret, url, .. } = action else {
+        let WorkflowAction::Webhook {
+            url,
+            secret,
+            headers,
+            ..
+        } = action
+        else {
             continue;
         };
-        if secret.as_deref() != Some(SECRET_MASK) {
-            continue;
-        }
         let stored = match existing.actions.get(index) {
             Some(WorkflowAction::Webhook {
                 url: stored_url,
                 secret,
+                headers,
                 ..
-            }) if stored_url == url => secret.clone(),
+            }) if stored_url == url => Some((secret, headers)),
             _ => None,
         };
-        *secret = Some(stored.ok_or_else(|| {
+        let cannot_keep = |what: &str| {
             ApiError::bad_request(format!(
-                "Webhook secret for {url} cannot be kept; provide it again"
+                "{what} for {} cannot be kept; provide it again",
+                redact_url(url)
             ))
-        })?);
+        };
+
+        if secret.as_deref() == Some(SECRET_MASK) {
+            let kept = stored.and_then(|(s, _)| s.clone());
+            *secret = Some(kept.ok_or_else(|| cannot_keep("Webhook secret"))?);
+        }
+        for (name, value) in headers
+            .iter_mut()
+            .filter(|(_, v)| v.as_str() == SECRET_MASK)
+        {
+            let kept = stored.and_then(|(_, h)| h.get(name).cloned());
+            *value = kept.ok_or_else(|| cannot_keep(&format!("Header {name}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// The mask is only meaningful when updating; on create it would be stored literally
+fn reject_masks(input: &WorkflowInput) -> Result<(), ApiError> {
+    let masked = input.actions.iter().any(|action| match action {
+        WorkflowAction::Webhook {
+            secret, headers, ..
+        } => secret.as_deref() == Some(SECRET_MASK) || headers.values().any(|v| v == SECRET_MASK),
+        _ => false,
+    });
+    if masked {
+        return Err(ApiError::bad_request(format!(
+            "'{SECRET_MASK}' only keeps stored values on update; provide the real value"
+        )));
     }
     Ok(())
 }
@@ -136,6 +182,7 @@ pub(crate) async fn create_workflow(
     State(state): State<AppState>,
     Json(input): Json<WorkflowInput>,
 ) -> ApiResult<(StatusCode, Json<Workflow>)> {
+    reject_masks(&input)?;
     let workflow = state.workflow_repo.create(input).await?;
     Ok((StatusCode::CREATED, Json(redact(workflow))))
 }
@@ -266,7 +313,7 @@ pub(crate) async fn send_test(
             })
             .await;
         deliveries.push(TestDelivery {
-            url: url.clone(),
+            url: redact_url(url),
             success: result.is_success(),
             status: result.status,
             error: result.error,

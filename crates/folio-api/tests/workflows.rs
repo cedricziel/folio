@@ -408,3 +408,67 @@ async fn the_form_explains_rejected_input() {
     assert_eq!(status, StatusCode::OK);
     assert!(html.contains("must use http or https"));
 }
+
+#[tokio::test]
+async fn header_values_are_masked_and_kept_on_update() {
+    let app = test_app().await;
+    let mut body = workflow_body("http://localhost:5678/hook");
+    body["actions"][0]["headers"] = json!({ "Authorization": "Bearer abc" });
+
+    let (_, created) = json_request(&app, "POST", "/api/workflows", Some(body.clone())).await;
+    assert_eq!(
+        created["actions"][0]["headers"]["Authorization"],
+        "********"
+    );
+    let id = created["id"].as_str().unwrap();
+
+    body["actions"][0]["headers"] = json!({ "Authorization": "********" });
+    body["actions"][0]["secret"] = json!("********");
+    let (status, _) = json_request(
+        &app,
+        "PUT",
+        &format!("/api/workflows/{id}"),
+        Some(body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let stored = app
+        .state
+        .workflow_repo
+        .find_by_id(id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let WorkflowAction::Webhook {
+        headers, secret, ..
+    } = &stored.actions[0]
+    else {
+        panic!("expected a webhook");
+    };
+    assert_eq!(headers["Authorization"], "Bearer abc");
+    assert_eq!(secret.as_deref(), Some("hunter2"));
+
+    // Pointing the webhook elsewhere must not carry stored values along.
+    body["actions"][0]["url"] = json!("http://evil.example/hook");
+    let (status, _) = json_request(&app, "PUT", &format!("/api/workflows/{id}"), Some(body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_rejects_the_mask_and_errors_hide_credentials() {
+    let app = test_app().await;
+    let mut body = workflow_body("http://localhost/x");
+    body["actions"][0]["secret"] = json!("********");
+    let (status, _) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, error) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("ftp://user:pw@example.com/x")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!error.to_string().contains("pw"));
+}

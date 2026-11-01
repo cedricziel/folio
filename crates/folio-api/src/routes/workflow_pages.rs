@@ -27,10 +27,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/workflows", get(list_page).post(create))
         .route("/workflows/new", get(new_page))
-        .route("/workflows/:id", get(edit_page).post(update))
-        .route("/workflows/:id/toggle", post(toggle))
-        .route("/workflows/:id/delete", post(delete))
-        .route("/workflows/:id/test", post(test))
+        .route("/workflows/{id}", get(edit_page).post(update))
+        .route("/workflows/{id}/toggle", post(toggle))
+        .route("/workflows/{id}/delete", post(delete))
+        .route("/workflows/{id}/test", post(test))
 }
 
 struct Choice {
@@ -151,7 +151,10 @@ impl FormValues {
                 url.clone(),
                 headers
                     .iter()
-                    .map(|(k, v)| format!("{k}: {v}"))
+                    .map(|(k, v)| {
+                        let shown = if v.is_empty() { "" } else { SECRET_MASK };
+                        format!("{k}: {shown}")
+                    })
                     .collect::<Vec<_>>()
                     .join("\n"),
             ),
@@ -206,18 +209,44 @@ impl FormValues {
                 .ok_or_else(|| format!("Header '{line}' needs the form Name: value."))?;
             headers.insert(name.trim().to_string(), value.trim().to_string());
         }
+        // Masked values from the edit form stand for the stored ones.
+        let new_url = self.webhook_url.trim();
+        let stored_hook = match existing.and_then(|w| first_webhook(&w.actions)) {
+            Some((
+                _,
+                WorkflowAction::Webhook {
+                    url,
+                    headers,
+                    secret,
+                    ..
+                },
+            )) if url == new_url => Some((headers, secret)),
+            _ => None,
+        };
+        if let Some((stored, _)) = stored_hook {
+            for (name, value) in headers
+                .iter_mut()
+                .filter(|(_, v)| v.as_str() == SECRET_MASK)
+            {
+                *value = stored
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("Header {name} has no stored value; enter it again."))?;
+            }
+        } else if headers.values().any(|v| v == SECRET_MASK) {
+            return Err("Enter the header values; the mask only keeps stored ones.".into());
+        }
 
         let mut actions = existing.map(|w| w.actions.clone()).unwrap_or_default();
-        let stored = first_webhook(&actions);
+        let stored = first_webhook(&actions).map(|(index, _)| index);
+        // A stored secret is only kept while the URL stays the same, so it
+        // cannot be sent to a new destination by editing the URL alone.
         let secret = if self.clear_secret.is_some() {
             None
         } else if let Some(secret) = optional(&self.webhook_secret) {
             Some(secret)
         } else {
-            match stored {
-                Some((_, WorkflowAction::Webhook { secret, .. })) => secret.clone(),
-                _ => None,
-            }
+            stored_hook.and_then(|(_, secret)| secret.clone())
         };
         let webhook = WorkflowAction::Webhook {
             url: self.webhook_url.trim().to_string(),
@@ -225,7 +254,7 @@ impl FormValues {
             headers,
             secret,
         };
-        match stored.map(|(index, _)| index) {
+        match stored {
             Some(index) => actions[index] = webhook,
             None => actions.insert(0, webhook),
         }

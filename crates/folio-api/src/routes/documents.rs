@@ -285,10 +285,14 @@ pub(crate) async fn upload_document(
         }
     }
 
-    // OCR and embedding ran inline above, so processing is already done.
-    state.event_broadcaster.send(DocumentEvent::Processed {
-        document_id: document.id,
-    });
+    // Only a successful inline OCR counts as processed. Otherwise the document
+    // has no content, and the worker's repair pass reprocesses it and emits
+    // the event when that finishes.
+    if content.is_some() {
+        state.event_broadcaster.send(DocumentEvent::Processed {
+            document_id: document.id,
+        });
+    }
 
     // Re-fetch to get updated document with file_path
     let document = state
