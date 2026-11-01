@@ -200,8 +200,26 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks);
 
-    let auth = AuthState::new(auth_store, config.server.public_url.clone())
+    let mut auth = AuthState::new(auth_store, config.server.public_url.clone())
         .with_required(config.auth.required);
+    let forward = &config.auth.forward;
+    if forward.enabled {
+        let settings = folio_auth::ForwardAuth::new(
+            &forward.user_header,
+            &forward.email_header,
+            &forward.name_header,
+            &forward.groups_header,
+            &forward.trusted_proxies,
+            forward.admin_group.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
+        if !settings.has_trusted_proxies() {
+            tracing::warn!(
+                "auth.forward is enabled without trusted_proxies; every request will be treated as unauthenticated"
+            );
+        }
+        auth = auth.with_forward(settings);
+    }
 
     // Create router
     let mcp = folio_mcp::router(
@@ -232,7 +250,11 @@ async fn main() -> Result<()> {
     info!("🚀 Folio is running at http://{}", addr);
 
     // Run server with graceful shutdown
-    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
 
     if let Err(e) = server.await {
         tracing::error!("Server error: {}", e);

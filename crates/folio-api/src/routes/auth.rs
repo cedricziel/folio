@@ -18,18 +18,19 @@ use url::{form_urlencoded, Url};
 use folio_auth::{
     base_url,
     crypto::{ct_eq, hash_password, hash_token, random_token, verify_password},
+    model::SOURCE_LOCAL,
     redirect::safe_next,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
         AuthorizeParams, OAuthError, OAuthServer, RegistrationRequest, TokenRequest,
         ValidatedAuthorize,
     },
-    AuthStore, Session, TokenValidator, User,
+    AuthStore, ForwardAuth, Group, Session, TokenValidator, User,
 };
 
-const SESSION_COOKIE: &str = "folio_session";
+pub(crate) const SESSION_COOKIE: &str = "folio_session";
 const CSRF_COOKIE: &str = "folio_csrf";
-const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
+pub(crate) const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
 const MIN_PASSWORD_LEN: usize = 12;
 
 /// State for the auth routes and the [`RequireUser`] extractor.
@@ -40,6 +41,8 @@ pub struct AuthState {
     pub public_url: Option<String>,
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
+    /// Trusted-header login, see [`crate::forward::forward_auth`].
+    pub forward: Option<Arc<ForwardAuth>>,
 }
 
 impl AuthState {
@@ -49,7 +52,13 @@ impl AuthState {
             store,
             public_url,
             required: true,
+            forward: None,
         }
+    }
+
+    pub fn with_forward(mut self, forward: ForwardAuth) -> Self {
+        self.forward = Some(Arc::new(forward));
+        self
     }
 
     pub fn with_required(mut self, required: bool) -> Self {
@@ -58,15 +67,24 @@ impl AuthState {
     }
 
     /// Validator for a protected resource path such as `/mcp`.
+    /// The user's groups in both namespaces, resolved on demand so callers
+    /// (session or token holders alike) always see current memberships.
+    pub async fn effective_groups(&self, user_id: &str) -> Vec<Group> {
+        self.store.user_groups(user_id).await.unwrap_or_else(|e| {
+            tracing::error!("group lookup failed: {e}");
+            Vec::new()
+        })
+    }
+
     pub fn validator(&self, resource_path: &str) -> TokenValidator {
         TokenValidator::new(self.store.clone(), self.public_url.clone(), resource_path)
     }
 
-    fn base(&self, headers: &HeaderMap) -> String {
+    pub(crate) fn base(&self, headers: &HeaderMap) -> String {
         base_url(self.public_url.as_deref(), headers)
     }
 
-    async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
+    pub(crate) async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
         let id = cookie(headers, SESSION_COOKIE)?;
         let session = self.store.find_session(&hash_token(&id)).await.ok()??;
         if session.expires_at <= now() {
@@ -190,7 +208,7 @@ where
 
 // ---- cookies and CSRF -------------------------------------------------------
 
-fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -201,7 +219,7 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
-fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
+pub(crate) fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
     let secure = if secure { "; Secure" } else { "" };
     format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")
 }
@@ -248,6 +266,12 @@ fn login_redirect(next: &str) -> Redirect {
 }
 
 async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<String> {
+    let id = create_session(auth, user).await?;
+    Some(set_cookie(SESSION_COOKIE, &id, SESSION_TTL_SECS, secure))
+}
+
+/// Stores a new session for the user and returns its cookie value.
+pub(crate) async fn create_session(auth: &AuthState, user: &User) -> Option<String> {
     let id = random_token();
     auth.store
         .create_session(Session {
@@ -258,10 +282,10 @@ async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<St
         .await
         .map_err(|e| tracing::error!("session create failed: {e}"))
         .ok()?;
-    Some(set_cookie(SESSION_COOKIE, &id, SESSION_TTL_SECS, secure))
+    Some(id)
 }
 
-fn is_secure(base: &str) -> bool {
+pub(crate) fn is_secure(base: &str) -> bool {
     base.starts_with("https://")
 }
 
@@ -361,6 +385,11 @@ async fn setup_submit(
         username: username.to_string(),
         password_hash,
         created_at: now(),
+        email: None,
+        display_name: None,
+        is_admin: true,
+        auth_source: SOURCE_LOCAL.to_string(),
+        external_id: None,
     };
     match auth.store.create_first_user(user).await {
         Ok(Some(user)) => match start_session(&auth, &user, secure).await {

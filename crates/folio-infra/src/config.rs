@@ -93,11 +93,44 @@ impl Default for StorageConfig {
 pub struct AuthConfig {
     /// Require a session or token for the web UI and API.
     pub required: bool,
+    pub forward: ForwardAuthConfig,
 }
 
 impl Default for AuthConfig {
     fn default() -> Self {
-        Self { required: true }
+        Self {
+            required: true,
+            forward: ForwardAuthConfig::default(),
+        }
+    }
+}
+
+/// Trusted-header authentication behind a reverse proxy or SSO gateway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ForwardAuthConfig {
+    pub enabled: bool,
+    pub user_header: String,
+    pub email_header: String,
+    pub name_header: String,
+    pub groups_header: String,
+    /// CIDRs or addresses of the proxies whose headers are honoured.
+    pub trusted_proxies: Vec<String>,
+    /// Members of this (external) group become admins.
+    pub admin_group: Option<String>,
+}
+
+impl Default for ForwardAuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            user_header: "Remote-User".to_string(),
+            email_header: "Remote-Email".to_string(),
+            name_header: "Remote-Name".to_string(),
+            groups_header: "Remote-Groups".to_string(),
+            trusted_proxies: Vec::new(),
+            admin_group: None,
+        }
     }
 }
 
@@ -179,6 +212,48 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AUTH__REQUIRED",
         legacy_env: &[],
         kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "auth.forward.enabled",
+        env: "FOLIO_AUTH__FORWARD__ENABLED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "auth.forward.user_header",
+        env: "FOLIO_AUTH__FORWARD__USER_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.email_header",
+        env: "FOLIO_AUTH__FORWARD__EMAIL_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.name_header",
+        env: "FOLIO_AUTH__FORWARD__NAME_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.groups_header",
+        env: "FOLIO_AUTH__FORWARD__GROUPS_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.trusted_proxies",
+        env: "FOLIO_AUTH__FORWARD__TRUSTED_PROXIES",
+        legacy_env: &[],
+        kind: ValueKind::List,
+    },
+    Setting {
+        key: "auth.forward.admin_group",
+        env: "FOLIO_AUTH__FORWARD__ADMIN_GROUP",
+        legacy_env: &[],
+        kind: ValueKind::Str,
     },
     Setting {
         key: "database.url",
@@ -360,6 +435,13 @@ mod tests {
         match node {
             serde_json::Value::Null => None,
             serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Array(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
             other => Some(other.to_string()),
         }
     }
@@ -416,6 +498,25 @@ mod tests {
                 assert_eq!(lookup(&config, setting.key).as_deref(), Some(expected));
             }
         }
+    }
+
+    #[test]
+    fn forward_auth_lists_split_on_commas_and_spaces() {
+        let config = load(&[
+            ("FOLIO_AUTH__FORWARD__ENABLED", "true"),
+            (
+                "FOLIO_AUTH__FORWARD__TRUSTED_PROXIES",
+                "10.0.0.0/8, 172.16.0.5, fd00::/8",
+            ),
+            ("FOLIO_AUTH__FORWARD__ADMIN_GROUP", "admins"),
+        ]);
+        assert!(config.auth.forward.enabled);
+        assert_eq!(
+            config.auth.forward.trusted_proxies,
+            ["10.0.0.0/8", "172.16.0.5", "fd00::/8"]
+        );
+        assert_eq!(config.auth.forward.admin_group.as_deref(), Some("admins"));
+        assert_eq!(config.auth.forward.user_header, "Remote-User");
     }
 
     #[test]

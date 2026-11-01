@@ -27,6 +27,7 @@ use crate::state::AppState;
 pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let health = health::router(state.health_checks.clone());
     let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
+    let forward = axum::middleware::from_fn_with_state(auth.clone(), crate::forward::forward_auth);
     let auth_routes = auth::router(auth);
 
     let router = Router::new()
@@ -50,6 +51,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(assets::router())
         // Middleware
         .layer(enforcement)
+        .layer(forward)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)
