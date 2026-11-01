@@ -3,6 +3,12 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod library;
+
+pub use library::{
+    DocumentDetail, DocumentHit, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, TextPage,
+};
+
 use std::sync::Arc;
 
 use serde::Serialize;
