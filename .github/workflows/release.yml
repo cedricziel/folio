@@ -30,13 +30,21 @@ jobs:
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
       - if: steps.release.outputs.prs_created == 'true'
-        name: Sync Cargo.lock with the release version
+        name: Sync Cargo.lock and the OpenAPI version with the release
         run: |
           cargo update --workspace --offline || cargo update --workspace
-          if ! git diff --quiet Cargo.lock; then
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          python3 - "$version" <<'PY'
+          import re, sys
+          path = "openapi/openapi.json"
+          spec = open(path).read()
+          spec = re.sub(r'("info": \{.*?"version": ")[^"]*(")', lambda m: m.group(1) + sys.argv[1] + m.group(2), spec, count=1, flags=re.S)
+          open(path, "w").write(spec)
+          PY
+          if ! git diff --quiet Cargo.lock openapi/openapi.json; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -am "chore: sync Cargo.lock with the release version"
+            git commit -am "chore: sync Cargo.lock and the OpenAPI version with the release"
             git push
           fi
 
