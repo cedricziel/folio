@@ -714,6 +714,55 @@ a:not([class]):hover,
   margin: var(--space-2) 0 var(--space-4);
 }
 
+dialog.dialog {
+  margin: auto;
+  color: var(--ink);
+}
+dialog.dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 40%, transparent);
+}
+dialog.dialog[open] {
+  animation: fade-in 200ms ease-out;
+}
+dialog.dialog p + .dialog-actions,
+dialog.dialog h2 + p {
+  margin-top: var(--space-2);
+}
+dialog.dialog form {
+  margin-top: var(--space-4);
+}
+.shortcuts-dialog {
+  width: min(520px, 100%);
+}
+.shortcuts-dialog .f-label {
+  margin: var(--space-4) 0 var(--space-1);
+}
+.shortcut-list {
+  margin: 0;
+}
+.shortcut-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.shortcut-list dt {
+  color: var(--ink);
+}
+.shortcut-list dd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+.shortcuts-dialog .hint {
+  margin-top: var(--space-4);
+}
+
 .palette {
   width: min(640px, 100%);
   padding: 0;
@@ -789,8 +838,15 @@ a:not([class]):hover,
   border-radius: 2px;
   background: var(--archive);
 }
+.palette-help {
+  margin-left: auto;
+  min-height: 0;
+  padding: 0 var(--space-2);
+  font-size: 12px;
+}
 .palette-footer {
   display: flex;
+  align-items: center;
   gap: var(--space-4);
   padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--rule);

@@ -4,7 +4,7 @@
 {% block title %}{{ document.title }} - Folio{% endblock %}
 
 {% block content %}
-<article class="doc-view">
+<article class="doc-view" data-hotkey-document="{{ document.id }}" data-hotkey-title="{{ document.title }}">
     <header class="doc-head">
         <a href="/" class="back-link">{{ icons::arrow_left() }} Inbox</a>
         <div class="doc-head-row">
@@ -61,7 +61,7 @@
                     <dt>From</dt>
                     <dd>
                         <form action="/documents/{{ document.id }}/correspondent" method="post" data-turbo="false">
-                            <select name="correspondent_id" class="select" aria-label="From" onchange="this.form.requestSubmit()">
+                            <select name="correspondent_id" class="select" aria-label="From" data-hotkey="edit" onchange="this.form.requestSubmit()">
                                 <option value="">Not set</option>
                                 {% for c in all_correspondents %}
                                 <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
@@ -109,7 +109,7 @@
                             {% endfor %}
                             {% endif %}
                         </div>
-                        <button type="button" class="f-btn f-btn-quiet" data-action="click->tags#openModal">Edit tags</button>
+                        <button type="button" class="f-btn f-btn-quiet" title="Edit tags (t)" aria-keyshortcuts="t" data-hotkey="tag" data-action="click->tags#openModal">Edit tags</button>
 
                         <div class="overlay" data-tags-target="modal" data-action="click->tags#backdropClick">
                             <div class="f-palette dialog" role="dialog" aria-modal="true" aria-labelledby="tags-title">
