@@ -68,6 +68,8 @@ struct MockState {
     secret: Option<&'static str>,
     userinfo: Option<Value>,
     kid_override: Option<&'static str>,
+    token_status: Option<StatusCode>,
+    hs256_secret: Option<&'static str>,
     codes: HashMap<String, Pending>,
 }
 
@@ -106,6 +108,8 @@ impl Mock {
             secret: None,
             userinfo: None,
             kid_override: None,
+            token_status: None,
+            hs256_secret: None,
             codes: HashMap::new(),
         })));
         let app = Router::new()
@@ -176,7 +180,11 @@ async fn authorize(
     assert_eq!(q["code_challenge_method"], "S256");
     assert_eq!(q["response_type"], "code");
     assert_eq!(q["client_id"], CLIENT_ID);
-    assert!(q["scope"].contains("openid"));
+    assert_eq!(
+        q["scope"].split(' ').filter(|s| *s == "openid").count(),
+        1,
+        "openid is requested once"
+    );
     let mut url = url::Url::parse(&q["redirect_uri"]).unwrap();
     url.query_pairs_mut()
         .append_pair("code", &code)
@@ -190,6 +198,9 @@ async fn token(
     Form(f): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let mut s = m.0.lock().unwrap();
+    if let Some(status) = s.token_status {
+        return (status, "upstream trouble").into_response();
+    }
     let denied = |why: &str| {
         (
             StatusCode::BAD_REQUEST,
@@ -243,14 +254,19 @@ async fn token(
             pending.nonce
         }),
     );
-    let mut header = Header::new(Algorithm::ES256);
+    let (alg, key) = match s.hs256_secret {
+        Some(secret) => (
+            Algorithm::HS256,
+            EncodingKey::from_secret(secret.as_bytes()),
+        ),
+        None => (
+            Algorithm::ES256,
+            EncodingKey::from_ec_pem(s.signer.pem.as_bytes()).unwrap(),
+        ),
+    };
+    let mut header = Header::new(alg);
     header.kid = Some(s.kid_override.unwrap_or(s.signer.kid).to_string());
-    let id_token = jsonwebtoken::encode(
-        &header,
-        &claims,
-        &EncodingKey::from_ec_pem(s.signer.pem.as_bytes()).unwrap(),
-    )
-    .unwrap();
+    let id_token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
     Json(json!({"access_token": "opaque", "token_type": "Bearer", "id_token": id_token}))
         .into_response()
 }
@@ -472,16 +488,30 @@ async fn confidential_clients_authenticate_at_the_token_endpoint() {
 #[tokio::test]
 async fn state_mismatch_is_rejected() {
     let f = folio().await;
-    let (url, state_cookie) = begin(&f, "/").await;
-    let callback = provider_round_trip(&url).await;
     // A cookie from another flow does not match the returned state.
+    let (url, _) = begin(&f, "/").await;
+    let callback = provider_round_trip(&url).await;
     let other = begin(&f, "/").await.1;
     assert_rejected(&send(&f, get_req(&callback, &other)).await);
+
     // No cookie at all (login CSRF from another browser).
+    let (url, _) = begin(&f, "/").await;
+    let callback = provider_round_trip(&url).await;
     assert_rejected(&send(&f, get_req(&callback, "")).await);
-    // A tampered state matches neither the cookie nor a stored flow.
+
+    // A tampered state matches no stored flow.
+    let (url, cookie) = begin(&f, "/").await;
+    let callback = provider_round_trip(&url).await;
     let tampered = callback.replace("state=", "state=x");
-    assert_rejected(&send(&f, get_req(&tampered, &state_cookie)).await);
+    assert_rejected(&send(&f, get_req(&tampered, &cookie)).await);
+
+    // A fresh, untampered flow still works, so none of the above was luck.
+    let (url, cookie) = begin(&f, "/").await;
+    let callback = provider_round_trip(&url).await;
+    assert_eq!(
+        send(&f, get_req(&callback, &cookie)).await.status,
+        StatusCode::SEE_OTHER
+    );
 }
 
 #[tokio::test]
@@ -713,6 +743,11 @@ async fn logout_ends_the_provider_session_when_advertised() {
     let q: HashMap<_, _> = target.query_pairs().into_owned().collect();
     assert_eq!(q["post_logout_redirect_uri"], format!("{BASE}/login"));
     assert_eq!(q["client_id"], CLIENT_ID);
+    assert_eq!(
+        q["id_token_hint"].split('.').count(),
+        3,
+        "the ID token is sent back as a hint"
+    );
     // The Folio session is gone.
     assert_eq!(
         send(&f, get_req("/", &session)).await.status,
@@ -732,4 +767,126 @@ async fn logout_stays_local_without_an_end_session_endpoint() {
         .body(Body::from(format!("csrf={csrf}")))
         .unwrap();
     assert_eq!(send(&f, logout).await.location(), "/login");
+}
+
+#[tokio::test]
+async fn symmetric_id_tokens_are_rejected() {
+    let f = folio_with(|c| c.client_secret = Some("s3cret".into())).await;
+    f.mock.with(|s| s.hs256_secret = Some("s3cret"));
+    assert_rejected(&login(&f, "/").await);
+    assert_eq!(f.store.count_users().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_failing_token_endpoint_is_a_bad_gateway() {
+    let f = folio().await;
+    f.mock
+        .with(|s| s.token_status = Some(StatusCode::SERVICE_UNAVAILABLE));
+    assert_eq!(login(&f, "/").await.status, StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn a_string_groups_claim_is_one_group_per_comma_item() {
+    let f = folio().await;
+    f.store.create_first_user(local_owner()).await.unwrap();
+    f.mock.with(|s| {
+        s.claims
+            .insert("groups".into(), json!("Staff folio-admins, family"))
+    });
+    assert_eq!(login(&f, "/").await.status, StatusCode::SEE_OTHER);
+    let source = format!("oidc:{}", f.mock.with(|s| s.base.clone()));
+    let user = f
+        .store
+        .find_user_by_external(&source, "user-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!user.is_admin, "a space must not split off the admin group");
+    let mut names: Vec<_> = f
+        .store
+        .user_groups(&user.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["Staff folio-admins", "family"]);
+}
+
+#[tokio::test]
+async fn a_failed_userinfo_call_keeps_groups_and_admin_status() {
+    let f = folio().await;
+    f.store.create_first_user(local_owner()).await.unwrap();
+    f.mock
+        .with(|s| s.claims.insert("groups".into(), json!(["folio-admins"])));
+    login(&f, "/").await;
+    let source = format!("oidc:{}", f.mock.with(|s| s.base.clone()));
+    let user = f
+        .store
+        .find_user_by_external(&source, "user-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(user.is_admin);
+
+    // Groups now only come from userinfo, which is down.
+    f.mock.with(|s| {
+        s.claims.remove("groups");
+        s.userinfo = None;
+    });
+    assert_eq!(login(&f, "/").await.status, StatusCode::SEE_OTHER);
+    let user = f
+        .store
+        .find_user_by_external(&source, "user-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(user.is_admin, "a lookup failure must not demote");
+    let groups = f.store.user_groups(&user.id).await.unwrap();
+    assert!(groups.iter().any(|g| g.name == "folio-admins"));
+}
+
+#[tokio::test]
+async fn a_new_login_replaces_the_session_it_was_started_with() {
+    let f = folio().await;
+    let first = login(&f, "/").await.cookie("folio_session").unwrap();
+    assert_eq!(send(&f, get_req("/", &first)).await.status, StatusCode::OK);
+
+    let (url, binding) = begin(&f, "/").await;
+    let callback = provider_round_trip(&url).await;
+    let res = send(&f, get_req(&callback, &format!("{binding}; {first}"))).await;
+    assert_eq!(res.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        send(&f, get_req("/", &first)).await.status,
+        StatusCode::SEE_OTHER,
+        "the old session is gone"
+    );
+}
+
+#[tokio::test]
+async fn the_setup_page_offers_sso_only_when_it_can_create_the_first_user() {
+    let f = folio().await;
+    let page = send(&f, get_req("/setup", "")).await;
+    assert!(page.body.contains("Sign in with Authentik"));
+    let f = folio_with(|c| c.auto_create_users = false).await;
+    let page = send(&f, get_req("/setup", "")).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(!page.body.contains("Sign in with Authentik"));
+}
+
+#[tokio::test]
+async fn starting_logins_is_rate_limited() {
+    let f = folio().await;
+    let mut limited = 0;
+    for _ in 0..60 {
+        let res = send(&f, get_req("/auth/oidc/login", "")).await;
+        match res.status {
+            StatusCode::SEE_OTHER => {}
+            StatusCode::TOO_MANY_REQUESTS => limited += 1,
+            other => panic!("unexpected {other}"),
+        }
+    }
+    assert!(limited > 0, "a flood of starts must be throttled");
+    assert!(limited < 60, "normal use must not be");
 }

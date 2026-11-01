@@ -1,7 +1,14 @@
 //! Sign in through an OpenID Connect provider: start and callback.
 
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
 use axum::{
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, Request, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
@@ -20,23 +27,63 @@ use super::auth::{
     NextQuery, SESSION_COOKIE, SESSION_TTL_SECS,
 };
 
-const BROWSER_COOKIE: &str = "folio_oidc";
 const LOGIN_TTL_SECS: i64 = 600;
+const START_WINDOW: Duration = Duration::from_secs(60);
+const STARTS_PER_WINDOW: u32 = 30;
+const MAX_TRACKED_CLIENTS: usize = 10_000;
+
+/// The `__Host-` prefix pins the cookie to this exact host and to https; it is
+/// only valid together with `Secure`.
+fn browser_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        "__Host-folio_oidc"
+    } else {
+        "folio_oidc"
+    }
+}
+
+/// Caps how often one client address can start a login, since every start
+/// stores a row.
+#[derive(Default)]
+pub(crate) struct StartLimiter(Mutex<HashMap<IpAddr, (Instant, u32)>>);
+
+impl StartLimiter {
+    fn allow(&self, ip: IpAddr) -> bool {
+        let mut seen = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        if seen.len() >= MAX_TRACKED_CLIENTS {
+            seen.retain(|_, (since, _)| now.duration_since(*since) < START_WINDOW);
+        }
+        let entry = seen.entry(ip).or_insert((now, 0));
+        if now.duration_since(entry.0) >= START_WINDOW {
+            *entry = (now, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= STARTS_PER_WINDOW
+    }
+}
 
 fn redirect_uri(auth: &AuthState, headers: &HeaderMap) -> String {
     format!("{}/auth/oidc/callback", auth.base(headers))
 }
 
-pub(crate) async fn start(
-    State(auth): State<AuthState>,
-    headers: HeaderMap,
-    Query(q): Query<NextQuery>,
-) -> Response {
+pub(crate) async fn start(State(auth): State<AuthState>, request: Request) -> Response {
     let Some(provider) = auth.oidc.clone() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let secure = is_secure(&auth.base(&headers));
-    let request = match provider.authorize(&redirect_uri(&auth, &headers)).await {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or(IpAddr::from([0, 0, 0, 0]), |c| c.0.ip());
+    if !auth.oidc_starts.allow(peer) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+    let headers = request.headers();
+    let q = Query::<NextQuery>::try_from_uri(request.uri())
+        .map(|q| q.0)
+        .unwrap_or(NextQuery { next: None });
+    let secure = is_secure(&auth.base(headers));
+    let request = match provider.authorize(&redirect_uri(&auth, headers)).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("starting the OIDC login failed: {e}");
@@ -62,7 +109,12 @@ pub(crate) async fn start(
         tracing::error!("storing the OIDC login failed: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    let binding = set_cookie(BROWSER_COOKIE, &browser, LOGIN_TTL_SECS, secure);
+    let binding = set_cookie(
+        browser_cookie_name(secure),
+        &browser,
+        LOGIN_TTL_SECS,
+        secure,
+    );
     with_cookies(
         Redirect::to(request.url.as_str()).into_response(),
         [binding],
@@ -85,7 +137,7 @@ pub(crate) async fn callback(
         return StatusCode::NOT_FOUND.into_response();
     };
     let secure = is_secure(&auth.base(&headers));
-    let clear = set_cookie(BROWSER_COOKIE, "", 0, secure);
+    let clear = set_cookie(browser_cookie_name(secure), "", 0, secure);
     let fail = |message: &str, status: StatusCode| {
         with_cookies(error_page_with(message, status), [clear.clone()])
     };
@@ -106,7 +158,7 @@ pub(crate) async fn callback(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    let same_browser = cookie(&headers, BROWSER_COOKIE)
+    let same_browser = cookie(&headers, browser_cookie_name(secure))
         .is_some_and(|c| ct_eq(&hash_token(&c), &login.browser_hash));
     if login.expires_at <= now() || !same_browser {
         return fail(
@@ -115,7 +167,8 @@ pub(crate) async fn callback(
         );
     }
     if let Some(error) = q.error {
-        tracing::warn!("the identity provider refused the login: {error}");
+        let shown: String = error.chars().take(64).collect();
+        tracing::warn!("the identity provider refused the login: {shown:?}");
         return fail(
             "The identity provider refused the sign-in.",
             StatusCode::FORBIDDEN,
@@ -125,7 +178,7 @@ pub(crate) async fn callback(
         return fail("The sign-in request is not valid.", StatusCode::BAD_REQUEST);
     };
 
-    let identity = match provider
+    let result = match provider
         .complete(
             &redirect_uri(&auth, &headers),
             &code,
@@ -134,7 +187,7 @@ pub(crate) async fn callback(
         )
         .await
     {
-        Ok(identity) => identity,
+        Ok(result) => result,
         Err(OidcError::Rejected(reason)) => {
             tracing::warn!("OIDC login rejected: {reason}");
             return fail("The sign-in could not be verified.", StatusCode::FORBIDDEN);
@@ -148,19 +201,30 @@ pub(crate) async fn callback(
         }
     };
 
-    if !provider.auto_create_users() {
-        let known = auth
-            .store
-            .find_user_by_external(&identity.source, &identity.external_id)
-            .await;
-        if !matches!(known, Ok(Some(_))) {
-            return fail(
-                "New accounts are not created through single sign-on here.",
-                StatusCode::FORBIDDEN,
-            );
+    let identity = result.identity;
+    let known = match auth
+        .store
+        .find_user_by_external(&identity.source, &identity.external_id)
+        .await
+    {
+        Ok(known) => known,
+        Err(e) => {
+            tracing::error!("OIDC user lookup failed: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+    };
+    if known.is_none() && !provider.auto_create_users() {
+        return fail(
+            "New accounts are not created through single sign-on here.",
+            StatusCode::FORBIDDEN,
+        );
     }
-    let user = match sync_external_user(&*auth.store, identity, provider.admin_group()).await {
+    // Without trustworthy groups, keep what is stored instead of demoting.
+    let synced = match known {
+        Some(existing) if !result.groups_known => Ok(existing),
+        _ => sync_external_user(&*auth.store, identity, provider.admin_group()).await,
+    };
+    let user = match synced {
         Ok(user) => user,
         Err(ExternalError::UsernameTaken | ExternalError::Invalid) => {
             return fail(
@@ -173,9 +237,20 @@ pub(crate) async fn callback(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    // A login replaces the session it was started with.
+    if let Some(old) = cookie(&headers, SESSION_COOKIE) {
+        let _ = auth.store.delete_session(&hash_token(&old)).await;
+    }
     let Some(session) = create_session(&auth, &user).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
+    if let Err(e) = auth
+        .store
+        .set_session_id_token(&hash_token(&session), &result.id_token)
+        .await
+    {
+        tracing::warn!("storing the ID token failed: {e}");
+    }
     let session = set_cookie(SESSION_COOKIE, &session, SESSION_TTL_SECS, secure);
     with_cookies(
         Redirect::to(&safe_next(Some(&login.next))).into_response(),

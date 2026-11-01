@@ -49,6 +49,7 @@ pub struct AuthState {
     pub forward: Option<Arc<ForwardAuth>>,
     /// Sign-in through an OpenID Connect provider.
     pub oidc: Option<Arc<OidcProvider>>,
+    pub(crate) oidc_starts: Arc<oidc::StartLimiter>,
 }
 
 impl AuthState {
@@ -60,6 +61,7 @@ impl AuthState {
             required: true,
             forward: None,
             oidc: None,
+            oidc_starts: Arc::default(),
         }
     }
 
@@ -333,6 +335,15 @@ struct Sso {
     href: String,
 }
 
+/// The first account can only be created through SSO when sign-ins may create
+/// accounts.
+fn setup_sso(auth: &AuthState) -> Option<Sso> {
+    auth.oidc
+        .as_ref()
+        .filter(|o| o.auto_create_users())
+        .and_then(|_| sso_button(auth, "/"))
+}
+
 fn sso_button(auth: &AuthState, next: &str) -> Option<Sso> {
     let provider = auth.oidc.as_ref()?;
     let encoded: String = form_urlencoded::byte_serialize(next.as_bytes()).collect();
@@ -385,7 +396,7 @@ async fn setup_page(State(auth): State<AuthState>, headers: HeaderMap) -> Respon
         return Redirect::to("/login").into_response();
     }
     let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
-    let sso = sso_button(&auth, "/");
+    let sso = setup_sso(&auth);
     with_cookies(
         render(
             SetupTemplate {
@@ -420,7 +431,7 @@ async fn setup_submit(
             SetupTemplate {
                 csrf: form.csrf.clone(),
                 error: Some(msg.to_string()),
-                sso: sso_button(&auth, "/"),
+                sso: setup_sso(&auth),
             },
             StatusCode::UNPROCESSABLE_ENTITY,
         )
@@ -557,8 +568,11 @@ async fn logout(
         return StatusCode::FORBIDDEN.into_response();
     }
     let user = auth.current_user(&headers).await;
+    let mut id_token_hint = None;
     if let Some(id) = cookie(&headers, SESSION_COOKIE) {
-        let _ = auth.store.delete_session(&hash_token(&id)).await;
+        let hash = hash_token(&id);
+        id_token_hint = auth.store.session_id_token(&hash).await.ok().flatten();
+        let _ = auth.store.delete_session(&hash).await;
     }
     let base = auth.base(&headers);
     let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&base));
@@ -566,7 +580,8 @@ async fn logout(
     // the user straight back in.
     let provider_logout = match (&auth.oidc, &user) {
         (Some(p), Some(u)) if u.auth_source == p.source() => {
-            p.logout_url(&format!("{base}/login")).await
+            p.logout_url(&format!("{base}/login"), id_token_hint.as_deref())
+                .await
         }
         _ => None,
     };
