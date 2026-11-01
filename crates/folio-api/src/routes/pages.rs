@@ -522,6 +522,8 @@ pub(super) async fn store_upload(
         .await?;
 
     // Store the file
+    folio_infra::telemetry::metrics().documents_changed(1);
+
     super::documents::store_original(state, document.id, file_data).await;
 
     // Enqueue background job for thumbnail, OCR, and embedding
@@ -571,6 +573,7 @@ async fn delete_document(
     // Delete the stored files first so a failure leaves the row to retry
     super::documents::purge_document_files(&state, id).await?;
     state.document_repo.delete(id).await?;
+    folio_infra::telemetry::metrics().documents_changed(-1);
 
     Ok(Redirect::to("/").into_response())
 }

@@ -19,7 +19,7 @@ pub(crate) mod workflows;
 pub use events::turbo_streams_for;
 
 use axum::{extract::DefaultBodyLimit, Router};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::cors::CorsLayer;
 
 pub use health::HealthChecks;
 
@@ -31,7 +31,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
     let auth_routes = auth::router(auth);
 
-    let router = Router::new()
+    let routes = Router::new()
         // API routes
         .nest("/api", api_router())
         // OpenAPI spec and docs viewer
@@ -51,10 +51,11 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         // Login, setup and OAuth authorization server
         .merge(auth_routes)
         // Static files
-        .merge(assets::router())
+        .merge(assets::router());
+
+    let router = crate::telemetry::instrument(routes)
         // Middleware
         .layer(enforcement)
-        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))

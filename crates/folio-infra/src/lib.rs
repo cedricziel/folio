@@ -13,6 +13,7 @@ pub mod config;
 pub mod database;
 pub mod queue;
 pub mod storage;
+pub mod telemetry;
 pub mod thumbnail;
 pub mod workflow;
 

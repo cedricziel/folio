@@ -118,7 +118,6 @@ impl PostgresJobQueue {
         Ok(id)
     }
 
-    #[instrument(skip(self))]
     pub async fn dequeue(&self) -> Result<Option<Job>> {
         let now = Utc::now();
 

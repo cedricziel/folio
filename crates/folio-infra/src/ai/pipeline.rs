@@ -165,7 +165,9 @@ impl DynamicOcrService {
 #[async_trait]
 impl OcrService for DynamicOcrService {
     async fn extract(&self, data: &[u8], mime_type: &str) -> Result<OcrOutput> {
-        self.service().await?.extract(data, mime_type).await
+        let provider = self.pipeline.settings().await.ocr.provider.clone();
+        let service = self.service().await?;
+        observe_ai("ocr", provider, service.extract(data, mime_type)).await
     }
 
     async fn health(&self) -> Result<()> {
@@ -201,7 +203,9 @@ impl DynamicEmbeddingService {
 #[async_trait]
 impl EmbeddingService for DynamicEmbeddingService {
     async fn embed(&self, texts: &[&str]) -> Result<EmbeddingBatch> {
-        self.service().await?.embed(texts).await
+        let provider = self.pipeline.settings().await.embeddings.provider.clone();
+        let service = self.service().await?;
+        observe_ai("embedding", provider, service.embed(texts)).await
     }
 
     async fn model_id(&self) -> Result<String> {
@@ -211,4 +215,23 @@ impl EmbeddingService for DynamicEmbeddingService {
     async fn health(&self) -> Result<()> {
         self.service().await?.health().await
     }
+}
+
+/// Run an OCR or embedding call inside a client span and record its latency by provider.
+async fn observe_ai<T>(
+    operation: &'static str,
+    provider: String,
+    call: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let span = tracing::info_span!(
+        "ai request",
+        otel.name = %format!("{operation} {provider}"),
+        otel.kind = "client",
+        gen_ai.system = %provider,
+        gen_ai.operation.name = operation,
+    );
+    let started = std::time::Instant::now();
+    let result = tracing::Instrument::instrument(call, span).await;
+    crate::telemetry::metrics().ai_request(operation, &provider, result.is_ok(), started);
+    result
 }

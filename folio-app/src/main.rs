@@ -8,14 +8,13 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::info;
-use tracing_subscriber::FmtSubscriber;
 
 use folio_api::{create_router, AppState, AuthState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
 use folio_core::services::{EventingDocumentRepository, LibraryService, WorkflowEngine};
 use folio_core::EventBroadcaster;
 use folio_infra::{
-    build_store, cleanup_legacy_layout, migrate_legacy_layout, Config, Database,
+    build_store, cleanup_legacy_layout, migrate_legacy_layout, telemetry, Config, Database,
     DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
     StorageFileMetadata, ThumbnailService, WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };
@@ -60,11 +59,12 @@ async fn main() -> Result<()> {
 
     let mode = parse_args()?;
 
-    // Initialize logging; stdout carries the protocol in stdio mode
-    FmtSubscriber::builder()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
+    // Initialize logging (stderr: stdout carries the protocol in stdio mode)
+    // and, when OTEL_* variables ask for it, OTLP export
+    let telemetry = telemetry::init();
+    if telemetry.is_enabled() {
+        info!("OpenTelemetry export enabled");
+    }
 
     info!("Starting Folio...");
 
@@ -123,6 +123,9 @@ async fn main() -> Result<()> {
     )
     .await
     .context("Failed to migrate stored files to object keys")?;
+
+    let stored_documents = document_repo.list(None).await.map(|d| d.len()).unwrap_or(0);
+    telemetry::metrics().documents_changed(stored_documents as i64);
 
     // Create AI services (providers follow the database settings, config.toml keys as fallback)
     let pipeline = PipelineContext::new(settings_repo.clone(), config.ai.clone());
@@ -282,6 +285,9 @@ async fn main() -> Result<()> {
     stop_worker(shutdown_tx, worker_handle).await;
 
     info!("Folio shutdown complete");
+
+    // Flush pending spans, metrics and logs; the exporters block while sending.
+    let _ = tokio::task::spawn_blocking(move || telemetry.shutdown()).await;
     Ok(())
 }
 

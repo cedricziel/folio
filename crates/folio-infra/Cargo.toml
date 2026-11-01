@@ -27,8 +27,14 @@ anyhow = { workspace = true }
 figment = { workspace = true }
 dotenvy = { workspace = true }
 
-# Logging
+# Logging and telemetry
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
