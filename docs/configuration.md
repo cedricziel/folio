@@ -44,6 +44,8 @@ startup by the first three layers.
 | `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | empty | Header carrying group names, separated by `,` or `\|`. Empty means groups are ignored. |
 | `auth.forward.role_header` | `FOLIO_AUTH__FORWARD__ROLE_HEADER` | empty | Header carrying a single role name (Pangolin: `Remote-Role`). Empty means roles are ignored. |
 | `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. Needs `groups_header`. |
+| `auth.forward.shared_secret` | `FOLIO_AUTH__FORWARD__SHARED_SECRET` | unset | When set, the proxy must also send this value in `secret_header`; requests without it are treated as unauthenticated. |
+| `auth.forward.secret_header` | `FOLIO_AUTH__FORWARD__SECRET_HEADER` | `X-Folio-Proxy-Secret` | Header carrying the shared secret. |
 | `auth.forward.admin_role` | `FOLIO_AUTH__FORWARD__ADMIN_ROLE` | unset | Users with this role are admins. Needs `role_header`. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Directory for stored documents and thumbnails. |

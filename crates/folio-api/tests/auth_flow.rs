@@ -782,19 +782,15 @@ mod forward {
         let forward = ForwardAuth::new(config).unwrap();
         let auth = AuthState::new(store.clone(), Some(BASE.into())).with_forward(forward);
         let router = auth_router(auth.clone())
-            .merge(
-                Router::new()
-                    .route("/", get(|| async { "home" }))
-                    .route(
-                        "/static/echo",
-                        get(|headers: HeaderMap| async move {
-                            let mut names: Vec<_> =
-                                headers.keys().map(|k| k.as_str().to_string()).collect();
-                            names.sort();
-                            names.join(",")
-                        }),
-                    ),
-            )
+            .merge(Router::new().route("/", get(|| async { "home" })).route(
+                "/static/echo",
+                get(|headers: HeaderMap| async move {
+                    let mut names: Vec<_> =
+                        headers.keys().map(|k| k.as_str().to_string()).collect();
+                    names.sort();
+                    names.join(",")
+                }),
+            ))
             .layer(middleware::from_fn_with_state(auth.clone(), enforce_auth))
             .layer(middleware::from_fn_with_state(auth, forward_auth));
         Fwd {
@@ -1126,6 +1122,33 @@ mod forward {
             }
         }
         assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_configured_shared_secret_must_accompany_the_identity() {
+        let f = fwd_app(|c| c.shared_secret = Some("s3cret-value".into())).await;
+        let echo = |secret: Option<&str>| {
+            let mut b = Request::get("/static/echo").header("Remote-User", "alice");
+            if let Some(secret) = secret {
+                b = b.header("X-Folio-Proxy-Secret", secret);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        for secret in [None, Some("wrong"), Some("s3cret-value-and-more")] {
+            let res = send_from(&f.app, TRUSTED, echo(secret)).await;
+            assert!(res.cookies().is_empty(), "{secret:?}");
+            assert_eq!(res.body, "", "{secret:?}: headers must not leak through");
+        }
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+
+        let ok = send_from(&f.app, TRUSTED, echo(Some("s3cret-value"))).await;
+        assert_eq!(ok.status, StatusCode::OK);
+        assert!(
+            !ok.body.contains("secret"),
+            "the secret header is not passed on: {}",
+            ok.body
+        );
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
     }
 
     #[tokio::test]

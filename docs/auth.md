@@ -80,6 +80,14 @@ Environment: `FOLIO_AUTH__FORWARD__ENABLED=true`,
   logged. Do not list a range that untrusted clients can reach, and make sure
   your proxy overwrites these headers instead of passing client values through.
   With the list empty nothing is trusted.
+- **Shared secret.** Optionally set `shared_secret` (and `secret_header`,
+  default `X-Folio-Proxy-Secret`) and have the proxy add that header to every
+  request. Folio then treats requests without the right value as
+  unauthenticated, which protects you if the proxy's address is ever reachable
+  by someone else. The secret header is removed before the request is handled.
+- **Machine paths.** Identity headers are never honoured on `/oauth/token`,
+  `/oauth/register`, `/oauth/revoke`, `/.well-known/*`, `/mcp` and on `/api`
+  requests that carry a bearer token. Those use OAuth, not the gateway.
 - **Users.** The first request for a name creates the account (no local
   password) and links it by name. A name that already belongs to another
   account, such as the local owner, is refused with `403`.

@@ -19,7 +19,10 @@ use crate::routes::auth::{
 fn is_machine_request(request: &Request) -> bool {
     let path = request.uri().path();
     let under = |prefix: &str| {
-        path == prefix || path.strip_prefix(prefix).is_some_and(|r| r.starts_with('/'))
+        path == prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|r| r.starts_with('/'))
     };
     if matches!(path, "/oauth/token" | "/oauth/register" | "/oauth/revoke")
         || under("/.well-known")
@@ -57,13 +60,15 @@ pub async fn forward_auth(
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
     let trusted = peer.is_some_and(|ip| forward.is_trusted(ip));
-    if !trusted && forward.has_identity(request.headers()) {
+    let proven = trusted && forward.secret_ok(request.headers());
+    if !proven && forward.has_identity(request.headers()) {
         tracing::warn!(
             peer = ?peer,
-            "ignoring forward-auth headers from a peer that is not a trusted proxy"
+            trusted_peer = trusted,
+            "ignoring forward-auth headers from a peer that is not a verified trusted proxy"
         );
     }
-    if !trusted || is_machine_request(&request) {
+    if !proven || is_machine_request(&request) {
         forward.strip(request.headers_mut());
         return next.run(request).await;
     }

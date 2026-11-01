@@ -9,7 +9,7 @@ use std::net::IpAddr;
 use axum::http::{HeaderMap, HeaderName};
 use ipnet::IpNet;
 
-use crate::{external::ExternalIdentity, model::SOURCE_FORWARD};
+use crate::{crypto::ct_eq, external::ExternalIdentity, model::SOURCE_FORWARD};
 
 #[derive(Debug, Clone)]
 pub struct ForwardAuth {
@@ -22,6 +22,7 @@ pub struct ForwardAuth {
     pub role_header: Option<HeaderName>,
     admin_group: Option<String>,
     admin_role: Option<String>,
+    secret: Option<(HeaderName, String)>,
     trusted: Vec<IpNet>,
 }
 
@@ -41,6 +42,9 @@ pub struct ForwardConfig {
     pub admin_group: Option<String>,
     /// Only effective together with `role_header`.
     pub admin_role: Option<String>,
+    /// When set, the proxy must send this value in `secret_header`.
+    pub shared_secret: Option<String>,
+    pub secret_header: String,
 }
 
 impl Default for ForwardConfig {
@@ -54,6 +58,8 @@ impl Default for ForwardConfig {
             trusted_proxies: Vec::new(),
             admin_group: None,
             admin_role: None,
+            shared_secret: None,
+            secret_header: "X-Folio-Proxy-Secret".into(),
         }
     }
 }
@@ -87,6 +93,10 @@ impl ForwardAuth {
         let admin_role = config
             .admin_role
             .filter(|r| !r.is_empty() && role_header.is_some());
+        let secret = match config.shared_secret.filter(|s| !s.is_empty()) {
+            Some(value) => Some((header(&config.secret_header)?, value)),
+            None => None,
+        };
         Ok(Self {
             user_header: header(&config.user_header)?,
             email_header: header(&config.email_header)?,
@@ -95,6 +105,7 @@ impl ForwardAuth {
             role_header,
             admin_group,
             admin_role,
+            secret,
             trusted,
         })
     }
@@ -117,6 +128,19 @@ impl ForwardAuth {
             .into_iter()
             .chain(&self.groups_header)
             .chain(&self.role_header)
+            .chain(self.secret.as_ref().map(|(name, _)| name))
+    }
+
+    /// With a shared secret configured, the proxy must prove itself with it
+    /// on top of its address. Compared in constant time.
+    pub fn secret_ok(&self, headers: &HeaderMap) -> bool {
+        let Some((name, expected)) = &self.secret else {
+            return true;
+        };
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|given| ct_eq(given, expected))
     }
 
     /// Removes the identity headers so later layers never see unverified values.

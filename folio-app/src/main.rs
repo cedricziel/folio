@@ -245,6 +245,8 @@ async fn main() -> Result<()> {
             trusted_proxies: forward.trusted_proxies.clone(),
             admin_group: forward.admin_group.clone(),
             admin_role: forward.admin_role.clone(),
+            shared_secret: forward.shared_secret.clone(),
+            secret_header: forward.secret_header.clone(),
         })
         .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
         if forward.admin_group.is_some() && forward.groups_header.is_empty() {

@@ -134,6 +134,9 @@ pub struct ForwardAuthConfig {
     pub admin_group: Option<String>,
     /// Users with this role become admins; needs `role_header`.
     pub admin_role: Option<String>,
+    /// When set, the proxy must also send it in `secret_header`.
+    pub shared_secret: Option<String>,
+    pub secret_header: String,
 }
 
 impl Default for ForwardAuthConfig {
@@ -148,6 +151,8 @@ impl Default for ForwardAuthConfig {
             trusted_proxies: Vec::new(),
             admin_group: None,
             admin_role: None,
+            shared_secret: None,
+            secret_header: "X-Folio-Proxy-Secret".to_string(),
         }
     }
 }
@@ -282,6 +287,18 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "auth.forward.admin_role",
         env: "FOLIO_AUTH__FORWARD__ADMIN_ROLE",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.shared_secret",
+        env: "FOLIO_AUTH__FORWARD__SHARED_SECRET",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.secret_header",
+        env: "FOLIO_AUTH__FORWARD__SECRET_HEADER",
         legacy_env: &[],
         kind: ValueKind::Str,
     },
