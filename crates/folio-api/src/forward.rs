@@ -14,6 +14,27 @@ use crate::routes::auth::{
     create_session, is_secure, set_cookie, AuthState, SESSION_COOKIE, SESSION_TTL_SECS,
 };
 
+/// Requests that authenticate with OAuth or bearer tokens. They bypass the
+/// gateway, so identity headers on them can only be forged.
+fn is_machine_request(request: &Request) -> bool {
+    let path = request.uri().path();
+    let under = |prefix: &str| {
+        path == prefix || path.strip_prefix(prefix).is_some_and(|r| r.starts_with('/'))
+    };
+    if matches!(path, "/oauth/token" | "/oauth/register" | "/oauth/revoke")
+        || under("/.well-known")
+        || under("/mcp")
+    {
+        return true;
+    }
+    under("/api")
+        && request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.len() > 6 && v[..6].eq_ignore_ascii_case("bearer"))
+}
+
 /// Logs in the user named by the forward-auth headers.
 ///
 /// Headers are honoured only when the TCP peer is in `trusted_proxies`. Every
@@ -35,13 +56,14 @@ pub async fn forward_auth(
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|c| c.0.ip());
-    if !peer.is_some_and(|ip| forward.is_trusted(ip)) {
-        if forward.has_identity(request.headers()) {
-            tracing::warn!(
-                peer = ?peer,
-                "ignoring forward-auth headers from a peer that is not a trusted proxy"
-            );
-        }
+    let trusted = peer.is_some_and(|ip| forward.is_trusted(ip));
+    if !trusted && forward.has_identity(request.headers()) {
+        tracing::warn!(
+            peer = ?peer,
+            "ignoring forward-auth headers from a peer that is not a trusted proxy"
+        );
+    }
+    if !trusted || is_machine_request(&request) {
         forward.strip(request.headers_mut());
         return next.run(request).await;
     }

@@ -1100,6 +1100,35 @@ mod forward {
     }
 
     #[tokio::test]
+    async fn machine_paths_never_honour_forward_headers() {
+        let f = fwd_app(|_| {}).await;
+        let cases = [
+            ("GET", "/.well-known/oauth-authorization-server", None),
+            ("POST", "/oauth/token", None),
+            ("POST", "/oauth/register", None),
+            ("POST", "/oauth/revoke", None),
+            ("GET", "/mcp", None),
+            ("GET", "/mcp/sse", None),
+            ("GET", "/api/documents", Some("Bearer not-a-real-token")),
+        ];
+        for (method, path, bearer) in cases {
+            let mut b = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("Remote-User", "mallory");
+            if let Some(bearer) = bearer {
+                b = b.header(header::AUTHORIZATION, bearer);
+            }
+            let res = send_from(&f.app, TRUSTED, b.body(Body::empty()).unwrap()).await;
+            assert!(res.cookies().is_empty(), "{path} set a session");
+            if path.starts_with("/api") {
+                assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{path}");
+            }
+        }
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
         let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;
         send_from(
