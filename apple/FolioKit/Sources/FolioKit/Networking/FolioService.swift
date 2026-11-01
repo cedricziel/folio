@@ -11,6 +11,7 @@ public protocol FolioService: Sendable {
     func upload(_ file: UploadFile) async throws -> Document
     func tags() async throws -> [Tag]
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws
+    func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws
     func correspondents() async throws -> [Correspondent]
     func documentTypes() async throws -> [DocumentType]
 }
