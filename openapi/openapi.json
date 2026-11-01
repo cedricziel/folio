@@ -7,7 +7,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.1.0-alpha.2"
+    "version": "0.1.1"
   },
   "paths": {
     "/api/correspondents": {
@@ -255,7 +255,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "204": {
             "description": "The correspondent was deleted"
           },
           "404": {
@@ -829,6 +829,16 @@
               }
             }
           },
+          "413": {
+            "description": "The upload exceeds the 50 MB limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -913,7 +923,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "204": {
             "description": "The document was deleted"
           },
           "404": {
@@ -1554,7 +1564,7 @@
           }
         ],
         "responses": {
-          "200": {
+          "204": {
             "description": "The tag was deleted"
           },
           "404": {

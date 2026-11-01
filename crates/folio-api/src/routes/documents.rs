@@ -2,15 +2,14 @@
 
 use axum::{
     body::Body,
-    extract::{Multipart, Path, Query, RawQuery, State},
-    http::header,
+    extract::{Multipart, Path, RawQuery, State},
+    http::{header, StatusCode},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::{debug, error};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -19,10 +18,12 @@ use axum::response::{IntoResponse, Redirect, Response};
 use folio_core::models::{
     CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
 };
-use folio_core::services::{NewUpload, SearchServiceFacade};
+use folio_core::services::SearchServiceFacade;
 
+use super::pages::store_upload;
 use crate::error::{ApiError, ApiResult};
-use crate::openapi::{BadRequest, InternalError, NotFound};
+use crate::extract::{ApiJson, ApiPath, ApiQuery};
+use crate::openapi::{BadRequest, InternalError, NotFound, PayloadTooLarge};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -201,7 +202,7 @@ pub(crate) async fn list_documents(
 )]
 pub(crate) async fn get_document(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<DocumentView>> {
     let document = state
         .document_repo
@@ -237,7 +238,7 @@ pub struct CreateDocumentRequest {
 )]
 pub(crate) async fn create_document(
     State(state): State<AppState>,
-    Json(req): Json<CreateDocumentRequest>,
+    ApiJson(req): ApiJson<CreateDocumentRequest>,
 ) -> ApiResult<Json<Document>> {
     let document = state
         .document_repo
@@ -262,19 +263,19 @@ pub(crate) async fn create_document(
     tag = "documents",
     params(("id" = Uuid, Path, description = "Document ID")),
     responses(
-        (status = 200, description = "The document was deleted"),
+        (status = 204, description = "The document was deleted"),
         NotFound,
         InternalError,
     )
 )]
 pub(crate) async fn delete_document(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<()>> {
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<StatusCode> {
     purge_document_files(&state, id).await?;
     state.document_repo.delete(id).await?;
     folio_infra::telemetry::metrics().documents_changed(-1);
-    Ok(Json(()))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Multipart form accepted by the upload endpoint
@@ -298,71 +299,15 @@ pub struct UploadDocumentRequest {
     responses(
         (status = 200, description = "The created document", body = Document),
         BadRequest,
+        PayloadTooLarge,
         InternalError,
     )
 )]
 pub(crate) async fn upload_document(
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> ApiResult<Json<Document>> {
-    debug!("Starting document upload");
-
-    let mut title: Option<String> = None;
-    let mut file_data: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-    let mut mime_type: Option<String> = None;
-
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        error!("Multipart error: {}", e);
-        ApiError::bad_request(format!("Invalid multipart data: {}", e))
-    })? {
-        let name = field.name().unwrap_or("").to_string();
-        debug!("Processing field: {}", name);
-
-        match name.as_str() {
-            "title" => {
-                title = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::bad_request(format!("Invalid title: {}", e)))?,
-                );
-            }
-            "file" => {
-                filename = field.file_name().map(|s| s.to_string());
-                mime_type = field.content_type().map(|s| s.to_string());
-                file_data = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| ApiError::bad_request(format!("Failed to read file: {}", e)))?
-                        .to_vec(),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    let file_data = file_data.ok_or_else(|| ApiError::bad_request("No file provided in upload"))?;
-    let title = title
-        .or_else(|| filename.clone())
-        .unwrap_or_else(|| "Untitled".to_string());
-    let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
-
-    let document = state
-        .importer
-        .import(NewUpload {
-            title: Some(title),
-            filename: filename.unwrap_or_else(|| "upload".to_string()),
-            mime_type: Some(mime_type),
-            data: file_data,
-            source: DocumentSource::of(SourceKind::Api),
-            tag_ids: Vec::new(),
-        })
-        .await?;
-
-    folio_infra::telemetry::metrics().documents_changed(1);
-
+    let document = store_upload(&state, multipart, SourceKind::Api).await?;
     Ok(Json(document))
 }
 
@@ -440,7 +385,7 @@ async fn semantic_search(
 )]
 pub(crate) async fn search_documents(
     State(state): State<AppState>,
-    Json(req): Json<SearchRequest>,
+    ApiJson(req): ApiJson<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
     let results = semantic_search(&state, &req.query, req.limit).await?;
 
@@ -461,7 +406,7 @@ pub(crate) async fn search_documents(
 )]
 pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
-    Query(params): Query<SearchQueryParams>,
+    ApiQuery(params): ApiQuery<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
     let results = semantic_search(&state, &params.q, params.limit).await?;
 
@@ -490,7 +435,7 @@ pub struct FileContent(Vec<u8>);
 )]
 pub(crate) async fn download_document(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Response> {
     let document = state
         .document_repo

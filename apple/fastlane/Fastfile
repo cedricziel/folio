@@ -126,9 +126,7 @@ def beta_build(platform:, destination:)
 
   mac = platform == "macos"
   testflight_platform = mac ? "osx" : "ios"
-  build_number = latest_testflight_build_number(
-    api_key: key, app_identifier: APP_IDENTIFIER, platform: testflight_platform
-  ) + 1
+  build_number = sh("git", "rev-list", "--count", "HEAD", log: false).strip
   build_params = {
     project: PROJECT,
     scheme: "Folio",

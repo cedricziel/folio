@@ -271,11 +271,37 @@ impl Worker {
             .is_empty())
     }
 
-    /// Process a single job
-    async fn process_job(
-        &self,
-        job_type: &JobType,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Process a single job, then clean up after a document that was deleted while it ran
+    async fn process_job(&self, job_type: &JobType) -> Result<(), BoxError> {
+        let result = self.run_job(job_type).await;
+        if let Some(document_id) = job_type.document_id() {
+            if let Err(e) = self.purge_if_deleted(document_id).await {
+                error!("Failed to purge leftovers of deleted document {document_id}: {e}");
+            }
+        }
+        result
+    }
+
+    /// Fail the job when the document is gone, so a delete is not followed by new writes
+    async fn ensure_exists(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        match self.document_repo.find_by_id(document_id).await? {
+            Some(_) => Ok(()),
+            None => Err(format!("Document {document_id} was deleted").into()),
+        }
+    }
+
+    /// Remove stored objects and embeddings a job wrote after its document was deleted.
+    /// The check before each write narrows that race; this closes it.
+    async fn purge_if_deleted(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        if self.document_repo.find_by_id(document_id).await?.is_some() {
+            return Ok(());
+        }
+        folio_core::ports::purge_document(self.store.as_ref(), document_id, None).await?;
+        self.search_service.delete_embedding(document_id).await?;
+        Ok(())
+    }
+
+    async fn run_job(&self, job_type: &JobType) -> Result<(), BoxError> {
         match job_type {
             JobType::GenerateThumbnail { document_id } => {
                 self.process_thumbnail(*document_id).await
@@ -324,6 +350,7 @@ impl Worker {
             .as_deref()
             .unwrap_or("application/octet-stream");
 
+        self.ensure_exists(document_id).await?;
         self.thumbnail_service
             .generate(document_id, &data, mime_type, document.content.as_deref())
             .await?;
@@ -499,6 +526,7 @@ impl Worker {
                 }
             }
 
+            self.ensure_exists(document_id).await?;
             self.search_service
                 .store_chunks(document_id, &model, &embedded)
                 .await?;
@@ -582,6 +610,7 @@ impl Worker {
             let mut success = false;
 
             for page in 1..=max_pages {
+                self.ensure_exists(document_id).await?;
                 match self
                     .thumbnail_service
                     .generate_page(document_id, local_pdf.path(), page)
@@ -603,6 +632,7 @@ impl Worker {
             (success, Some(count))
         } else {
             // Non-PDF: use original single-thumbnail generation
+            self.ensure_exists(document_id).await?;
             let ok = match self
                 .thumbnail_service
                 .generate(document_id, &data, mime_type, document.content.as_deref())
@@ -839,6 +869,121 @@ mod tests {
         assert!(f
             .search
             .search("other:model", &[1.0, 0.0], 5)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Storage that deletes the document row the first time its original is read,
+    /// the way a user delete lands in the middle of a running job.
+    struct DeleteOnRead {
+        inner: Arc<dyn DocumentStore>,
+        repo: Arc<SqliteDocumentRepository>,
+        doc_id: uuid::Uuid,
+    }
+
+    #[async_trait]
+    impl DocumentStore for DeleteOnRead {
+        fn backend(&self) -> &'static str {
+            self.inner.backend()
+        }
+        async fn put(&self, key: &str, data: bytes::Bytes) -> Result<()> {
+            self.inner.put(key, data).await
+        }
+        async fn get(&self, key: &str) -> Result<folio_core::ports::StoredObject> {
+            let object = self.inner.get(key).await?;
+            let _ = self.repo.delete(self.doc_id).await;
+            Ok(object)
+        }
+        async fn size(&self, key: &str) -> Result<Option<u64>> {
+            self.inner.size(key).await
+        }
+        async fn exists(&self, key: &str) -> Result<bool> {
+            self.inner.exists(key).await
+        }
+        async fn copy(&self, from: &str, to: &str) -> Result<()> {
+            self.inner.copy(from, to).await
+        }
+        async fn delete(&self, key: &str) -> Result<()> {
+            self.inner.delete(key).await
+        }
+        async fn delete_prefix(&self, prefix: &str) -> Result<u64> {
+            self.inner.delete_prefix(prefix).await
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+            self.inner.list(prefix).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_document_deleted_mid_job_leaves_no_thumbnail_behind() {
+        let mut f = fixture("text").await;
+        f.worker.store = Arc::new(DeleteOnRead {
+            inner: f.storage.clone(),
+            repo: f.repo.clone(),
+            doc_id: f.doc_id,
+        });
+        let mut png = Vec::new();
+        image::RgbImage::new(4, 4)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        f.storage
+            .put(&folio_core::ports::keys::original(f.doc_id), png.into())
+            .await
+            .unwrap();
+
+        f.worker
+            .process_job(&JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .ok();
+
+        assert!(f
+            .storage
+            .list(&folio_core::ports::keys::document_prefix(f.doc_id))
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    struct DeletingEmbeddings(Arc<SqliteDocumentRepository>, uuid::Uuid);
+
+    #[async_trait]
+    impl EmbeddingService for DeletingEmbeddings {
+        async fn embed(&self, texts: &[&str]) -> Result<EmbeddingBatch> {
+            let _ = self.0.delete(self.1).await;
+            FixedEmbeddings.embed(texts).await
+        }
+        async fn model_id(&self) -> Result<String> {
+            Ok("test:model".to_string())
+        }
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_document_deleted_mid_job_gets_no_embedding() {
+        let mut f = fixture("some text").await;
+        f.worker.embedding_service = Arc::new(DeletingEmbeddings(f.repo.clone(), f.doc_id));
+        f.repo.complete_ocr(f.doc_id, "some text").await.unwrap();
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+
+        f.worker
+            .process_job(&JobType::GenerateEmbedding {
+                document_id: f.doc_id,
+            })
+            .await
+            .ok();
+
+        assert!(f
+            .search
+            .search("test:model", &[1.0, 0.0], 5)
             .await
             .unwrap()
             .is_empty());

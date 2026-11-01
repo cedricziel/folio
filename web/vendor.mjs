@@ -17,6 +17,7 @@ const staticDir = join(here, "..", "static");
 const scripts = {
   "turbo.js": "@hotwired/turbo/dist/turbo.es2017-esm.js",
   "stimulus.js": "@hotwired/stimulus/dist/stimulus.js",
+  "scalar.js": "@scalar/api-reference/dist/browser/standalone.js",
 };
 
 const fonts = [
