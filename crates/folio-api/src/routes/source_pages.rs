@@ -19,6 +19,7 @@ use super::sources::{all_sources, find, prepare_input, require_managed, run_test
 use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -63,10 +64,10 @@ fn summary(def: &IngestionSourceDef) -> String {
     }
 }
 
-async fn rows(state: &AppState) -> ApiResult<Vec<Row>> {
+async fn rows(DefaultVault(vault): DefaultVault, state: &AppState) -> ApiResult<Vec<Row>> {
     let mut rows = Vec::new();
     for def in all_sources(state).await? {
-        let status = state.ingestion.managed.status(def.id).await?;
+        let status = state.ingestion.managed.status(vault, def.id).await?;
         rows.push(Row {
             id: def.id.to_string(),
             kind: match def.config {
@@ -389,6 +390,7 @@ async fn try_connection(
 }
 
 async fn create(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
@@ -401,7 +403,7 @@ async fn create(
             Ok(()) => state
                 .ingestion
                 .managed
-                .create(input)
+                .create(vault, input)
                 .await
                 .map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),
@@ -417,6 +419,7 @@ async fn create(
 }
 
 async fn update(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Form(values): Form<FormValues>,
@@ -434,7 +437,7 @@ async fn update(
             Ok(()) => state
                 .ingestion
                 .managed
-                .update(id, input)
+                .update(vault, id, input)
                 .await
                 .map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),
@@ -449,13 +452,18 @@ async fn update(
     }
 }
 
-async fn toggle(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Redirect> {
+async fn toggle(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Redirect> {
     let def = find(&state, id).await?;
     require_managed(&def)?;
     state
         .ingestion
         .managed
         .update(
+            vault,
             id,
             IngestionSourceInput {
                 name: def.name,
@@ -467,10 +475,14 @@ async fn toggle(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResul
     Ok(Redirect::to("/settings/sources"))
 }
 
-async fn delete(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Redirect> {
+async fn delete(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Redirect> {
     let def = find(&state, id).await?;
     require_managed(&def)?;
-    state.ingestion.managed.delete(id).await?;
+    state.ingestion.managed.delete(vault, id).await?;
     Ok(Redirect::to("/settings/sources"))
 }
 

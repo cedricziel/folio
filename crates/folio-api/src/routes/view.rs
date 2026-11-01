@@ -6,6 +6,7 @@ use folio_core::models::{Correspondent, Document, DocumentStatus, DocumentType, 
 
 use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 /// Which sidebar entry is highlighted
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,7 +44,7 @@ pub struct Sidebar {
 
 impl Sidebar {
     pub async fn load(state: &AppState, nav: Nav) -> ApiResult<Self> {
-        let documents = state.document_repo.list(None).await?;
+        let documents = state.document_repo.list(vault, None).await?;
         Self::build(state, nav, &documents).await
     }
 
@@ -53,11 +54,11 @@ impl Sidebar {
             active: nav.as_str(),
             inbox_count: inbox_count(documents),
             total_count: documents.len(),
-            correspondents: state.correspondent_repo.list().await?,
-            document_types: state.document_type_repo.list().await?,
+            correspondents: state.correspondent_repo.list(vault).await?,
+            document_types: state.document_type_repo.list(vault).await?,
             tags: state
                 .tag_repo
-                .list()
+                .list(vault)
                 .await?
                 .iter()
                 .map(TagView::from)
@@ -97,7 +98,9 @@ impl Counts {
     }
 
     pub async fn load(state: &AppState) -> ApiResult<Self> {
-        Ok(Self::from_documents(&state.document_repo.list(None).await?))
+        Ok(Self::from_documents(
+            &state.document_repo.list(vault, None).await?,
+        ))
     }
 }
 
@@ -164,17 +167,21 @@ impl DocumentRow {
 }
 
 /// Builds list rows, resolving names and tags
-pub async fn rows(state: &AppState, documents: Vec<Document>) -> ApiResult<Vec<DocumentRow>> {
+pub async fn rows(
+    DefaultVault(vault): DefaultVault,
+    state: &AppState,
+    documents: Vec<Document>,
+) -> ApiResult<Vec<DocumentRow>> {
     let correspondents: HashMap<Id, String> = state
         .correspondent_repo
-        .list()
+        .list(vault)
         .await?
         .into_iter()
         .map(|c| (c.id, c.name))
         .collect();
     let types: HashMap<Id, String> = state
         .document_type_repo
-        .list()
+        .list(vault)
         .await?
         .into_iter()
         .map(|t| (t.id, t.name))
@@ -184,7 +191,7 @@ pub async fn rows(state: &AppState, documents: Vec<Document>) -> ApiResult<Vec<D
     for doc in documents {
         let tags = state
             .document_repo
-            .get_tags(doc.id)
+            .get_tags(vault, doc.id)
             .await?
             .iter()
             .map(TagView::from)
@@ -223,12 +230,13 @@ fn row_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use folio_core::models::VaultId;
 
     #[test]
     fn counts_split_inbox_from_review() {
-        let processing = Document::new("a");
-        let review = Document::new("b").with_content("x");
-        let filed = Document::new("c")
+        let processing = Document::new(VaultId::new(), "a");
+        let review = Document::new(VaultId::new(), "b").with_content("x");
+        let filed = Document::new(VaultId::new(), "c")
             .with_content("x")
             .with_document_type(Id::new_v4());
         let review_id = review.id.to_string();

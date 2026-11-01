@@ -12,6 +12,7 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 use folio_core::events::DocumentEvent;
 
 use super::pages::DocumentStreams;
@@ -21,13 +22,21 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Turbo Streams that bring open pages up to date after `event`.
-pub async fn turbo_streams_for(state: &AppState, event: &DocumentEvent) -> ApiResult<String> {
+pub async fn turbo_streams_for(
+    DefaultVault(vault): DefaultVault,
+    state: &AppState,
+    event: &DocumentEvent,
+) -> ApiResult<String> {
     let streams = match event {
         DocumentEvent::Deleted { document_id, .. } => {
             DocumentStreams::removed(state, *document_id).await?
         }
         _ => {
-            let Some(document) = state.document_repo.find_by_id(event.document_id()).await? else {
+            let Some(document) = state
+                .document_repo
+                .find_by_id(vault, event.document_id())
+                .await?
+            else {
                 return Ok(String::new());
             };
             match event {

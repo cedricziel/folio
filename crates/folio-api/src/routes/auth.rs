@@ -304,7 +304,7 @@ const EXEMPT_EXACT: [&str; 10] = [
 ];
 const EXEMPT_PREFIX: [&str; 4] = ["/static/", "/oauth/", "/.well-known/", "/mcp/"];
 
-fn is_exempt(path: &str) -> bool {
+pub(crate) fn is_exempt(path: &str) -> bool {
     EXEMPT_EXACT.contains(&path) || EXEMPT_PREFIX.iter().any(|p| path.starts_with(p))
 }
 

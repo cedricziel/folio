@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     glob_match, DocumentSource, EmailConfig, EmailOrigin, Id, IngestItem, IngestOutcome,
-    LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
+    LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport, VaultId,
 };
 use folio_core::ports::{IngestLedger, IngestSink, IngestionSource};
 
@@ -38,6 +38,8 @@ pub struct EmailSource {
     name: String,
     config: EmailConfig,
     ledger: Arc<dyn IngestLedger>,
+    /// Where the ledger entries live; only polling needs it, not connection tests
+    vault: Option<VaultId>,
 }
 
 /// What was found in one message
@@ -172,13 +174,25 @@ pub fn parse_mail(
 }
 
 impl EmailSource {
-    pub fn new(id: Id, name: &str, config: EmailConfig, ledger: Arc<dyn IngestLedger>) -> Self {
+    pub fn new(
+        id: Id,
+        name: &str,
+        config: EmailConfig,
+        ledger: Arc<dyn IngestLedger>,
+        vault: Option<VaultId>,
+    ) -> Self {
         Self {
             id,
             name: name.to_string(),
             config,
             ledger,
+            vault,
         }
+    }
+
+    fn vault(&self) -> Result<VaultId> {
+        self.vault
+            .ok_or_else(|| Error::Validation(format!("Source '{}' has no vault", self.name)))
     }
 
     async fn connect(&self) -> Result<ImapSession> {
@@ -298,7 +312,7 @@ impl EmailSource {
                     .unwrap_or_else(|| format!("{mailbox}/{uid}")),
             );
 
-            let already_done = self.ledger.find(&key).await?.is_some();
+            let already_done = self.ledger.find(self.vault()?, &key).await?.is_some();
             if !already_done {
                 let mut all_ok = true;
                 for item in mail.items {
@@ -317,13 +331,16 @@ impl EmailSource {
                     continue;
                 }
                 self.ledger
-                    .insert(&LedgerEntry {
-                        key: key.clone(),
-                        source_id: self.id,
-                        document_id: None,
-                        outcome: "processed".to_string(),
-                        created_at: Utc::now(),
-                    })
+                    .insert(
+                        self.vault()?,
+                        &LedgerEntry {
+                            key: key.clone(),
+                            source_id: self.id,
+                            document_id: None,
+                            outcome: "processed".to_string(),
+                            created_at: Utc::now(),
+                        },
+                    )
                     .await?;
             }
             // Also runs for mails recorded earlier whose clean-up failed back then.

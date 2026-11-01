@@ -12,7 +12,7 @@ use common::{container_or_skip, ingest::Harness};
 use folio_core::error::Result;
 use folio_core::models::{
     Document, EmailConfig, Id, IngestItem, IngestOutcome, MailAfterImport, MailBody, MailSecurity,
-    SourceConditions, SourceKind, TextMatch,
+    SourceConditions, SourceKind, TextMatch, VaultId,
 };
 use folio_core::ports::{IngestSink, IngestionSource};
 use folio_infra::EmailSource;
@@ -138,7 +138,10 @@ struct Collect(Mutex<Vec<IngestItem>>);
 impl IngestSink for Collect {
     async fn ingest(&self, _s: Id, item: IngestItem) -> Result<IngestOutcome> {
         self.0.lock().unwrap().push(item);
-        Ok(IngestOutcome::Imported(Box::new(Document::new("t"))))
+        Ok(IngestOutcome::Imported(Box::new(Document::new(
+            VaultId::new(),
+            "t",
+        ))))
     }
 }
 

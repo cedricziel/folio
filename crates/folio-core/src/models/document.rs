@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentSource, Id};
+use super::{DocumentSource, Id, UserId, VaultId};
 
 /// A stage of the document processing pipeline that is tracked per document
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +77,15 @@ pub struct Document {
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
 
+    /// The vault the document belongs to
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+
+    /// Who uploaded the document; `None` for documents that predate vaults
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub uploaded_by: Option<UserId>,
+
     /// Document title
     pub title: String,
 
@@ -121,11 +130,13 @@ pub struct Document {
 }
 
 impl Document {
-    /// Create a new document with the given title
-    pub fn new(title: impl Into<String>) -> Self {
+    /// Create a new document with the given title in a vault
+    pub fn new(vault_id: VaultId, title: impl Into<String>) -> Self {
         let now = Utc::now();
         Self {
             id: Id::new_v4(),
+            vault_id,
+            uploaded_by: None,
             title: title.into(),
             content: None,
             original_filename: None,
@@ -208,6 +219,8 @@ impl Document {
 /// Parameters for creating a new document
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateDocument {
+    /// Recorded so contributors can later edit their own uploads
+    pub uploaded_by: Option<UserId>,
     pub title: String,
     pub content: Option<String>,
     pub original_filename: Option<String>,
@@ -247,7 +260,7 @@ mod tests {
 
     #[test]
     fn status_follows_extraction_and_classification() {
-        let doc = Document::new("Invoice");
+        let doc = Document::new(VaultId::new(), "Invoice");
         assert_eq!(doc.status(), DocumentStatus::Processing);
 
         let read = doc.with_content("text");

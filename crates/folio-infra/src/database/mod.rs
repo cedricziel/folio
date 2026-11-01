@@ -19,8 +19,9 @@ use sqlx::{PgPool, SqlitePool};
 
 use folio_auth::AuthStore;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, IngestLedger,
-    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
+    AccessPolicy, AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,
+    IngestLedger, MembershipRepository, SearchService, SettingsRepository, SourceRepository,
+    TagRepository, VaultRepository, WorkflowRepository,
 };
 
 use crate::queue::JobQueue;
@@ -30,13 +31,13 @@ pub use postgres::{
     PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
     PostgresDocumentTypeRepository, PostgresIngestLedger, PostgresSearchService,
     PostgresSettingsRepository, PostgresSourceRepository, PostgresTagRepository,
-    PostgresWorkflowRepository,
+    PostgresVaultRepository, PostgresWorkflowRepository,
 };
 pub use sqlite::{
     create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
     SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger,
     SqliteSearchService, SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
-    SqliteWorkflowRepository,
+    SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
 /// Supported database backends
@@ -101,6 +102,10 @@ pub struct Repositories {
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
     pub auth: Arc<dyn AuthStore>,
+    pub vaults: Arc<dyn VaultRepository>,
+    pub members: Arc<dyn MembershipRepository>,
+    pub audit: Arc<dyn AuditLog>,
+    pub access: Arc<dyn AccessPolicy>,
 }
 
 impl Database {
@@ -132,32 +137,46 @@ impl Database {
     /// PostgreSQL search service probes for pgvector and adjusts the schema.
     pub async fn repositories(&self) -> Repositories {
         match self {
-            Self::Sqlite(pool) => Repositories {
-                documents: Arc::new(SqliteDocumentRepository::new(pool.clone())),
-                tags: Arc::new(SqliteTagRepository::new(pool.clone())),
-                correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-                document_types: Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-                settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
-                workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
-                sources: Arc::new(SqliteSourceRepository::new(pool.clone())),
-                ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
-                search: Arc::new(SqliteSearchService::new(pool.clone())),
-                jobs: JobQueue::sqlite(pool.clone()),
-                auth: Arc::new(SqliteAuthStore::new(pool.clone())),
-            },
-            Self::Postgres(pool) => Repositories {
-                documents: Arc::new(PostgresDocumentRepository::new(pool.clone())),
-                tags: Arc::new(PostgresTagRepository::new(pool.clone())),
-                correspondents: Arc::new(PostgresCorrespondentRepository::new(pool.clone())),
-                document_types: Arc::new(PostgresDocumentTypeRepository::new(pool.clone())),
-                settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
-                workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
-                sources: Arc::new(PostgresSourceRepository::new(pool.clone())),
-                ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
-                search: Arc::new(PostgresSearchService::new(pool.clone()).await),
-                jobs: JobQueue::postgres(pool.clone()),
-                auth: Arc::new(PostgresAuthStore::new(pool.clone())),
-            },
+            Self::Sqlite(pool) => {
+                let vaults = Arc::new(SqliteVaultRepository::new(pool.clone()));
+                Repositories {
+                    documents: Arc::new(SqliteDocumentRepository::new(pool.clone())),
+                    tags: Arc::new(SqliteTagRepository::new(pool.clone())),
+                    correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
+                    document_types: Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
+                    settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
+                    workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
+                    sources: Arc::new(SqliteSourceRepository::new(pool.clone())),
+                    ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
+                    search: Arc::new(SqliteSearchService::new(pool.clone())),
+                    jobs: JobQueue::sqlite(pool.clone()),
+                    auth: Arc::new(SqliteAuthStore::new(pool.clone())),
+                    vaults: vaults.clone(),
+                    members: vaults.clone(),
+                    audit: vaults.clone(),
+                    access: vaults,
+                }
+            }
+            Self::Postgres(pool) => {
+                let vaults = Arc::new(PostgresVaultRepository::new(pool.clone()));
+                Repositories {
+                    documents: Arc::new(PostgresDocumentRepository::new(pool.clone())),
+                    tags: Arc::new(PostgresTagRepository::new(pool.clone())),
+                    correspondents: Arc::new(PostgresCorrespondentRepository::new(pool.clone())),
+                    document_types: Arc::new(PostgresDocumentTypeRepository::new(pool.clone())),
+                    settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
+                    workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
+                    sources: Arc::new(PostgresSourceRepository::new(pool.clone())),
+                    ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
+                    search: Arc::new(PostgresSearchService::new(pool.clone()).await),
+                    jobs: JobQueue::postgres(pool.clone()),
+                    auth: Arc::new(PostgresAuthStore::new(pool.clone())),
+                    vaults: vaults.clone(),
+                    members: vaults.clone(),
+                    audit: vaults.clone(),
+                    access: vaults,
+                }
+            }
         }
     }
 }

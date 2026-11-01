@@ -90,7 +90,7 @@ impl WebhookPayload {
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
-        let mut doc = Document::new("Sample invoice")
+        let mut doc = Document::new(VaultId::new(), "Sample invoice")
             .with_filename("invoice-2025-03.pdf")
             .with_mime_type("application/pdf");
         doc.id = Id::nil();
@@ -156,6 +156,7 @@ impl WebhookDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::VaultId;
 
     #[test]
     fn payload_matches_the_documented_shape() {

@@ -22,6 +22,7 @@ use folio_core::services::{NewUpload, SearchServiceFacade};
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -67,6 +68,7 @@ pub struct DocumentListResponse {
     )
 )]
 pub(crate) async fn list_documents(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<ListDocumentsQuery>,
 ) -> ApiResult<Json<DocumentListResponse>> {
@@ -80,7 +82,7 @@ pub(crate) async fn list_documents(
         None
     };
 
-    let documents = state.document_repo.list(filter).await?;
+    let documents = state.document_repo.list(vault, filter).await?;
     let count = documents.len();
 
     Ok(Json(DocumentListResponse { documents, count }))
@@ -100,12 +102,13 @@ pub(crate) async fn list_documents(
     )
 )]
 pub(crate) async fn get_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Document>> {
     let document = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
@@ -135,19 +138,23 @@ pub struct CreateDocumentRequest {
     )
 )]
 pub(crate) async fn create_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Json(req): Json<CreateDocumentRequest>,
 ) -> ApiResult<Json<Document>> {
     let document = state
         .document_repo
-        .create(CreateDocument {
-            title: req.title,
-            content: req.content,
-            correspondent_id: req.correspondent_id,
-            document_type_id: req.document_type_id,
-            source: DocumentSource::of(SourceKind::Api),
-            ..Default::default()
-        })
+        .create(
+            vault,
+            CreateDocument {
+                title: req.title,
+                content: req.content,
+                correspondent_id: req.correspondent_id,
+                document_type_id: req.document_type_id,
+                source: DocumentSource::of(SourceKind::Api),
+                ..Default::default()
+            },
+        )
         .await?;
 
     Ok(Json(document))
@@ -167,11 +174,12 @@ pub(crate) async fn create_document(
     )
 )]
 pub(crate) async fn delete_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {
     purge_document_files(&state, id).await?;
-    state.document_repo.delete(id).await?;
+    state.document_repo.delete(vault, id).await?;
     folio_infra::telemetry::metrics().documents_changed(-1);
     Ok(Json(()))
 }
@@ -201,6 +209,7 @@ pub struct UploadDocumentRequest {
     )
 )]
 pub(crate) async fn upload_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<Document>> {
@@ -250,14 +259,17 @@ pub(crate) async fn upload_document(
 
     let document = state
         .importer
-        .import(NewUpload {
-            title: Some(title),
-            filename: filename.unwrap_or_else(|| "upload".to_string()),
-            mime_type: Some(mime_type),
-            data: file_data,
-            source: DocumentSource::of(SourceKind::Api),
-            tag_ids: Vec::new(),
-        })
+        .import(
+            vault,
+            NewUpload {
+                title: Some(title),
+                filename: filename.unwrap_or_else(|| "upload".to_string()),
+                mime_type: Some(mime_type),
+                data: file_data,
+                source: DocumentSource::of(SourceKind::Api),
+                tag_ids: Vec::new(),
+            },
+        )
         .await?;
 
     folio_infra::telemetry::metrics().documents_changed(1);
@@ -306,12 +318,13 @@ pub struct SearchResultWithDocument {
 }
 
 async fn semantic_search(
+    DefaultVault(vault): DefaultVault,
     state: &AppState,
     query: &str,
     limit: usize,
 ) -> ApiResult<Vec<SearchResultWithDocument>> {
     let facade = SearchServiceFacade::new(
-        state.document_repo.clone(),
+        state.document_repo.clone(vault),
         state.embedding_service.clone(),
         state.search_service.clone(),
     );
@@ -388,12 +401,13 @@ pub struct FileContent(Vec<u8>);
     )
 )]
 pub(crate) async fn download_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
     let document = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
@@ -500,6 +514,7 @@ pub struct SetCorrespondentForm {
 
 /// Set document correspondent (form handler with redirect)
 async fn set_correspondent(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<SetCorrespondentForm>,
@@ -512,6 +527,7 @@ async fn set_correspondent(
     state
         .document_repo
         .update(
+            vault,
             id,
             UpdateDocument {
                 correspondent_id: Some(correspondent_id),
@@ -531,6 +547,7 @@ pub struct SetDocumentTypeForm {
 
 /// Set document type (form handler with redirect)
 async fn set_document_type(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<SetDocumentTypeForm>,
@@ -543,6 +560,7 @@ async fn set_document_type(
     state
         .document_repo
         .update(
+            vault,
             id,
             UpdateDocument {
                 document_type_id: Some(document_type_id),
@@ -562,13 +580,14 @@ pub struct AddTagForm {
 
 /// Add a tag to a document (form handler with redirect)
 async fn add_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<AddTagForm>,
 ) -> ApiResult<Response> {
     if let Some(tag_id_str) = form.tag_id.filter(|s| !s.is_empty()) {
         if let Ok(tag_id) = Uuid::parse_str(&tag_id_str) {
-            state.document_repo.add_tag(id, tag_id).await?;
+            state.document_repo.add_tag(vault, id, tag_id).await?;
         }
     }
 
@@ -584,17 +603,25 @@ pub struct RemoveTagPath {
 
 /// Remove a tag from a document (form handler with redirect)
 async fn remove_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(path): Path<RemoveTagPath>,
 ) -> ApiResult<Response> {
-    state.document_repo.remove_tag(path.id, path.tag_id).await?;
+    state
+        .document_repo
+        .remove_tag(vault, path.id, path.tag_id)
+        .await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
 }
 
 /// Remove every stored object of a document, including pre-key-layout files.
-pub(crate) async fn purge_document_files(state: &AppState, id: Uuid) -> ApiResult<()> {
-    let Some(document) = state.document_repo.find_by_id(id).await? else {
+pub(crate) async fn purge_document_files(
+    DefaultVault(vault): DefaultVault,
+    state: &AppState,
+    id: Uuid,
+) -> ApiResult<()> {
+    let Some(document) = state.document_repo.find_by_id(vault, id).await? else {
         return Ok(());
     };
     folio_core::ports::purge_document(state.store.as_ref(), id, document.page_count).await?;

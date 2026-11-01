@@ -16,6 +16,7 @@ use folio_infra::JobType;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 use super::view::{Nav, Sidebar};
 
@@ -275,12 +276,15 @@ async fn test_processing_settings(
 }
 
 /// Re-embed every document with the active embedding model
-async fn reembed_all(State(state): State<AppState>) -> ApiResult<Response> {
+async fn reembed_all(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Response> {
     if let Ok(model) = state.embedding_service.model_id().await {
         state.search_service.mark_stale_except(&model).await?;
     }
 
-    let ids = state.document_repo.reset_embedding_status().await?;
+    let ids = state.document_repo.reset_embedding_status(vault).await?;
     for document_id in &ids {
         if let Err(e) = state
             .job_queue

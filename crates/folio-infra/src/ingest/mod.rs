@@ -37,6 +37,7 @@ impl IngestionSourceFactory for SourceFactory {
                 &def.name,
                 config.clone(),
                 Arc::clone(&self.ledger),
+                def.vault_id,
             )),
         })
     }

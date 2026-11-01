@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use folio_core::error::Result;
 use folio_core::models::IngestionSourceDef;
+use folio_core::models::VaultId;
 use folio_core::ports::{
     CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
     DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory,
     OcrService, SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
     WorkflowRepository,
 };
-use folio_core::services::{Importer, SearchServiceFacade};
+use folio_core::services::{Importer, SearchServiceFacade, VaultService};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
 
 use folio_core::EventBroadcaster;
@@ -51,6 +52,7 @@ pub struct AppState {
     /// The one path that stores a new document
     pub importer: Arc<dyn DocumentImporter>,
     pub ingestion: IngestionState,
+    pub vaults: Arc<VaultService>,
 }
 
 impl IngestionState {
@@ -87,6 +89,7 @@ impl AppState {
         webhook_client: WebhookClient,
         public_url: String,
         ingestion: IngestionState,
+        vaults: Arc<VaultService>,
     ) -> Self {
         let importer = Arc::new(Importer::new(
             document_repo.clone(),
@@ -113,6 +116,7 @@ impl AppState {
             public_url,
             importer,
             ingestion,
+            vaults,
         }
     }
 
@@ -125,14 +129,19 @@ impl AppState {
 
 impl AppState {
     /// Search documents: literal title/text matches first, then semantic neighbours
-    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    pub async fn search_documents(
+        &self,
+        vault: VaultId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
         let facade = SearchServiceFacade::new(
             self.document_repo.clone(),
             self.embedding_service.clone(),
             self.search_service.clone(),
         );
         Ok(facade
-            .hybrid_search(query, limit)
+            .hybrid_search(vault, query, limit)
             .await?
             .into_iter()
             .map(|s| SearchResult {

@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, WorkflowAction, WorkflowRun,
+    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
 };
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
 
@@ -71,7 +71,12 @@ impl WorkflowRunner {
             });
         }
 
-        let Some(workflow) = self.workflows.find_by_id(run.workflow_id).await? else {
+        let vault = self.workflows.locate(run.workflow_id).await?;
+        let workflow = match vault {
+            Some(vault) => self.workflows.find_by_id(vault, run.workflow_id).await?,
+            None => None,
+        };
+        let (Some(vault), Some(workflow)) = (vault, workflow) else {
             self.finish(
                 &mut run,
                 RunStatus::Failed,
@@ -84,7 +89,7 @@ impl WorkflowRunner {
         run.attempts += 1;
         let skip = run.completed_actions as usize;
         for (index, action) in workflow.actions.iter().enumerate().skip(skip) {
-            match self.perform(action, &run).await {
+            match self.perform(vault, action, &run).await {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);
@@ -128,6 +133,7 @@ impl WorkflowRunner {
     /// Returns the webhook's HTTP status when the action was a webhook
     async fn perform(
         &self,
+        vault: VaultId,
         action: &WorkflowAction,
         run: &WorkflowRun,
     ) -> Result<Option<u16>, ActionFailure> {
@@ -163,12 +169,13 @@ impl WorkflowRunner {
                     }),
                 }
             }
-            local => self.perform_local(local, run).await.map(|()| None),
+            local => self.perform_local(vault, local, run).await.map(|()| None),
         }
     }
 
     async fn perform_local(
         &self,
+        vault: VaultId,
         action: &WorkflowAction,
         run: &WorkflowRun,
     ) -> Result<(), ActionFailure> {
@@ -182,7 +189,7 @@ impl WorkflowRunner {
             WorkflowAction::AddTags { tag_ids } => {
                 let mut result = Ok(());
                 for tag_id in tag_ids {
-                    result = self.documents.add_tag(document_id, *tag_id).await;
+                    result = self.documents.add_tag(vault, document_id, *tag_id).await;
                     if result.is_err() {
                         break;
                     }
@@ -192,6 +199,7 @@ impl WorkflowRunner {
             WorkflowAction::SetCorrespondent { correspondent_id } => self
                 .documents
                 .update(
+                    vault,
                     document_id,
                     UpdateDocument {
                         correspondent_id: Some(Some(*correspondent_id)),
@@ -203,6 +211,7 @@ impl WorkflowRunner {
             WorkflowAction::SetDocumentType { document_type_id } => self
                 .documents
                 .update(
+                    vault,
                     document_id,
                     UpdateDocument {
                         document_type_id: Some(Some(*document_type_id)),

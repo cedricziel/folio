@@ -5,6 +5,7 @@ mod document_repo;
 mod ingest_repo;
 mod search;
 mod settings_repo;
+mod vault_repo;
 mod workflow_repo;
 
 use std::str::FromStr;
@@ -20,6 +21,7 @@ pub use document_repo::{
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
 pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
+pub use vault_repo::SqliteVaultRepository;
 pub use workflow_repo::SqliteWorkflowRepository;
 
 /// Create a new SQLite connection pool

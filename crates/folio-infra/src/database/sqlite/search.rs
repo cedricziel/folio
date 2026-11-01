@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 use tracing::instrument;
 
 use folio_core::error::{Error, Result};
-use folio_core::models::Id;
+use folio_core::models::{Id, VaultId};
 use folio_core::ports::{EmbeddedChunk, SearchResult, SearchService};
 
 use crate::ai::cosine_similarity;
@@ -41,11 +41,26 @@ fn decode(bytes: &[u8]) -> Vec<f32> {
 impl SearchService for SqliteSearchService {
     async fn store_chunks(
         &self,
+        vault: VaultId,
         document_id: Id,
         model: &str,
         chunks: &[EmbeddedChunk],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(db_error)?;
+
+        let in_vault: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM documents WHERE id = ? AND vault_id = ?")
+                .bind(document_id.to_string())
+                .bind(vault.to_string())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db_error)?;
+        if in_vault.is_none() {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: document_id.to_string(),
+            });
+        }
 
         sqlx::query("DELETE FROM document_chunks WHERE document_id = ?")
             .bind(document_id.to_string())
@@ -75,12 +90,16 @@ impl SearchService for SqliteSearchService {
         tx.commit().await.map_err(db_error)
     }
 
-    async fn delete_embedding(&self, document_id: Id) -> Result<()> {
-        sqlx::query("DELETE FROM document_chunks WHERE document_id = ?")
-            .bind(document_id.to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(db_error)?;
+    async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM document_chunks WHERE document_id = ?
+               AND document_id IN (SELECT id FROM documents WHERE vault_id = ?)",
+        )
+        .bind(document_id.to_string())
+        .bind(vault.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(db_error)?;
         Ok(())
     }
 
@@ -108,14 +127,17 @@ impl SearchService for SqliteSearchService {
     #[instrument(skip(self, query_embedding))]
     async fn search(
         &self,
+        vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
-            "SELECT document_id, text, embedding FROM document_chunks
-             WHERE model = ? AND stale = 0",
+            "SELECT c.document_id, c.text, c.embedding
+             FROM document_chunks c JOIN documents d ON d.id = c.document_id
+             WHERE d.vault_id = ? AND c.model = ? AND c.stale = 0",
         )
+        .bind(vault.to_string())
         .bind(model)
         .fetch_all(&self.pool)
         .await

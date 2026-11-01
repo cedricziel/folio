@@ -15,11 +15,11 @@ use super::NewUpload;
 use crate::error::{Error, Result};
 use crate::models::{
     CreateTag, Id, IngestItem, IngestOutcome, IngestionSourceDef, LedgerEntry, PollReport,
-    SourceStatus, WorkflowAction, WorkflowTrigger,
+    SourceStatus, VaultId, WorkflowAction, WorkflowTrigger,
 };
 use crate::ports::{
     DocumentImporter, DocumentRepository, IngestLedger, IngestSink, IngestionSourceFactory,
-    SourceRepository, TagRepository, WorkflowRepository,
+    SourceRepository, TagRepository, VaultIngest, VaultRepository, WorkflowRepository,
 };
 
 /// A claim without a document older than this is treated as left over from a crash
@@ -52,10 +52,10 @@ impl IngestPipeline {
     }
 
     /// Name of the first enabled `ingest.received` workflow that discards the item
-    async fn discarding_rule(&self, item: &IngestItem) -> Result<Option<String>> {
+    async fn discarding_rule(&self, vault: VaultId, item: &IngestItem) -> Result<Option<String>> {
         let rules = self
             .workflows
-            .list_enabled(WorkflowTrigger::IngestReceived)
+            .list_enabled(vault, WorkflowTrigger::IngestReceived)
             .await?;
         Ok(rules
             .into_iter()
@@ -68,7 +68,7 @@ impl IngestPipeline {
     }
 
     /// Reserve the content hash; false means another import owns it
-    async fn claim(&self, key: &str, source_id: Id) -> Result<bool> {
+    async fn claim(&self, vault: VaultId, key: &str, source_id: Id) -> Result<bool> {
         let entry = LedgerEntry {
             key: key.to_string(),
             source_id,
@@ -76,42 +76,45 @@ impl IngestPipeline {
             outcome: "claimed".to_string(),
             created_at: Utc::now(),
         };
-        if self.ledger.insert(&entry).await? {
+        if self.ledger.insert(vault, &entry).await? {
             return Ok(true);
         }
-        let Some(existing) = self.ledger.find(key).await? else {
-            return self.ledger.insert(&entry).await;
+        let Some(existing) = self.ledger.find(vault, key).await? else {
+            return self.ledger.insert(vault, &entry).await;
         };
         let alive = match existing.document_id {
-            Some(id) => self.documents.find_by_id(id).await?.is_some(),
+            Some(id) => self.documents.find_by_id(vault, id).await?.is_some(),
             None => Utc::now() - existing.created_at < STALE_CLAIM,
         };
         if alive {
             return Ok(false);
         }
         // The earlier document was deleted (or the claim is stale): allow a re-import.
-        self.ledger.delete(key).await?;
-        self.ledger.insert(&entry).await
+        self.ledger.delete(vault, key).await?;
+        self.ledger.insert(vault, &entry).await
     }
 
-    async fn resolve_tags(&self, names: &[String]) -> Result<Vec<Id>> {
+    async fn resolve_tags(&self, vault: VaultId, names: &[String]) -> Result<Vec<Id>> {
         let mut ids = Vec::new();
         for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
-            let tag = match self.tags.find_by_name(name).await? {
+            let tag = match self.tags.find_by_name(vault, name).await? {
                 Some(tag) => tag,
                 None => match self
                     .tags
-                    .create(CreateTag {
-                        name: name.to_string(),
-                        color: None,
-                    })
+                    .create(
+                        vault,
+                        CreateTag {
+                            name: name.to_string(),
+                            color: None,
+                        },
+                    )
                     .await
                 {
                     Ok(tag) => tag,
                     // Lost a race with another import creating the same tag.
                     Err(Error::Duplicate { .. }) => self
                         .tags
-                        .find_by_name(name)
+                        .find_by_name(vault, name)
                         .await?
                         .ok_or_else(|| Error::Repository(format!("Tag '{name}' vanished")))?,
                     Err(e) => return Err(e),
@@ -131,29 +134,38 @@ pub fn content_key(data: &[u8]) -> String {
 }
 
 #[async_trait]
-impl IngestSink for IngestPipeline {
-    async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
-        if let Some(rule) = self.discarding_rule(&item).await? {
+impl VaultIngest for IngestPipeline {
+    async fn ingest(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        if let Some(rule) = self.discarding_rule(vault, &item).await? {
             debug!("Rule '{rule}' discarded {}", item.filename);
             return Ok(IngestOutcome::Skipped { rule });
         }
 
         let key = content_key(&item.data);
-        if !self.claim(&key, source_id).await? {
+        if !self.claim(vault, &key, source_id).await? {
             return Ok(IngestOutcome::Duplicate);
         }
 
         let imported = async {
-            let tag_ids = self.resolve_tags(&item.tags).await?;
+            let tag_ids = self.resolve_tags(vault, &item.tags).await?;
             self.importer
-                .import(NewUpload {
-                    title: Some(item.filename.clone()),
-                    filename: item.filename,
-                    mime_type: Some(item.mime_type),
-                    data: item.data,
-                    source: item.source,
-                    tag_ids,
-                })
+                .import(
+                    vault,
+                    NewUpload {
+                        title: Some(item.filename.clone()),
+                        filename: item.filename,
+                        mime_type: Some(item.mime_type),
+                        data: item.data,
+                        source: item.source,
+                        tag_ids,
+                        uploaded_by: None,
+                    },
+                )
                 .await
         }
         .await;
@@ -161,13 +173,13 @@ impl IngestSink for IngestPipeline {
         match imported {
             Ok(document) => {
                 self.ledger
-                    .complete(&key, "imported", Some(document.id))
+                    .complete(vault, &key, "imported", Some(document.id))
                     .await?;
                 Ok(IngestOutcome::Imported(Box::new(document)))
             }
             Err(e) => {
                 // Release the claim so the next attempt is not mistaken for a duplicate.
-                let _ = self.ledger.delete(&key).await;
+                let _ = self.ledger.delete(vault, &key).await;
                 Err(e)
             }
         }
@@ -183,8 +195,22 @@ pub struct IngestScheduler {
     managed: Arc<dyn SourceRepository>,
     configured: Vec<IngestionSourceDef>,
     factory: Arc<dyn IngestionSourceFactory>,
-    sink: Arc<dyn IngestSink>,
+    sink: Arc<dyn VaultIngest>,
+    vaults: Arc<dyn VaultRepository>,
     reload_every: Duration,
+}
+
+/// Feeds one pipeline from sources that do not know about vaults
+struct BoundSink {
+    vault: VaultId,
+    inner: Arc<dyn VaultIngest>,
+}
+
+#[async_trait]
+impl IngestSink for BoundSink {
+    async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
+        self.inner.ingest(self.vault, source_id, item).await
+    }
 }
 
 impl IngestScheduler {
@@ -192,13 +218,15 @@ impl IngestScheduler {
         managed: Arc<dyn SourceRepository>,
         configured: Vec<IngestionSourceDef>,
         factory: Arc<dyn IngestionSourceFactory>,
-        sink: Arc<dyn IngestSink>,
+        sink: Arc<dyn VaultIngest>,
+        vaults: Arc<dyn VaultRepository>,
     ) -> Self {
         Self {
             managed,
             configured,
             factory,
             sink,
+            vaults,
             reload_every: Duration::from_secs(5),
         }
     }
@@ -212,7 +240,7 @@ impl IngestScheduler {
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         let mut running: HashMap<Id, (String, JoinHandle<()>)> = HashMap::new();
         loop {
-            match self.managed.list().await {
+            match self.managed.list_all().await {
                 Ok(managed) => {
                     let wanted: Vec<_> = self
                         .configured
@@ -221,7 +249,7 @@ impl IngestScheduler {
                         .chain(managed)
                         .filter(|d| d.enabled)
                         .collect();
-                    self.reconcile(&mut running, wanted, &shutdown);
+                    self.reconcile(&mut running, wanted, &shutdown).await;
                 }
                 Err(e) => warn!("Could not load ingestion sources: {e}"),
             }
@@ -235,7 +263,7 @@ impl IngestScheduler {
         }
     }
 
-    fn reconcile(
+    async fn reconcile(
         &self,
         running: &mut HashMap<Id, (String, JoinHandle<()>)>,
         wanted: Vec<IngestionSourceDef>,
@@ -249,13 +277,29 @@ impl IngestScheduler {
             keep
         });
         for def in wanted {
-            let fingerprint = serde_json::to_string(&(&def.name, &def.config)).unwrap_or_default();
+            // Sources from the configuration have no vault of their own.
+            let vault = match def.vault_id {
+                Some(vault) => vault,
+                None => match self.vaults.instance_default().await {
+                    Ok(vault) => vault,
+                    Err(e) => {
+                        warn!("Source '{}' has no vault to import into: {e}", def.name);
+                        continue;
+                    }
+                },
+            };
+            let fingerprint =
+                serde_json::to_string(&(&def.name, &def.config, vault)).unwrap_or_default();
             if running.get(&def.id).is_some_and(|(f, _)| *f == fingerprint) {
                 continue;
             }
             if let Some((_, old)) = running.remove(&def.id) {
                 old.abort();
             }
+            let def = IngestionSourceDef {
+                vault_id: Some(vault),
+                ..def
+            };
             let source = match self.factory.build(&def) {
                 Ok(source) => source,
                 Err(e) => {
@@ -274,7 +318,10 @@ impl IngestScheduler {
                 def.id,
                 def.name.clone(),
                 source,
-                Arc::clone(&self.sink),
+                Arc::new(BoundSink {
+                    vault,
+                    inner: Arc::clone(&self.sink),
+                }),
                 Arc::clone(&self.managed),
                 shutdown.clone(),
             ));

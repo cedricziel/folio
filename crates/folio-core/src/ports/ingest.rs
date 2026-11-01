@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::models::{
     Document, Id, IngestItem, IngestOutcome, IngestionSourceDef, IngestionSourceInput, LedgerEntry,
-    PollReport, SourceStatus,
+    PollReport, SourceStatus, VaultId,
 };
 use crate::services::NewUpload;
 
@@ -13,6 +13,18 @@ use crate::services::NewUpload;
 #[async_trait]
 pub trait IngestSink: Send + Sync {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome>;
+}
+
+/// Receives items for a known vault; the scheduler binds each source to its
+/// vault and hands the result to the source as an [`IngestSink`]
+#[async_trait]
+pub trait VaultIngest: Send + Sync {
+    async fn ingest(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        item: IngestItem,
+    ) -> Result<IngestOutcome>;
 }
 
 /// A place documents arrive from, such as a folder or a mailbox
@@ -44,29 +56,47 @@ pub trait IngestionSourceFactory: Send + Sync {
 /// and schedules background processing.
 #[async_trait]
 pub trait DocumentImporter: Send + Sync {
-    async fn import(&self, upload: NewUpload) -> Result<Document>;
+    async fn import(&self, vault: VaultId, upload: NewUpload) -> Result<Document>;
 }
 
 /// Persistence for managed sources and the status of every source
 #[async_trait]
 pub trait SourceRepository: Send + Sync {
-    async fn list(&self) -> Result<Vec<IngestionSourceDef>>;
-    async fn find(&self, id: Id) -> Result<Option<IngestionSourceDef>>;
-    async fn create(&self, input: IngestionSourceInput) -> Result<IngestionSourceDef>;
-    async fn update(&self, id: Id, input: IngestionSourceInput) -> Result<IngestionSourceDef>;
-    async fn delete(&self, id: Id) -> Result<()>;
+    async fn list(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>>;
+    /// Every managed source of every vault, for the scheduler
+    async fn list_all(&self) -> Result<Vec<IngestionSourceDef>>;
+    async fn find(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>>;
+    async fn create(
+        &self,
+        vault: VaultId,
+        input: IngestionSourceInput,
+    ) -> Result<IngestionSourceDef>;
+    async fn update(
+        &self,
+        vault: VaultId,
+        id: Id,
+        input: IngestionSourceInput,
+    ) -> Result<IngestionSourceDef>;
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;
     async fn save_status(&self, id: Id, status: &SourceStatus) -> Result<()>;
     async fn status(&self, id: Id) -> Result<Option<SourceStatus>>;
 }
 
 /// What the pipeline already handled, so nothing is imported twice
 ///
-/// Keys are unique; `insert` must not overwrite an existing entry.
+/// Keys are unique per vault, so the same file can be imported into two
+/// vaults; `insert` must not overwrite an existing entry.
 #[async_trait]
 pub trait IngestLedger: Send + Sync {
     /// Returns whether the entry was new
-    async fn insert(&self, entry: &LedgerEntry) -> Result<bool>;
-    async fn find(&self, key: &str) -> Result<Option<LedgerEntry>>;
-    async fn complete(&self, key: &str, outcome: &str, document_id: Option<Id>) -> Result<()>;
-    async fn delete(&self, key: &str) -> Result<()>;
+    async fn insert(&self, vault: VaultId, entry: &LedgerEntry) -> Result<bool>;
+    async fn find(&self, vault: VaultId, key: &str) -> Result<Option<LedgerEntry>>;
+    async fn complete(
+        &self,
+        vault: VaultId,
+        key: &str,
+        outcome: &str,
+        document_id: Option<Id>,
+    ) -> Result<()>;
+    async fn delete(&self, vault: VaultId, key: &str) -> Result<()>;
 }

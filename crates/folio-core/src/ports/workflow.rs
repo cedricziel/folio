@@ -3,25 +3,32 @@
 use async_trait::async_trait;
 
 use crate::error::Result;
-use crate::models::{Id, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger};
+use crate::models::{Id, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger};
 
 /// Persistence for workflows and their runs
+///
+/// Workflows belong to a vault. Runs are addressed by their own id, which only
+/// the engine and worker hold.
 #[async_trait]
 pub trait WorkflowRepository: Send + Sync {
-    async fn find_by_id(&self, id: Id) -> Result<Option<Workflow>>;
+    /// The vault a workflow belongs to, for the worker that executes its runs
+    async fn locate(&self, id: Id) -> Result<Option<VaultId>>;
 
-    async fn list(&self) -> Result<Vec<Workflow>>;
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>>;
+
+    async fn list(&self, vault: VaultId) -> Result<Vec<Workflow>>;
 
     /// Enabled workflows listening for `trigger`
-    async fn list_enabled(&self, trigger: WorkflowTrigger) -> Result<Vec<Workflow>>;
+    async fn list_enabled(&self, vault: VaultId, trigger: WorkflowTrigger)
+        -> Result<Vec<Workflow>>;
 
-    async fn create(&self, input: WorkflowInput) -> Result<Workflow>;
+    async fn create(&self, vault: VaultId, input: WorkflowInput) -> Result<Workflow>;
 
     /// Replace all fields of a workflow
-    async fn update(&self, id: Id, input: WorkflowInput) -> Result<Workflow>;
+    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow>;
 
     /// Delete a workflow and its runs
-    async fn delete(&self, id: Id) -> Result<()>;
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;
 
     /// Insert a run; returns false when a once-per-document run already exists
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool>;
@@ -32,7 +39,12 @@ pub trait WorkflowRepository: Send + Sync {
     async fn update_run(&self, run: &WorkflowRun) -> Result<()>;
 
     /// Newest runs first
-    async fn list_runs(&self, workflow_id: Id, limit: u32) -> Result<Vec<WorkflowRun>>;
+    async fn list_runs(
+        &self,
+        vault: VaultId,
+        workflow_id: Id,
+        limit: u32,
+    ) -> Result<Vec<WorkflowRun>>;
 }
 
 /// Hands a run to the background worker

@@ -14,6 +14,7 @@ use folio_core::models::{CreateDocumentType, DocumentType, UpdateDocumentType};
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -38,9 +39,10 @@ pub fn router() -> Router<AppState> {
     )
 )]
 pub(crate) async fn list_document_types(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<DocumentType>>> {
-    let document_types = state.document_type_repo.list().await?;
+    let document_types = state.document_type_repo.list(vault).await?;
     Ok(Json(document_types))
 }
 
@@ -58,12 +60,13 @@ pub(crate) async fn list_document_types(
     )
 )]
 pub(crate) async fn get_document_type(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<DocumentType>> {
     let document_type = state
         .document_type_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document type not found"))?;
 
@@ -91,12 +94,13 @@ pub struct CreateDocumentTypeRequest {
     )
 )]
 pub(crate) async fn create_document_type(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Json(req): Json<CreateDocumentTypeRequest>,
 ) -> ApiResult<Json<DocumentType>> {
     let document_type = state
         .document_type_repo
-        .create(CreateDocumentType { name: req.name })
+        .create(vault, CreateDocumentType { name: req.name })
         .await?;
 
     Ok(Json(document_type))
@@ -125,13 +129,14 @@ pub struct UpdateDocumentTypeRequest {
     )
 )]
 pub(crate) async fn update_document_type(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateDocumentTypeRequest>,
 ) -> ApiResult<Json<DocumentType>> {
     let document_type = state
         .document_type_repo
-        .update(id, UpdateDocumentType { name: req.name })
+        .update(vault, id, UpdateDocumentType { name: req.name })
         .await?;
 
     Ok(Json(document_type))
@@ -151,9 +156,10 @@ pub(crate) async fn update_document_type(
     )
 )]
 pub(crate) async fn delete_document_type(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {
-    state.document_type_repo.delete(id).await?;
+    state.document_type_repo.delete(vault, id).await?;
     Ok(Json(()))
 }

@@ -20,6 +20,7 @@ use folio_core::models::{
 use super::workflows::{find, send_test, SECRET_MASK};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 use super::view::{Nav, Sidebar};
 
@@ -97,12 +98,15 @@ struct ListTemplate {
     rows: Vec<WorkflowRow>,
 }
 
-async fn list_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
+async fn list_page(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
     let mut rows = Vec::new();
-    for workflow in state.workflow_repo.list().await? {
+    for workflow in state.workflow_repo.list(vault).await? {
         let last_run = state
             .workflow_repo
-            .list_runs(workflow.id, 1)
+            .list_runs(vault, workflow.id, 1)
             .await?
             .first()
             .map(RunView::from);
@@ -369,6 +373,7 @@ struct FormTemplate {
 }
 
 async fn build_form(
+    DefaultVault(vault): DefaultVault,
     state: &AppState,
     workflow: Option<&Workflow>,
     values: FormValues,
@@ -384,13 +389,13 @@ async fn build_form(
             })
             .collect::<Vec<_>>()
     };
-    let tags = state.tag_repo.list().await?;
-    let correspondents = state.correspondent_repo.list().await?;
-    let document_types = state.document_type_repo.list().await?;
+    let tags = state.tag_repo.list(vault).await?;
+    let correspondents = state.correspondent_repo.list(vault).await?;
+    let document_types = state.document_type_repo.list(vault).await?;
     let runs = match workflow {
         Some(w) => state
             .workflow_repo
-            .list_runs(w.id, RUN_HISTORY)
+            .list_runs(vault, w.id, RUN_HISTORY)
             .await?
             .iter()
             .map(RunView::from)
@@ -467,13 +472,14 @@ async fn edit_page(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiRe
 }
 
 async fn create(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
     let saved = match values.clone().into_input(None) {
         Ok(input) => state
             .workflow_repo
-            .create(input)
+            .create(vault, input)
             .await
             .map_err(|e| e.to_string()),
         Err(message) => Err(message),
@@ -487,6 +493,7 @@ async fn create(
 }
 
 async fn update(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Form(values): Form<FormValues>,
@@ -495,7 +502,7 @@ async fn update(
     let saved = match values.clone().into_input(Some(&workflow)) {
         Ok(input) => state
             .workflow_repo
-            .update(id, input)
+            .update(vault, id, input)
             .await
             .map_err(|e| e.to_string()),
         Err(message) => Err(message),
@@ -509,11 +516,16 @@ async fn update(
     }
 }
 
-async fn toggle(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Redirect> {
+async fn toggle(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Redirect> {
     let workflow = find(&*state.workflow_repo, id).await?;
     state
         .workflow_repo
         .update(
+            vault,
             id,
             WorkflowInput {
                 name: workflow.name,
@@ -527,8 +539,12 @@ async fn toggle(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResul
     Ok(Redirect::to("/workflows"))
 }
 
-async fn delete(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Redirect> {
-    state.workflow_repo.delete(id).await?;
+async fn delete(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Redirect> {
+    state.workflow_repo.delete(vault, id).await?;
     Ok(Redirect::to("/workflows"))
 }
 

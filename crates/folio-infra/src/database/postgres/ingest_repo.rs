@@ -6,7 +6,7 @@ use sqlx::{postgres::PgRow, PgPool, Row};
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Id, IngestionSourceDef, IngestionSourceInput, LedgerEntry, SourceOrigin, SourceStatus,
+    Id, IngestionSourceDef, IngestionSourceInput, LedgerEntry, SourceOrigin, SourceStatus, VaultId,
 };
 use folio_core::ports::{IngestLedger, SourceRepository};
 
@@ -44,12 +44,24 @@ fn source_from_row(row: &PgRow) -> Result<IngestionSourceDef> {
         enabled: row.get("enabled"),
         origin: SourceOrigin::Managed,
         config: serde_json::from_str(row.get("config")).map_err(repo_err)?,
+        vault_id: Some(VaultId(row.get("vault_id"))),
     })
 }
 
 #[async_trait]
 impl SourceRepository for PostgresSourceRepository {
-    async fn list(&self) -> Result<Vec<IngestionSourceDef>> {
+    async fn list(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>> {
+        let rows = sqlx::query(
+            "SELECT * FROM ingestion_sources WHERE vault_id = $1 ORDER BY created_at, name",
+        )
+        .bind(vault.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.iter().map(source_from_row).collect()
+    }
+
+    async fn list_all(&self) -> Result<Vec<IngestionSourceDef>> {
         let rows = sqlx::query("SELECT * FROM ingestion_sources ORDER BY created_at, name")
             .fetch_all(&self.pool)
             .await
@@ -57,23 +69,30 @@ impl SourceRepository for PostgresSourceRepository {
         rows.iter().map(source_from_row).collect()
     }
 
-    async fn find(&self, id: Id) -> Result<Option<IngestionSourceDef>> {
-        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = $1")
+    async fn find(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>> {
+        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .fetch_optional(&self.pool)
             .await
             .map_err(repo_err)?;
         row.as_ref().map(source_from_row).transpose()
     }
 
-    async fn create(&self, input: IngestionSourceInput) -> Result<IngestionSourceDef> {
+    async fn create(
+        &self,
+        vault: VaultId,
+        input: IngestionSourceInput,
+    ) -> Result<IngestionSourceDef> {
         let id = Id::new_v4();
         let now = Utc::now();
         sqlx::query(
-            "INSERT INTO ingestion_sources (id, name, enabled, kind, config, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $6)",
+            "INSERT INTO ingestion_sources
+                 (id, vault_id, name, enabled, kind, config, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
         )
         .bind(id)
+        .bind(vault.0)
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.config.kind().as_str())
@@ -82,15 +101,21 @@ impl SourceRepository for PostgresSourceRepository {
         .execute(&self.pool)
         .await
         .map_err(|e| write_err(e, &input.name))?;
-        self.find(id)
+        self.find(vault, id)
             .await?
             .ok_or_else(|| repo_err("Source vanished after insert"))
     }
 
-    async fn update(&self, id: Id, input: IngestionSourceInput) -> Result<IngestionSourceDef> {
+    async fn update(
+        &self,
+        vault: VaultId,
+        id: Id,
+        input: IngestionSourceInput,
+    ) -> Result<IngestionSourceDef> {
         let result = sqlx::query(
             "UPDATE ingestion_sources
-             SET name = $1, enabled = $2, kind = $3, config = $4, updated_at = $5 WHERE id = $6",
+             SET name = $1, enabled = $2, kind = $3, config = $4, updated_at = $5
+             WHERE id = $6 AND vault_id = $7",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -98,6 +123,7 @@ impl SourceRepository for PostgresSourceRepository {
         .bind(serde_json::to_string(&input.config).map_err(repo_err)?)
         .bind(Utc::now())
         .bind(id)
+        .bind(vault.0)
         .execute(&self.pool)
         .await
         .map_err(|e| write_err(e, &input.name))?;
@@ -107,14 +133,15 @@ impl SourceRepository for PostgresSourceRepository {
                 id: id.to_string(),
             });
         }
-        self.find(id)
+        self.find(vault, id)
             .await?
             .ok_or_else(|| repo_err("Source vanished after update"))
     }
 
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM ingestion_sources WHERE id = $1")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM ingestion_sources WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -186,12 +213,13 @@ impl PostgresIngestLedger {
 
 #[async_trait]
 impl IngestLedger for PostgresIngestLedger {
-    async fn insert(&self, entry: &LedgerEntry) -> Result<bool> {
+    async fn insert(&self, vault: VaultId, entry: &LedgerEntry) -> Result<bool> {
         let result = sqlx::query(
-            "INSERT INTO ingest_ledger (key, source_id, document_id, outcome, created_at)
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT(key) DO NOTHING",
+            "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT(vault_id, key) DO NOTHING",
         )
+        .bind(vault.0)
         .bind(&entry.key)
         .bind(entry.source_id)
         .bind(entry.document_id)
@@ -203,8 +231,9 @@ impl IngestLedger for PostgresIngestLedger {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn find(&self, key: &str) -> Result<Option<LedgerEntry>> {
-        let row = sqlx::query("SELECT * FROM ingest_ledger WHERE key = $1")
+    async fn find(&self, vault: VaultId, key: &str) -> Result<Option<LedgerEntry>> {
+        let row = sqlx::query("SELECT * FROM ingest_ledger WHERE vault_id = $1 AND key = $2")
+            .bind(vault.0)
             .bind(key)
             .fetch_optional(&self.pool)
             .await
@@ -218,19 +247,30 @@ impl IngestLedger for PostgresIngestLedger {
         }))
     }
 
-    async fn complete(&self, key: &str, outcome: &str, document_id: Option<Id>) -> Result<()> {
-        sqlx::query("UPDATE ingest_ledger SET outcome = $1, document_id = $2 WHERE key = $3")
-            .bind(outcome)
-            .bind(document_id)
-            .bind(key)
-            .execute(&self.pool)
-            .await
-            .map_err(repo_err)?;
+    async fn complete(
+        &self,
+        vault: VaultId,
+        key: &str,
+        outcome: &str,
+        document_id: Option<Id>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE ingest_ledger SET outcome = $1, document_id = $2
+             WHERE vault_id = $3 AND key = $4",
+        )
+        .bind(outcome)
+        .bind(document_id)
+        .bind(vault.0)
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(())
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM ingest_ledger WHERE key = $1")
+    async fn delete(&self, vault: VaultId, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM ingest_ledger WHERE vault_id = $1 AND key = $2")
+            .bind(vault.0)
             .bind(key)
             .execute(&self.pool)
             .await

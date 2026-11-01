@@ -10,7 +10,7 @@ use tracing::{debug, error, warn};
 use crate::error::Result;
 use crate::events::DocumentEvent;
 use crate::models::{
-    Document, Id, Tag, WebhookDocument, WebhookPayload, WorkflowRun, WorkflowTrigger,
+    Document, Id, Tag, VaultId, WebhookDocument, WebhookPayload, WorkflowRun, WorkflowTrigger,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
@@ -117,13 +117,23 @@ impl WorkflowEngine {
         let Some(trigger) = Self::trigger_for(event) else {
             return Ok(Vec::new());
         };
-        let candidates = self.workflows.list_enabled(trigger).await?;
+        let document_id = event.document_id();
+        let vault = match event {
+            DocumentEvent::Deleted { snapshot, .. } => {
+                snapshot.as_ref().map(|s| s.document.vault_id)
+            }
+            _ => self.documents.locate(document_id).await?,
+        };
+        let Some(vault) = vault else {
+            debug!("Document {document_id} is gone, skipping {trigger:?}");
+            return Ok(Vec::new());
+        };
+        let candidates = self.workflows.list_enabled(vault, trigger).await?;
         if candidates.is_empty() {
             return Ok(Vec::new());
         }
 
-        let document_id = event.document_id();
-        let Some(ctx) = self.load_context(event, trigger).await? else {
+        let Some(ctx) = self.load_context(vault, event, trigger).await? else {
             debug!("Document {document_id} is gone, skipping {trigger:?}");
             return Ok(Vec::new());
         };
@@ -138,7 +148,7 @@ impl WorkflowEngine {
             let body = match &payload_json {
                 Some(body) => body.clone(),
                 None => {
-                    let body = self.build_payload(trigger, &ctx).await?;
+                    let body = self.build_payload(vault, trigger, &ctx).await?;
                     payload_json = Some(body.clone());
                     body
                 }
@@ -156,6 +166,7 @@ impl WorkflowEngine {
 
     async fn load_context(
         &self,
+        vault: VaultId,
         event: &DocumentEvent,
         trigger: WorkflowTrigger,
     ) -> Result<Option<EventContext>> {
@@ -167,7 +178,7 @@ impl WorkflowEngine {
         }
 
         let id = event.document_id();
-        let mut document = self.documents.find_by_id(id).await?;
+        let mut document = self.documents.find_by_id(vault, id).await?;
         if trigger == WorkflowTrigger::DocumentUploaded {
             // An upload creates the record first and stores the file right
             // after; receivers expect the download link to work.
@@ -180,27 +191,32 @@ impl WorkflowEngine {
                     break;
                 }
                 tokio::time::sleep(FILE_POLL).await;
-                document = self.documents.find_by_id(id).await?;
+                document = self.documents.find_by_id(vault, id).await?;
             }
         }
 
         match document {
             Some(document) => Ok(Some(EventContext {
-                tags: self.documents.get_tags(id).await?,
+                tags: self.documents.get_tags(vault, id).await?,
                 document,
             })),
             None => Ok(None),
         }
     }
 
-    async fn build_payload(&self, trigger: WorkflowTrigger, ctx: &EventContext) -> Result<String> {
+    async fn build_payload(
+        &self,
+        vault: VaultId,
+        trigger: WorkflowTrigger,
+        ctx: &EventContext,
+    ) -> Result<String> {
         let doc = &ctx.document;
         let correspondent = match doc.correspondent_id {
-            Some(id) => self.correspondents.find_by_id(id).await?,
+            Some(id) => self.correspondents.find_by_id(vault, id).await?,
             None => None,
         };
         let document_type = match doc.document_type_id {
-            Some(id) => self.document_types.find_by_id(id).await?,
+            Some(id) => self.document_types.find_by_id(vault, id).await?,
             None => None,
         };
         let size = match &doc.file_path {

@@ -60,3 +60,8 @@ fn auth_of(extensions: &Extensions) -> Option<&McpAuth> {
         .extensions
         .get::<McpAuth>()
 }
+
+/// The authenticated user, when an auth layer supplied one
+pub(crate) fn subject_of(extensions: &Extensions) -> Option<&str> {
+    auth_of(extensions)?.subject.as_deref()
+}

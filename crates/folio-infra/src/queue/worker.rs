@@ -8,7 +8,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, info_span, Instrument};
 
 use folio_core::events::{DocumentEvent, EventBroadcaster};
-use folio_core::models::{ProcessingStage, ProcessingStatus};
+use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
 use folio_core::ports::{
     DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, SearchService,
 };
@@ -251,7 +251,12 @@ impl Worker {
             {
                 // OCR is over and left no text, so there is nothing to embed.
                 self.document_repo
-                    .set_stage_status(doc.id, ProcessingStage::Embed, ProcessingStatus::Skipped)
+                    .set_stage_status(
+                        doc.vault_id,
+                        doc.id,
+                        ProcessingStage::Embed,
+                        ProcessingStatus::Skipped,
+                    )
                     .await?;
             }
         }
@@ -261,6 +266,15 @@ impl Worker {
         }
 
         Ok(())
+    }
+
+    /// The vault a job's document lives in; jobs carry only the document id
+    async fn vault_of(&self, document_id: uuid::Uuid) -> Result<VaultId, BoxError> {
+        Ok(self
+            .document_repo
+            .locate(document_id)
+            .await?
+            .ok_or("Document not found")?)
     }
 
     async fn has_active_job(&self, document_id: uuid::Uuid) -> Result<bool, BoxError> {
@@ -309,9 +323,10 @@ impl Worker {
         &self,
         document_id: uuid::Uuid,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
@@ -340,19 +355,20 @@ impl Worker {
     /// Run a stage, marking it running first and failed if it errors
     async fn track<T>(
         &self,
+        vault: VaultId,
         document_id: uuid::Uuid,
         stage: ProcessingStage,
         work: impl std::future::Future<Output = Result<T, BoxError>>,
     ) -> Result<T, BoxError> {
         self.document_repo
-            .set_stage_status(document_id, stage, ProcessingStatus::Running)
+            .set_stage_status(vault, document_id, stage, ProcessingStatus::Running)
             .await?;
         match work.await {
             Ok(value) => Ok(value),
             Err(e) => {
                 if let Err(status_err) = self
                     .document_repo
-                    .set_stage_status(document_id, stage, ProcessingStatus::Failed)
+                    .set_stage_status(vault, document_id, stage, ProcessingStatus::Failed)
                     .await
                 {
                     error!("Failed to record {:?} failure: {}", stage, status_err);
@@ -364,30 +380,31 @@ impl Worker {
 
     /// Process OCR text extraction
     async fn process_ocr(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
         let set_status = |status| {
             self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Ocr, status)
+                .set_stage_status(vault, document_id, ProcessingStage::Ocr, status)
         };
 
         if document.content.as_deref().is_some_and(|c| !c.is_empty()) {
             debug!("Document {} already has content, skipping OCR", document_id);
             set_status(ProcessingStatus::Done).await?;
-            return self.schedule_embedding(document_id, true).await;
+            return self.schedule_embedding(vault, document_id, true).await;
         }
 
         if self.pipeline.settings().await.ocr.provider == "none" {
             set_status(ProcessingStatus::Skipped).await?;
-            return self.schedule_embedding(document_id, false).await;
+            return self.schedule_embedding(vault, document_id, false).await;
         }
 
         let output = self
-            .track(document_id, ProcessingStage::Ocr, async {
+            .track(vault, document_id, ProcessingStage::Ocr, async {
                 let file_path = document.file_path.as_ref().ok_or("No file path")?;
                 let data = self.store.get_bytes(file_path).await?;
                 let mime_type = document
@@ -400,7 +417,7 @@ impl Worker {
 
         // An empty result is a successful OCR: store "" so the document is not retried.
         self.document_repo
-            .complete_ocr(document_id, &output.text)
+            .complete_ocr(vault, document_id, &output.text)
             .await?;
 
         info!(
@@ -416,17 +433,18 @@ impl Worker {
             self.event_broadcaster
                 .send(DocumentEvent::OcrComplete { document_id });
         }
-        self.schedule_embedding(document_id, has_text).await
+        self.schedule_embedding(vault, document_id, has_text).await
     }
 
     /// End the embedding stage, the last step of the pipeline, and announce that processing finished
     async fn finish_embed_stage(
         &self,
+        vault: VaultId,
         document_id: uuid::Uuid,
         status: ProcessingStatus,
     ) -> Result<(), BoxError> {
         self.document_repo
-            .set_stage_status(document_id, ProcessingStage::Embed, status)
+            .set_stage_status(vault, document_id, ProcessingStage::Embed, status)
             .await?;
         self.event_broadcaster
             .send(DocumentEvent::Processed { document_id });
@@ -436,6 +454,7 @@ impl Worker {
     /// Queue the embedding stage, or mark it skipped when it cannot or should not run
     async fn schedule_embedding(
         &self,
+        vault: VaultId,
         document_id: uuid::Uuid,
         has_text: bool,
     ) -> Result<(), BoxError> {
@@ -443,6 +462,7 @@ impl Worker {
         if has_text && settings.processing.auto_embed && settings.embeddings.provider != "none" {
             self.document_repo
                 .set_stage_status(
+                    vault,
                     document_id,
                     ProcessingStage::Embed,
                     ProcessingStatus::Pending,
@@ -452,7 +472,7 @@ impl Worker {
                 .enqueue(JobType::GenerateEmbedding { document_id })
                 .await?;
         } else {
-            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
                 .await?;
         }
         Ok(())
@@ -460,27 +480,28 @@ impl Worker {
 
     /// Process embedding generation
     async fn process_embedding(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
         let content = document.content.unwrap_or_default();
         let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
         if chunks.is_empty() {
-            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
                 .await?;
             return Ok(());
         }
 
         if self.pipeline.settings().await.embeddings.provider == "none" {
-            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
                 .await?;
             return Ok(());
         }
 
-        self.track(document_id, ProcessingStage::Embed, async {
+        self.track(vault, document_id, ProcessingStage::Embed, async {
             let active_model = self.embedding_service.model_id().await?;
             self.search_service.mark_stale_except(&active_model).await?;
 
@@ -500,9 +521,9 @@ impl Worker {
             }
 
             self.search_service
-                .store_chunks(document_id, &model, &embedded)
+                .store_chunks(vault, document_id, &model, &embedded)
                 .await?;
-            self.finish_embed_stage(document_id, ProcessingStatus::Done)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Done)
                 .await?;
             info!(
                 "Stored {} embedded chunks for document {} (model {})",
@@ -519,9 +540,10 @@ impl Worker {
     async fn process_document(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
         info!("Starting document processing for {}", document_id);
 
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
@@ -573,7 +595,11 @@ impl Worker {
             };
 
             // Store page count
-            if let Err(e) = self.document_repo.set_page_count(document_id, count).await {
+            if let Err(e) = self
+                .document_repo
+                .set_page_count(vault, document_id, count)
+                .await
+            {
                 debug!("Failed to set page count: {}", e);
             }
 
@@ -621,7 +647,11 @@ impl Worker {
 
             // Images have 1 page
             if mime_type.starts_with("image/") {
-                if let Err(e) = self.document_repo.set_page_count(document_id, 1).await {
+                if let Err(e) = self
+                    .document_repo
+                    .set_page_count(vault, document_id, 1)
+                    .await
+                {
                     debug!("Failed to set page count: {}", e);
                 }
             }
@@ -640,16 +670,26 @@ impl Worker {
         let has_text = document.content.as_deref().is_some_and(|c| !c.is_empty());
         if has_text || settings.processing.auto_ocr {
             self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Ocr, ProcessingStatus::Pending)
+                .set_stage_status(
+                    vault,
+                    document_id,
+                    ProcessingStage::Ocr,
+                    ProcessingStatus::Pending,
+                )
                 .await?;
             self.queue
                 .enqueue(JobType::ExtractText { document_id })
                 .await?;
         } else {
             self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Ocr, ProcessingStatus::Skipped)
+                .set_stage_status(
+                    vault,
+                    document_id,
+                    ProcessingStage::Ocr,
+                    ProcessingStatus::Skipped,
+                )
                 .await?;
-            self.schedule_embedding(document_id, false).await?;
+            self.schedule_embedding(vault, document_id, false).await?;
         }
 
         info!("Completed processing document {}", document_id);

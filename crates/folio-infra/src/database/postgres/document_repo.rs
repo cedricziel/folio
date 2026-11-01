@@ -2,14 +2,14 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
     DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
-    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -35,11 +35,77 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
     }
 }
 
+/// The document must exist in `vault`
+async fn require_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Result<()> {
+    let found: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2")
+            .bind(id)
+            .bind(vault.0)
+            .fetch_optional(conn)
+            .await
+            .map_err(repo_err)?;
+    found.map(|_| ()).ok_or_else(|| not_found("Document", id))
+}
+
+/// A vocabulary entry must exist in `vault`; `table` is one of ours, never user input
+async fn require_entry(
+    conn: &mut PgConnection,
+    table: &'static str,
+    entity_type: &'static str,
+    vault: VaultId,
+    id: Id,
+) -> Result<()> {
+    let found: Option<(i32,)> = sqlx::query_as(&format!(
+        "SELECT 1 FROM {table} WHERE id = $1 AND vault_id = $2"
+    ))
+    .bind(id)
+    .bind(vault.0)
+    .fetch_optional(conn)
+    .await
+    .map_err(repo_err)?;
+    found.map(|_| ()).ok_or_else(|| not_found(entity_type, id))
+}
+
+/// The entry of `table` in `to` that carries the same name as entry `id` of
+/// `from`, created when the target has none
+async fn remap_by_name(
+    conn: &mut PgConnection,
+    table: &'static str,
+    from: VaultId,
+    to: VaultId,
+    id: Option<Id>,
+) -> Result<Option<Id>> {
+    let Some(id) = id else { return Ok(None) };
+    let name: Option<(String,)> = sqlx::query_as(&format!(
+        "SELECT name FROM {table} WHERE id = $1 AND vault_id = $2"
+    ))
+    .bind(id)
+    .bind(from.0)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    let Some((name,)) = name else { return Ok(None) };
+    let new_id = Id::new_v4();
+    let (target,): (Id,) = sqlx::query_as(&format!(
+        "INSERT INTO {table} (id, vault_id, name, created_at) VALUES ($1, $2, $3, now())
+         ON CONFLICT (vault_id, name) DO UPDATE SET name = excluded.name
+         RETURNING id"
+    ))
+    .bind(new_id)
+    .bind(to.0)
+    .bind(&name)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(repo_err)?;
+    Ok(Some(target))
+}
+
 /// `SELECT` over `documents` with the full column list; sqlx requires static SQL.
 macro_rules! select_documents {
     ($tail:literal) => {
         concat!(
-            "SELECT id, title, content, original_filename, file_path, mime_type, ",
+            "SELECT id, vault_id, uploaded_by, title, content, original_filename, file_path, ",
+            "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
             "ocr_status, embed_status, ",
             "created_at, updated_at ",
@@ -52,6 +118,8 @@ macro_rules! select_documents {
 #[derive(sqlx::FromRow)]
 struct DocumentRow {
     id: Uuid,
+    vault_id: Uuid,
+    uploaded_by: Option<String>,
     title: String,
     content: Option<String>,
     original_filename: Option<String>,
@@ -74,6 +142,8 @@ impl TryFrom<DocumentRow> for Document {
     fn try_from(row: DocumentRow) -> Result<Self> {
         Ok(Document {
             id: row.id,
+            vault_id: VaultId(row.vault_id),
+            uploaded_by: row.uploaded_by.map(UserId),
             title: row.title,
             content: row.content,
             original_filename: row.original_filename,
@@ -162,18 +232,135 @@ impl PostgresDocumentRepository {
 
 #[async_trait]
 impl DocumentRepository for PostgresDocumentRepository {
-    async fn find_by_id(&self, id: Id) -> Result<Option<Document>> {
-        let row: Option<DocumentRow> = sqlx::query_as(select_documents!("WHERE id = $1"))
+    async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(Uuid,)> = sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(repo_err)?;
+        Ok(row.map(|(v,)| VaultId(v)))
+    }
+
+    async fn move_to(
+        &self,
+        id: Id,
+        from: VaultId,
+        to: VaultId,
+        actor: Option<&UserId>,
+    ) -> Result<Document> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let doc: DocumentRow = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 FOR UPDATE"
+        ))
+        .bind(id)
+        .bind(from.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?
+        .ok_or_else(|| not_found("Document", id))?;
+        if from == to {
+            return doc.try_into();
+        }
+        let target: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM vaults WHERE id = $1")
+            .bind(to.0)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        if target.is_none() {
+            return Err(not_found("Vault", to.0));
+        }
+
+        let tags: Vec<(String,)> = sqlx::query_as(
+            "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
+             WHERE dt.document_id = $1",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        let correspondent =
+            remap_by_name(&mut tx, "correspondents", from, to, doc.correspondent_id).await?;
+        let document_type =
+            remap_by_name(&mut tx, "document_types", from, to, doc.document_type_id).await?;
+
+        sqlx::query("DELETE FROM document_tags WHERE document_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        for (name,) in tags {
+            let (tag_id,): (Id,) = sqlx::query_as(
+                "INSERT INTO tags (id, vault_id, name, color, created_at)
+                 SELECT $1, $2, name, color, created_at FROM tags WHERE vault_id = $3 AND name = $4
+                 ON CONFLICT (vault_id, name) DO UPDATE SET name = excluded.name
+                 RETURNING id",
+            )
+            .bind(Id::new_v4())
+            .bind(to.0)
+            .bind(from.0)
+            .bind(&name)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)")
+                .bind(id)
+                .bind(tag_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_err)?;
+        }
+
+        sqlx::query(
+            "UPDATE documents SET vault_id = $1, correspondent_id = $2, document_type_id = $3,
+                                  updated_at = now()
+             WHERE id = $4",
+        )
+        .bind(to.0)
+        .bind(correspondent)
+        .bind(document_type)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        for vault in [from, to] {
+            sqlx::query(
+                "INSERT INTO audit_events
+                     (id, at, actor_user_id, action, vault_id, target_type, target_id, details)
+                 VALUES ($1, now(), $2, 'document.moved', $3, 'document', $4, $5)",
+            )
+            .bind(Id::new_v4())
+            .bind(actor.map(UserId::as_str))
+            .bind(vault.0)
+            .bind(id.to_string())
+            .bind(serde_json::json!({ "from": from, "to": to }))
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        }
+        tx.commit().await.map_err(repo_err)?;
+
+        self.find_by_id(to, id)
+            .await?
+            .ok_or_else(|| not_found("Document", id))
+    }
+
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
+        let row: Option<DocumentRow> =
+            sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))
+                .bind(id)
+                .bind(vault.0)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(repo_err)?;
 
         row.map(TryInto::try_into).transpose()
     }
 
-    async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
-        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE TRUE"));
+    async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
+        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE vault_id = "));
+        qb.push_bind(vault.0);
 
         if let Some(filter) = filter {
             if let Some(id) = filter.correspondent_id {
@@ -224,7 +411,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
-    async fn create(&self, params: CreateDocument) -> Result<Document> {
+    async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
         let id = Id::new_v4();
         let now = Utc::now();
         let ocr_status = if params.content.is_some() {
@@ -234,13 +421,25 @@ impl DocumentRepository for PostgresDocumentRepository {
         };
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
 
+        if let Some(c) = params.correspondent_id {
+            require_entry(&mut tx, "correspondents", "Correspondent", vault, c).await?;
+        }
+        if let Some(t) = params.document_type_id {
+            require_entry(&mut tx, "document_types", "DocumentType", vault, t).await?;
+        }
+        for tag_id in &params.tag_ids {
+            require_entry(&mut tx, "tags", "Tag", vault, *tag_id).await?;
+        }
+
         sqlx::query(
-            "INSERT INTO documents (id, title, content, original_filename, mime_type,
-                                    correspondent_id, document_type_id, ocr_status,
+            "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
+                                    mime_type, correspondent_id, document_type_id, ocr_status,
                                     source_type, source_meta, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
         )
         .bind(id)
+        .bind(vault.0)
+        .bind(params.uploaded_by.as_ref().map(UserId::as_str))
         .bind(&params.title)
         .bind(&params.content)
         .bind(&params.original_filename)
@@ -270,6 +469,8 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         Ok(Document {
             id,
+            vault_id: vault,
+            uploaded_by: params.uploaded_by,
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,
@@ -286,9 +487,9 @@ impl DocumentRepository for PostgresDocumentRepository {
         })
     }
 
-    async fn update(&self, id: Id, params: UpdateDocument) -> Result<Document> {
+    async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
         let existing = self
-            .find_by_id(id)
+            .find_by_id(vault, id)
             .await?
             .ok_or_else(|| not_found("Document", id))?;
 
@@ -298,10 +499,18 @@ impl DocumentRepository for PostgresDocumentRepository {
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
         let now = Utc::now();
 
+        let mut conn = self.pool.acquire().await.map_err(repo_err)?;
+        if let Some(c) = correspondent_id.filter(|c| Some(*c) != existing.correspondent_id) {
+            require_entry(&mut conn, "correspondents", "Correspondent", vault, c).await?;
+        }
+        if let Some(t) = document_type_id.filter(|t| Some(*t) != existing.document_type_id) {
+            require_entry(&mut conn, "document_types", "DocumentType", vault, t).await?;
+        }
+
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
                                   document_type_id = $4, updated_at = $5
-             WHERE id = $6",
+             WHERE id = $6 AND vault_id = $7",
         )
         .bind(&title)
         .bind(&content)
@@ -309,12 +518,15 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(document_type_id)
         .bind(now)
         .bind(id)
-        .execute(&self.pool)
+        .bind(vault.0)
+        .execute(&mut *conn)
         .await
         .map_err(repo_err)?;
 
         Ok(Document {
             id,
+            vault_id: vault,
+            uploaded_by: existing.uploaded_by,
             title,
             content,
             original_filename: existing.original_filename,
@@ -331,9 +543,10 @@ impl DocumentRepository for PostgresDocumentRepository {
         })
     }
 
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM documents WHERE id = $1")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM documents WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -344,59 +557,80 @@ impl DocumentRepository for PostgresDocumentRepository {
         Ok(())
     }
 
-    async fn set_file_path(&self, id: Id, file_path: &str) -> Result<()> {
+    async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
         self.touch_one(
             id,
-            sqlx::query("UPDATE documents SET file_path = $1, updated_at = $2 WHERE id = $3")
-                .bind(file_path.to_string())
-                .bind(Utc::now())
-                .bind(id),
+            sqlx::query(
+                "UPDATE documents SET file_path = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4",
+            )
+            .bind(file_path.to_string())
+            .bind(Utc::now())
+            .bind(id)
+            .bind(vault.0),
         )
         .await
     }
 
-    async fn set_page_count(&self, id: Id, page_count: u32) -> Result<()> {
+    async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()> {
         self.touch_one(
             id,
-            sqlx::query("UPDATE documents SET page_count = $1, updated_at = $2 WHERE id = $3")
-                .bind(page_count as i32)
-                .bind(Utc::now())
-                .bind(id),
+            sqlx::query(
+                "UPDATE documents SET page_count = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4",
+            )
+            .bind(page_count as i32)
+            .bind(Utc::now())
+            .bind(id)
+            .bind(vault.0),
         )
         .await
     }
 
     async fn set_stage_status(
         &self,
+        vault: VaultId,
         id: Id,
         stage: ProcessingStage,
         status: ProcessingStatus,
     ) -> Result<()> {
         let sql = match stage {
-            ProcessingStage::Ocr => "UPDATE documents SET ocr_status = $1 WHERE id = $2",
-            ProcessingStage::Embed => "UPDATE documents SET embed_status = $1 WHERE id = $2",
+            ProcessingStage::Ocr => {
+                "UPDATE documents SET ocr_status = $1 WHERE id = $2 AND vault_id = $3"
+            }
+            ProcessingStage::Embed => {
+                "UPDATE documents SET embed_status = $1 WHERE id = $2 AND vault_id = $3"
+            }
         };
         sqlx::query(sql)
             .bind(status.as_str())
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
         Ok(())
     }
 
-    async fn complete_ocr(&self, id: Id, content: &str) -> Result<()> {
+    async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
         self.touch_one(
             id,
             sqlx::query(
                 "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
-                 WHERE id = $3",
+                 WHERE id = $3 AND vault_id = $4",
             )
             .bind(content.to_string())
             .bind(Utc::now())
-            .bind(id),
+            .bind(id)
+            .bind(vault.0),
         )
         .await
+    }
+
+    async fn list_all(&self) -> Result<Vec<Document>> {
+        let rows: Vec<DocumentRow> = sqlx::query_as(select_documents!("ORDER BY created_at DESC"))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
@@ -426,14 +660,16 @@ impl DocumentRepository for PostgresDocumentRepository {
         .map_err(repo_err)
     }
 
-    async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>> {
+    async fn get_tags(&self, vault: VaultId, document_id: Id) -> Result<Vec<Tag>> {
         let rows: Vec<TagRow> = sqlx::query_as(
             "SELECT t.id, t.name, t.color, t.created_at
              FROM tags t
              INNER JOIN document_tags dt ON t.id = dt.tag_id
-             WHERE dt.document_id = $1",
+             INNER JOIN documents d ON d.id = dt.document_id
+             WHERE dt.document_id = $1 AND d.vault_id = $2 AND t.vault_id = d.vault_id",
         )
         .bind(document_id)
+        .bind(vault.0)
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)?;
@@ -441,8 +677,13 @@ impl DocumentRepository for PostgresDocumentRepository {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn set_tags(&self, document_id: Id, tag_ids: &[Id]) -> Result<()> {
+    async fn set_tags(&self, vault: VaultId, document_id: Id, tag_ids: &[Id]) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
+
+        require_document(&mut tx, vault, document_id).await?;
+        for tag_id in tag_ids {
+            require_entry(&mut tx, "tags", "Tag", vault, *tag_id).await?;
+        }
 
         sqlx::query("DELETE FROM document_tags WHERE document_id = $1")
             .bind(document_id)
@@ -451,37 +692,47 @@ impl DocumentRepository for PostgresDocumentRepository {
             .map_err(repo_err)?;
 
         for tag_id in tag_ids {
-            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)")
-                .bind(document_id)
-                .bind(tag_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(repo_err)?;
+            sqlx::query(
+                "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(document_id)
+            .bind(tag_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
         }
 
         tx.commit().await.map_err(repo_err)
     }
 
-    async fn add_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
+    async fn add_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        require_document(&mut tx, vault, document_id).await?;
+        require_entry(&mut tx, "tags", "Tag", vault, tag_id).await?;
         sqlx::query(
             "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)
              ON CONFLICT DO NOTHING",
         )
         .bind(document_id)
         .bind(tag_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        tx.commit().await.map_err(repo_err)
+    }
+
+    async fn remove_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM document_tags WHERE document_id = $1 AND tag_id = $2
+               AND document_id IN (SELECT id FROM documents WHERE vault_id = $3)",
+        )
+        .bind(document_id)
+        .bind(tag_id)
+        .bind(vault.0)
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
-        Ok(())
-    }
-
-    async fn remove_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
-        sqlx::query("DELETE FROM document_tags WHERE document_id = $1 AND tag_id = $2")
-            .bind(document_id)
-            .bind(tag_id)
-            .execute(&self.pool)
-            .await
-            .map_err(repo_err)?;
         Ok(())
     }
 }
@@ -499,47 +750,56 @@ impl PostgresTagRepository {
 
 #[async_trait]
 impl TagRepository for PostgresTagRepository {
-    async fn find_by_id(&self, id: Id) -> Result<Option<Tag>> {
-        let row: Option<TagRow> =
-            sqlx::query_as("SELECT id, name, color, created_at FROM tags WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Tag>> {
+        let row: Option<TagRow> = sqlx::query_as(
+            "SELECT id, name, color, created_at FROM tags WHERE id = $1 AND vault_id = $2",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(row.map(Into::into))
     }
 
-    async fn find_by_name(&self, name: &str) -> Result<Option<Tag>> {
-        let row: Option<TagRow> =
-            sqlx::query_as("SELECT id, name, color, created_at FROM tags WHERE name = $1")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Tag>> {
+        let row: Option<TagRow> = sqlx::query_as(
+            "SELECT id, name, color, created_at FROM tags WHERE name = $1 AND vault_id = $2",
+        )
+        .bind(name)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(row.map(Into::into))
     }
 
-    async fn list(&self) -> Result<Vec<Tag>> {
-        let rows: Vec<TagRow> =
-            sqlx::query_as("SELECT id, name, color, created_at FROM tags ORDER BY name")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn list(&self, vault: VaultId) -> Result<Vec<Tag>> {
+        let rows: Vec<TagRow> = sqlx::query_as(
+            "SELECT id, name, color, created_at FROM tags WHERE vault_id = $1 ORDER BY name",
+        )
+        .bind(vault.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn create(&self, params: CreateTag) -> Result<Tag> {
+    async fn create(&self, vault: VaultId, params: CreateTag) -> Result<Tag> {
         let id = Id::new_v4();
         let now = Utc::now();
 
-        sqlx::query("INSERT INTO tags (id, name, color, created_at) VALUES ($1, $2, $3, $4)")
-            .bind(id)
-            .bind(&params.name)
-            .bind(&params.color)
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| map_write_error(e, "Tag", &params.name))?;
+        sqlx::query(
+            "INSERT INTO tags (id, vault_id, name, color, created_at) VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .bind(&params.name)
+        .bind(&params.color)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| map_write_error(e, "Tag", &params.name))?;
 
         Ok(Tag {
             id,
@@ -549,19 +809,20 @@ impl TagRepository for PostgresTagRepository {
         })
     }
 
-    async fn update(&self, id: Id, params: UpdateTag) -> Result<Tag> {
+    async fn update(&self, vault: VaultId, id: Id, params: UpdateTag) -> Result<Tag> {
         let existing = self
-            .find_by_id(id)
+            .find_by_id(vault, id)
             .await?
             .ok_or_else(|| not_found("Tag", id))?;
 
         let name = params.name.unwrap_or(existing.name);
         let color = params.color.unwrap_or(existing.color);
 
-        sqlx::query("UPDATE tags SET name = $1, color = $2 WHERE id = $3")
+        sqlx::query("UPDATE tags SET name = $1, color = $2 WHERE id = $3 AND vault_id = $4")
             .bind(&name)
             .bind(&color)
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(|e| map_write_error(e, "Tag", &name))?;
@@ -574,9 +835,10 @@ impl TagRepository for PostgresTagRepository {
         })
     }
 
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM tags WHERE id = $1")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM tags WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -601,46 +863,55 @@ impl PostgresCorrespondentRepository {
 
 #[async_trait]
 impl CorrespondentRepository for PostgresCorrespondentRepository {
-    async fn find_by_id(&self, id: Id) -> Result<Option<Correspondent>> {
-        let row: Option<NamedRow> =
-            sqlx::query_as("SELECT id, name, created_at FROM correspondents WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>> {
+        let row: Option<NamedRow> = sqlx::query_as(
+            "SELECT id, name, created_at FROM correspondents WHERE id = $1 AND vault_id = $2",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(row.map(Into::into))
     }
 
-    async fn find_by_name(&self, name: &str) -> Result<Option<Correspondent>> {
-        let row: Option<NamedRow> =
-            sqlx::query_as("SELECT id, name, created_at FROM correspondents WHERE name = $1")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Correspondent>> {
+        let row: Option<NamedRow> = sqlx::query_as(
+            "SELECT id, name, created_at FROM correspondents WHERE name = $1 AND vault_id = $2",
+        )
+        .bind(name)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(row.map(Into::into))
     }
 
-    async fn list(&self) -> Result<Vec<Correspondent>> {
-        let rows: Vec<NamedRow> =
-            sqlx::query_as("SELECT id, name, created_at FROM correspondents ORDER BY name")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn list(&self, vault: VaultId) -> Result<Vec<Correspondent>> {
+        let rows: Vec<NamedRow> = sqlx::query_as(
+            "SELECT id, name, created_at FROM correspondents WHERE vault_id = $1 ORDER BY name",
+        )
+        .bind(vault.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn create(&self, params: CreateCorrespondent) -> Result<Correspondent> {
+    async fn create(&self, vault: VaultId, params: CreateCorrespondent) -> Result<Correspondent> {
         let id = Id::new_v4();
         let now = Utc::now();
 
-        sqlx::query("INSERT INTO correspondents (id, name, created_at) VALUES ($1, $2, $3)")
-            .bind(id)
-            .bind(&params.name)
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| map_write_error(e, "Correspondent", &params.name))?;
+        sqlx::query(
+            "INSERT INTO correspondents (id, vault_id, name, created_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .bind(&params.name)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| map_write_error(e, "Correspondent", &params.name))?;
 
         Ok(Correspondent {
             id,
@@ -649,17 +920,23 @@ impl CorrespondentRepository for PostgresCorrespondentRepository {
         })
     }
 
-    async fn update(&self, id: Id, params: UpdateCorrespondent) -> Result<Correspondent> {
+    async fn update(
+        &self,
+        vault: VaultId,
+        id: Id,
+        params: UpdateCorrespondent,
+    ) -> Result<Correspondent> {
         let existing = self
-            .find_by_id(id)
+            .find_by_id(vault, id)
             .await?
             .ok_or_else(|| not_found("Correspondent", id))?;
 
         let name = params.name.unwrap_or(existing.name);
 
-        sqlx::query("UPDATE correspondents SET name = $1 WHERE id = $2")
+        sqlx::query("UPDATE correspondents SET name = $1 WHERE id = $2 AND vault_id = $3")
             .bind(&name)
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(|e| map_write_error(e, "Correspondent", &name))?;
@@ -671,9 +948,10 @@ impl CorrespondentRepository for PostgresCorrespondentRepository {
         })
     }
 
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM correspondents WHERE id = $1")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM correspondents WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -698,46 +976,55 @@ impl PostgresDocumentTypeRepository {
 
 #[async_trait]
 impl DocumentTypeRepository for PostgresDocumentTypeRepository {
-    async fn find_by_id(&self, id: Id) -> Result<Option<DocumentType>> {
-        let row: Option<NamedRow> =
-            sqlx::query_as("SELECT id, name, created_at FROM document_types WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>> {
+        let row: Option<NamedRow> = sqlx::query_as(
+            "SELECT id, name, created_at FROM document_types WHERE id = $1 AND vault_id = $2",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(row.map(Into::into))
     }
 
-    async fn find_by_name(&self, name: &str) -> Result<Option<DocumentType>> {
-        let row: Option<NamedRow> =
-            sqlx::query_as("SELECT id, name, created_at FROM document_types WHERE name = $1")
-                .bind(name)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<DocumentType>> {
+        let row: Option<NamedRow> = sqlx::query_as(
+            "SELECT id, name, created_at FROM document_types WHERE name = $1 AND vault_id = $2",
+        )
+        .bind(name)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(row.map(Into::into))
     }
 
-    async fn list(&self) -> Result<Vec<DocumentType>> {
-        let rows: Vec<NamedRow> =
-            sqlx::query_as("SELECT id, name, created_at FROM document_types ORDER BY name")
-                .fetch_all(&self.pool)
-                .await
-                .map_err(repo_err)?;
+    async fn list(&self, vault: VaultId) -> Result<Vec<DocumentType>> {
+        let rows: Vec<NamedRow> = sqlx::query_as(
+            "SELECT id, name, created_at FROM document_types WHERE vault_id = $1 ORDER BY name",
+        )
+        .bind(vault.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    async fn create(&self, params: CreateDocumentType) -> Result<DocumentType> {
+    async fn create(&self, vault: VaultId, params: CreateDocumentType) -> Result<DocumentType> {
         let id = Id::new_v4();
         let now = Utc::now();
 
-        sqlx::query("INSERT INTO document_types (id, name, created_at) VALUES ($1, $2, $3)")
-            .bind(id)
-            .bind(&params.name)
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| map_write_error(e, "DocumentType", &params.name))?;
+        sqlx::query(
+            "INSERT INTO document_types (id, vault_id, name, created_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .bind(&params.name)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| map_write_error(e, "DocumentType", &params.name))?;
 
         Ok(DocumentType {
             id,
@@ -746,17 +1033,23 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
         })
     }
 
-    async fn update(&self, id: Id, params: UpdateDocumentType) -> Result<DocumentType> {
+    async fn update(
+        &self,
+        vault: VaultId,
+        id: Id,
+        params: UpdateDocumentType,
+    ) -> Result<DocumentType> {
         let existing = self
-            .find_by_id(id)
+            .find_by_id(vault, id)
             .await?
             .ok_or_else(|| not_found("DocumentType", id))?;
 
         let name = params.name.unwrap_or(existing.name);
 
-        sqlx::query("UPDATE document_types SET name = $1 WHERE id = $2")
+        sqlx::query("UPDATE document_types SET name = $1 WHERE id = $2 AND vault_id = $3")
             .bind(&name)
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(|e| map_write_error(e, "DocumentType", &name))?;
@@ -768,9 +1061,10 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
         })
     }
 
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM document_types WHERE id = $1")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM document_types WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;

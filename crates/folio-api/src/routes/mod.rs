@@ -33,6 +33,13 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let health = health::router(state.health_checks.clone());
     let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
     let forward = axum::middleware::from_fn_with_state(auth.clone(), crate::forward::forward_auth);
+    let default_vault = axum::middleware::from_fn_with_state(
+        crate::vault::VaultResolver {
+            auth: auth.clone(),
+            vaults: state.vaults.clone(),
+        },
+        crate::vault::resolve_default_vault,
+    );
     let auth_routes = auth::router(auth);
 
     let routes = Router::new()
@@ -61,6 +68,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
 
     let router = crate::telemetry::instrument(routes)
         // Middleware
+        .layer(default_vault)
         .layer(enforcement)
         .layer(forward)
         .layer(CorsLayer::permissive())

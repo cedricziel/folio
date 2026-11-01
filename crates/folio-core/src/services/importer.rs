@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use super::NewUpload;
 use crate::error::Result;
-use crate::models::{CreateDocument, Document};
+use crate::models::{CreateDocument, Document, VaultId};
 use crate::ports::{keys, DocumentImporter, DocumentRepository, DocumentStore, ProcessingQueue};
 
 /// Creates the record, stores the file, and queues background processing
@@ -36,27 +36,31 @@ impl Importer {
 
 #[async_trait]
 impl DocumentImporter for Importer {
-    async fn import(&self, upload: NewUpload) -> Result<Document> {
+    async fn import(&self, vault: VaultId, upload: NewUpload) -> Result<Document> {
         let document = self
             .documents
-            .create(CreateDocument {
-                title: upload.title.unwrap_or_else(|| upload.filename.clone()),
-                original_filename: Some(upload.filename.clone()),
-                mime_type: upload.mime_type,
-                source: upload.source,
-                tag_ids: upload.tag_ids,
-                ..Default::default()
-            })
+            .create(
+                vault,
+                CreateDocument {
+                    uploaded_by: upload.uploaded_by,
+                    title: upload.title.unwrap_or_else(|| upload.filename.clone()),
+                    original_filename: Some(upload.filename.clone()),
+                    mime_type: upload.mime_type,
+                    source: upload.source,
+                    tag_ids: upload.tag_ids,
+                    ..Default::default()
+                },
+            )
             .await?;
 
         let key = keys::original(document.id);
         let stored = match self.files.put(&key, upload.data.into()).await {
-            Ok(()) => self.documents.set_file_path(document.id, &key).await,
+            Ok(()) => self.documents.set_file_path(vault, document.id, &key).await,
             Err(e) => Err(e),
         };
         if let Err(e) = stored {
             // A record without its file is useless; do not leave one behind.
-            let _ = self.documents.delete(document.id).await;
+            let _ = self.documents.delete(vault, document.id).await;
             return Err(e);
         }
         // The file is stored, so a failed enqueue leaves a usable document
@@ -67,7 +71,7 @@ impl DocumentImporter for Importer {
 
         Ok(self
             .documents
-            .find_by_id(document.id)
+            .find_by_id(vault, document.id)
             .await?
             .unwrap_or(document))
     }

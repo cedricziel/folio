@@ -14,6 +14,7 @@ use folio_core::models::{CreateTag, Tag, UpdateTag};
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -32,8 +33,11 @@ pub fn router() -> Router<AppState> {
         InternalError,
     )
 )]
-pub(crate) async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<Vec<Tag>>> {
-    let tags = state.tag_repo.list().await?;
+pub(crate) async fn list_tags(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<Tag>>> {
+    let tags = state.tag_repo.list(vault).await?;
     Ok(Json(tags))
 }
 
@@ -51,12 +55,13 @@ pub(crate) async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<V
     )
 )]
 pub(crate) async fn get_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Tag>> {
     let tag = state
         .tag_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Tag not found"))?;
 
@@ -85,15 +90,19 @@ pub struct CreateTagRequest {
     )
 )]
 pub(crate) async fn create_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Json(req): Json<CreateTagRequest>,
 ) -> ApiResult<Json<Tag>> {
     let tag = state
         .tag_repo
-        .create(CreateTag {
-            name: req.name,
-            color: req.color,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: req.name,
+                color: req.color,
+            },
+        )
         .await?;
 
     Ok(Json(tag))
@@ -134,6 +143,7 @@ where
     )
 )]
 pub(crate) async fn update_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTagRequest>,
@@ -141,6 +151,7 @@ pub(crate) async fn update_tag(
     let tag = state
         .tag_repo
         .update(
+            vault,
             id,
             UpdateTag {
                 name: req.name,
@@ -166,9 +177,10 @@ pub(crate) async fn update_tag(
     )
 )]
 pub(crate) async fn delete_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {
-    state.tag_repo.delete(id).await?;
+    state.tag_repo.delete(vault, id).await?;
     Ok(Json(()))
 }
