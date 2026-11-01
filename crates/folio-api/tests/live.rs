@@ -79,7 +79,11 @@ mod resume {
     }
 
     /// Read the stream until `wanted` event ids were seen
-    async fn ids_until(body: &mut Body, wanted: usize) -> Vec<i64> {
+    ///
+    /// Each event is two frames (JSON, then Turbo Streams) sharing one id, so
+    /// the second frame of an event already reported earlier may still be in
+    /// flight; ids up to `after` are ignored.
+    async fn ids_until(body: &mut Body, after: i64, wanted: usize) -> Vec<i64> {
         let mut text = String::new();
         let mut ids = Vec::new();
         while ids.len() < wanted {
@@ -95,6 +99,7 @@ mod resume {
                 .lines()
                 .filter_map(|line| line.strip_prefix("id: "))
                 .filter_map(|id| id.trim().parse().ok())
+                .filter(|id| *id > after)
                 .fold(Vec::new(), |mut ids, id| {
                     if !ids.contains(&id) {
                         ids.push(id);
@@ -135,12 +140,12 @@ mod resume {
             .await
             .unwrap();
         let mut body = response.into_body();
-        assert_eq!(ids_until(&mut body, 2).await, [ids[1], ids[2]]);
+        assert_eq!(ids_until(&mut body, ids[0], 2).await, [ids[1], ids[2]]);
 
         // Live events follow, with ids from the same sequence.
         create(&h, "four").await;
         dispatch.dispatch_once().await.unwrap();
-        let live = ids_until(&mut body, 1).await;
+        let live = ids_until(&mut body, ids[2], 1).await;
         assert!(live[0] > ids[2]);
     }
 
@@ -161,7 +166,7 @@ mod resume {
         create(&h, "after").await;
         dispatch.dispatch_once().await.unwrap();
 
-        let ids = ids_until(&mut body, 1).await;
+        let ids = ids_until(&mut body, 0, 1).await;
         let newest = h
             .state
             .outbox
