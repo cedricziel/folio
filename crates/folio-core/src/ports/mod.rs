@@ -17,5 +17,6 @@ pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,
 };
-pub use storage::{FileStore, ProcessingQueue, ProcessingStatus};
+pub use storage::{keys, purge_document, DocumentStore, LocalCopy, StoredObject};
+pub use storage::{ProcessingQueue, ProcessingStatus};
 pub use workflow::{FileMetadata, WorkflowJobQueue, WorkflowRepository};

@@ -3,7 +3,7 @@
 //! This crate implements the port traits from folio-core:
 //! - SQLite and PostgreSQL database repositories
 //! - OCR and embedding providers behind a registry (see `docs/pipeline.md`)
-//! - File storage
+//! - Document storage (local filesystem, S3)
 //! - Thumbnail generation
 //! - Job queue for background processing
 //! - Configuration loading
@@ -27,6 +27,8 @@ pub use database::{
     SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
 };
 pub use queue::{Job, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
-pub use storage::FileStorage;
+pub use storage::{
+    build_store, cleanup_legacy_layout, migrate_legacy_layout, ObjectStoreDocumentStore,
+};
 pub use thumbnail::ThumbnailService;
 pub use workflow::{StorageFileMetadata, WebhookClient, WorkflowRunner};

@@ -16,8 +16,8 @@ use crate::models::{
     DocumentFilter, DocumentType, Id, Tag, UpdateDocument,
 };
 use crate::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    FileStore, ProcessingQueue, ProcessingStatus, SearchService, TagRepository,
+    keys, CorrespondentRepository, DocumentRepository, DocumentStore, DocumentTypeRepository,
+    EmbeddingService, ProcessingQueue, ProcessingStatus, SearchService, TagRepository,
 };
 
 const SNIPPET_RADIUS: usize = 80;
@@ -93,7 +93,7 @@ pub struct LibraryService {
     correspondents: Arc<dyn CorrespondentRepository>,
     document_types: Arc<dyn DocumentTypeRepository>,
     semantic: SearchServiceFacade,
-    files: Arc<dyn FileStore>,
+    files: Arc<dyn DocumentStore>,
     queue: Arc<dyn ProcessingQueue>,
 }
 
@@ -106,7 +106,7 @@ impl LibraryService {
         document_types: Arc<dyn DocumentTypeRepository>,
         embeddings: Arc<dyn EmbeddingService>,
         search: Arc<dyn SearchService>,
-        files: Arc<dyn FileStore>,
+        files: Arc<dyn DocumentStore>,
         queue: Arc<dyn ProcessingQueue>,
     ) -> Self {
         let semantic = SearchServiceFacade::new(documents.clone(), embeddings, search);
@@ -265,7 +265,7 @@ impl LibraryService {
         let document = self.require_document(id).await?;
         match document.file_path.clone() {
             Some(path) => {
-                let data = self.files.read(&path).await?;
+                let data = self.files.get_bytes(&path).await?;
                 Ok(Some((document, data)))
             }
             None => Ok(None),
@@ -383,11 +383,9 @@ impl LibraryService {
             })
             .await?;
 
-        let path = self
-            .files
-            .store(document.id, &upload.filename, &upload.data)
-            .await?;
-        self.documents.set_file_path(document.id, &path).await?;
+        let key = keys::original(document.id);
+        self.files.put(&key, upload.data.into()).await?;
+        self.documents.set_file_path(document.id, &key).await?;
         self.queue.enqueue_processing(document.id).await?;
 
         let document = self.require_document(document.id).await?;
