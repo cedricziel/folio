@@ -70,15 +70,47 @@ impl Default for DatabaseConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
+    pub backend: StorageBackend,
+    /// Root directory for the `local` backend.
     pub path: String,
+    pub s3: S3Config,
 }
 
 impl Default for StorageConfig {
     fn default() -> Self {
         Self {
+            backend: StorageBackend::default(),
             path: "./data".to_string(),
+            s3: S3Config::default(),
         }
     }
+}
+
+/// Where document files live
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageBackend {
+    #[default]
+    Local,
+    S3,
+}
+
+/// S3-compatible object storage (AWS S3, MinIO, Garage, R2, ...)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct S3Config {
+    pub bucket: Option<String>,
+    pub region: Option<String>,
+    /// Custom endpoint for non-AWS services.
+    pub endpoint: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    /// Address buckets as `endpoint/bucket` instead of `bucket.endpoint`.
+    pub path_style: bool,
+    /// Allow plain HTTP endpoints.
+    pub allow_http: bool,
+    /// Key prefix inside the bucket.
+    pub prefix: Option<String>,
 }
 
 /// AI provider configuration
@@ -141,9 +173,63 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::Str,
     },
     Setting {
+        key: "storage.backend",
+        env: "FOLIO_STORAGE__BACKEND",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
         key: "storage.path",
         env: "FOLIO_STORAGE__PATH",
         legacy_env: &["FOLIO_STORAGE_PATH"],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.s3.bucket",
+        env: "FOLIO_STORAGE__S3__BUCKET",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.s3.region",
+        env: "FOLIO_STORAGE__S3__REGION",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.s3.endpoint",
+        env: "FOLIO_STORAGE__S3__ENDPOINT",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.s3.access_key_id",
+        env: "FOLIO_STORAGE__S3__ACCESS_KEY_ID",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.s3.secret_access_key",
+        env: "FOLIO_STORAGE__S3__SECRET_ACCESS_KEY",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.s3.path_style",
+        env: "FOLIO_STORAGE__S3__PATH_STYLE",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "storage.s3.allow_http",
+        env: "FOLIO_STORAGE__S3__ALLOW_HTTP",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "storage.s3.prefix",
+        env: "FOLIO_STORAGE__S3__PREFIX",
+        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
@@ -310,10 +396,11 @@ mod tests {
     #[test]
     fn every_setting_is_set_by_its_env_var() {
         for setting in SETTINGS {
-            let sample = match setting.kind {
-                ValueKind::Str => "sample-value",
-                ValueKind::Port => "4242",
-                ValueKind::Bool => "true",
+            let sample = match (setting.key, setting.kind) {
+                ("storage.backend", _) => "s3",
+                (_, ValueKind::Str) => "sample-value",
+                (_, ValueKind::Port) => "4242",
+                (_, ValueKind::Bool) => "true",
             };
             let config = load(&[(setting.env, sample)]);
             assert_eq!(

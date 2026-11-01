@@ -3,7 +3,7 @@
 //! This crate implements the port traits from folio-core:
 //! - SQLite and PostgreSQL database repositories
 //! - AI service providers (OpenAI, Anthropic, Local)
-//! - File storage
+//! - Document storage (local filesystem, S3)
 //! - Thumbnail generation
 //! - Job queue for background processing
 //! - Configuration loading
@@ -25,5 +25,5 @@ pub use database::{
     SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository,
 };
 pub use queue::{Job, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
-pub use storage::FileStorage;
+pub use storage::{build_store, migrate_legacy_layout, ObjectStoreDocumentStore};
 pub use thumbnail::ThumbnailService;
