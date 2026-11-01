@@ -7,7 +7,7 @@
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(git -C "$here" rev-parse --show-toplevel)
+repo=${FOLIO_REPO:-$(git -C "$here" rev-parse --show-toplevel)}
 bin=${FOLIO_BIN:-${CARGO_TARGET_DIR:-$repo/target}/debug/folio-app}
 [ -x "$bin" ] || bin=$("$here/build.sh")
 [ -x "$bin" ] || { echo "up.sh: binary not found: $bin" >&2; exit 1; }
