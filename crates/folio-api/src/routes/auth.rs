@@ -651,6 +651,10 @@ async fn login_submit(
     match user.filter(|_| verified) {
         Some(user) => {
             auth.login_by_user.record_success(&username);
+            // Fresh session id on login, so one planted beforehand is worthless.
+            if let Some(id) = cookie(&headers, SESSION_COOKIE) {
+                let _ = auth.store.delete_session(&hash_token(&id)).await;
+            }
             match start_session(&auth, &user, secure).await {
                 Some(session) => with_cookies(Redirect::to(&next).into_response(), [session]),
                 None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),

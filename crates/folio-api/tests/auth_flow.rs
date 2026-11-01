@@ -662,6 +662,45 @@ async fn auth_pages_cannot_be_framed_or_cached() {
 }
 
 #[tokio::test]
+async fn logging_in_ends_the_previous_session() {
+    let app = app().await;
+    let old = setup_and_login(&app).await;
+    let old_session = old.split("; ").last().unwrap().to_string();
+    assert_eq!(
+        send(&app, get_req("/login", &old_session)).await.status,
+        StatusCode::SEE_OTHER,
+        "the first session is valid"
+    );
+
+    let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    let csrf = csrf_from(&page.body);
+    let done = send(
+        &app,
+        form_req(
+            "/login",
+            &format!("folio_csrf={csrf}; {old_session}"),
+            &format!("csrf={csrf}&username=owner&password=correct-horse-battery"),
+        ),
+    )
+    .await;
+    assert_eq!(done.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        send(&app, get_req("/login", &old_session)).await.status,
+        StatusCode::OK,
+        "the session presented at login is gone"
+    );
+    let fresh = done
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with("folio_session="))
+        .unwrap();
+    assert_eq!(
+        send(&app, get_req("/login", &fresh)).await.status,
+        StatusCode::SEE_OTHER
+    );
+}
+
+#[tokio::test]
 async fn authorize_redirects_anonymous_users_to_login_and_back() {
     let app = app().await;
     setup_and_login(&app).await;
