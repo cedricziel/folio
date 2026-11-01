@@ -400,6 +400,18 @@ pub struct WorkflowRun {
     /// The event payload as sent, frozen when the event happened
     #[serde(skip)]
     pub payload: String,
+    /// The workflow's actions as they were when the run was created
+    ///
+    /// Executed instead of the workflow's current list, so editing a workflow
+    /// never changes what an already queued run does. May hold webhook secrets,
+    /// so it is never serialized.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub actions: Vec<WorkflowAction>,
+    /// Outbox event that caused the run; at most one run per workflow and event
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub source_event_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
 }
@@ -422,9 +434,23 @@ impl WorkflowRun {
             last_error: None,
             response_status: None,
             payload,
+            actions: Vec::new(),
+            source_event_id: None,
             created_at: Utc::now(),
             finished_at: None,
         }
+    }
+
+    /// Freeze the actions to execute
+    pub fn with_actions(mut self, actions: Vec<WorkflowAction>) -> Self {
+        self.actions = actions;
+        self
+    }
+
+    /// Record the outbox event that caused this run
+    pub fn with_source_event(mut self, event_id: i64) -> Self {
+        self.source_event_id = Some(event_id);
+        self
     }
 }
 

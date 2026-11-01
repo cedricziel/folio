@@ -3,17 +3,19 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
-mod eventing;
 mod importer;
 mod ingest;
 mod library;
+mod outbox_dispatcher;
 mod workflow_engine;
 
-pub use eventing::EventingDocumentRepository;
 pub use importer::Importer;
 pub use ingest::{content_key, IngestPipeline, IngestScheduler};
 pub use library::{
     DocumentDetail, DocumentHit, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, TextPage,
+};
+pub use outbox_dispatcher::{
+    retry_delay, BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher,
 };
 pub use workflow_engine::WorkflowEngine;
 

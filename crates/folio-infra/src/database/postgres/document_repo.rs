@@ -2,7 +2,10 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder};
+use std::sync::Arc;
+
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
@@ -14,8 +17,10 @@ use folio_core::models::{
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
 };
+use folio_core::{DeletedDocument, DocumentEvent, EventOrigin};
 
 use super::map_write_error;
+use super::outbox::insert_event;
 
 fn repo_err(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
@@ -138,13 +143,48 @@ impl From<NamedRow> for DocumentType {
 }
 
 /// PostgreSQL implementation of DocumentRepository
+///
+/// Lifecycle changes (create, update, delete, tag edits) write their outbox
+/// event in the same transaction, so a change is never committed without it.
 pub struct PostgresDocumentRepository {
     pool: PgPool,
+    origin: EventOrigin,
+    wake: Arc<Notify>,
 }
 
 impl PostgresDocumentRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            origin: EventOrigin::User,
+            wake: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Attribute the events of this repository's changes to `origin`
+    pub fn with_origin(mut self, origin: EventOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// Signal this when an event was committed
+    pub fn with_wake(mut self, wake: Arc<Notify>) -> Self {
+        self.wake = wake;
+        self
+    }
+
+    async fn emit_in(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: DocumentEvent,
+    ) -> Result<()> {
+        insert_event(tx, &event, self.origin).await.map(|_| ())
+    }
+
+    async fn commit(&self, tx: Transaction<'_, Postgres>) -> Result<()> {
+        tx.commit().await.map_err(repo_err)?;
+        self.wake.notify_one();
+        Ok(())
     }
 
     async fn touch_one(
@@ -266,7 +306,9 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
         }
-        tx.commit().await.map_err(repo_err)?;
+        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+            .await?;
+        self.commit(tx).await?;
 
         Ok(Document {
             id,
@@ -297,6 +339,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
         let now = Utc::now();
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
 
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
@@ -309,9 +352,12 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(document_type_id)
         .bind(now)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
+        self.emit_in(&mut tx, DocumentEvent::Updated { document_id: id })
+            .await?;
+        self.commit(tx).await?;
 
         Ok(Document {
             id,
@@ -332,16 +378,33 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn delete(&self, id: Id) -> Result<()> {
+        // Workflows still need to see the document after it is gone.
+        let snapshot = match self.find_by_id(id).await? {
+            Some(document) => Some(Arc::new(DeletedDocument {
+                tags: self.get_tags(id).await?,
+                document,
+            })),
+            None => None,
+        };
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query("DELETE FROM documents WHERE id = $1")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(repo_err)?;
 
         if result.rows_affected() == 0 {
             return Err(not_found("Document", id));
         }
-        Ok(())
+        self.emit_in(
+            &mut tx,
+            DocumentEvent::Deleted {
+                document_id: id,
+                snapshot,
+            },
+        )
+        .await?;
+        self.commit(tx).await
     }
 
     async fn set_file_path(&self, id: Id, file_path: &str) -> Result<()> {
@@ -458,31 +521,43 @@ impl DocumentRepository for PostgresDocumentRepository {
                 .await
                 .map_err(repo_err)?;
         }
-
-        tx.commit().await.map_err(repo_err)
+        self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
+            .await?;
+        self.commit(tx).await
     }
 
     async fn add_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
-        sqlx::query(
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let result = sqlx::query(
             "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)
              ON CONFLICT DO NOTHING",
         )
         .bind(document_id)
         .bind(tag_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        Ok(())
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
+                .await?;
+        }
+        self.commit(tx).await
     }
 
     async fn remove_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
-        sqlx::query("DELETE FROM document_tags WHERE document_id = $1 AND tag_id = $2")
-            .bind(document_id)
-            .bind(tag_id)
-            .execute(&self.pool)
-            .await
-            .map_err(repo_err)?;
-        Ok(())
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let result =
+            sqlx::query("DELETE FROM document_tags WHERE document_id = $1 AND tag_id = $2")
+                .bind(document_id)
+                .bind(tag_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_err)?;
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
+                .await?;
+        }
+        self.commit(tx).await
     }
 }
 
