@@ -13,4 +13,5 @@
     <p class="f-meta">At least 12 characters.</p>
     <button class="f-btn f-btn-primary" type="submit">Create account</button>
 </form>
+{% match sso %}{% when Some with (sso) %}<p class="f-meta">Or <a href="{{ sso.href }}" data-turbo="false">{{ sso.label }}</a> to make the first account the owner.</p>{% when None %}{% endmatch %}
 {% endblock %}

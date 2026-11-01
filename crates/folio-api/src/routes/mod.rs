@@ -8,6 +8,7 @@ pub(crate) mod documents;
 pub(crate) mod events;
 mod health;
 mod manage;
+mod oidc;
 mod pages;
 mod pwa;
 mod settings;
