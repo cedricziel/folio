@@ -37,3 +37,9 @@
 !.claude/hooks/
 !.claude/skills/
 !.claude/commands/
+
+# Swift / Xcode build output
+.build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/xcuserdata/
