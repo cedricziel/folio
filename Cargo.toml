@@ -4,6 +4,7 @@ members = [
     "crates/folio-core",
     "crates/folio-infra",
     "crates/folio-api",
+    "crates/folio-mcp",
     "folio-app",
 ]
 
@@ -48,6 +49,10 @@ dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# MCP
+rmcp = { version = "3.8", default-features = false }
+base64 = "0.22"
+
 # Utilities
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -68,3 +73,4 @@ image = "0.25"
 folio-core = { path = "crates/folio-core" }
 folio-infra = { path = "crates/folio-infra" }
 folio-api = { path = "crates/folio-api" }
+folio-mcp = { path = "crates/folio-mcp" }
