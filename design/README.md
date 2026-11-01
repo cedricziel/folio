@@ -28,7 +28,7 @@ Folio keeps a household's or a small office's paperwork: letters, invoices, cont
 
 ## Type
 
-- Geist for interface, Geist Mono for records, both from Google Fonts. On Apple platforms use SF Pro and SF Mono instead (the stacks fall back to them) and map styles to Dynamic Type: `display` → `.largeTitle`, `title` → `.title2`, `heading` → `.headline`, `body` → `.body`, `body-sm` → `.subheadline`, `label` → `.caption` (uppercase, semibold), `meta` and `ocr` → `.caption` / `.callout` in `.monospaced()` design with monospaced digits.
+- Geist for interface, Geist Mono for records, both bundled with the app as self-hosted variable fonts. On Apple platforms use SF Pro and SF Mono instead (the stacks fall back to them) and map styles to Dynamic Type: `display` → `.largeTitle`, `title` → `.title2`, `heading` → `.headline`, `body` → `.body`, `body-sm` → `.subheadline`, `label` → `.caption` (uppercase, semibold), `meta` and `ocr` → `.caption` / `.callout` in `.monospaced()` design with monospaced digits.
 - One `title` per screen. `display` only in empty states and onboarding.
 - Use `font-variant-numeric: tabular-nums` (SwiftUI `.monospacedDigit()`) wherever numbers stack.
 

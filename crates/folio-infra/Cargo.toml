@@ -45,3 +45,4 @@ image = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

@@ -1,70 +1,20 @@
-{% if documents.is_empty() %}
-<div class="empty-state-container">
-    <div class="empty-state-illustration">
-        <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="25" y="15" width="70" height="90" rx="4" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="2"/>
-            <rect x="35" y="35" width="50" height="4" rx="2" fill="#94a3b8"/>
-            <rect x="35" y="45" width="40" height="4" rx="2" fill="#94a3b8"/>
-            <rect x="35" y="55" width="45" height="4" rx="2" fill="#94a3b8"/>
-            <rect x="35" y="65" width="30" height="4" rx="2" fill="#94a3b8"/>
-            <circle cx="90" cy="90" r="25" fill="#2563eb" opacity="0.1"/>
-            <circle cx="90" cy="90" r="18" fill="#2563eb"/>
-            <path d="M90 82v16M82 90h16" stroke="white" stroke-width="3" stroke-linecap="round"/>
-        </svg>
-    </div>
-    <h3 class="empty-state-title">Welcome to Folio!</h3>
-    <p class="empty-state-description">
-        Upload your first document to get started.<br>
-        We support images and PDFs with automatic text extraction.
-    </p>
-    <button type="button" class="empty-state-cta" data-action="click->upload-modal#open">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="17 8 12 3 7 8"/>
-            <line x1="12" y1="3" x2="12" y2="15"/>
-        </svg>
-        Upload Document
-    </button>
-    <p class="empty-state-hint">Or drag and drop files anywhere on the page</p>
-</div>
-{% else %}
-<ul class="documents-list">
-    {% for doc in documents %}
-    <li class="document-item" id="document-{{ doc.id }}">
-        <a href="/documents/{{ doc.id }}" data-turbo-frame="_top">
-            <div class="document-thumbnail">
-                <img src="/documents/{{ doc.id }}/thumbnail" alt="{{ doc.title }}" loading="lazy">
-            </div>
-            <div class="document-info-block">
-                <div class="document-title-row">
-                    <span class="document-title">{{ doc.title }}</span>
-                    {% match doc.content %}
-                    {% when Some with (_content) %}
-                    <span class="status-badge status-ready" title="Text extracted">Ready</span>
-                    {% when None %}
-                    <span class="status-badge status-processing" title="Extracting text...">
-                        <span class="status-spinner"></span>
-                        Processing
-                    </span>
-                    {% endmatch %}
-                </div>
-                <div class="document-meta">
-                    <span class="date">{{ doc.created_at.format("%b %d, %Y") }}</span>
-                    {% match doc.mime_type %}
-                    {% when Some with (mime) %}
-                    <span class="mime-type">{{ mime }}</span>
-                    {% when None %}
-                    {% endmatch %}
-                </div>
-                {% match doc.content %}
-                {% when Some with (content) %}
-                <div class="document-preview-text">{{ content|truncate(150) }}</div>
-                {% when None %}
-                <div class="document-preview-text document-preview-pending">Text extraction in progress...</div>
-                {% endmatch %}
-            </div>
-        </a>
-    </li>
+<div class="f-list" id="documents-rows">
+    {% for row in rows %}
+    {% include "partials/document_row.html" %}
     {% endfor %}
-</ul>
+</div>
+{% if rows.is_empty() %}
+<div class="empty-state" id="documents-empty">
+    {% if total == 0 %}
+    <h2 class="display">Your paperwork, filed.</h2>
+    <p class="lede">Drop a letter, invoice or contract below and Folio reads it for you.</p>
+    <button type="button" class="f-btn f-btn-primary" data-action="click->upload-modal#open">Upload a document</button>
+    {% else if view_all %}
+    <h2 class="heading">No documents match.</h2>
+    <p class="lede">Try another filter, or <a href="/?view=all">see all documents</a>.</p>
+    {% else %}
+    <h2 class="heading">Nothing waiting.</h2>
+    <p class="lede">Everything is filed. New uploads land here. <a href="/?view=all">See all documents</a>.</p>
+    {% endif %}
+</div>
 {% endif %}

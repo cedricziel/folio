@@ -1,39 +1,31 @@
+{% import "partials/icons.html" as icons %}
 <turbo-frame id="document-types-list">
     <ul class="manage-list">
         {% if document_types.is_empty() %}
-        <li class="manage-list-empty">No document types yet</li>
+        <li class="manage-list-empty">No types yet</li>
         {% else %}
         {% for doc_type in document_types %}
         <li class="manage-list-item" id="document-type-{{ doc_type.id }}">
             <span class="manage-item-name">{{ doc_type.name }}</span>
             <div class="manage-item-actions">
-                <button type="button" class="manage-btn-edit"
-                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                    </svg>
-                </button>
+                <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename document-type {{ doc_type.name }}"
+                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{{ icons::pencil() }}</button>
                 <form action="/manage/document_types/{{ doc_type.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
-                      data-confirm-message-value="Delete document type '{{ doc_type.name }}'?"
+                      data-confirm-message-value="Delete document-type '{{ doc_type.name }}'?"
                       data-action="submit->confirm#confirm"
                       data-turbo-frame="document-types-list">
-                    <button type="submit" class="manage-btn-delete">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"/>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                        </svg>
-                    </button>
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger icon-btn" aria-label="Delete document-type {{ doc_type.name }}">{{ icons::trash() }}</button>
                 </form>
             </div>
             <div class="manage-edit-form">
                 <form action="/manage/document_types/{{ doc_type.id }}/update" method="post"
                       data-turbo-frame="document-types-list">
-                    <input type="text" name="name" value="{{ doc_type.name }}" required>
+                    <label class="sr-only" for="edit-document-type-{{ doc_type.id }}">Name</label>
+                    <input class="input" id="edit-document-type-{{ doc_type.id }}" type="text" name="name" value="{{ doc_type.name }}" required>
                     <div class="manage-edit-actions">
-                        <button type="submit" class="btn-small">Save</button>
-                        <button type="button" class="btn-small btn-secondary"
+                        <button type="submit" class="f-btn f-btn-primary">Save</button>
+                        <button type="button" class="f-btn f-btn-quiet"
                                 onclick="this.closest('.manage-edit-form').classList.remove('active')">Cancel</button>
                     </div>
                 </form>

@@ -9,6 +9,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY folio-app ./folio-app
 COPY migrations ./migrations
+COPY xtask ./xtask
+COPY static ./static
 RUN cargo build --release --locked --bin folio-app
 
 FROM debian:bookworm-slim
@@ -32,7 +34,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=builder /build/target/release/folio-app /usr/local/bin/folio-app
-COPY static ./static
+COPY config.toml ./config.toml
 
 ENV FOLIO_SERVER__HOST=0.0.0.0 \
     FOLIO_SERVER__PORT=3000 \
@@ -42,4 +44,6 @@ ENV FOLIO_SERVER__HOST=0.0.0.0 \
 USER folio
 VOLUME /data
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/folio-app", "healthcheck"]
 ENTRYPOINT ["folio-app"]

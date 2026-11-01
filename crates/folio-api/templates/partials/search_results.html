@@ -1,29 +1,13 @@
 <turbo-frame id="documents-list">
-{% if results.is_empty() %}
-<p class="empty-state">No matching documents found.</p>
-{% else %}
-<ul class="documents-list">
-    {% for result in results %}
-    <li class="document-item" id="document-{{ result.document.id }}">
-        <a href="/documents/{{ result.document.id }}" data-turbo-frame="document-detail">
-            <div class="document-title">{{ result.document.title }}</div>
-            <div class="document-meta">
-                <span class="score">Score: {{ result.score_percent }}%</span>
-                <span class="date">{{ result.document.created_at }}</span>
-                {% match result.document.mime_type %}
-                {% when Some with (mime) %}
-                <span class="mime-type">{{ mime }}</span>
-                {% when None %}
-                {% endmatch %}
-            </div>
-            {% match result.document.content %}
-            {% when Some with (content) %}
-            <div class="document-preview">{{ content|truncate(200) }}</div>
-            {% when None %}
-            {% endmatch %}
-        </a>
-    </li>
-    {% endfor %}
-</ul>
-{% endif %}
+    <div class="f-list" id="documents-rows">
+        {% for row in rows %}
+        {% include "partials/document_row.html" %}
+        {% endfor %}
+    </div>
+    {% if rows.is_empty() %}
+    <div class="empty-state" id="documents-empty">
+        <h2 class="heading">No matching documents.</h2>
+        <p class="lede">Try different words.</p>
+    </div>
+    {% endif %}
 </turbo-frame>

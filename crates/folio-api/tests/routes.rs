@@ -12,12 +12,7 @@ use folio_core::{
     models::{CreateDocument, CreateTag},
     EventBroadcaster,
 };
-use folio_infra::{
-    create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    SqliteAuthStore, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
-    SqliteTagRepository, ThumbnailService,
-};
+use folio_infra::{Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -43,28 +38,29 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let storage_path = dir.to_str().unwrap().to_string();
 
     // A file-backed database: each pooled connection to `:memory:` would see its own empty DB.
-    let pool = create_pool(&format!("sqlite://{}/test.db", storage_path))
+    let database = Database::connect(&format!("sqlite://{}/test.db", storage_path))
         .await
         .unwrap();
-    run_migrations(&pool).await.unwrap();
+    database.migrate().await.unwrap();
+    let repos = database.repositories().await;
+    let auth_store = repos.auth.clone();
 
     let ai = Config::default().ai;
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
     let state = AppState::new(
-        Arc::new(SqliteDocumentRepository::new(pool.clone())),
-        Arc::new(SqliteTagRepository::new(pool.clone())),
-        Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-        Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-        settings_repo.clone(),
+        repos.documents,
+        repos.tags,
+        repos.correspondents,
+        repos.document_types,
+        repos.settings.clone(),
         Arc::new(DynamicOcrService::new(
-            settings_repo.clone(),
+            repos.settings.clone(),
             ai.clone(),
             &storage_path,
         )),
-        Arc::new(DynamicEmbeddingService::new(settings_repo, ai)),
-        Arc::new(SqliteSearchService::new(pool.clone())),
+        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        repos.search,
         Arc::new(ThumbnailService::new(&storage_path)),
-        JobQueue::new(pool.clone()),
+        repos.jobs,
         storage_path,
         EventBroadcaster::default(),
     );
@@ -72,7 +68,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     TestApp {
         router: create_router(
             state.clone(),
-            AuthState::new(Arc::new(SqliteAuthStore::new(pool)), None).with_required(auth_required),
+            AuthState::new(auth_store, None).with_required(auth_required),
         ),
         state,
         dir,
@@ -203,4 +199,8 @@ async fn full_router_enforces_auth_when_required() {
     assert_eq!(status, StatusCode::OK);
     let (status, _) = request(&app, "GET", "/api/openapi.json").await;
     assert_eq!(status, StatusCode::OK);
+    for probe in ["/healthz", "/readyz"] {
+        let (status, _) = request(&app, "GET", probe).await;
+        assert_eq!(status, StatusCode::OK, "{probe} must stay unauthenticated");
+    }
 }

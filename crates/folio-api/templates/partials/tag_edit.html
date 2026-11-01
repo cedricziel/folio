@@ -1,18 +1,11 @@
 <div class="manage-edit-inline">
     <form action="/manage/tags/{{ tag.id }}/update" method="post"
           data-turbo-frame="tags-list">
-        <div class="tag-form-row">
-            <input type="text" name="name" value="{{ tag.name }}" required autofocus>
-            {% match tag.color %}
-            {% when Some with (color) %}
-            <input type="color" name="color" value="{{ color }}" class="color-picker">
-            {% when None %}
-            <input type="color" name="color" value="#2563eb" class="color-picker">
-            {% endmatch %}
-        </div>
+        <label class="sr-only" for="edit-name">Name</label>
+        <input class="input" id="edit-name" type="text" name="name" value="{{ tag.name }}" required autofocus>
         <div class="manage-edit-actions">
-            <button type="submit" class="btn-small">Save</button>
-            <a href="/manage/tags" class="btn-small btn-secondary" data-turbo-frame="tags-list">Cancel</a>
+            <button type="submit" class="f-btn f-btn-primary">Save</button>
+            <a href="/manage/tags" class="f-btn f-btn-quiet" data-turbo-frame="tags-list">Cancel</a>
         </div>
     </form>
 </div>

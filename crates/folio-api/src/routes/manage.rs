@@ -19,6 +19,8 @@ use folio_core::models::{
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
+use super::view::{Nav, Sidebar};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         // Main management page
@@ -74,6 +76,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "manage.html")]
 struct ManageTemplate {
+    sidebar: Sidebar,
     title: String,
     correspondents: Vec<Correspondent>,
     document_types: Vec<DocumentType>,
@@ -86,6 +89,7 @@ async fn manage_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
     let tags = state.tag_repo.list().await?;
 
     let template = ManageTemplate {
+        sidebar: Sidebar::load(&state, Nav::Manage).await?,
         title: "Manage - Folio".to_string(),
         correspondents,
         document_types,

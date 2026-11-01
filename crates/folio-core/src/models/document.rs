@@ -102,6 +102,31 @@ impl Document {
     }
 }
 
+/// Where a document stands between upload and being filed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentStatus {
+    /// Text has not been extracted yet
+    Processing,
+    /// Read, but not yet assigned a correspondent or a document type
+    NeedsReview,
+    /// Read and assigned a correspondent or a document type
+    Filed,
+}
+
+impl Document {
+    /// Derive the document's inbox status from what is known about it
+    pub fn status(&self) -> DocumentStatus {
+        if self.content.is_none() {
+            DocumentStatus::Processing
+        } else if self.correspondent_id.is_none() && self.document_type_id.is_none() {
+            DocumentStatus::NeedsReview
+        } else {
+            DocumentStatus::Filed
+        }
+    }
+}
+
 /// Parameters for creating a new document
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateDocument {
@@ -129,4 +154,21 @@ pub struct DocumentFilter {
     pub document_type_id: Option<Id>,
     pub tag_ids: Option<Vec<Id>>,
     pub search_query: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_follows_extraction_and_classification() {
+        let doc = Document::new("Invoice");
+        assert_eq!(doc.status(), DocumentStatus::Processing);
+
+        let read = doc.with_content("text");
+        assert_eq!(read.status(), DocumentStatus::NeedsReview);
+
+        let filed = read.with_document_type(Id::new_v4());
+        assert_eq!(filed.status(), DocumentStatus::Filed);
+    }
 }

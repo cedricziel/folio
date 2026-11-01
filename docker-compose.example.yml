@@ -1,0 +1,52 @@
+# Folio with PostgreSQL. Copy to docker-compose.yml and change the passwords.
+#
+#   docker compose up -d
+#
+# The pgvector image lets Folio rank semantic search in the database. A plain
+# postgres image works too; Folio then falls back to cosine similarity in Rust.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: folio
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: folio
+    secrets:
+      - db_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U folio -d folio"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  folio:
+    image: ghcr.io/cedricziel/folio:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      # Compose does not expand secrets inside URLs, so keep the password here
+      # in sync with secrets/db_password, or use an .env file.
+      FOLIO_DATABASE__URL: postgres://folio:change-me@postgres:5432/folio
+      FOLIO_AI__PROVIDER: openai
+      FOLIO_AI__OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
+    secrets:
+      - openai_api_key
+    volumes:
+      - folio-data:/data
+
+volumes:
+  postgres-data:
+  folio-data:
+
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  openai_api_key:
+    file: ./secrets/openai_api_key

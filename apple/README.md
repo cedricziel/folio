@@ -33,3 +33,20 @@ Use `xcrun swift …` and `xcrun xcodebuild …` rather than bare `swift`, so th
 ```sh
 cd apple/FolioKit && xcrun swift test
 ```
+
+## Fastlane and TestFlight
+
+```sh
+cd apple
+bundle install
+bundle exec fastlane bootstrap   # once: bundle ids with App Groups, then match appstore (not readonly)
+bundle exec fastlane test        # FolioKit tests, then builds for iOS Simulator and macOS
+bundle exec fastlane beta        # match -> build number -> build -> TestFlight (iOS)
+bundle exec fastlane beta_mac    # same for macOS
+```
+
+Every push to `main` that touches `apple/`, `openapi/` or `design/tokens.json` runs `beta` and `beta_mac` in CI (`beta_mac` is allowed to fail until the Mac installer certificate exists). The build number is the latest TestFlight build plus one.
+
+The lanes need `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_CONTENT` (the raw `.p8`, or its base64) for the App Store Connect API key, and `MATCH_PASSWORD`. Match clones `git@github.com:cedricziel/certificates.git` over ssh (`MATCH_GIT_URL` overrides it). CI additionally uses `MATCH_DEPLOY_KEY` and `MATCH_KEYCHAIN_PASSWORD`. The team id is in `fastlane/Appfile`.
+
+`beta` registers missing bundle ids (`com.cedricziel.folio`, `.share`, `.fileprovider`) when `CI` is not set. An API key cannot create the App Group or the App Store Connect app record; `bootstrap` prints what to create by hand. Fastlane runs `xcrun xcodebuild` under the active Xcode, so select the right one with `xcode-select` or `DEVELOPER_DIR`; per the machine rules, never bare `swift`.
