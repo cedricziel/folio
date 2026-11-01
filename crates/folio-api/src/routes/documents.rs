@@ -344,7 +344,7 @@ pub(crate) async fn search_documents(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
-    let search_results = state.semantic_search(&req.query, req.limit).await?;
+    let search_results = state.search_documents(&req.query, req.limit).await?;
 
     // Fetch full document details
     let mut results = Vec::new();
@@ -376,7 +376,7 @@ pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
     Query(params): Query<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
-    let search_results = state.semantic_search(&params.q, params.limit).await?;
+    let search_results = state.search_documents(&params.q, params.limit).await?;
 
     // Fetch full document details
     let mut results = Vec::new();

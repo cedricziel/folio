@@ -40,15 +40,16 @@
                     <div class="document-info-block">
                         <div class="document-title-row">
                             <span class="document-title">{{ doc.title }}</span>
-                            {% match doc.content %}
-                            {% when Some with (_content) %}
-                            <span class="status-badge status-ready" title="Text extracted">Ready</span>
-                            {% when None %}
+{% if doc.ocr_status.is_active() %}
                             <span class="status-badge status-processing" title="Extracting text...">
                                 <span class="status-spinner"></span>
                                 Processing
                             </span>
-                            {% endmatch %}
+                            {% else if doc.ocr_status.as_str() == "failed" %}
+                            <span class="status-badge status-failed" title="Text extraction failed">Failed</span>
+                            {% else %}
+                            <span class="status-badge status-ready" title="Text extracted">Ready</span>
+                            {% endif %}
                         </div>
                         <div class="document-meta">
                             <span class="date">{{ doc.created_at }}</span>

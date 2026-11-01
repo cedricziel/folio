@@ -16,6 +16,7 @@ pub enum ProcessingStage {
 /// State of one pipeline stage for one document
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum ProcessingStatus {
     /// Waiting to be processed
     #[default]
@@ -31,6 +32,11 @@ pub enum ProcessingStatus {
 }
 
 impl ProcessingStatus {
+    /// Whether the stage still has work ahead of it
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Pending | Self::Running)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",

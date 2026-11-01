@@ -76,8 +76,20 @@ impl AppState {
 }
 
 impl AppState {
-    /// Semantic search over document chunks embedded with the active model
-    pub async fn semantic_search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    /// Search documents by meaning, falling back to title and text matching
+    ///
+    /// The fallback applies when embeddings are disabled or fail, and when no
+    /// stored vector matches (for example before the first document is embedded).
+    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        match self.semantic_search(query, limit).await {
+            Ok(results) if !results.is_empty() => return Ok(results),
+            Ok(_) => {}
+            Err(e) => tracing::debug!("Semantic search unavailable, using text match: {}", e),
+        }
+        self.text_search(query, limit).await
+    }
+
+    async fn semantic_search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let batch = self.embedding_service.embed(&[query]).await?;
         let Some(vector) = batch.vectors.first() else {
             return Ok(Vec::new());
@@ -85,5 +97,25 @@ impl AppState {
         self.search_service
             .search(&batch.model, vector, limit)
             .await
+    }
+
+    async fn text_search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let needle = query.to_lowercase();
+        let documents = self.document_repo.list(None).await?;
+        Ok(documents
+            .into_iter()
+            .filter(|d| {
+                d.title.to_lowercase().contains(&needle)
+                    || d.content
+                        .as_deref()
+                        .is_some_and(|c| c.to_lowercase().contains(&needle))
+            })
+            .take(limit)
+            .map(|d| SearchResult {
+                document_id: d.id,
+                score: 1.0,
+                snippet: None,
+            })
+            .collect())
     }
 }

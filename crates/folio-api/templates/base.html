@@ -209,8 +209,8 @@
                     const response = await fetch(`/api/documents/search?q=${encodeURIComponent(query)}`);
                     if (response.ok) {
                         const data = await response.json();
-                        this.results = data;
-                        this.renderResults(data, "Search Results");
+                        this.results = data.results;
+                        this.renderResults(this.results, "Search Results");
                     } else {
                         // Fallback to simple fetch
                         this.showRecentDocuments(query);
@@ -224,7 +224,7 @@
                 try {
                     const response = await fetch("/api/documents");
                     if (response.ok) {
-                        let data = await response.json();
+                        let data = (await response.json()).documents;
 
                         // Filter if query provided
                         if (filterQuery) {

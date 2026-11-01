@@ -1219,7 +1219,7 @@ dependencies = [
  "folio-api",
  "folio-core",
  "folio-infra",
- "reqwest",
+ "reqwest 0.13.5",
  "tokio",
  "tracing",
  "tracing-subscriber",

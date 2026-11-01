@@ -527,7 +527,7 @@ async fn search_documents(
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Html<String>> {
     // Try to generate embedding for query - fall back to empty results if AI not available
-    let results = match state.semantic_search(&query.q, 10).await {
+    let results = match state.search_documents(&query.q, 10).await {
         Ok(search_results) => {
             // Fetch full document details and format scores
             let mut results = Vec::new();

@@ -27,10 +27,7 @@ test.describe("document lifecycle", () => {
     await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
   });
 
-  // Search is embedding-based: with AI provider "local" /documents/search returns
-  // no results, /api/documents/search errors, and the palette's client-side
-  // fallback filters the wrong shape. Enable once title search works without AI.
-  test.fixme("search finds the document by title", async ({ page }) => {
+  test("search finds the document by title", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: /Search documents/ }).click();
     await page.getByPlaceholder("Search documents...").last().fill(title);
