@@ -29,3 +29,14 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::MigrateError> {
     sqlx::migrate!("../../migrations").run(pool).await
 }
+
+/// Migrated throw-away database for tests; each pooled connection of an
+/// in-memory SQLite database would see its own empty schema, so use a file.
+#[cfg(test)]
+pub(crate) async fn test_pool() -> (SqlitePool, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("test.db").display());
+    let pool = create_pool(&url).await.unwrap();
+    run_migrations(&pool).await.unwrap();
+    (pool, dir)
+}
