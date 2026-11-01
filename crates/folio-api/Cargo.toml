@@ -52,6 +52,8 @@ url = "2"
 async-trait = { workspace = true }
 
 [dev-dependencies]
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+reqwest = { workspace = true }
 sqlx = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-subscriber = { workspace = true }

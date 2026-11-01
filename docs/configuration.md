@@ -51,6 +51,16 @@ startup by the first three layers.
 | `auth.forward.secret_header` | `FOLIO_AUTH__FORWARD__SECRET_HEADER` | `X-Folio-Proxy-Secret` | Header carrying the shared secret. |
 | `auth.forward.session_ttl_secs` | `FOLIO_AUTH__FORWARD__SESSION_TTL_SECS` | `43200` | Lifetime of sessions created by forward-auth logins (12 hours). Local logins last 14 days. |
 | `auth.forward.admin_role` | `FOLIO_AUTH__FORWARD__ADMIN_ROLE` | unset | Users with this role are admins. Needs `role_header`. |
+| `auth.oidc.enabled` | `FOLIO_AUTH__OIDC__ENABLED` | `false` | Let users sign in through an OpenID Connect provider. See [auth.md](auth.md#openid-connect). |
+| `auth.oidc.issuer` | `FOLIO_AUTH__OIDC__ISSUER` | unset | Issuer URL of the provider, for example `https://auth.example.com/application/o/folio/`. Discovery reads `<issuer>/.well-known/openid-configuration`. |
+| `auth.oidc.client_id` | `FOLIO_AUTH__OIDC__CLIENT_ID` | unset | Client ID registered at the provider. |
+| `auth.oidc.client_secret` | `FOLIO_AUTH__OIDC__CLIENT_SECRET` | unset | Client secret. Leave unset for a public client. Supports `_FILE`. |
+| `auth.oidc.scopes` | `FOLIO_AUTH__OIDC__SCOPES` | `openid profile email` | Space-separated scopes to request. Add one that releases your groups claim if the provider needs it. |
+| `auth.oidc.display_name` | `FOLIO_AUTH__OIDC__DISPLAY_NAME` | `Sign in with SSO` | Label of the button on the login page. |
+| `auth.oidc.groups_claim` | `FOLIO_AUTH__OIDC__GROUPS_CLAIM` | `groups` | Claim that lists the user's group names. |
+| `auth.oidc.admin_group` | `FOLIO_AUTH__OIDC__ADMIN_GROUP` | unset | Members of this external group are admins. |
+| `auth.oidc.allow_local_login` | `FOLIO_AUTH__OIDC__ALLOW_LOCAL_LOGIN` | `true` | Keep the username and password form. With `false` only SSO works and `/setup` is not needed. |
+| `auth.oidc.auto_create_users` | `FOLIO_AUTH__OIDC__AUTO_CREATE_USERS` | `true` | Create an account on first sign-in. With `false` only users who already signed in once can sign in. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
 | `storage.backend` | `FOLIO_STORAGE__BACKEND` | `local` | `local` or `s3` (see [storage.md](storage.md)). |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Root directory for the `local` backend. |

@@ -64,6 +64,16 @@ public struct LiveFolioService: FolioService {
         try check(response, body: data)
     }
 
+    /// Also a form post, with the tag in the path.
+    public func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
+        var request = URLRequest(
+            url: endpoint(
+                "api/documents/\(documentID.uuidString.lowercased())/tags/\(tagID.uuidString.lowercased())"))
+        request.httpMethod = "POST"
+        let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+        try check(response, body: data)
+    }
+
     public func deleteDocument(id: Document.ID) async throws {
         try await call {
             _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).noContent

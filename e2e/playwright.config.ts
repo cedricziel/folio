@@ -11,6 +11,8 @@ export default defineConfig({
   workers: 1,
   timeout: 20_000,
   expect: { timeout: 7_000 },
+  // Linux-only baselines (see visual.spec.ts), so no platform suffix.
+  snapshotPathTemplate: "{testDir}/__screenshots__/{testFileName}/{arg}{ext}",
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI
     ? [["list"], ["html", { open: "never" }]]

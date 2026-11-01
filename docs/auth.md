@@ -91,6 +91,7 @@ rotating refresh token.
 | --- | --- | --- |
 | Username and password | always | The owner account from `/setup`. |
 | Forward auth (trusted headers) | `auth.forward.enabled` | For deployments behind an SSO gateway. See below. |
+| OpenID Connect | `auth.oidc.enabled` | A "Sign in with SSO" button. See [OpenID Connect](#openid-connect). |
 
 All methods end in the same session cookie, so the OAuth authorize flow, the
 web UI and the MCP login work the same way with any of them.
@@ -204,6 +205,102 @@ use Folio's own OAuth instead.
 - **oauth2-proxy**: pass `--set-xauthrequest` and map `X-Auth-Request-User`,
   `X-Auth-Request-Email`, `X-Auth-Request-Groups`.
 
+## OpenID Connect
+
+Folio can act as an OpenID Connect relying party, so one identity provider
+(Authentik, Authelia, Pocket ID, Keycloak, ...) signs everybody in. The login
+page gets a button; the rest (sessions, the MCP and native app OAuth flow,
+`next` redirects) works as with a password.
+
+```toml
+[auth.oidc]
+enabled = true
+issuer = "https://auth.example.com/application/o/folio/"
+client_id = "folio"
+client_secret = "..."          # or FOLIO_AUTH__OIDC__CLIENT_SECRET_FILE; omit for a public client
+admin_group = "folio-admins"   # optional
+# scopes = "openid profile email"
+# display_name = "Sign in with SSO"
+# groups_claim = "groups"
+# allow_local_login = true
+# auto_create_users = true
+```
+
+Register `<public_url>/auth/oidc/callback` as the redirect URI at the provider
+and set `server.public_url`; the redirect URI Folio sends must match exactly.
+The issuer must be `https` (plain `http` only for loopback) and must equal the
+`issuer` of `<issuer>/.well-known/openid-configuration`, including a trailing
+slash if the provider has one.
+
+- **Flow.** Authorization code with PKCE (S256), `state` and `nonce`. The
+  pending login is stored server-side for ten minutes, bound to the browser by
+  a cookie, and can be used once.
+- **Validation.** The ID token must be signed by a key from the provider's
+  JWKS and carry the right issuer, audience, nonce and a valid
+  `exp` (one minute of clock leeway). An unknown `kid` makes Folio refetch the
+  JWKS at most every ten seconds, so key rotation needs no restart. Discovery
+  is cached for an hour. If the ID token lacks `preferred_username` or the
+  groups claim and the provider has a userinfo endpoint, Folio asks it.
+- **Algorithms.** Only asymmetric signatures are accepted: RS256/384/512,
+  PS256/384/512, ES256/384/512 and EdDSA. HMAC (`HS*`) ID tokens are refused,
+  because anyone who knows the client secret could forge them. Set the
+  provider's signing key to RSA or ECDSA (in Authentik, pick a signing key,
+  not "HS256").
+- **Endpoints.** The authorization, token, userinfo and JWKS URLs from
+  discovery must be https (loopback excepted).
+- **Rate limit.** One client address can start 30 sign-ins per minute; behind a
+  reverse proxy that address is the proxy's.
+- **Users.** An account is linked by issuer and `sub`, never by name or email.
+  The username comes from `preferred_username`, then `email`, then `sub`. A
+  name that already belongs to a local or forward-auth account is refused with
+  `403`. With `auto_create_users = false` only users who already signed in
+  once can sign in, except that the very first sign-in on an empty install
+  still creates the owner.
+- **Admins and groups.** The first user of a fresh install is the owner. With
+  `admin_group` set, admin status follows membership of that group on every
+  login. The groups claim replaces the user's external groups on every login.
+- **Local login.** With `allow_local_login = false` the password form is gone
+  and refused, and `/setup` (and its token) is not used: the first person to sign in
+  through the provider becomes owner and admin. With local login on, an empty
+  install still starts at `/setup`, which also offers the SSO button. Keep it `true` until SSO works, so you
+  cannot lock yourself out.
+- **Logout.** If the provider advertises an `end_session_endpoint`, signing out
+  of Folio also ends the session at the provider (RP-initiated logout). Folio
+  keeps the ID token with the session and sends it as `id_token_hint`, and asks
+  the provider to return to `<public_url>/login`; register that URL as an
+  allowed post-logout redirect.
+
+### Authentik
+
+1. Create a provider of type **OAuth2/OpenID Provider**. Client type
+   *Confidential*, redirect URI (strict) `https://folio.example.com/auth/oidc/callback`,
+   signing key any RSA key. Note the client ID and secret.
+2. Create an application with slug `folio` and attach the provider. The issuer
+   is `https://auth.example.com/application/o/folio/`.
+3. Add `https://folio.example.com/login` to the provider's allowed redirect
+   URIs too: Authentik uses that list for the post-logout redirect.
+4. Groups: the default `profile` scope mapping already adds a `groups` claim
+   with the user's group names. Create a group `folio-admins` and add admins to
+   it, then set `admin_group = "folio-admins"`.
+
+### Authelia
+
+Add a client under `identity_providers.oidc.clients` with
+`client_id: folio`, a hashed `client_secret`,
+`redirect_uris: [https://folio.example.com/auth/oidc/callback]`,
+`scopes: [openid, profile, email, groups]`, `authorization_policy` as you like.
+The issuer is your Authelia URL, for example `https://auth.example.com`. Set
+`scopes = "openid profile email groups"` in Folio so the `groups` claim is
+released.
+
+### Pocket ID
+
+Create an OIDC client with callback URL
+`https://folio.example.com/auth/oidc/callback`, copy the client ID and secret,
+and use your Pocket ID URL as the issuer. Pocket ID puts a user's groups in the
+`groups` claim; add the groups to the client's allowed groups and set
+`admin_group` to the admin group's name.
+
 ## Endpoints
 
 | Path | Purpose |
@@ -214,6 +311,7 @@ use Folio's own OAuth instead.
 | `/oauth/authorize` | authorization code with PKCE (S256 only), consent page |
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants |
 | `POST /oauth/revoke` | RFC 7009 revocation (`token`, `client_id`) |
+| `GET /auth/oidc/login`, `GET /auth/oidc/callback` | OpenID Connect sign-in |
 
 Scopes are `documents:read` and `documents:write` (both by default). Tokens
 are opaque, stored hashed, and bound to the `resource` (RFC 8707), which must
