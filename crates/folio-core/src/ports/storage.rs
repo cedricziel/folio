@@ -109,6 +109,9 @@ pub trait DocumentStore: Send + Sync {
     /// Open an object for streaming. Missing keys yield [`Error::NotFound`].
     async fn get(&self, key: &str) -> Result<StoredObject>;
 
+    /// Size in bytes of an object, or `None` when it does not exist.
+    async fn size(&self, key: &str) -> Result<Option<u64>>;
+
     /// Whether an object exists.
     async fn exists(&self, key: &str) -> Result<bool>;
 

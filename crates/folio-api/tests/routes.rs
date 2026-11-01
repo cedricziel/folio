@@ -15,7 +15,7 @@ use folio_core::{
 };
 use folio_infra::{
     Config, Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
-    ThumbnailService,
+    PipelineContext, ThumbnailService, WebhookClient,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -51,19 +51,24 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
 
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let ai = Config::default().ai;
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let state = AppState::new(
         repos.documents,
         repos.tags,
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(repos.settings.clone(), ai.clone())),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         Arc::new(ThumbnailService::new(store.clone())),
         repos.jobs,
         store,
         EventBroadcaster::default(),
+        repos.workflows,
+        WebhookClient::new(),
+        "http://folio.test".to_string(),
     );
 
     TestApp {

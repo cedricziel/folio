@@ -1,6 +1,6 @@
 <div class="panel settings-card">
-    <h2 class="heading">AI configuration</h2>
-    <p class="hint">Pick a provider for reading text from files and for search.</p>
+    <h2 class="heading">API keys</h2>
+    <p class="hint">Credentials for hosted reading and search providers.</p>
 
     {% if saved %}
     <div class="f-notice settings-saved" role="status" data-controller="flash" data-flash-delay-value="5000">
@@ -13,17 +13,6 @@
           data-action="turbo:submit-start->settings-form#submit turbo:submit-end->settings-form#complete">
 
         <div class="field">
-            <label for="provider">AI provider</label>
-            <select id="provider" name="provider" class="select" data-settings-form-target="provider"
-                    data-action="change->settings-form#providerChanged">
-                <option value="local" {% if ai_settings.provider == "local" %}selected{% endif %}>Local (no AI)</option>
-                <option value="openai" {% if ai_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
-                <option value="anthropic" {% if ai_settings.provider == "anthropic" %}selected{% endif %}>Anthropic</option>
-            </select>
-            <span class="hint">Used for reading text and for search.</span>
-        </div>
-
-        <div class="field" data-settings-form-target="openaiFields" {% if ai_settings.provider != "openai" %}hidden{% endif %}>
             <label for="openai_api_key">OpenAI API key</label>
             <div class="input-row" data-controller="password-toggle">
                 <input class="input" type="password" id="openai_api_key" name="openai_api_key"
@@ -31,10 +20,10 @@
                        autocomplete="off" data-password-toggle-target="input">
                 <button type="button" class="f-btn" data-action="click->password-toggle#toggle" data-password-toggle-target="button">Show</button>
             </div>
-            <span class="hint">Used for GPT-4 Vision and embeddings.</span>
+            <span class="hint">Used by the openai-vision and openai providers.</span>
         </div>
 
-        <div class="field" data-settings-form-target="anthropicFields" {% if ai_settings.provider != "anthropic" %}hidden{% endif %}>
+        <div class="field">
             <label for="anthropic_api_key">Anthropic API key</label>
             <div class="input-row" data-controller="password-toggle">
                 <input class="input" type="password" id="anthropic_api_key" name="anthropic_api_key"
@@ -42,21 +31,7 @@
                        autocomplete="off" data-password-toggle-target="input">
                 <button type="button" class="f-btn" data-action="click->password-toggle#toggle" data-password-toggle-target="button">Show</button>
             </div>
-            <span class="hint">Used for Claude Vision.</span>
-        </div>
-
-        <div class="field">
-            <label for="ocr_model">Reading model</label>
-            <input class="input" type="text" id="ocr_model" name="ocr_model"
-                   value="{{ ai_settings.ocr_model }}" placeholder="gpt-4o-mini">
-            <span class="hint">The model that reads text from images and PDFs.</span>
-        </div>
-
-        <div class="field">
-            <label for="embedding_model">Embedding model</label>
-            <input class="input" type="text" id="embedding_model" name="embedding_model"
-                   value="{{ ai_settings.embedding_model }}" placeholder="text-embedding-3-small">
-            <span class="hint">The model that makes documents searchable by meaning.</span>
+            <span class="hint">Used by the anthropic-vision provider.</span>
         </div>
 
         <div class="form-actions">

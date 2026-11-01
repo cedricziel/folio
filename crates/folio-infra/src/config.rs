@@ -43,8 +43,19 @@ pub struct ServerConfig {
     pub host: String,
     pub port: u16,
     /// Externally visible base URL (for example `https://folio.example.com`).
-    /// Used in OAuth metadata and redirects; derived from the request when unset.
+    /// Used in OAuth metadata, redirects and webhook payload links; derived from the
+    /// request or `http://<host>:<port>` when unset.
     pub public_url: Option<String>,
+}
+
+impl ServerConfig {
+    /// Base URL other systems can use to reach this instance
+    pub fn base_url(&self) -> String {
+        match &self.public_url {
+            Some(url) => url.trim_end_matches('/').to_string(),
+            None => format!("http://{}:{}", self.host, self.port),
+        }
+    }
 }
 
 impl Default for ServerConfig {

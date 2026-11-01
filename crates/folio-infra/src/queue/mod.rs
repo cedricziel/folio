@@ -63,16 +63,19 @@ pub enum JobType {
     GenerateEmbedding { document_id: Uuid },
     /// Process a newly uploaded document (all steps)
     ProcessDocument { document_id: Uuid },
+    /// Execute the actions of a workflow run
+    ExecuteWorkflowRun { run_id: Uuid },
 }
 
 impl JobType {
-    /// The document this job works on.
-    pub fn document_id(&self) -> Uuid {
+    /// The document this job works on, if it is a document job.
+    pub fn document_id(&self) -> Option<Uuid> {
         match self {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id }
             | JobType::GenerateEmbedding { document_id }
-            | JobType::ProcessDocument { document_id } => *document_id,
+            | JobType::ProcessDocument { document_id } => Some(*document_id),
+            JobType::ExecuteWorkflowRun { .. } => None,
         }
     }
 
@@ -82,6 +85,7 @@ impl JobType {
             JobType::ExtractText { .. } => "extract_text",
             JobType::GenerateEmbedding { .. } => "generate_embedding",
             JobType::ProcessDocument { .. } => "process_document",
+            JobType::ExecuteWorkflowRun { .. } => "execute_workflow_run",
         }
     }
 }
@@ -101,6 +105,9 @@ pub struct Job {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
 }
+
+/// Retry budget of a job unless the caller sets one
+pub(crate) const DEFAULT_MAX_ATTEMPTS: i32 = 3;
 
 /// Job queue backed by the configured database.
 #[derive(Clone)]
@@ -139,6 +146,19 @@ impl JobQueue {
         scheduled_at: DateTime<Utc>,
     ) -> Result<Uuid> {
         dispatch!(self, enqueue_delayed(job_type, scheduled_at))
+    }
+
+    /// Enqueue a job with its own retry budget
+    pub async fn enqueue_with_max_attempts(
+        &self,
+        job_type: JobType,
+        scheduled_at: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<Uuid> {
+        dispatch!(
+            self,
+            enqueue_with_max_attempts(job_type, scheduled_at, max_attempts)
+        )
     }
 
     /// Claim the next available job

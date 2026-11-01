@@ -1218,6 +1218,391 @@
         }
       }
     },
+    "/api/workflows": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List all workflows",
+        "operationId": "listWorkflows",
+        "responses": {
+          "200": {
+            "description": "All workflows; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Workflow"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Create a workflow",
+        "operationId": "createWorkflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Get a workflow",
+        "operationId": "getWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workflow; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Replace a workflow",
+        "description": "All fields are replaced. A webhook `secret` of `********` keeps the stored one.",
+        "operationId": "updateWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Delete a workflow and its run history",
+        "operationId": "deleteWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The workflow was deleted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/runs": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a workflow's recent runs, newest first",
+        "operationId": "listWorkflowRuns",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of runs, newest first",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowRun"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/test": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Send a sample payload to the workflow's webhooks",
+        "description": "Delivers once, signed like a real delivery, without retries. Nothing is recorded in the run history.",
+        "operationId": "testWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery results; a failing receiver is reported here, not as an error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/events": {
       "get": {
         "tags": [
@@ -1348,6 +1733,8 @@
         "required": [
           "id",
           "title",
+          "ocr_status",
+          "embed_status",
           "created_at",
           "updated_at"
         ],
@@ -1380,6 +1767,10 @@
             "format": "uuid",
             "description": "Document type classification"
           },
+          "embed_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the embedding stage"
+          },
           "file_path": {
             "type": [
               "string",
@@ -1398,6 +1789,10 @@
               "null"
             ],
             "description": "MIME type of the original document"
+          },
+          "ocr_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the OCR stage"
           },
           "original_filename": {
             "type": [
@@ -1527,6 +1922,26 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Background processing (thumbnails, OCR, embedding) finished",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "processed"
+                ]
+              }
+            }
           }
         ],
         "description": "Event types that can be broadcast to clients"
@@ -1600,6 +2015,43 @@
         "type": "string",
         "format": "binary",
         "description": "Binary payload of a stored file"
+      },
+      "NamedRef": {
+        "type": "object",
+        "description": "A related entity, by id and display name",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ProcessingStatus": {
+        "type": "string",
+        "description": "State of one pipeline stage for one document",
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed",
+          "skipped"
+        ]
+      },
+      "RunStatus": {
+        "type": "string",
+        "description": "Where a run is in its lifecycle",
+        "enum": [
+          "pending",
+          "succeeded",
+          "failed"
+        ]
       },
       "SearchRequest": {
         "type": "object",
@@ -1684,6 +2136,65 @@
           }
         }
       },
+      "TestDelivery": {
+        "type": "object",
+        "description": "Outcome of sending the sample payload to one webhook",
+        "required": [
+          "url",
+          "success",
+          "duration_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "HTTP status of the response, when one arrived",
+            "minimum": 0
+          },
+          "success": {
+            "type": "boolean",
+            "description": "The receiver answered with a 2xx status"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "TestResult": {
+        "type": "object",
+        "description": "Result of \"send test\"",
+        "required": [
+          "payload",
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TestDelivery"
+            },
+            "description": "One entry per webhook action, in order"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/WebhookPayload",
+            "description": "What was sent"
+          }
+        }
+      },
       "UpdateCorrespondentRequest": {
         "type": "object",
         "description": "Request body for updating a correspondent",
@@ -1747,6 +2258,462 @@
             "description": "Document title; defaults to the file name"
           }
         }
+      },
+      "WebhookDocument": {
+        "type": "object",
+        "description": "The document an event is about, as it was when the event happened",
+        "required": [
+          "id",
+          "title",
+          "tags",
+          "created_at",
+          "urls"
+        ],
+        "properties": {
+          "asn": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Archive serial number; always null until Folio supports serial numbers"
+          },
+          "correspondent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamedRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "document_type": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamedRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original filename"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "File size in bytes; null when no file is stored",
+            "minimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedRef"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "urls": {
+            "$ref": "#/components/schemas/WebhookUrls"
+          }
+        }
+      },
+      "WebhookMethod": {
+        "type": "string",
+        "description": "HTTP method used for webhook delivery",
+        "enum": [
+          "POST"
+        ]
+      },
+      "WebhookPayload": {
+        "type": "object",
+        "description": "Body of every webhook delivery",
+        "required": [
+          "event",
+          "version",
+          "occurred_at",
+          "document"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/WebhookDocument"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WorkflowTrigger",
+            "description": "Event name, for example `document.uploaded`"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Payload schema version",
+            "example": 1,
+            "minimum": 0
+          }
+        }
+      },
+      "WebhookUrls": {
+        "type": "object",
+        "description": "Links to the document, absolute so receivers can follow them",
+        "required": [
+          "api",
+          "web",
+          "download"
+        ],
+        "properties": {
+          "api": {
+            "type": "string",
+            "description": "JSON API resource",
+            "example": "http://folio.local:3000/api/documents/0b9c0c3e-0000-0000-0000-000000000000"
+          },
+          "download": {
+            "type": "string",
+            "description": "The original file"
+          },
+          "web": {
+            "type": "string",
+            "description": "Page in the web UI"
+          }
+        }
+      },
+      "Workflow": {
+        "type": "object",
+        "description": "A configured automation",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "trigger",
+          "conditions",
+          "actions",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowAction"
+            }
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/WorkflowConditions"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkflowAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Send the event payload to an HTTP endpoint",
+            "required": [
+              "url",
+              "type"
+            ],
+            "properties": {
+              "headers": {
+                "type": "object",
+                "description": "Extra request headers; `X-Folio-*` headers cannot be overridden",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "method": {
+                "$ref": "#/components/schemas/WebhookMethod"
+              },
+              "secret": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Shared secret used to sign deliveries; unsigned when absent"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "webhook"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "description": "Destination; only `http` and `https` are accepted"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Attach tags to the document",
+            "required": [
+              "tag_ids",
+              "type"
+            ],
+            "properties": {
+              "tag_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "add_tags"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Set the document's correspondent",
+            "required": [
+              "correspondent_id",
+              "type"
+            ],
+            "properties": {
+              "correspondent_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_correspondent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Set the document's type",
+            "required": [
+              "document_type_id",
+              "type"
+            ],
+            "properties": {
+              "document_type_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_document_type"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A step a workflow performs, in order"
+      },
+      "WorkflowConditions": {
+        "type": "object",
+        "description": "Conditions a document must meet; every set condition has to match",
+        "properties": {
+          "correspondent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The document has this correspondent"
+          },
+          "document_type_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The document has this document type"
+          },
+          "filename_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob (`*` and `?`) matched case-insensitively against the original filename"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type, exact or with a wildcard subtype such as `image/*`"
+          },
+          "tag_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The document carries this tag"
+          }
+        }
+      },
+      "WorkflowInput": {
+        "type": "object",
+        "description": "Fields for creating or replacing a workflow",
+        "required": [
+          "name",
+          "trigger",
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowAction"
+            }
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/WorkflowConditions"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          }
+        }
+      },
+      "WorkflowRun": {
+        "type": "object",
+        "description": "One execution of a workflow for one event",
+        "required": [
+          "id",
+          "workflow_id",
+          "event",
+          "status",
+          "attempts",
+          "completed_actions",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "completed_actions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many actions already finished, so a retry resumes where it stopped",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Not a foreign key: runs outlive the documents they were about"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Also sent as `X-Folio-Delivery`, so receivers can de-duplicate retries"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "HTTP status of the latest webhook response",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "workflow_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkflowTrigger": {
+        "type": "string",
+        "description": "Events a workflow can listen for",
+        "enum": [
+          "document.uploaded",
+          "document.processed",
+          "document.updated",
+          "document.deleted"
+        ]
       }
     }
   },
@@ -1770,6 +2737,10 @@
     {
       "name": "events",
       "description": "Real-time updates"
+    },
+    {
+      "name": "workflows",
+      "description": "Automations that react to document events, such as webhooks"
     }
   ]
 }

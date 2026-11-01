@@ -11,12 +11,12 @@ use tracing::info;
 
 use folio_api::{create_router, AppState, AuthState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
-use folio_core::services::LibraryService;
+use folio_core::services::{EventingDocumentRepository, LibraryService, WorkflowEngine};
 use folio_core::EventBroadcaster;
 use folio_infra::{
     build_store, cleanup_legacy_layout, migrate_legacy_layout, telemetry, Config, Database,
-    DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, Worker,
-    WorkerConfig,
+    DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
+    StorageFileMetadata, ThumbnailService, WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };
 use folio_mcp::McpOptions;
 
@@ -75,7 +75,6 @@ async fn main() -> Result<()> {
     info!("  Server: {}:{}", config.server.host, config.server.port);
     info!("  Database: {}", redact_url(&config.database.url));
     info!("  Storage: {:?}", config.storage.backend);
-    info!("  AI Provider: {}", config.ai.provider);
 
     // Initialize database
     let database = Database::connect(&config.database.url)
@@ -106,6 +105,7 @@ async fn main() -> Result<()> {
     let correspondent_repo = repos.correspondents;
     let document_type_repo = repos.document_types;
     let settings_repo = repos.settings;
+    let workflow_repo = repos.workflows;
     let auth_store = repos.auth;
 
     if matches!(mode, Mode::CleanupLegacyStorage) {
@@ -127,15 +127,10 @@ async fn main() -> Result<()> {
     let stored_documents = document_repo.list(None).await.map(|d| d.len()).unwrap_or(0);
     telemetry::metrics().documents_changed(stored_documents as i64);
 
-    // Create AI services (dynamic - reads from database settings with config.toml fallback)
-    let ocr_service = Arc::new(DynamicOcrService::new(
-        settings_repo.clone(),
-        config.ai.clone(),
-    ));
-    let embedding_service = Arc::new(DynamicEmbeddingService::new(
-        settings_repo.clone(),
-        config.ai.clone(),
-    ));
+    // Create AI services (providers follow the database settings, config.toml keys as fallback)
+    let pipeline = PipelineContext::new(settings_repo.clone(), config.ai.clone());
+    let ocr_service = Arc::new(DynamicOcrService::new(pipeline.clone()));
+    let embedding_service = Arc::new(DynamicEmbeddingService::new(pipeline.clone()));
     let search_service = repos.search;
 
     // Create job queue
@@ -143,6 +138,31 @@ async fn main() -> Result<()> {
 
     // Create event broadcaster for SSE
     let event_broadcaster = EventBroadcaster::new(100);
+
+    // The HTTP layer gets a repository that announces creates, updates, and
+    // deletes; the worker and workflow actions keep the plain one so they
+    // control their own events.
+    let api_document_repo = Arc::new(EventingDocumentRepository::new(
+        document_repo.clone(),
+        event_broadcaster.clone(),
+    ));
+
+    let webhook_client = WebhookClient::new();
+    let public_url = config.server.base_url();
+    let workflow_runner = Arc::new(WorkflowRunner::new(
+        workflow_repo.clone(),
+        document_repo.clone(),
+        webhook_client.clone(),
+    ));
+    let workflow_engine = Arc::new(WorkflowEngine::new(
+        workflow_repo.clone(),
+        document_repo.clone(),
+        correspondent_repo.clone(),
+        document_type_repo.clone(),
+        Arc::new(job_queue.clone()),
+        Arc::new(StorageFileMetadata::new(store.clone())),
+        public_url.clone(),
+    ));
 
     info!("Services initialized");
 
@@ -156,11 +176,16 @@ async fn main() -> Result<()> {
         ocr_service.clone(),
         embedding_service.clone(),
         search_service.clone(),
+        pipeline.clone(),
         thumbnail_service.clone(),
         store.clone(),
         WorkerConfig::default(),
         event_broadcaster.clone(),
-    );
+    )
+    .with_workflow_runner(workflow_runner);
+
+    // Stops on its own when the shutdown signal flips
+    tokio::spawn(workflow_engine.run(event_broadcaster.subscribe(), shutdown_tx.subscribe()));
 
     let worker_handle = tokio::spawn(async move {
         worker.run(shutdown_rx).await;
@@ -168,8 +193,9 @@ async fn main() -> Result<()> {
 
     info!("Background job worker started");
 
+    // MCP edits are user actions, so they go through the repository that announces them
     let library = Arc::new(LibraryService::new(
-        document_repo.clone(),
+        api_document_repo.clone(),
         tag_repo.clone(),
         correspondent_repo.clone(),
         document_type_repo.clone(),
@@ -199,7 +225,7 @@ async fn main() -> Result<()> {
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
     let state = AppState::new(
-        document_repo,
+        api_document_repo,
         tag_repo,
         correspondent_repo,
         document_type_repo,
@@ -207,10 +233,14 @@ async fn main() -> Result<()> {
         ocr_service,
         embedding_service,
         search_service,
+        pipeline,
         thumbnail_service,
         job_queue,
         store,
         event_broadcaster,
+        workflow_repo,
+        webhook_client,
+        public_url,
     )
     .with_health_checks(health_checks);
 

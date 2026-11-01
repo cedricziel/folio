@@ -82,7 +82,7 @@ impl Metrics {
     pub fn ai_request(
         &self,
         operation: &'static str,
-        provider: &'static str,
+        provider: &str,
         success: bool,
         started: Instant,
     ) {
@@ -90,7 +90,7 @@ impl Metrics {
             started.elapsed().as_secs_f64(),
             &[
                 KeyValue::new("operation", operation),
-                KeyValue::new("provider", provider),
+                KeyValue::new("provider", provider.to_string()),
                 KeyValue::new("outcome", if success { "success" } else { "failure" }),
             ],
         );

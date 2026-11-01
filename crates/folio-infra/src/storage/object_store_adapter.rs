@@ -166,6 +166,14 @@ impl DocumentStore for ObjectStoreDocumentStore {
         .await
     }
 
+    async fn size(&self, key: &str) -> Result<Option<u64>> {
+        match self.store.head(&Self::path(key)?).await {
+            Ok(meta) => Ok(Some(meta.size)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(storage_err(&format!("Failed to stat {key}"), e)),
+        }
+    }
+
     async fn exists(&self, key: &str) -> Result<bool> {
         self.timed("exists", async {
             match self.store.head(&Self::path(key)?).await {

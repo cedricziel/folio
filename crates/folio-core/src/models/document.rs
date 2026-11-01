@@ -5,6 +5,70 @@ use serde::{Deserialize, Serialize};
 
 use super::Id;
 
+/// A stage of the document processing pipeline that is tracked per document
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingStage {
+    Ocr,
+    Embed,
+}
+
+/// State of one pipeline stage for one document
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub enum ProcessingStatus {
+    /// Waiting to be processed
+    #[default]
+    Pending,
+    /// A worker is processing it right now
+    Running,
+    /// Finished successfully (possibly with an empty result)
+    Done,
+    /// The last attempt failed
+    Failed,
+    /// Deliberately not run (disabled in settings, or nothing to process)
+    Skipped,
+}
+
+impl ProcessingStatus {
+    /// Whether the stage still has work ahead of it
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Pending | Self::Running)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+impl std::str::FromStr for ProcessingStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "done" => Ok(Self::Done),
+            "failed" => Ok(Self::Failed),
+            "skipped" => Ok(Self::Skipped),
+            other => Err(format!("unknown processing status: {other}")),
+        }
+    }
+}
+
+impl std::fmt::Display for ProcessingStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A document in the system
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -39,6 +103,12 @@ pub struct Document {
     /// Number of pages in the document (for PDFs and multi-page images)
     pub page_count: Option<u32>,
 
+    /// State of the OCR stage
+    pub ocr_status: ProcessingStatus,
+
+    /// State of the embedding stage
+    pub embed_status: ProcessingStatus,
+
     /// When the document was created in the system
     pub created_at: DateTime<Utc>,
 
@@ -60,6 +130,8 @@ impl Document {
             correspondent_id: None,
             document_type_id: None,
             page_count: None,
+            ocr_status: ProcessingStatus::Pending,
+            embed_status: ProcessingStatus::Pending,
             created_at: now,
             updated_at: now,
         }
@@ -68,6 +140,7 @@ impl Document {
     /// Set the document content
     pub fn with_content(mut self, content: impl Into<String>) -> Self {
         self.content = Some(content.into());
+        self.ocr_status = ProcessingStatus::Done;
         self
     }
 
@@ -117,7 +190,7 @@ pub enum DocumentStatus {
 impl Document {
     /// Derive the document's inbox status from what is known about it
     pub fn status(&self) -> DocumentStatus {
-        if self.content.is_none() {
+        if self.ocr_status.is_active() {
             DocumentStatus::Processing
         } else if self.correspondent_id.is_none() && self.document_type_id.is_none() {
             DocumentStatus::NeedsReview

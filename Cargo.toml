@@ -72,6 +72,11 @@ utoipa-scalar = "0.4"
 # Object storage
 object_store = { version = "0.14", default-features = false, features = ["fs", "aws"] }
 
+# Webhook signing
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
 # Embedded static assets
 rust-embed = { version = "8", features = ["mime-guess"] }
 
