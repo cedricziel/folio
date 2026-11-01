@@ -135,16 +135,6 @@ impl WorkflowEngine {
             if !workflow.conditions.matches(&ctx.document, &tag_ids) {
                 continue;
             }
-            if trigger.once_per_document()
-                && self
-                    .workflows
-                    .run_exists(workflow.id, trigger, document_id)
-                    .await?
-            {
-                debug!("Workflow {} already ran for {document_id}", workflow.id);
-                continue;
-            }
-
             let body = match &payload_json {
                 Some(body) => body.clone(),
                 None => {
@@ -154,7 +144,10 @@ impl WorkflowEngine {
                 }
             };
             let run = WorkflowRun::new(workflow.id, trigger, Some(document_id), body);
-            self.workflows.create_run(&run).await?;
+            if !self.workflows.create_run(&run).await? {
+                debug!("Workflow {} already ran for {document_id}", workflow.id);
+                continue;
+            }
             self.jobs.enqueue_run(run.id).await?;
             runs.push(run);
         }

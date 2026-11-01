@@ -15,8 +15,8 @@ pub use settings::{AiSettings, ProcessingSettings, Setting};
 pub use tag::{CreateTag, Tag, UpdateTag};
 pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOAD_VERSION};
 pub use workflow::{
-    glob_match, validate_webhook_url, RunStatus, WebhookMethod, Workflow, WorkflowAction,
-    WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
+    glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
+    WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
 /// Unique identifier type alias

@@ -23,7 +23,8 @@ pub trait WorkflowRepository: Send + Sync {
     /// Delete a workflow and its runs
     async fn delete(&self, id: Id) -> Result<()>;
 
-    async fn create_run(&self, run: &WorkflowRun) -> Result<()>;
+    /// Insert a run; returns false when a once-per-document run already exists
+    async fn create_run(&self, run: &WorkflowRun) -> Result<bool>;
 
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>>;
 
@@ -32,14 +33,6 @@ pub trait WorkflowRepository: Send + Sync {
 
     /// Newest runs first
     async fn list_runs(&self, workflow_id: Id, limit: u32) -> Result<Vec<WorkflowRun>>;
-
-    /// Whether the workflow already has a run for this event and document
-    async fn run_exists(
-        &self,
-        workflow_id: Id,
-        event: WorkflowTrigger,
-        document_id: Id,
-    ) -> Result<bool>;
 }
 
 /// Hands a run to the background worker

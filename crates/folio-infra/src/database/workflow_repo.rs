@@ -178,11 +178,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     }
 
     #[instrument(skip(self, run))]
-    async fn create_run(&self, run: &WorkflowRun) -> Result<()> {
-        sqlx::query(
+    async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
+        let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
              last_error, response_status, payload, created_at, finished_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
         )
         .bind(run.id.to_string())
         .bind(run.workflow_id.to_string())
@@ -199,7 +199,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     #[instrument(skip(self))]
@@ -242,25 +242,6 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .await
         .map_err(repo_err)?;
         rows.iter().map(run_from_row).collect()
-    }
-
-    #[instrument(skip(self))]
-    async fn run_exists(
-        &self,
-        workflow_id: Id,
-        event: WorkflowTrigger,
-        document_id: Id,
-    ) -> Result<bool> {
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ? AND event = ? AND document_id = ?",
-        )
-        .bind(workflow_id.to_string())
-        .bind(event.as_str())
-        .bind(document_id.to_string())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(repo_err)?;
-        Ok(count > 0)
     }
 }
 

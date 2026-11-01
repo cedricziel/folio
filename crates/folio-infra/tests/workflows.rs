@@ -73,7 +73,7 @@ impl TestServer {
 
         let state = Arc::new(ServerState::default());
         let app = Router::new()
-            .route("/*path", post(handler))
+            .route("/{*path}", post(handler))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -235,7 +235,7 @@ impl Harness {
             Some(document_id),
             r#"{"event":"document.uploaded","version":1}"#.into(),
         );
-        self.workflows.create_run(&run).await.unwrap();
+        assert!(self.workflows.create_run(&run).await.unwrap());
         run
     }
 
@@ -405,6 +405,41 @@ async fn upload_creates_exactly_one_uploaded_run() {
         h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
         1
     );
+}
+
+#[tokio::test]
+async fn concurrent_events_still_create_one_run() {
+    let h = Harness::new().await;
+    let workflow = h
+        .webhook_workflow("http://127.0.0.1:1/x".into(), None)
+        .await;
+    let doc = h.document("a.pdf", "application/pdf").await;
+
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let engine = h.engine.clone();
+            tokio::spawn(async move {
+                engine
+                    .handle(&DocumentEvent::Created {
+                        document_id: doc.id,
+                    })
+                    .await
+                    .unwrap()
+                    .len()
+            })
+        })
+        .collect();
+    let mut created = 0;
+    for handle in handles {
+        created += handle.await.unwrap();
+    }
+
+    assert_eq!(created, 1);
+    assert_eq!(
+        h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
+        1
+    );
+    assert_eq!(h.queue.pending_count().await.unwrap(), 1);
 }
 
 #[tokio::test]

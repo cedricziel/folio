@@ -268,10 +268,24 @@ impl WorkflowInput {
     }
 }
 
+/// The URL with any `user:password@` part masked, safe to show in messages and logs
+pub fn redact_url(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut parsed) => {
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                let _ = parsed.set_username("***");
+                let _ = parsed.set_password(None);
+            }
+            parsed.to_string()
+        }
+        Err(_) => "<invalid url>".to_string(),
+    }
+}
+
 /// Accept only absolute `http`/`https` URLs with a host
 pub fn validate_webhook_url(raw: &str) -> Result<()> {
-    let parsed = url::Url::parse(raw)
-        .map_err(|e| Error::Validation(format!("Invalid webhook URL '{raw}': {e}")))?;
+    let parsed =
+        url::Url::parse(raw).map_err(|e| Error::Validation(format!("Invalid webhook URL: {e}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(Error::Validation(format!(
             "Webhook URL must use http or https, not '{}'",
@@ -521,6 +535,18 @@ mod tests {
         let back: WorkflowAction =
             serde_json::from_str(&serde_json::to_string(&action).unwrap()).unwrap();
         assert_eq!(back, action);
+    }
+
+    #[test]
+    fn redact_url_hides_credentials() {
+        assert_eq!(
+            redact_url("https://user:pw@example.com/hook?x=1"),
+            "https://***@example.com/hook?x=1"
+        );
+        assert_eq!(redact_url("http://lan:8123/h"), "http://lan:8123/h");
+        assert_eq!(redact_url("not a url"), "<invalid url>");
+        let err = validate_webhook_url("ftp://user:pw@example.com/x").unwrap_err();
+        assert!(!err.to_string().contains("pw"));
     }
 
     #[test]

@@ -30,4 +30,6 @@ CREATE TABLE workflow_runs (
 );
 
 CREATE INDEX idx_workflow_runs_workflow ON workflow_runs(workflow_id, created_at DESC);
-CREATE INDEX idx_workflow_runs_dedupe ON workflow_runs(workflow_id, event, document_id);
+-- Once-per-document events: concurrent inserts for the same workflow and document collapse to one run.
+CREATE UNIQUE INDEX idx_workflow_runs_once ON workflow_runs(workflow_id, event, document_id)
+    WHERE event IN ('document.uploaded', 'document.processed');

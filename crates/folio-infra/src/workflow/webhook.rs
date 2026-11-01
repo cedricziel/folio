@@ -141,7 +141,7 @@ impl WebhookClient {
             .body(request.body.to_string())
             .send()
             .await
-            .map_err(|e| Failure::transient(describe(&e)))?;
+            .map_err(|e| Failure::transient(describe(e.without_url())))?;
 
         let status = response.status();
         if status.is_success() {
@@ -191,7 +191,7 @@ impl Failure {
     }
 }
 
-fn describe(error: &reqwest::Error) -> String {
+fn describe(error: reqwest::Error) -> String {
     if error.is_timeout() {
         format!("Request timed out after {}s", TIMEOUT.as_secs())
     } else if error.is_connect() {
