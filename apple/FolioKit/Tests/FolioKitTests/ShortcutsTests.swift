@@ -80,6 +80,17 @@ struct DocumentCatalogTests {
         #expect(found.map(\.title) == ["Match"])
     }
 
+    @Test func findSendsTheFiltersToTheServer() async throws {
+        let (catalog, service) = await makeCatalog([document("A", tags: [utilities])])
+        _ = try await catalog.find(
+            DocumentCriteria(tagID: utilities.id, correspondentID: stadtwerke.id, from: day(0), through: day(2)))
+        let filter = try #require(await service.filters.last)
+        #expect(filter.tagIDs == [utilities.id])
+        #expect(filter.correspondentID == stadtwerke.id)
+        #expect(filter.createdAfter == day(0))
+        #expect(filter.createdBefore == day(3))
+    }
+
     @Test func findDateRangeIncludesBothEndDays() async throws {
         let (catalog, _) = await makeCatalog([
             document("Before", day: -1), document("First", day: 0), document("Last", day: 2),

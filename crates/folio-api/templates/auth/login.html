@@ -8,9 +8,9 @@
 <form method="post" action="/login" class="auth-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="next" value="{{ next }}">
-    <label class="f-label" for="username">Username</label>
+    <label for="username">Username</label>
     <input class="f-input" id="username" name="username" type="text" autocomplete="username" required{% if sso.is_none() %} autofocus{% endif %}>
-    <label class="f-label" for="password">Password</label>
+    <label for="password">Password</label>
     <input class="f-input" id="password" name="password" type="password" autocomplete="current-password" required>
     <button class="f-btn {% if sso.is_none() %}f-btn-primary{% else %}f-btn-quiet{% endif %}" type="submit">Sign in</button>
 </form>

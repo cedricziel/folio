@@ -186,6 +186,8 @@ impl Document {
 pub enum DocumentStatus {
     /// Text has not been extracted yet
     Processing,
+    /// Folio could not read the file
+    Failed,
     /// Read, but not yet assigned a correspondent or a document type
     NeedsReview,
     /// Read and assigned a correspondent or a document type
@@ -197,6 +199,8 @@ impl Document {
     pub fn status(&self) -> DocumentStatus {
         if self.ocr_status.is_active() {
             DocumentStatus::Processing
+        } else if self.ocr_status == ProcessingStatus::Failed {
+            DocumentStatus::Failed
         } else if self.correspondent_id.is_none() && self.document_type_id.is_none() {
             DocumentStatus::NeedsReview
         } else {
@@ -255,5 +259,12 @@ mod tests {
 
         let filed = read.with_document_type(Id::new_v4());
         assert_eq!(filed.status(), DocumentStatus::Filed);
+    }
+
+    #[test]
+    fn unreadable_documents_are_failed_not_waiting_for_review() {
+        let mut doc = Document::new("scan");
+        doc.ocr_status = ProcessingStatus::Failed;
+        assert_eq!(doc.status(), DocumentStatus::Failed);
     }
 }

@@ -7,11 +7,11 @@
 <form method="post" action="/setup" class="auth-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="token" value="{{ token }}">
-    <label class="f-label" for="username">Username</label>
+    <label for="username">Username</label>
     <input class="f-input" id="username" name="username" type="text" autocomplete="username" required autofocus>
-    <label class="f-label" for="password">Password</label>
+    <label for="password">Password</label>
     <input class="f-input" id="password" name="password" type="password" autocomplete="new-password" minlength="12" required>
-    <p class="f-meta">At least 12 characters.</p>
+    <p class="auth-hint">At least 12 characters.</p>
     <button class="f-btn f-btn-primary" type="submit">Create account</button>
 </form>
 {% match sso %}{% when Some with (sso) %}<p class="f-meta">Or <a href="{{ sso.href }}" data-turbo="false">{{ sso.label }}</a> to make the first account the owner.</p>{% when None %}{% endmatch %}

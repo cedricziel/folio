@@ -7,7 +7,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.1.0-alpha.2"
+    "version": "0.1.0"
   },
   "paths": {
     "/api/correspondents": {
@@ -557,7 +557,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "List documents, optionally filtered by correspondent or document type",
+        "summary": "List documents, newest first, with their tags and the names of their correspondent and type",
         "operationId": "listDocuments",
         "parameters": [
           {
@@ -579,6 +579,41 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "tag_id",
+            "in": "query",
+            "description": "Only return documents that carry every one of these tags; repeat the parameter for several",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "created_after",
+            "in": "query",
+            "description": "Only return documents created at or after this instant (RFC 3339)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "created_before",
+            "in": "query",
+            "description": "Only return documents created before this instant (RFC 3339)",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
           }
         ],
         "responses": {
@@ -588,6 +623,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DocumentListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -832,7 +877,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Document"
+                  "$ref": "#/components/schemas/DocumentView"
                 }
               }
             }
@@ -2293,7 +2338,7 @@
           "documents": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Document"
+              "$ref": "#/components/schemas/DocumentView"
             }
           }
         }
@@ -2337,6 +2382,30 @@
           }
         }
       },
+      "DocumentTag": {
+        "type": "object",
+        "description": "A tag as shown on a document",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hex color such as \"#ff5733\", when the tag has one"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "DocumentType": {
         "type": "object",
         "description": "A document type for classification (e.g., Invoice, Receipt, Contract)",
@@ -2361,6 +2430,42 @@
             "description": "Type name (unique)"
           }
         }
+      },
+      "DocumentView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Document"
+          },
+          {
+            "type": "object",
+            "required": [
+              "tags"
+            ],
+            "properties": {
+              "correspondent": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Name of the correspondent, when one is set"
+              },
+              "document_type": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Name of the document type, when one is set"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DocumentTag"
+                }
+              }
+            }
+          }
+        ],
+        "description": "A document together with the names behind its ids"
       },
       "EmailConfig": {
         "type": "object",
