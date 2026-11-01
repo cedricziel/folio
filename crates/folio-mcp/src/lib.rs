@@ -9,4 +9,4 @@ mod transport;
 
 pub use auth::{McpAuth, SCOPE_READ, SCOPE_WRITE};
 pub use server::FolioMcp;
-pub use transport::{router, serve_stdio, McpOptions, ENABLED_SETTING};
+pub use transport::{is_enabled, router, serve_stdio, McpOptions, ENABLED_SETTING};

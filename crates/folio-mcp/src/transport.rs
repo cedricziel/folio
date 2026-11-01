@@ -48,17 +48,16 @@ struct Gate {
     enabled_by_default: bool,
 }
 
-impl Gate {
-    async fn is_open(&self) -> bool {
-        match self.settings.get(ENABLED_SETTING).await {
-            Ok(Some(setting)) => setting.value.trim().eq_ignore_ascii_case("true"),
-            _ => self.enabled_by_default,
-        }
+/// Whether `/mcp` is served: the DB setting wins over the configured default
+pub async fn is_enabled(settings: &dyn SettingsRepository, default: bool) -> bool {
+    match settings.get(ENABLED_SETTING).await {
+        Ok(Some(setting)) => setting.value.trim().eq_ignore_ascii_case("true"),
+        _ => default,
     }
 }
 
 async fn enabled_gate(State(gate): State<Gate>, req: Request, next: Next) -> Response {
-    if gate.is_open().await {
+    if is_enabled(gate.settings.as_ref(), gate.enabled_by_default).await {
         next.run(req).await
     } else {
         StatusCode::NOT_FOUND.into_response()

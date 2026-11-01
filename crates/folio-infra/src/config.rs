@@ -105,7 +105,8 @@ impl Default for AiConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpConfig {
-    /// Serve the MCP endpoint at `/mcp`; the `mcp.enabled` DB setting overrides this
+    /// Serve the MCP endpoint at `/mcp`; off by default because it is not authenticated yet.
+    /// The `mcp.enabled` DB setting overrides this.
     pub enabled: bool,
     /// Extra `Host` header values to accept besides loopback
     pub allowed_hosts: Vec<String>,
@@ -114,7 +115,7 @@ pub struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             allowed_hosts: Vec::new(),
         }
     }
@@ -347,6 +348,12 @@ mod tests {
         assert_eq!(config.server.port, 3000);
         assert_eq!(config.storage.path, "./data");
         assert!(config.ai.openai_api_key.is_none());
+    }
+
+    #[test]
+    fn mcp_is_disabled_by_default() {
+        assert!(!load(&[]).mcp.enabled);
+        assert!(load(&[("FOLIO_MCP__ENABLED", "true")]).mcp.enabled);
     }
 
     #[test]

@@ -172,6 +172,12 @@ async fn main() -> Result<()> {
     }
 
     let mcp_settings: Arc<dyn SettingsRepository> = settings_repo.clone();
+    if folio_mcp::is_enabled(mcp_settings.as_ref(), config.mcp.enabled).await {
+        tracing::warn!(
+            "MCP endpoint /mcp is enabled without authentication; \
+             do not expose this server beyond localhost until an auth layer is configured"
+        );
+    }
 
     // Create application state
     let health_checks: Vec<Arc<dyn HealthCheck>> =

@@ -19,7 +19,8 @@ provider = "openai"
 # - FOLIO_AI__ANTHROPIC_API_KEY
 
 [mcp]
-# Serve the MCP endpoint at /mcp (the "mcp.enabled" setting in the database overrides this)
-enabled = true
+# Serve the MCP endpoint at /mcp. Off by default: the endpoint is not authenticated yet
+# (the "mcp.enabled" setting in the database overrides this)
+enabled = false
 # Extra Host headers to accept besides loopback, e.g. ["folio.example.com"]
 allowed_hosts = []

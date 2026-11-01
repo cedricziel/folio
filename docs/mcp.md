@@ -2,7 +2,7 @@
 
 Folio ships a [Model Context Protocol](https://modelcontextprotocol.io) server so AI assistants can search and organize your archive.
 
-- **HTTP:** `http://localhost:3000/mcp` (streamable HTTP), served by the main Folio process.
+- **HTTP:** `http://localhost:3000/mcp` (streamable HTTP), served by the main Folio process once `mcp.enabled` is set (off by default).
 - **stdio:** `folio-app mcp --stdio`, for clients that launch a local process.
 
 ## Connect
@@ -51,14 +51,14 @@ The `date` returned and filtered on is the date a document was added to Folio.
 
 ```toml
 [mcp]
-enabled = true            # serve /mcp
+enabled = false           # serve /mcp; off by default until authentication is wired in
 allowed_hosts = []        # extra Host headers to accept, e.g. ["folio.example.com"]
 ```
 
-The `mcp.enabled` setting stored in the database (`/settings`) takes precedence over `config.toml` and applies without a restart. `FOLIO_MCP__ENABLED` overrides the file.
+The `mcp.enabled` setting stored in the database takes precedence over `config.toml` and applies without a restart. `FOLIO_MCP__ENABLED` overrides the file.
 
 By default only loopback `Host` headers are accepted, which protects a local server from DNS rebinding. List other hostnames in `allowed_hosts` when you reach Folio through a reverse proxy.
 
 ## Authentication
 
-The endpoint does not authenticate callers yet. Do not expose `/mcp` beyond localhost until OAuth is wired in: `folio_mcp::router(..)` returns an axum router, so an auth layer is added with `.layer(..)` in `folio-app`. The layer validates the bearer token and inserts a `folio_mcp::McpAuth` (subject and scopes) into the request extensions. When present, read tools need the `documents:read` scope and write tools `documents:write`. Without an `McpAuth` extension, as with stdio, every tool is allowed.
+The endpoint does not authenticate callers yet, which is why it is disabled by default and logs a warning at startup when enabled. Do not expose `/mcp` beyond localhost until OAuth is wired in: `folio_mcp::router(..)` returns an axum router, so an auth layer is added with `.layer(..)` in `folio-app`. The layer validates the bearer token and inserts a `folio_mcp::McpAuth` (subject and scopes) into the request extensions. When present, read tools need the `documents:read` scope and write tools `documents:write`. Without an `McpAuth` extension, as with stdio, every tool is allowed.
