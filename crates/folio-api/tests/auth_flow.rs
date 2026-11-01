@@ -589,6 +589,7 @@ mod enforcement {
         ] {
             pages = pages.route(path, get(|| async { "ok" }));
         }
+        pages = pages.route("/api/tags", axum::routing::post(|| async { "created" }));
         App {
             router: auth_router(auth.clone())
                 .merge(pages)
@@ -743,5 +744,73 @@ mod enforcement {
         let app = guarded(false).await;
         assert_eq!(status(&app, "/").await, StatusCode::OK);
         assert_eq!(status(&app, "/api/documents").await, StatusCode::OK);
+    }
+
+    /// Runs consent for an `/api` audience with the given scopes and returns the access token.
+    async fn api_token(app: &App, session: &str, scope: &str) -> String {
+        let client = register(app).await;
+        let api = enc(&format!("{BASE}/api"));
+        let q = format!(
+            "{}&scope={}",
+            authorize_query(&client).replace(&enc(&format!("{BASE}/mcp")), &api),
+            enc(scope)
+        );
+        let page = send(app, get_req(&format!("/oauth/authorize?{q}"), session)).await;
+        let csrf = csrf_from(&page.body);
+        let done = send(
+            app,
+            form_req(
+                "/oauth/authorize",
+                session,
+                &format!("{q}&csrf={csrf}&decision=allow"),
+            ),
+        )
+        .await;
+        let loc = url::Url::parse(&done.location()).unwrap();
+        let code = loc
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .to_string();
+        let body = code_body(&client, &code, VERIFIER).replace(&enc(&format!("{BASE}/mcp")), &api);
+        let tokens = exchange(app, &body).await.json();
+        tokens["access_token"].as_str().unwrap().to_string()
+    }
+
+    fn bearer(method: &str, uri: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn read_only_token_cannot_write_through_the_api() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let read_only = api_token(&app, &session, "documents:read").await;
+
+        let read = send(&app, bearer("GET", "/api/documents", &read_only)).await;
+        assert_eq!(read.status, StatusCode::OK);
+        let write = send(&app, bearer("POST", "/api/tags", &read_only)).await;
+        assert_eq!(write.status, StatusCode::FORBIDDEN);
+        assert_eq!(write.json()["error"], "insufficient_scope");
+        assert!(write.headers[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap()
+            .contains("insufficient_scope"));
+
+        let writer = api_token(&app, &session, "documents:write").await;
+        assert_eq!(
+            send(&app, bearer("POST", "/api/tags", &writer))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let read_with_write_only = send(&app, bearer("GET", "/api/documents", &writer)).await;
+        assert_eq!(read_with_write_only.status, StatusCode::FORBIDDEN);
     }
 }

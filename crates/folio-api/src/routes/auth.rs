@@ -5,7 +5,7 @@ use std::sync::Arc;
 use askama::Template;
 use axum::{
     extract::{FromRef, FromRequestParts, Query, RawQuery, Request, State},
-    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -123,7 +123,11 @@ fn is_exempt(path: &str) -> bool {
 /// Requires a session (web UI) or an `/api`-scoped bearer token (API) on every
 /// route except the exemptions above. `/mcp` is guarded by its own bearer layer.
 /// Web requests are redirected to `/login`, API requests get a 401.
-pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next: Next) -> Response {
+pub async fn enforce_auth(
+    State(auth): State<AuthState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     let path = request.uri().path().to_string();
     if !auth.required || is_exempt(&path) {
         return next.run(request).await;
@@ -137,7 +141,16 @@ pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next:
     }
     if is_api {
         let validator = auth.validator("/api");
-        if validator.validate(request.headers()).await.is_some() {
+        if let Some(context) = validator.validate(request.headers()).await {
+            let needed = if is_read_method(request.method()) {
+                "documents:read"
+            } else {
+                "documents:write"
+            };
+            if !context.has_scope(needed) {
+                return insufficient_scope(needed);
+            }
+            request.extensions_mut().insert(context);
             return next.run(request).await;
         }
         let mut response = validator.unauthorized(request.headers());
@@ -148,7 +161,7 @@ pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next:
         );
         return response;
     }
-    let next_path = if request.method() == axum::http::Method::GET {
+    let next_path = if request.method() == Method::GET {
         request
             .uri()
             .path_and_query()
@@ -158,6 +171,25 @@ pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next:
         "/".into()
     };
     login_redirect(&next_path).into_response()
+}
+
+fn is_read_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+fn insufficient_scope(scope: &str) -> Response {
+    let mut response = (
+        StatusCode::FORBIDDEN,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"insufficient_scope"}"#,
+    )
+        .into_response();
+    if let Ok(v) = HeaderValue::from_str(&format!(
+        "Bearer error=\"insufficient_scope\", scope=\"{scope}\""
+    )) {
+        response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
+    }
+    response
 }
 
 pub fn router<S>(state: AuthState) -> Router<S>
