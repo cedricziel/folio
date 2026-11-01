@@ -6,6 +6,7 @@ pub(crate) mod correspondents;
 pub(crate) mod document_types;
 pub(crate) mod documents;
 pub(crate) mod events;
+mod file_response;
 mod health;
 mod manage;
 mod pages;

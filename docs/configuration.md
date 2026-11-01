@@ -36,6 +36,7 @@ startup by the first three layers.
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
 | `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | unset | Externally visible base URL, used in OAuth metadata, redirects and links in webhook payloads. Derived from the request when unset. |
 | `auth.required` | `FOLIO_AUTH__REQUIRED` | `true` | Require a login or token for the web UI and API. See [auth](auth.md). |
+| `auth.setup_token` | `FOLIO_AUTH__SETUP_TOKEN` | random per start | One-time secret that `/setup` requires while no user exists. When unset Folio generates one and logs the full setup URL at startup. Supports `FOLIO_AUTH__SETUP_TOKEN_FILE`. See [auth](auth.md). |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
 | `storage.backend` | `FOLIO_STORAGE__BACKEND` | `local` | `local` or `s3` (see [storage.md](storage.md)). |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Root directory for the `local` backend. |

@@ -147,11 +147,33 @@ impl AuthStore for SqliteAuthStore {
         .transpose()
     }
 
+    async fn mark_client_used(&self, client_id: &str, at: i64) -> Result<(), AuthError> {
+        sqlx::query(
+            "UPDATE oauth_clients SET token_issued_at = $2
+             WHERE client_id = $1 AND token_issued_at IS NULL",
+        )
+        .bind(client_id)
+        .bind(at)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(err)
+    }
+
+    async fn purge_unused_clients(&self, registered_before: i64) -> Result<u64, AuthError> {
+        sqlx::query("DELETE FROM oauth_clients WHERE token_issued_at IS NULL AND created_at < $1")
+            .bind(registered_before)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(err)
+    }
+
     async fn insert_code(&self, c: AuthCode) -> Result<(), AuthError> {
         sqlx::query(
             "INSERT INTO oauth_codes
-             (code_hash, client_id, user_id, redirect_uri, code_challenge, scopes, audience, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             (code_hash, client_id, user_id, redirect_uri, code_challenge, scopes, audience, expires_at, grant_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(c.code_hash)
         .bind(c.client_id)
@@ -161,6 +183,7 @@ impl AuthStore for SqliteAuthStore {
         .bind(c.scopes.join(" "))
         .bind(c.audience)
         .bind(c.expires_at)
+        .bind(c.grant_id)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -182,6 +205,7 @@ impl AuthStore for SqliteAuthStore {
             scopes: split(r.get("scopes")),
             audience: r.get("audience"),
             expires_at: r.get("expires_at"),
+            grant_id: r.get("grant_id"),
         }))
     }
 
@@ -195,6 +219,7 @@ impl AuthStore for SqliteAuthStore {
             &t.scopes,
             &t.audience,
             t.expires_at,
+            &t.grant_id,
         )
         .await
     }
@@ -212,6 +237,7 @@ impl AuthStore for SqliteAuthStore {
             scopes: split(r.get("scopes")),
             audience: r.get("audience"),
             expires_at: r.get("expires_at"),
+            grant_id: r.get("grant_id"),
         }))
     }
 
@@ -225,6 +251,7 @@ impl AuthStore for SqliteAuthStore {
             &t.scopes,
             &t.audience,
             t.expires_at,
+            &t.grant_id,
         )
         .await
     }
@@ -233,7 +260,9 @@ impl AuthStore for SqliteAuthStore {
         &self,
         token_hash: &str,
     ) -> Result<Option<RefreshToken>, AuthError> {
-        let row = sqlx::query("DELETE FROM oauth_refresh_tokens WHERE token_hash = $1 RETURNING *")
+        let row = sqlx::query(
+            "UPDATE oauth_refresh_tokens SET used = 1 WHERE token_hash = $1 AND used = 0 RETURNING *",
+        )
             .bind(token_hash)
             .fetch_optional(&self.pool)
             .await
@@ -245,20 +274,65 @@ impl AuthStore for SqliteAuthStore {
             scopes: split(r.get("scopes")),
             audience: r.get("audience"),
             expires_at: r.get("expires_at"),
+            grant_id: r.get("grant_id"),
         }))
     }
 
-    async fn revoke_token(&self, token_hash: &str) -> Result<(), AuthError> {
-        sqlx::query("DELETE FROM oauth_access_tokens WHERE token_hash = $1")
-            .bind(token_hash)
-            .execute(&self.pool)
-            .await
-            .map_err(err)?;
-        sqlx::query("DELETE FROM oauth_refresh_tokens WHERE token_hash = $1")
-            .bind(token_hash)
-            .execute(&self.pool)
-            .await
-            .map_err(err)?;
+    async fn used_refresh_grant(&self, token_hash: &str) -> Result<Option<String>, AuthError> {
+        sqlx::query_scalar(
+            "SELECT grant_id FROM oauth_refresh_tokens WHERE token_hash = $1 AND used = 1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(err)
+    }
+
+    async fn revoke_grant(&self, grant_id: &str) -> Result<(), AuthError> {
+        if grant_id.is_empty() {
+            return Ok(());
+        }
+        for sql in [
+            "DELETE FROM oauth_access_tokens WHERE grant_id = $1",
+            "DELETE FROM oauth_refresh_tokens WHERE grant_id = $1",
+        ] {
+            sqlx::query(sql)
+                .bind(grant_id)
+                .execute(&self.pool)
+                .await
+                .map_err(err)?;
+        }
+        Ok(())
+    }
+
+    async fn revoke_token(&self, token_hash: &str, client_id: &str) -> Result<(), AuthError> {
+        let lookups = [
+            (
+                "SELECT grant_id FROM oauth_access_tokens WHERE token_hash = $1 AND client_id = $2",
+                "DELETE FROM oauth_access_tokens WHERE token_hash = $1",
+            ),
+            (
+                "SELECT grant_id FROM oauth_refresh_tokens WHERE token_hash = $1 AND client_id = $2",
+                "DELETE FROM oauth_refresh_tokens WHERE token_hash = $1",
+            ),
+        ];
+        for (select, delete) in lookups {
+            let found: Option<String> = sqlx::query_scalar(select)
+                .bind(token_hash)
+                .bind(client_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(err)?;
+            if let Some(grant_id) = found {
+                // Tokens from before grants existed are revoked on their own.
+                sqlx::query(delete)
+                    .bind(token_hash)
+                    .execute(&self.pool)
+                    .await
+                    .map_err(err)?;
+                return self.revoke_grant(&grant_id).await;
+            }
+        }
         Ok(())
     }
 
@@ -281,11 +355,11 @@ impl AuthStore for SqliteAuthStore {
 }
 
 const INSERT_ACCESS: &str = "INSERT INTO oauth_access_tokens
-    (token_hash, client_id, user_id, scopes, audience, expires_at)
-    VALUES ($1, $2, $3, $4, $5, $6)";
+    (token_hash, client_id, user_id, scopes, audience, expires_at, grant_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)";
 const INSERT_REFRESH: &str = "INSERT INTO oauth_refresh_tokens
-    (token_hash, client_id, user_id, scopes, audience, expires_at)
-    VALUES ($1, $2, $3, $4, $5, $6)";
+    (token_hash, client_id, user_id, scopes, audience, expires_at, grant_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)";
 
 #[allow(clippy::too_many_arguments)]
 async fn insert_token(
@@ -297,6 +371,7 @@ async fn insert_token(
     scopes: &[String],
     audience: &str,
     expires_at: i64,
+    grant_id: &str,
 ) -> Result<(), AuthError> {
     sqlx::query(sql)
         .bind(hash)
@@ -305,6 +380,7 @@ async fn insert_token(
         .bind(scopes.join(" "))
         .bind(audience)
         .bind(expires_at)
+        .bind(grant_id)
         .execute(pool)
         .await
         .map(|_| ())

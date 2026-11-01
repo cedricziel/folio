@@ -16,16 +16,20 @@ use crate::{
     store::AuthStore,
 };
 
-/// Public base URL without trailing slash. Uses the configured value, or
-/// derives it from the request (`X-Forwarded-Proto` + `Host`) for local dev.
-pub fn base_url(configured: Option<&str>, headers: &HeaderMap) -> String {
-    if let Some(url) = configured.filter(|u| !u.is_empty()) {
-        return url.trim_end_matches('/').to_string();
-    }
-    let header_str = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
-    let scheme = header_str("x-forwarded-proto").unwrap_or("http");
-    let host = header_str("host").unwrap_or("localhost");
-    format!("{scheme}://{host}")
+/// Origin used when no public URL is configured. Folio refuses to start
+/// without one when it is reachable beyond loopback, so this only ever shows
+/// in embedded use and tests.
+const FALLBACK_BASE: &str = "http://localhost";
+
+/// Public base URL without trailing slash. It comes from configuration only:
+/// `Host` and `X-Forwarded-*` are client-controlled and must never decide the
+/// issuer, token audiences or cookie flags.
+pub fn base_url(configured: Option<&str>) -> String {
+    configured
+        .filter(|u| !u.is_empty())
+        .unwrap_or(FALLBACK_BASE)
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Validates opaque access tokens issued by Folio's authorization server.
@@ -64,7 +68,7 @@ impl TokenValidator {
             .ok()??;
         let audience = format!(
             "{}{}",
-            base_url(self.public_url.as_deref(), headers),
+            base_url(self.public_url.as_deref()),
             self.resource_path
         );
         if record.expires_at <= now() || !ct_eq(&record.audience, &audience) {
@@ -80,9 +84,16 @@ impl TokenValidator {
 
     /// The 401 response mandated by the MCP authorization spec.
     pub fn unauthorized(&self, headers: &HeaderMap) -> Response {
-        let base = base_url(self.public_url.as_deref(), headers);
-        let mut challenge =
-            format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource\"");
+        let base = base_url(self.public_url.as_deref());
+        // The MCP document lives at the unsuffixed path for older clients.
+        let suffix = if self.resource_path == "/mcp" {
+            ""
+        } else {
+            self.resource_path.as_str()
+        };
+        let mut challenge = format!(
+            "Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource{suffix}\""
+        );
         if bearer_token(headers).is_some() {
             challenge.push_str(", error=\"invalid_token\"");
         }

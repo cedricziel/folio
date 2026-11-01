@@ -75,6 +75,10 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Config::load().context("Failed to load configuration")?;
 
+    if !matches!(mode, Mode::McpStdio) {
+        config.validate().map_err(anyhow::Error::msg)?;
+    }
+
     info!("Configuration loaded");
     info!("  Server: {}:{}", config.server.host, config.server.port);
     info!("  Database: {}", redact_url(&config.database.url));
@@ -274,8 +278,19 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks);
 
-    let auth = AuthState::new(auth_store, config.server.public_url.clone())
+    let mut auth = AuthState::new(auth_store.clone(), Some(config.server.base_url()))
         .with_required(config.auth.required);
+    if let Some(token) = config.auth.setup_token.as_deref().filter(|t| !t.is_empty()) {
+        auth = auth.with_setup_token(token);
+    }
+    if config.auth.required && auth_store.count_users().await.unwrap_or(1) == 0 {
+        let base = config.server.base_url();
+        tracing::warn!(
+            "\n\n  No owner account exists yet. Open this link to create it:\n\n    {}/setup?token={}\n\n  The link works until the first account is created.\n",
+            base.trim_end_matches('/'),
+            auth.setup_token()
+        );
+    }
 
     // Create router
     let mcp = folio_mcp::router(
@@ -295,7 +310,7 @@ async fn main() -> Result<()> {
     } else {
         mcp
     };
-    let app = create_router(state, auth).merge(mcp);
+    let app = create_router(state, auth.clone()).merge(mcp);
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -306,12 +321,18 @@ async fn main() -> Result<()> {
     info!("🚀 Folio is running at http://{}", addr);
 
     // Run server with graceful shutdown
-    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
+    let maintenance = auth.spawn_maintenance();
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
 
     if let Err(e) = server.await {
         tracing::error!("Server error: {}", e);
     }
 
+    maintenance.abort();
     stop_worker(shutdown_tx, worker_handle).await;
 
     info!("Folio shutdown complete");

@@ -1,11 +1,13 @@
 //! Login, setup and the OAuth 2.1 authorization server endpoints.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use askama::Template;
 use axum::{
-    extract::{FromRef, FromRequestParts, Query, RawQuery, Request, State},
-    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    extract::{
+        ConnectInfo, DefaultBodyLimit, FromRef, FromRequestParts, Query, RawQuery, Request, State,
+    },
+    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -13,11 +15,15 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::Semaphore;
 use url::{form_urlencoded, Url};
 
 use folio_auth::{
     base_url,
-    crypto::{ct_eq, hash_password, hash_token, random_token, verify_password},
+    crypto::{
+        ct_eq, hash_password, hash_token, hmac_token, random_secret, random_token, verify_password,
+    },
+    limit::{FailureLimiter, RateLimiter},
     redirect::safe_next,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
@@ -27,10 +33,31 @@ use folio_auth::{
     AuthStore, Session, TokenValidator, User,
 };
 
+// `__Host-` pins a cookie to this exact host over HTTPS, so a sibling
+// subdomain cannot plant or overwrite it.
 const SESSION_COOKIE: &str = "folio_session";
 const CSRF_COOKIE: &str = "folio_csrf";
 const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
 const MIN_PASSWORD_LEN: usize = 12;
+/// Dynamic client registrations a peer may make in a burst; the allowance
+/// refills over an hour.
+const REGISTER_BURST: u32 = 20;
+const MAX_PASSWORD_LEN: usize = 1024;
+const MAX_CONCURRENT_HASHES: usize = 4;
+/// Failed logins tolerated before lockout. Per IP is looser because several
+/// people can share an address.
+const LOGIN_FAILURES_PER_USER: u32 = 5;
+const LOGIN_FAILURES_PER_IP: u32 = 10;
+const REGISTER_BODY_LIMIT: usize = 16 * 1024;
+
+fn login_limiter(free_attempts: u32) -> FailureLimiter {
+    FailureLimiter::new(
+        free_attempts,
+        Duration::from_secs(30),
+        Duration::from_secs(15 * 60),
+        Duration::from_secs(3600),
+    )
+}
 
 /// State for the auth routes and the [`RequireUser`] extractor.
 #[derive(Clone)]
@@ -40,6 +67,13 @@ pub struct AuthState {
     pub public_url: Option<String>,
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
+    setup_token: Arc<str>,
+    csrf_secret: Arc<[u8; 32]>,
+    register_limit: Arc<RateLimiter>,
+    login_by_ip: Arc<FailureLimiter>,
+    login_by_user: Arc<FailureLimiter>,
+    /// Bounds concurrent argon2 hashes, which are memory-hungry.
+    hash_permits: Arc<Semaphore>,
 }
 
 impl AuthState {
@@ -49,7 +83,46 @@ impl AuthState {
             store,
             public_url,
             required: true,
+            setup_token: random_token().into(),
+            csrf_secret: Arc::new(random_secret()),
+            login_by_ip: Arc::new(login_limiter(LOGIN_FAILURES_PER_IP)),
+            login_by_user: Arc::new(login_limiter(LOGIN_FAILURES_PER_USER)),
+            hash_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_HASHES)),
+            register_limit: Arc::new(RateLimiter::new(
+                REGISTER_BURST,
+                REGISTER_BURST as f64 / 3600.0,
+            )),
         }
+    }
+
+    /// Replaces the generated one-time setup token (for example with an
+    /// operator-chosen value from the configuration).
+    pub fn with_setup_token(mut self, token: impl Into<Arc<str>>) -> Self {
+        self.setup_token = token.into();
+        self
+    }
+
+    /// Starts the periodic cleanup of expired tokens and unused clients.
+    pub fn spawn_maintenance(&self) -> tokio::task::JoinHandle<()> {
+        let server = self.server.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = server.purge().await {
+                    tracing::warn!("auth cleanup failed: {e}");
+                }
+            }
+        })
+    }
+
+    /// Secret that must accompany `/setup` while no user exists.
+    pub fn setup_token(&self) -> &str {
+        &self.setup_token
+    }
+
+    fn setup_token_ok(&self, given: Option<&str>) -> bool {
+        given.is_some_and(|g| !g.is_empty() && ct_eq(g, &self.setup_token))
     }
 
     pub fn with_required(mut self, required: bool) -> Self {
@@ -62,17 +135,112 @@ impl AuthState {
         TokenValidator::new(self.store.clone(), self.public_url.clone(), resource_path)
     }
 
-    fn base(&self, headers: &HeaderMap) -> String {
-        base_url(self.public_url.as_deref(), headers)
+    /// Runs a password hash on the blocking pool, at most
+    /// [`MAX_CONCURRENT_HASHES`] at a time.
+    async fn hash_work<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let _permit = self.hash_permits.acquire().await.ok()?;
+        tokio::task::spawn_blocking(work).await.ok()
     }
 
-    async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
-        let id = cookie(headers, SESSION_COOKIE)?;
+    /// Cookie-authenticated writes must come from our own pages. Fetch metadata
+    /// is authoritative when the browser sends it; `Origin` covers older ones.
+    /// Requests with neither are not from a browser and carry no ambient cookie.
+    fn is_same_origin(&self, headers: &HeaderMap) -> bool {
+        let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        if let Some(site) = text("sec-fetch-site") {
+            return matches!(site, "same-origin" | "none");
+        }
+        match text("origin") {
+            None => true,
+            Some(origin) => Url::parse(&self.base())
+                .is_ok_and(|base| base.origin().ascii_serialization() == origin),
+        }
+    }
+
+    fn base(&self) -> String {
+        base_url(self.public_url.as_deref())
+    }
+
+    fn secure(&self) -> bool {
+        self.base().starts_with("https://")
+    }
+
+    fn session_cookie_name(&self) -> &'static str {
+        if self.secure() {
+            "__Host-folio_session"
+        } else {
+            SESSION_COOKIE
+        }
+    }
+
+    fn csrf_cookie_name(&self) -> &'static str {
+        if self.secure() {
+            "__Host-folio_csrf"
+        } else {
+            CSRF_COOKIE
+        }
+    }
+
+    /// The raw session cookie value and its user, when the session is live.
+    async fn session(&self, headers: &HeaderMap) -> Option<(String, User)> {
+        let id = cookie(headers, self.session_cookie_name())?;
         let session = self.store.find_session(&hash_token(&id)).await.ok()??;
         if session.expires_at <= now() {
             return None;
         }
-        self.store.find_user_by_id(&session.user_id).await.ok()?
+        let user = self.store.find_user_by_id(&session.user_id).await.ok()??;
+        Some((id, user))
+    }
+
+    async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
+        self.session(headers).await.map(|(_, user)| user)
+    }
+
+    fn csrf_mac(&self, subject: &str) -> String {
+        hmac_token(&*self.csrf_secret, subject)
+    }
+
+    /// CSRF token for a form shown before login (login, setup), plus a cookie
+    /// to set when needed. It is an HMAC, under a server secret, of a random
+    /// pre-session cookie, so it cannot be computed without asking the server.
+    fn csrf_pre_token(&self, headers: &HeaderMap) -> (String, Option<String>) {
+        let (value, set) = match cookie(headers, self.csrf_cookie_name()).filter(|c| c.len() >= 32)
+        {
+            Some(existing) => (existing, None),
+            None => {
+                let value = random_token();
+                let set = set_cookie(
+                    self.csrf_cookie_name(),
+                    &value,
+                    SESSION_TTL_SECS,
+                    self.secure(),
+                );
+                (value, Some(set))
+            }
+        };
+        (self.csrf_mac(&format!("pre:{value}")), set)
+    }
+
+    fn csrf_pre_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
+        cookie(headers, self.csrf_cookie_name())
+            .filter(|c| c.len() >= 32)
+            .is_some_and(|c| ct_eq(&self.csrf_mac(&format!("pre:{c}")), submitted))
+    }
+
+    /// CSRF token for a form shown to a logged-in user: an HMAC of the session
+    /// id, so a token from one session is worthless in another.
+    fn csrf_session_token(&self, session_id: &str) -> String {
+        self.csrf_mac(&format!("session:{session_id}"))
+    }
+
+    async fn csrf_session_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
+        match self.session(headers).await {
+            Some((id, _)) => ct_eq(&self.csrf_session_token(&id), submitted),
+            None => false,
+        }
     }
 }
 
@@ -104,7 +272,7 @@ where
 }
 
 /// Router with all login, setup and OAuth endpoints.
-const EXEMPT_EXACT: [&str; 8] = [
+const EXEMPT_EXACT: [&str; 10] = [
     "/healthz",
     "/readyz",
     "/login",
@@ -113,6 +281,8 @@ const EXEMPT_EXACT: [&str; 8] = [
     "/api/openapi.json",
     "/api/docs",
     "/mcp",
+    "/manifest.webmanifest",
+    "/sw.js",
 ];
 const EXEMPT_PREFIX: [&str; 4] = ["/static/", "/oauth/", "/.well-known/", "/mcp/"];
 
@@ -123,7 +293,11 @@ fn is_exempt(path: &str) -> bool {
 /// Requires a session (web UI) or an `/api`-scoped bearer token (API) on every
 /// route except the exemptions above. `/mcp` is guarded by its own bearer layer.
 /// Web requests are redirected to `/login`, API requests get a 401.
-pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next: Next) -> Response {
+pub async fn enforce_auth(
+    State(auth): State<AuthState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     let path = request.uri().path().to_string();
     if !auth.required || is_exempt(&path) {
         return next.run(request).await;
@@ -133,11 +307,23 @@ pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next:
     }
     let is_api = path == "/api" || path.starts_with("/api/");
     if auth.current_user(request.headers()).await.is_some() {
+        if !is_read_method(request.method()) && !auth.is_same_origin(request.headers()) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
         return next.run(request).await;
     }
     if is_api {
         let validator = auth.validator("/api");
-        if validator.validate(request.headers()).await.is_some() {
+        if let Some(context) = validator.validate(request.headers()).await {
+            let needed = if is_read_method(request.method()) {
+                "documents:read"
+            } else {
+                "documents:write"
+            };
+            if !context.has_scope(needed) {
+                return insufficient_scope(needed);
+            }
+            request.extensions_mut().insert(context);
             return next.run(request).await;
         }
         let mut response = validator.unauthorized(request.headers());
@@ -148,7 +334,12 @@ pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next:
         );
         return response;
     }
-    let next_path = if request.method() == axum::http::Method::GET {
+    if path == "/share" && request.method() == Method::POST {
+        // Accepting the upload before login would let anyone park files on
+        // disk, so ask the user to sign in and share again instead.
+        return render(ShareLoginTemplate, StatusCode::UNAUTHORIZED);
+    }
+    let next_path = if request.method() == Method::GET {
         request
             .uri()
             .path_and_query()
@@ -158,6 +349,25 @@ pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next:
         "/".into()
     };
     login_redirect(&next_path).into_response()
+}
+
+fn is_read_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+fn insufficient_scope(scope: &str) -> Response {
+    let mut response = (
+        StatusCode::FORBIDDEN,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"error":"insufficient_scope"}"#,
+    )
+        .into_response();
+    if let Ok(v) = HeaderValue::from_str(&format!(
+        "Bearer error=\"insufficient_scope\", scope=\"{scope}\""
+    )) {
+        response.headers_mut().insert(header::WWW_AUTHENTICATE, v);
+    }
+    response
 }
 
 pub fn router<S>(state: AuthState) -> Router<S>
@@ -172,13 +382,20 @@ where
         .route("/.well-known/oauth-authorization-server", get(as_metadata))
         .route(
             "/.well-known/oauth-protected-resource",
-            get(resource_metadata),
+            get(mcp_resource_metadata),
         )
         .route(
             "/.well-known/oauth-protected-resource/mcp",
-            get(resource_metadata),
+            get(mcp_resource_metadata),
         )
-        .route("/oauth/register", post(register))
+        .route(
+            "/.well-known/oauth-protected-resource/api",
+            get(api_resource_metadata),
+        )
+        .route(
+            "/oauth/register",
+            post(register).layer(DefaultBodyLimit::max(REGISTER_BODY_LIMIT)),
+        )
         .route(
             "/oauth/authorize",
             get(authorize_page).post(authorize_submit),
@@ -206,23 +423,6 @@ fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
     format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")
 }
 
-/// Double-submit CSRF: the form field must equal the cookie. Returns the
-/// token to embed plus a cookie to set when none exists yet.
-fn csrf_token(headers: &HeaderMap, secure: bool) -> (String, Option<String>) {
-    match cookie(headers, CSRF_COOKIE).filter(|c| c.len() >= 32) {
-        Some(existing) => (existing, None),
-        None => {
-            let token = random_token();
-            let set = set_cookie(CSRF_COOKIE, &token, SESSION_TTL_SECS, secure);
-            (token, Some(set))
-        }
-    }
-}
-
-fn csrf_ok(headers: &HeaderMap, submitted: &str) -> bool {
-    cookie(headers, CSRF_COOKIE).is_some_and(|c| c.len() >= 32 && ct_eq(&c, submitted))
-}
-
 fn with_cookies(mut response: Response, cookies: impl IntoIterator<Item = String>) -> Response {
     for c in cookies {
         if let Ok(v) = HeaderValue::from_str(&c) {
@@ -234,7 +434,18 @@ fn with_cookies(mut response: Response, cookies: impl IntoIterator<Item = String
 
 fn render<T: Template>(template: T, status: StatusCode) -> Response {
     match template.render() {
-        Ok(body) => (status, Html(body)).into_response(),
+        Ok(body) => {
+            let mut response = (status, Html(body)).into_response();
+            let h = response.headers_mut();
+            // Clickjacking and back-button exposure of credentials and consent.
+            h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+            h.insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("frame-ancestors 'none'"),
+            );
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
         Err(e) => {
             tracing::error!("template error: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -247,7 +458,7 @@ fn login_redirect(next: &str) -> Redirect {
     Redirect::to(&format!("/login?next={encoded}"))
 }
 
-async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<String> {
+async fn start_session(auth: &AuthState, user: &User) -> Option<String> {
     let id = random_token();
     auth.store
         .create_session(Session {
@@ -258,11 +469,12 @@ async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<St
         .await
         .map_err(|e| tracing::error!("session create failed: {e}"))
         .ok()?;
-    Some(set_cookie(SESSION_COOKIE, &id, SESSION_TTL_SECS, secure))
-}
-
-fn is_secure(base: &str) -> bool {
-    base.starts_with("https://")
+    Some(set_cookie(
+        auth.session_cookie_name(),
+        &id,
+        SESSION_TTL_SECS,
+        auth.secure(),
+    ))
 }
 
 // ---- templates --------------------------------------------------------------
@@ -271,8 +483,17 @@ fn is_secure(base: &str) -> bool {
 #[template(path = "auth/setup.html")]
 struct SetupTemplate {
     csrf: String,
+    token: String,
     error: Option<String>,
 }
+
+#[derive(Template)]
+#[template(path = "auth/setup_locked.html")]
+struct SetupLockedTemplate;
+
+#[derive(Template)]
+#[template(path = "auth/share_login.html")]
+struct ShareLoginTemplate;
 
 #[derive(Template)]
 #[template(path = "auth/login.html")]
@@ -310,13 +531,32 @@ async fn theme() -> impl IntoResponse {
 
 // ---- setup / login / logout -------------------------------------------------
 
-async fn setup_page(State(auth): State<AuthState>, headers: HeaderMap) -> Response {
+#[derive(Deserialize)]
+struct SetupQuery {
+    token: Option<String>,
+}
+
+async fn setup_page(
+    State(auth): State<AuthState>,
+    headers: HeaderMap,
+    Query(q): Query<SetupQuery>,
+) -> Response {
     if auth.store.count_users().await.unwrap_or(1) > 0 {
         return Redirect::to("/login").into_response();
     }
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
+    let Some(token) = q.token.filter(|t| auth.setup_token_ok(Some(t))) else {
+        return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
+    };
+    let (csrf, cookie) = auth.csrf_pre_token(&headers);
     with_cookies(
-        render(SetupTemplate { csrf, error: None }, StatusCode::OK),
+        render(
+            SetupTemplate {
+                csrf,
+                token,
+                error: None,
+            },
+            StatusCode::OK,
+        ),
         cookie,
     )
 }
@@ -326,6 +566,7 @@ struct SetupForm {
     username: String,
     password: String,
     csrf: String,
+    token: Option<String>,
 }
 
 async fn setup_submit(
@@ -333,14 +574,20 @@ async fn setup_submit(
     headers: HeaderMap,
     Form(form): Form<SetupForm>,
 ) -> Response {
-    let secure = is_secure(&auth.base(&headers));
-    if !csrf_ok(&headers, &form.csrf) {
+    if auth.store.count_users().await.unwrap_or(1) > 0 {
+        return Redirect::to("/login").into_response();
+    }
+    if !auth.csrf_pre_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if !auth.setup_token_ok(form.token.as_deref()) {
+        return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
     }
     let form_error = |msg: &str| {
         render(
             SetupTemplate {
                 csrf: form.csrf.clone(),
+                token: form.token.clone().unwrap_or_default(),
                 error: Some(msg.to_string()),
             },
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -350,10 +597,15 @@ async fn setup_submit(
     if username.is_empty() || username.len() > 64 {
         return form_error("Choose a username of up to 64 characters.");
     }
-    if form.password.chars().count() < MIN_PASSWORD_LEN {
+    let password_len = form.password.chars().count();
+    if password_len < MIN_PASSWORD_LEN {
         return form_error("Use a password of at least 12 characters.");
     }
-    let Ok(password_hash) = hash_password(&form.password) else {
+    if password_len > MAX_PASSWORD_LEN {
+        return form_error("Use a password of at most 1024 characters.");
+    }
+    let password = form.password.clone();
+    let Some(Ok(password_hash)) = auth.hash_work(move || hash_password(&password)).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let user = User {
@@ -363,7 +615,7 @@ async fn setup_submit(
         created_at: now(),
     };
     match auth.store.create_first_user(user).await {
-        Ok(Some(user)) => match start_session(&auth, &user, secure).await {
+        Ok(Some(user)) => match start_session(&auth, &user).await {
             Some(session) => with_cookies(Redirect::to("/").into_response(), [session]),
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         },
@@ -392,7 +644,7 @@ async fn login_page(
     if auth.current_user(&headers).await.is_some() {
         return Redirect::to(&next).into_response();
     }
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
+    let (csrf, cookie) = auth.csrf_pre_token(&headers);
     with_cookies(
         render(
             LoginTemplate {
@@ -417,41 +669,91 @@ struct LoginForm {
 async fn login_submit(
     State(auth): State<AuthState>,
     headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let secure = is_secure(&auth.base(&headers));
-    if !csrf_ok(&headers, &form.csrf) {
+    if !auth.csrf_pre_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let next = safe_next(form.next.as_deref());
-    let user = auth
-        .store
-        .find_user_by_username(form.username.trim())
-        .await
-        .ok()
-        .flatten();
-    // Hash against a throwaway when the user is unknown so timing does not
-    // reveal which usernames exist.
-    let verified = match &user {
-        Some(u) => verify_password(&form.password, &u.password_hash),
-        None => {
-            let _ = hash_password(&form.password);
-            false
-        }
-    };
-    match user.filter(|_| verified) {
-        Some(user) => match start_session(&auth, &user, secure).await {
-            Some(session) => with_cookies(Redirect::to(&next).into_response(), [session]),
-            None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
-        None => render(
+    let username = form.username.trim().to_lowercase();
+    let retry_after = auth
+        .login_by_ip
+        .check(&ip)
+        .err()
+        .max(auth.login_by_user.check(&username).err());
+    if let Some(seconds) = retry_after {
+        let mut response = render(
             LoginTemplate {
                 csrf: form.csrf,
                 next,
-                error: Some("That username and password don't match.".into()),
+                error: Some(format!(
+                    "Too many failed attempts. Try again in {}.",
+                    wait_text(seconds)
+                )),
             },
-            StatusCode::UNAUTHORIZED,
-        ),
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        return response;
+    }
+
+    let user = auth
+        .store
+        .find_user_by_username(&username)
+        .await
+        .ok()
+        .flatten();
+    let verified = if form.password.chars().count() > MAX_PASSWORD_LEN {
+        false
+    } else {
+        let password = form.password.clone();
+        // Hash against a throwaway when the user is unknown so timing does not
+        // reveal which usernames exist.
+        let stored = user.as_ref().map(|u| u.password_hash.clone());
+        auth.hash_work(move || match stored {
+            Some(hash) => verify_password(&password, &hash),
+            None => {
+                let _ = hash_password(&password);
+                false
+            }
+        })
+        .await
+        .unwrap_or(false)
+    };
+    match user.filter(|_| verified) {
+        Some(user) => {
+            auth.login_by_user.record_success(&username);
+            // Fresh session id on login, so one planted beforehand is worthless.
+            if let Some(id) = cookie(&headers, auth.session_cookie_name()) {
+                let _ = auth.store.delete_session(&hash_token(&id)).await;
+            }
+            match start_session(&auth, &user).await {
+                Some(session) => with_cookies(Redirect::to(&next).into_response(), [session]),
+                None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        None => {
+            auth.login_by_ip.record_failure(&ip);
+            auth.login_by_user.record_failure(&username);
+            render(
+                LoginTemplate {
+                    csrf: form.csrf,
+                    next,
+                    error: Some("That username and password don't match.".into()),
+                },
+                StatusCode::UNAUTHORIZED,
+            )
+        }
+    }
+}
+
+fn wait_text(seconds: u64) -> String {
+    match seconds {
+        0..=59 => format!("{seconds} seconds"),
+        s => format!("{} minutes", s.div_ceil(60)),
     }
 }
 
@@ -465,24 +767,31 @@ async fn logout(
     headers: HeaderMap,
     Form(form): Form<CsrfForm>,
 ) -> Response {
-    if !csrf_ok(&headers, &form.csrf) {
-        return StatusCode::FORBIDDEN.into_response();
+    // Without a live session there is nothing to protect; just clear the cookie.
+    if auth.session(&headers).await.is_some() {
+        if !auth.csrf_session_ok(&headers, &form.csrf).await {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if let Some(id) = cookie(&headers, auth.session_cookie_name()) {
+            let _ = auth.store.delete_session(&hash_token(&id)).await;
+        }
     }
-    if let Some(id) = cookie(&headers, SESSION_COOKIE) {
-        let _ = auth.store.delete_session(&hash_token(&id)).await;
-    }
-    let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&auth.base(&headers)));
+    let clear = set_cookie(auth.session_cookie_name(), "", 0, auth.secure());
     with_cookies(Redirect::to("/login").into_response(), [clear])
 }
 
 // ---- metadata and registration ----------------------------------------------
 
-async fn as_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<Value> {
-    Json(authorization_server_metadata(&auth.base(&headers)))
+async fn as_metadata(State(auth): State<AuthState>) -> Json<Value> {
+    Json(authorization_server_metadata(&auth.base()))
 }
 
-async fn resource_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<Value> {
-    Json(protected_resource_metadata(&auth.base(&headers)))
+async fn mcp_resource_metadata(State(auth): State<AuthState>) -> Json<Value> {
+    Json(protected_resource_metadata(&auth.base(), "/mcp"))
+}
+
+async fn api_resource_metadata(State(auth): State<AuthState>) -> Json<Value> {
+    Json(protected_resource_metadata(&auth.base(), "/api"))
 }
 
 fn oauth_json(status: StatusCode, body: Value) -> Response {
@@ -505,7 +814,42 @@ fn oauth_error(e: OAuthError) -> Response {
     oauth_json(status, e.to_json())
 }
 
-async fn register(State(auth): State<AuthState>, Json(req): Json<RegistrationRequest>) -> Response {
+/// Peer address of the TCP connection. Proxy headers are deliberately ignored:
+/// they are client-controlled unless a trusted proxy sets them.
+struct ClientIp(String);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let ip = parts
+            .extensions
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .map(|c| c.0.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        Ok(Self(ip))
+    }
+}
+
+fn too_many_requests(retry_after: u64) -> Response {
+    let mut response = oauth_json(
+        StatusCode::TOO_MANY_REQUESTS,
+        serde_json::json!({"error": "too_many_requests", "error_description": "slow down"}),
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(retry_after));
+    response
+}
+
+async fn register(
+    State(auth): State<AuthState>,
+    ClientIp(ip): ClientIp,
+    Json(req): Json<RegistrationRequest>,
+) -> Response {
+    if let Err(retry_after) = auth.register_limit.check(&ip) {
+        return too_many_requests(retry_after);
+    }
     match auth.server.register_client(req).await {
         Ok(body) => oauth_json(StatusCode::CREATED, body),
         Err(e) => oauth_error(e),
@@ -523,17 +867,21 @@ fn error_page(message: &str) -> Response {
     )
 }
 
-fn redirect_with(redirect_uri: &str, params: &[(&str, &str)]) -> Response {
+/// Redirects to the client with `params`, adding the RFC 9207 `iss` so a client
+/// can tell which authorization server answered.
+fn redirect_with(redirect_uri: &str, issuer: &str, params: &[(&str, &str)]) -> Response {
     match Url::parse(redirect_uri) {
         Ok(mut url) => {
-            url.query_pairs_mut().extend_pairs(params);
+            url.query_pairs_mut()
+                .extend_pairs(params)
+                .append_pair("iss", issuer);
             Redirect::to(url.as_str()).into_response()
         }
         Err(_) => error_page("The redirect address is not valid."),
     }
 }
 
-fn failure_response(f: AuthorizeFailure) -> Response {
+fn failure_response(f: AuthorizeFailure, issuer: &str) -> Response {
     match f {
         AuthorizeFailure::Page(m) => error_page(&m),
         AuthorizeFailure::Redirect {
@@ -549,7 +897,7 @@ fn failure_response(f: AuthorizeFailure) -> Response {
             if let Some(s) = state.as_deref() {
                 params.push(("state", s));
             }
-            redirect_with(&redirect_uri, &params)
+            redirect_with(&redirect_uri, issuer, &params)
         }
     }
 }
@@ -589,16 +937,16 @@ async fn authorize_page(
     RawQuery(raw): RawQuery,
     Query(params): Query<AuthorizeParams>,
 ) -> Response {
-    let base = auth.base(&headers);
+    let base = auth.base();
     let validated = match auth.server.validate_authorize(&base, &params).await {
         Ok(v) => v,
-        Err(f) => return failure_response(f),
+        Err(f) => return failure_response(f, &base),
     };
-    let Some(user) = auth.current_user(&headers).await else {
+    let Some((session_id, user)) = auth.session(&headers).await else {
         let next = format!("/oauth/authorize?{}", raw.unwrap_or_default());
         return login_redirect(&next).into_response();
     };
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&base));
+    let csrf = auth.csrf_session_token(&session_id);
     let fields = vec![
         ("response_type", "code".to_string()),
         ("client_id", validated.client.client_id.clone()),
@@ -617,7 +965,7 @@ async fn authorize_page(
         scopes: validated.scopes.iter().map(|s| describe_scope(s)).collect(),
         fields,
     };
-    with_cookies(render(page, StatusCode::OK), cookie)
+    render(page, StatusCode::OK)
 }
 
 #[derive(Deserialize)]
@@ -639,7 +987,7 @@ async fn authorize_submit(
     headers: HeaderMap,
     Form(form): Form<ConsentForm>,
 ) -> Response {
-    if !csrf_ok(&headers, &form.csrf) {
+    if !auth.csrf_session_ok(&headers, &form.csrf).await {
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some(user) = auth.current_user(&headers).await else {
@@ -655,10 +1003,10 @@ async fn authorize_submit(
         scope: form.scope,
         resource: form.resource,
     };
-    let base = auth.base(&headers);
+    let base = auth.base();
     let validated: ValidatedAuthorize = match auth.server.validate_authorize(&base, &params).await {
         Ok(v) => v,
-        Err(f) => return failure_response(f),
+        Err(f) => return failure_response(f, &base),
     };
     let state = validated.state.as_deref();
     if form.decision != "allow" {
@@ -666,7 +1014,7 @@ async fn authorize_submit(
         if let Some(s) = state {
             p.push(("state", s));
         }
-        return redirect_with(&validated.redirect_uri, &p);
+        return redirect_with(&validated.redirect_uri, &base, &p);
     }
     match auth.server.issue_code(&user.id, &validated).await {
         Ok(code) => {
@@ -674,7 +1022,7 @@ async fn authorize_submit(
             if let Some(s) = state {
                 p.push(("state", s));
             }
-            redirect_with(&validated.redirect_uri, &p)
+            redirect_with(&validated.redirect_uri, &base, &p)
         }
         Err(e) => {
             tracing::error!("issue code failed: {e}");
@@ -685,12 +1033,8 @@ async fn authorize_submit(
 
 // ---- token and revoke -------------------------------------------------------
 
-async fn token(
-    State(auth): State<AuthState>,
-    headers: HeaderMap,
-    Form(req): Form<TokenRequest>,
-) -> Response {
-    match auth.server.token(&auth.base(&headers), req).await {
+async fn token(State(auth): State<AuthState>, Form(req): Form<TokenRequest>) -> Response {
+    match auth.server.token(&auth.base(), req).await {
         Ok(body) => oauth_json(StatusCode::OK, body),
         Err(e) => oauth_error(e),
     }
@@ -699,10 +1043,11 @@ async fn token(
 #[derive(Deserialize)]
 struct RevokeForm {
     token: String,
+    client_id: String,
 }
 
 async fn revoke(State(auth): State<AuthState>, Form(form): Form<RevokeForm>) -> Response {
-    match auth.server.revoke(&form.token).await {
+    match auth.server.revoke(&form.token, &form.client_id).await {
         Ok(()) => oauth_json(StatusCode::OK, serde_json::json!({})),
         Err(e) => oauth_error(e.into()),
     }
