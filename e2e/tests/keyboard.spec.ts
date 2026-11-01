@@ -2,8 +2,10 @@ import { expect, test, uniqueTitle, uploadViaUi } from "./fixtures";
 
 // Focus management for the dialogs, the command palette and the mobile drawer.
 
+// Native modal dialogs may hand Tab to the browser chrome (activeElement is
+// then the body), but never to the inert page behind them.
 const focusIsInside = (selector: string) =>
-  `document.querySelector(${JSON.stringify(selector)})?.contains(document.activeElement) ?? false`;
+  `(() => { const a = document.activeElement; return a === document.body || (document.querySelector(${JSON.stringify(selector)})?.contains(a) ?? false); })()`;
 
 test.describe("dialogs", () => {
   test("upload dialog takes focus, traps Tab, closes on Escape and gives focus back", async ({

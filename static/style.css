@@ -853,6 +853,15 @@ dialog.palette {
   color: var(--ink);
   text-decoration: none;
 }
+.palette-item .f-meta {
+  flex: none;
+  white-space: nowrap;
+}
+.f-row-plain .f-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+}
 .palette-item-main {
   display: flex;
   flex-direction: column;

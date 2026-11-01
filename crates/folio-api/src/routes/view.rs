@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 
-use folio_core::models::{
-    Correspondent, Document, DocumentStatus, DocumentType, Id, ProcessingStatus, Tag,
-};
+use folio_core::models::{Correspondent, Document, DocumentStatus, DocumentType, Id, Tag};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -236,6 +234,7 @@ fn row_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use folio_core::models::ProcessingStatus;
 
     #[test]
     fn counts_split_inbox_from_review() {
