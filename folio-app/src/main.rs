@@ -12,8 +12,8 @@ use tracing::info;
 use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
 use folio_core::services::{
-    EventingDocumentRepository, Importer, IngestPipeline, IngestScheduler, LibraryService,
-    WorkflowEngine,
+    BroadcastConsumer, DispatcherConfig, Importer, IngestPipeline, IngestScheduler, LibraryService,
+    OutboxDispatcher, WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
 use folio_infra::{
@@ -109,6 +109,8 @@ async fn main() -> Result<()> {
     // Create repositories
     let repos = database.repositories().await;
     let document_repo = repos.documents;
+    let workflow_document_repo = repos.workflow_documents;
+    let outbox = repos.outbox;
     let tag_repo = repos.tags;
     let correspondent_repo = repos.correspondents;
     let document_type_repo = repos.document_types;
@@ -146,22 +148,16 @@ async fn main() -> Result<()> {
     // Create job queue
     let job_queue = repos.jobs;
 
-    // Create event broadcaster for SSE
+    // Live SSE connections are fed by the outbox dispatcher; the buffer only
+    // bridges slow connections, which replay what they missed from the outbox.
     let event_broadcaster = EventBroadcaster::new(100);
-
-    // The HTTP layer gets a repository that announces creates, updates, and
-    // deletes; the worker and workflow actions keep the plain one so they
-    // control their own events.
-    let api_document_repo = Arc::new(EventingDocumentRepository::new(
-        document_repo.clone(),
-        event_broadcaster.clone(),
-    ));
 
     let webhook_client = WebhookClient::new();
     let public_url = config.server.base_url();
+    // Workflow edits are announced to live clients but never re-trigger workflows.
     let workflow_runner = Arc::new(WorkflowRunner::new(
         workflow_repo.clone(),
-        document_repo.clone(),
+        workflow_document_repo,
         webhook_client.clone(),
     ));
     let workflow_engine = Arc::new(WorkflowEngine::new(
@@ -169,7 +165,6 @@ async fn main() -> Result<()> {
         document_repo.clone(),
         correspondent_repo.clone(),
         document_type_repo.clone(),
-        Arc::new(job_queue.clone()),
         Arc::new(StorageFileMetadata::new(store.clone())),
         public_url.clone(),
     ));
@@ -182,7 +177,7 @@ async fn main() -> Result<()> {
         workflow_repo.clone(),
         ledger.clone(),
         Arc::new(Importer::new(
-            api_document_repo.clone(),
+            document_repo.clone(),
             store.clone(),
             Arc::new(job_queue.clone()),
         )),
@@ -210,12 +205,21 @@ async fn main() -> Result<()> {
         thumbnail_service.clone(),
         store.clone(),
         WorkerConfig::default(),
-        event_broadcaster.clone(),
+        outbox.clone(),
     )
     .with_workflow_runner(workflow_runner);
 
-    // Stops on its own when the shutdown signal flips
-    tokio::spawn(workflow_engine.run(event_broadcaster.subscribe(), shutdown_tx.subscribe()));
+    // Delivers committed events to workflows and live clients, including those
+    // left over from before a restart. Stops when the shutdown signal flips.
+    let dispatcher = Arc::new(OutboxDispatcher::new(
+        outbox.clone(),
+        vec![
+            workflow_engine,
+            Arc::new(BroadcastConsumer(event_broadcaster.clone())),
+        ],
+        DispatcherConfig::default(),
+    ));
+    tokio::spawn(dispatcher.run(shutdown_tx.subscribe()));
 
     // Stops on its own when the shutdown signal flips
     tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
@@ -226,9 +230,8 @@ async fn main() -> Result<()> {
 
     info!("Background job worker started");
 
-    // MCP edits are user actions, so they go through the repository that announces them
     let library = Arc::new(LibraryService::new(
-        api_document_repo.clone(),
+        document_repo.clone(),
         tag_repo.clone(),
         correspondent_repo.clone(),
         document_type_repo.clone(),
@@ -258,7 +261,7 @@ async fn main() -> Result<()> {
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
     let state = AppState::new(
-        api_document_repo,
+        document_repo.clone(),
         tag_repo,
         correspondent_repo,
         document_type_repo,
@@ -271,6 +274,7 @@ async fn main() -> Result<()> {
         job_queue,
         store,
         event_broadcaster,
+        outbox,
         workflow_repo,
         webhook_client,
         public_url,

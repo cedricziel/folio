@@ -1555,6 +1555,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "chrono",
  "folio-auth",
  "folio-core",
  "folio-infra",
@@ -1571,7 +1572,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-stream",
  "tower",
  "tower-http 0.7.1",
  "tower-livereload",
@@ -5310,7 +5310,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

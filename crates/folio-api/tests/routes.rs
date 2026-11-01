@@ -67,6 +67,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         repos.jobs,
         store,
         EventBroadcaster::default(),
+        repos.outbox,
         repos.workflows,
         WebhookClient::new(),
         "http://folio.test".to_string(),
