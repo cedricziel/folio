@@ -321,6 +321,21 @@ a:not([class]):hover,
   flex-direction: column;
   gap: var(--space-1);
 }
+.page-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.page-head .back-link {
+  margin-bottom: var(--space-2);
+}
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
 
 .filter-line {
   display: flex;

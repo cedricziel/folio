@@ -110,7 +110,7 @@ async fn list_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
             id: workflow.id.to_string(),
             name: workflow.name,
             enabled: workflow.enabled,
-            trigger: workflow.trigger.as_str(),
+            trigger: workflow.trigger.label(),
             last_run,
         });
     }
