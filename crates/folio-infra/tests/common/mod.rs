@@ -26,3 +26,61 @@ pub fn container_or_skip<T, E: Display>(what: &str, started: Result<T, E>) -> Op
 fn require_docker() -> bool {
     std::env::var("FOLIO_REQUIRE_DOCKER").is_ok_and(|v| !v.is_empty() && v != "0")
 }
+
+pub const MINIO_USER: &str = "folio-test-user";
+pub const MINIO_PASSWORD: &str = "folio-test-password";
+
+/// Create a bucket with a hand-signed SigV4 request; `object_store` cannot
+/// create buckets.
+pub async fn create_bucket(endpoint: &str, bucket: &str) {
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+
+    fn hmac_sha256(key: &[u8], data: &str) -> Vec<u8> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+        mac.update(data.as_bytes());
+        mac.finalize().into_bytes().to_vec()
+    }
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    let host = endpoint.trim_start_matches("http://");
+    let now = chrono::Utc::now();
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let date = now.format("%Y%m%d").to_string();
+    let payload_hash = hex(&Sha256::digest(b""));
+    let canonical = format!(
+        "PUT\n/{bucket}\n\nhost:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n\nhost;x-amz-content-sha256;x-amz-date\n{payload_hash}"
+    );
+    let scope = format!("{date}/us-east-1/s3/aws4_request");
+    let to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}",
+        hex(&Sha256::digest(canonical.as_bytes()))
+    );
+    let mut key = hmac_sha256(format!("AWS4{MINIO_PASSWORD}").as_bytes(), &date);
+    for part in ["us-east-1", "s3", "aws4_request"] {
+        key = hmac_sha256(&key, part);
+    }
+    let signature = hex(&hmac_sha256(&key, &to_sign));
+
+    let response = reqwest::Client::new()
+        .put(format!("{endpoint}/{bucket}"))
+        .header("x-amz-date", &amz_date)
+        .header("x-amz-content-sha256", &payload_hash)
+        .header(
+            "Authorization",
+            format!(
+                "AWS4-HMAC-SHA256 Credential={MINIO_USER}/{scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}"
+            ),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "creating bucket failed: {} {}",
+        response.status(),
+        response.text().await.unwrap_or_default()
+    );
+}

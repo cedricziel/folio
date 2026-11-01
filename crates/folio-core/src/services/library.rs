@@ -16,8 +16,9 @@ use crate::models::{
     DocumentSource, DocumentType, Id, Tag, UpdateDocument,
 };
 use crate::ports::{
-    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentTypeRepository,
-    EmbeddingService, FileStore, ProcessingQueue, ProcessingStatus, SearchService, TagRepository,
+    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
+    DocumentTypeRepository, EmbeddingService, ProcessingQueue, ProcessingStatus, SearchService,
+    TagRepository,
 };
 
 const SNIPPET_RADIUS: usize = 80;
@@ -97,7 +98,7 @@ pub struct LibraryService {
     correspondents: Arc<dyn CorrespondentRepository>,
     document_types: Arc<dyn DocumentTypeRepository>,
     semantic: SearchServiceFacade,
-    files: Arc<dyn FileStore>,
+    files: Arc<dyn DocumentStore>,
     importer: Importer,
     queue: Arc<dyn ProcessingQueue>,
 }
@@ -111,7 +112,7 @@ impl LibraryService {
         document_types: Arc<dyn DocumentTypeRepository>,
         embeddings: Arc<dyn EmbeddingService>,
         search: Arc<dyn SearchService>,
-        files: Arc<dyn FileStore>,
+        files: Arc<dyn DocumentStore>,
         queue: Arc<dyn ProcessingQueue>,
     ) -> Self {
         let semantic = SearchServiceFacade::new(documents.clone(), embeddings, search);
@@ -271,7 +272,7 @@ impl LibraryService {
         let document = self.require_document(id).await?;
         match document.file_path.clone() {
             Some(path) => {
-                let data = self.files.read(&path).await?;
+                let data = self.files.get_bytes(&path).await?;
                 Ok(Some((document, data)))
             }
             None => Ok(None),

@@ -12,9 +12,10 @@ use uuid::Uuid;
 
 use folio_api::{create_router, AppState, AuthState, EventBroadcaster, IngestionState};
 use folio_core::models::IngestionSourceDef;
+use folio_core::ports::DocumentStore;
 use folio_infra::{
-    Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
-    WebhookClient,
+    Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
+    PipelineContext, ThumbnailService, WebhookClient,
 };
 
 pub struct Harness {
@@ -44,8 +45,8 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
         openai_api_key: None,
         anthropic_api_key: None,
     };
-    let thumbnails = Arc::new(ThumbnailService::new(&storage));
-    thumbnails.init().await.unwrap();
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
@@ -61,7 +62,7 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
         pipeline,
         thumbnails,
         repos.jobs,
-        storage,
+        store,
         EventBroadcaster::new(16),
         repos.workflows,
         WebhookClient::new(),

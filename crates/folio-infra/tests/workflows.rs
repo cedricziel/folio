@@ -25,7 +25,8 @@ use folio_core::services::{EventingDocumentRepository, WorkflowEngine};
 use folio_core::{DocumentEvent, EventBroadcaster};
 use folio_infra::workflow::{sign, RunOutcome, WebhookRequest, MAX_ATTEMPTS};
 use folio_infra::{
-    Database, FileStorage, JobQueue, StorageFileMetadata, WebhookClient, WorkflowRunner,
+    Database, JobQueue, ObjectStoreDocumentStore, StorageFileMetadata, WebhookClient,
+    WorkflowRunner,
 };
 
 struct Received {
@@ -149,7 +150,9 @@ impl Harness {
                 correspondents.clone(),
                 repos.document_types,
                 Arc::new(queue.clone()),
-                Arc::new(StorageFileMetadata::new(FileStorage::new(&dir))),
+                Arc::new(StorageFileMetadata::new(Arc::new(
+                    ObjectStoreDocumentStore::in_memory(),
+                ))),
                 "http://folio.test",
             )
             .with_file_wait(Duration::ZERO),

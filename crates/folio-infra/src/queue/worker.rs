@@ -1,22 +1,22 @@
 //! Background job worker
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 use tokio::time::sleep;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, info_span, Instrument};
 
 use folio_core::events::{DocumentEvent, EventBroadcaster};
 use folio_core::models::{ProcessingStage, ProcessingStatus};
 use folio_core::ports::{
-    DocumentRepository, EmbeddedChunk, EmbeddingService, OcrService, SearchService,
+    DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, SearchService,
 };
 
 use super::{JobQueue, JobType};
 use crate::ai::chunker::{chunk_text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS};
 use crate::ai::PipelineContext;
-use crate::storage::FileStorage;
+use crate::telemetry::metrics;
 use crate::thumbnail::ThumbnailService;
 use crate::workflow::{RunOutcome, WorkflowRunner};
 
@@ -58,7 +58,7 @@ pub struct Worker {
     search_service: Arc<dyn SearchService>,
     pipeline: Arc<PipelineContext>,
     thumbnail_service: Arc<ThumbnailService>,
-    storage: FileStorage,
+    store: Arc<dyn DocumentStore>,
     config: WorkerConfig,
     event_broadcaster: EventBroadcaster,
     workflow_runner: Option<Arc<WorkflowRunner>>,
@@ -75,7 +75,7 @@ impl Worker {
         search_service: Arc<dyn SearchService>,
         pipeline: Arc<PipelineContext>,
         thumbnail_service: Arc<ThumbnailService>,
-        storage_path: &str,
+        store: Arc<dyn DocumentStore>,
         config: WorkerConfig,
         event_broadcaster: EventBroadcaster,
     ) -> Self {
@@ -87,7 +87,7 @@ impl Worker {
             search_service,
             pipeline,
             thumbnail_service,
-            storage: FileStorage::new(storage_path),
+            store,
             config,
             event_broadcaster,
             workflow_runner: None,
@@ -146,17 +146,39 @@ impl Worker {
                 Ok(Some(job)) => {
                     debug!("Processing job {}: {:?}", job.id, job.job_type.type_name());
 
-                    let result = self.process_job(&job.job_type).await;
+                    let type_name = job.job_type.type_name();
+                    let span = info_span!(
+                        "job",
+                        otel.name = %format!("job {type_name}"),
+                        otel.kind = "consumer",
+                        job.id = %job.id,
+                        job.r#type = type_name,
+                        job.attempt = job.attempts,
+                        document.id = job.job_type.document_id().map(tracing::field::display),
+                    );
+                    let started = Instant::now();
+                    let result = self
+                        .process_job(&job.job_type)
+                        .instrument(span.clone())
+                        .await;
+                    metrics().job_finished(type_name, result.is_ok(), started);
 
                     match result {
                         Ok(()) => {
-                            if let Err(e) = self.queue.complete(job.id).await {
+                            if let Err(e) =
+                                self.queue.complete(job.id).instrument(span.clone()).await
+                            {
                                 error!("Failed to mark job {} as complete: {}", job.id, e);
                             }
                         }
                         Err(e) => {
                             let error_msg = e.to_string();
-                            if let Err(e) = self.queue.fail(job.id, &error_msg, true).await {
+                            if let Err(e) = self
+                                .queue
+                                .fail(job.id, &error_msg, true)
+                                .instrument(span.clone())
+                                .await
+                            {
                                 error!("Failed to mark job {} as failed: {}", job.id, e);
                             }
                         }
@@ -250,7 +272,6 @@ impl Worker {
     }
 
     /// Process a single job
-    #[instrument(skip(self))]
     async fn process_job(
         &self,
         job_type: &JobType,
@@ -296,7 +317,7 @@ impl Worker {
 
         // Read the file
         let file_path = document.file_path.as_ref().ok_or("No file path")?;
-        let data = self.storage.read(file_path).await?;
+        let data = self.store.get_bytes(file_path).await?;
 
         let mime_type = document
             .mime_type
@@ -368,7 +389,7 @@ impl Worker {
         let output = self
             .track(document_id, ProcessingStage::Ocr, async {
                 let file_path = document.file_path.as_ref().ok_or("No file path")?;
-                let data = self.storage.read(file_path).await?;
+                let data = self.store.get_bytes(file_path).await?;
                 let mime_type = document
                     .mime_type
                     .as_deref()
@@ -517,19 +538,33 @@ impl Worker {
             }
         };
 
-        info!("Reading file from: {}", file_path);
-        let data = self.storage.read(&file_path).await?;
-        info!("File read successfully, size: {} bytes", data.len());
-
         let mime_type = document
             .mime_type
             .as_deref()
             .unwrap_or("application/octet-stream");
 
+        // PDFs go through poppler, which needs a file: fetch them to disk once
+        // and reuse that copy for the page count and every page.
+        info!("Reading file from: {}", file_path);
+        let local_pdf = if mime_type == "application/pdf" {
+            Some(self.store.download_to_temp(&file_path).await?)
+        } else {
+            None
+        };
+        let data = match &local_pdf {
+            Some(local) => tokio::fs::read(local.path()).await?,
+            None => self.store.get_bytes(&file_path).await?,
+        };
+        info!("File read successfully, size: {} bytes", data.len());
+
         // Step 1: Generate thumbnail(s) and get page count for PDFs
-        let (_, page_count) = if mime_type == "application/pdf" {
+        let (_, page_count) = if let Some(local_pdf) = &local_pdf {
             // Get page count
-            let count = match self.thumbnail_service.get_pdf_page_count(&data).await {
+            let count = match self
+                .thumbnail_service
+                .get_pdf_page_count(local_pdf.path())
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     debug!("Failed to get PDF page count: {}", e);
@@ -549,7 +584,7 @@ impl Worker {
             for page in 1..=max_pages {
                 match self
                     .thumbnail_service
-                    .generate_page(document_id, &data, page)
+                    .generate_page(document_id, local_pdf.path(), page)
                     .await
                 {
                     Ok(_) => {
@@ -673,13 +708,12 @@ mod tests {
         queue: JobQueue,
         pipeline: Arc<PipelineContext>,
         doc_id: uuid::Uuid,
-        storage: FileStorage,
+        storage: Arc<dyn DocumentStore>,
         _dir: tempfile::TempDir,
     }
 
     async fn fixture(ocr_text: &'static str) -> Fixture {
         let (pool, dir) = test_pool().await;
-        let storage_path = dir.path().join("files");
         let repo = Arc::new(SqliteDocumentRepository::new(pool.clone()));
         let settings = Arc::new(SqliteSettingsRepository::new(pool.clone()));
         let search = Arc::new(SqliteSearchService::new(pool.clone()));
@@ -692,10 +726,9 @@ mod tests {
                 anthropic_api_key: None,
             },
         );
-        let thumbnails = Arc::new(ThumbnailService::new(storage_path.to_str().unwrap()));
-
-        let storage = FileStorage::new(&storage_path);
-        storage.init().await.unwrap();
+        let storage: Arc<dyn DocumentStore> =
+            Arc::new(crate::storage::ObjectStoreDocumentStore::in_memory());
+        let thumbnails = Arc::new(ThumbnailService::new(storage.clone()));
         let doc = repo
             .create(CreateDocument {
                 title: "scan".into(),
@@ -706,8 +739,9 @@ mod tests {
             })
             .await
             .unwrap();
-        let path = storage
-            .store(doc.id, "scan.png", b"not a real png")
+        let path = folio_core::ports::keys::original(doc.id);
+        storage
+            .put(&path, b"not a real png".as_slice().into())
             .await
             .unwrap();
         repo.set_file_path(doc.id, &path).await.unwrap();
@@ -720,7 +754,7 @@ mod tests {
             search.clone(),
             pipeline.clone(),
             thumbnails,
-            storage_path.to_str().unwrap(),
+            storage.clone(),
             WorkerConfig::default(),
             EventBroadcaster::new(16),
         );
@@ -851,7 +885,8 @@ mod tests {
             })
             .await
             .unwrap();
-        let path = f.storage.store(doc2.id, "b.png", b"x").await.unwrap();
+        let path = folio_core::ports::keys::original(doc2.id);
+        f.storage.put(&path, b"x".as_slice().into()).await.unwrap();
         f.repo.set_file_path(doc2.id, &path).await.unwrap();
         f.worker
             .process_job(&JobType::ProcessDocument {

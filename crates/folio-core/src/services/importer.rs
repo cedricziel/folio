@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use super::NewUpload;
 use crate::error::Result;
 use crate::models::{CreateDocument, Document};
-use crate::ports::{DocumentImporter, DocumentRepository, FileStore, ProcessingQueue};
+use crate::ports::{keys, DocumentImporter, DocumentRepository, DocumentStore, ProcessingQueue};
 
 /// Creates the record, stores the file, and queues background processing
 ///
@@ -16,14 +16,14 @@ use crate::ports::{DocumentImporter, DocumentRepository, FileStore, ProcessingQu
 /// up here.
 pub struct Importer {
     documents: Arc<dyn DocumentRepository>,
-    files: Arc<dyn FileStore>,
+    files: Arc<dyn DocumentStore>,
     queue: Arc<dyn ProcessingQueue>,
 }
 
 impl Importer {
     pub fn new(
         documents: Arc<dyn DocumentRepository>,
-        files: Arc<dyn FileStore>,
+        files: Arc<dyn DocumentStore>,
         queue: Arc<dyn ProcessingQueue>,
     ) -> Self {
         Self {
@@ -49,17 +49,15 @@ impl DocumentImporter for Importer {
             })
             .await?;
 
-        match self
-            .files
-            .store(document.id, &upload.filename, &upload.data)
-            .await
-        {
-            Ok(path) => self.documents.set_file_path(document.id, &path).await?,
-            Err(e) => {
-                // A record without its file is useless; do not leave one behind.
-                let _ = self.documents.delete(document.id).await;
-                return Err(e);
-            }
+        let key = keys::original(document.id);
+        let stored = match self.files.put(&key, upload.data.into()).await {
+            Ok(()) => self.documents.set_file_path(document.id, &key).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = stored {
+            // A record without its file is useless; do not leave one behind.
+            let _ = self.documents.delete(document.id).await;
+            return Err(e);
         }
         // The file is stored, so a failed enqueue leaves a usable document
         // that can be reprocessed.

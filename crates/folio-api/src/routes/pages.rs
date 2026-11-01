@@ -3,7 +3,7 @@
 use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::header,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -14,6 +14,7 @@ use uuid::Uuid;
 use folio_core::models::{
     Correspondent, Document, DocumentSource, DocumentType, SourceKind, UpdateDocument,
 };
+use folio_core::ports::{keys, DocumentStore, StoredObject};
 use folio_core::services::NewUpload;
 use folio_infra::JobType;
 
@@ -281,6 +282,30 @@ async fn document_detail(
     })))
 }
 
+/// The first of `candidates` that exists; later ones are keys from before the
+/// object-key layout, kept so thumbnails survive until the layout migration ran.
+async fn first_object(store: &dyn DocumentStore, candidates: &[String]) -> Option<StoredObject> {
+    for key in candidates {
+        match store.get(key).await {
+            Ok(object) => return Some(object),
+            Err(folio_core::Error::NotFound { .. }) => {}
+            Err(e) => error!("Failed to read {key}: {e}"),
+        }
+    }
+    None
+}
+
+/// Stream a stored object as a response body
+fn stream_object(object: StoredObject, content_type: &str) -> Response {
+    let mut response = Response::builder().header(header::CONTENT_TYPE, content_type);
+    if let Some(size) = object.size {
+        response = response.header(header::CONTENT_LENGTH, size);
+    }
+    response
+        .body(axum::body::Body::from_stream(object.stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 /// Document thumbnail (serves generated thumbnail or placeholder)
 async fn document_thumbnail(
     State(state): State<AppState>,
@@ -293,10 +318,13 @@ async fn document_thumbnail(
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
     // Try to serve generated thumbnail first
-    if state.thumbnail_service.exists(id).await {
-        if let Ok(data) = state.thumbnail_service.read(id).await {
-            return Ok(([(header::CONTENT_TYPE, "image/jpeg")], data).into_response());
-        }
+    if let Some(object) = first_object(
+        state.store.as_ref(),
+        &[keys::thumbnail(id), keys::legacy::thumbnail(id)],
+    )
+    .await
+    {
+        return Ok(stream_object(object, "image/jpeg"));
     }
 
     // Fallback: try to serve the original image if it's an image
@@ -308,12 +336,11 @@ async fn document_thumbnail(
 
     if is_image {
         if let Some(ref file_path) = document.file_path {
-            let storage = folio_infra::FileStorage::new(&state.storage_path);
-            if let Ok(data) = storage.read(file_path).await {
+            if let Ok(object) = state.store.get(file_path).await {
                 let mime = document
                     .mime_type
                     .unwrap_or_else(|| "application/octet-stream".to_string());
-                return Ok(([(header::CONTENT_TYPE, mime)], data).into_response());
+                return Ok(stream_object(object, &mime));
             }
         }
     }
@@ -367,10 +394,13 @@ async fn document_page_thumbnail(
     }
 
     // Try to serve generated page thumbnail
-    if state.thumbnail_service.page_exists(id, page).await {
-        if let Ok(data) = state.thumbnail_service.read_page(id, page).await {
-            return Ok(([(header::CONTENT_TYPE, "image/jpeg")], data).into_response());
-        }
+    if let Some(object) = first_object(
+        state.store.as_ref(),
+        &[keys::page(id, page), keys::legacy::page(id, page)],
+    )
+    .await
+    {
+        return Ok(stream_object(object, "image/jpeg"));
     }
 
     // Fallback: return a placeholder SVG for the page
@@ -494,6 +524,8 @@ pub(super) async fn store_upload(
         })
         .await?;
 
+    folio_infra::telemetry::metrics().documents_changed(1);
+
     Ok(document)
 }
 
@@ -520,7 +552,10 @@ async fn delete_document(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
+    // Delete the stored files first so a failure leaves the row to retry
+    super::documents::purge_document_files(&state, id).await?;
     state.document_repo.delete(id).await?;
+    folio_infra::telemetry::metrics().documents_changed(-1);
 
     Ok(Redirect::to("/").into_response())
 }

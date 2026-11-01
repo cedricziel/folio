@@ -5,14 +5,13 @@ use std::sync::Arc;
 use folio_core::error::Result;
 use folio_core::models::IngestionSourceDef;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentTypeRepository,
-    EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory, OcrService, SearchResult,
-    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
+    DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory,
+    OcrService, SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
+    WorkflowRepository,
 };
 use folio_core::services::{Importer, SearchServiceFacade};
-use folio_infra::{
-    FileStorage, JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient,
-};
+use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
 
 use folio_core::EventBroadcaster;
 
@@ -42,7 +41,7 @@ pub struct AppState {
     pub pipeline: Arc<PipelineContext>,
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
-    pub storage_path: String,
+    pub store: Arc<dyn DocumentStore>,
     pub event_broadcaster: EventBroadcaster,
     pub health_checks: HealthChecks,
     pub workflow_repo: Arc<dyn WorkflowRepository>,
@@ -82,7 +81,7 @@ impl AppState {
         pipeline: Arc<PipelineContext>,
         thumbnail_service: Arc<ThumbnailService>,
         job_queue: JobQueue,
-        storage_path: String,
+        store: Arc<dyn DocumentStore>,
         event_broadcaster: EventBroadcaster,
         workflow_repo: Arc<dyn WorkflowRepository>,
         webhook_client: WebhookClient,
@@ -91,7 +90,7 @@ impl AppState {
     ) -> Self {
         let importer = Arc::new(Importer::new(
             document_repo.clone(),
-            Arc::new(FileStorage::new(&storage_path)),
+            store.clone(),
             Arc::new(job_queue.clone()),
         ));
         Self {
@@ -106,7 +105,7 @@ impl AppState {
             pipeline,
             thumbnail_service,
             job_queue,
-            storage_path,
+            store,
             event_broadcaster,
             health_checks: Arc::from(Vec::new()),
             workflow_repo,

@@ -33,7 +33,7 @@ async fn imports_with_source_tags_and_the_stored_file() {
         .collect();
     tags.sort();
     assert_eq!(tags, ["2025", "Insurance"]);
-    assert!(h.dir.join(stored.file_path.unwrap()).exists());
+    assert!(h.store.exists(&stored.file_path.unwrap()).await.unwrap());
 }
 
 #[tokio::test]

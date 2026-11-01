@@ -12,11 +12,12 @@ use axum::{
 use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::{
     models::{WorkflowAction, WorkflowRun, WorkflowTrigger},
+    ports::DocumentStore,
     EventBroadcaster,
 };
 use folio_infra::{
-    Config, Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
-    ThumbnailService, WebhookClient,
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
+    PipelineContext, ThumbnailService, WebhookClient,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -50,6 +51,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let repos = database.repositories().await;
 
     let auth = AuthState::new(repos.auth.clone(), None).with_required(auth_required);
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let ai = Config::default().ai;
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
@@ -63,9 +65,9 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
         pipeline,
-        Arc::new(ThumbnailService::new(&storage_path)),
+        Arc::new(ThumbnailService::new(store.clone())),
         repos.jobs,
-        storage_path,
+        store,
         EventBroadcaster::default(),
         repos.workflows,
         WebhookClient::new(),

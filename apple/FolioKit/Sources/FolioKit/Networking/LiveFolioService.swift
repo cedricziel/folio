@@ -25,7 +25,8 @@ public struct LiveFolioService: FolioService {
             serverURL: baseURL,
             configuration: .init(dateTranscoder: LenientDateTranscoder()),
             transport: URLSessionTransport(configuration: .init(session: session)),
-            middlewares: [BearerAuthMiddleware(provider: tokenProvider), ErrorMappingMiddleware()]
+            // Outermost first: the error mapper sees the response after the bearer middleware retried a 401.
+            middlewares: [ErrorMappingMiddleware(), BearerAuthMiddleware(provider: tokenProvider)]
         )
     }
 
@@ -55,11 +56,11 @@ public struct LiveFolioService: FolioService {
 
     /// The server only offers this as a form post that redirects back to the document page.
     public func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
-        var request = await authorized(url: endpoint("api/documents/\(documentID.uuidString.lowercased())/tags"))
+        var request = URLRequest(url: endpoint("api/documents/\(documentID.uuidString.lowercased())/tags"))
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data("tag_id=\(tagID.uuidString.lowercased())".utf8)
-        let (data, response) = try await transfer { try await session.data(for: request) }
+        let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
         try check(response, body: data)
     }
 
@@ -94,8 +95,8 @@ public struct LiveFolioService: FolioService {
     }
 
     public func downloadFile(for document: Document) async throws -> URL {
-        let request = await authorized(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
-        let (temporary, response) = try await transfer { try await session.download(for: request) }
+        let request = URLRequest(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
+        let (temporary, response) = try await authorizedTransfer(request) { try await session.download(for: $0) }
         try check(response, body: try? Data(contentsOf: temporary))
 
         let directory = FileManager.default.temporaryDirectory
@@ -109,12 +110,14 @@ public struct LiveFolioService: FolioService {
     }
 
     public func upload(_ file: UploadFile) async throws -> Document {
-        var request = await authorized(url: endpoint("api/documents/upload"))
+        var request = URLRequest(url: endpoint("api/documents/upload"))
         request.httpMethod = "POST"
         let form = MultipartForm(file: file)
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await transfer { try await session.upload(for: request, from: form.body) }
+        let (data, response) = try await authorizedTransfer(request) {
+            try await session.upload(for: $0, from: form.body)
+        }
         try check(response, body: data)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
@@ -145,12 +148,21 @@ public struct LiveFolioService: FolioService {
         baseURL.appending(path: path)
     }
 
-    private func authorized(url: URL) async -> URLRequest {
-        var request = URLRequest(url: url)
-        if let token = await tokenProvider.token() {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    /// Sends a request with the bearer token; if the server rejects it, refreshes the token and sends it once more.
+    private func authorizedTransfer<T>(
+        _ request: URLRequest, _ perform: (URLRequest) async throws -> (T, URLResponse)
+    ) async throws -> (T, URLResponse) {
+        func signed(_ token: String?) -> URLRequest {
+            var copy = request
+            if let token { copy.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            return copy
         }
-        return request
+        let token = await tokenProvider.token()
+        let first = try await transfer { try await perform(signed(token)) }
+        guard (first.1 as? HTTPURLResponse)?.statusCode == 401, let token,
+            let fresh = await tokenProvider.refresh(rejecting: token)
+        else { return first }
+        return try await transfer { try await perform(signed(fresh)) }
     }
 
     private func transfer<T>(_ work: () async throws -> T) async throws -> T {
@@ -163,6 +175,7 @@ public struct LiveFolioService: FolioService {
 
     private func check(_ response: URLResponse, body: Data?) throws {
         guard let http = response as? HTTPURLResponse else { throw FolioError.unreadableResponse }
+        if http.statusCode == 401 { throw FolioError.signInRequired }
         guard (200..<300).contains(http.statusCode) else {
             throw FolioError.server(status: http.statusCode, message: body.flatMap(ErrorMappingMiddleware.message))
         }

@@ -28,6 +28,9 @@ async-trait = { workspace = true }
 # Async runtime (for broadcast channel)
 tokio = { workspace = true }
 
+bytes = { workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true }
 # Webhook URL validation
 url = "2"
 

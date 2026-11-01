@@ -7,14 +7,16 @@ use folio_core::models::{
     DocumentSource, EmailOrigin, FolderOrigin, Id, IngestItem, IngestOutcome, SourceConditions,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowTrigger,
 };
+use folio_core::ports::DocumentStore;
 use folio_core::ports::{DocumentRepository, IngestLedger, IngestSink, WorkflowRepository};
 use folio_core::services::{EventingDocumentRepository, Importer, IngestPipeline, WorkflowEngine};
 use folio_core::EventBroadcaster;
-use folio_infra::{Database, FileStorage, StorageFileMetadata};
+use folio_infra::{Database, ObjectStoreDocumentStore, StorageFileMetadata};
 
 pub struct Harness {
     pub pipeline: Arc<IngestPipeline>,
     pub ledger: Arc<dyn IngestLedger>,
+    pub store: Arc<dyn DocumentStore>,
     pub documents: Arc<dyn DocumentRepository>,
     pub workflows: Arc<dyn WorkflowRepository>,
     pub engine: WorkflowEngine,
@@ -38,6 +40,7 @@ impl Harness {
         database.migrate().await.unwrap();
         let repos = database.repositories().await;
 
+        let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
         let events = EventBroadcaster::default();
         let documents = repos.documents;
         let eventing = Arc::new(EventingDocumentRepository::new(
@@ -54,7 +57,7 @@ impl Harness {
             ledger.clone(),
             Arc::new(Importer::new(
                 eventing,
-                Arc::new(FileStorage::new(&dir)),
+                store.clone(),
                 Arc::new(queue.clone()),
             )),
         ));
@@ -64,7 +67,7 @@ impl Harness {
             repos.correspondents,
             repos.document_types,
             Arc::new(queue),
-            Arc::new(StorageFileMetadata::new(FileStorage::new(&dir))),
+            Arc::new(StorageFileMetadata::new(store.clone())),
             "http://folio.test",
         )
         .with_file_wait(Duration::ZERO);
@@ -72,6 +75,7 @@ impl Harness {
         Self {
             pipeline,
             ledger,
+            store,
             documents,
             workflows,
             engine,

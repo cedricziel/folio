@@ -68,6 +68,17 @@ pub enum JobType {
 }
 
 impl JobType {
+    /// The document this job works on, if it is a document job.
+    pub fn document_id(&self) -> Option<Uuid> {
+        match self {
+            JobType::GenerateThumbnail { document_id }
+            | JobType::ExtractText { document_id }
+            | JobType::GenerateEmbedding { document_id }
+            | JobType::ProcessDocument { document_id } => Some(*document_id),
+            JobType::ExecuteWorkflowRun { .. } => None,
+        }
+    }
+
     pub fn type_name(&self) -> &'static str {
         match self {
             JobType::GenerateThumbnail { .. } => "generate_thumbnail",
