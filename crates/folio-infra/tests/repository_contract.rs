@@ -950,6 +950,7 @@ async fn auth_contract(r: &Repositories) {
         email: None,
         display_name: None,
         is_admin: false,
+        is_owner: false,
         auth_source: "local".into(),
         external_id: None,
     };
@@ -971,12 +972,13 @@ async fn auth_contract(r: &Repositories) {
     for i in 0..16 {
         let auth = r.auth.clone();
         let u = external(i);
-        tasks.spawn(async move { auth.create_external_user(u, true).await.map(|()| true) });
+        tasks.spawn(async move { auth.create_external_user(u).await.map(|()| true) });
     }
     while let Some(done) = tasks.join_next().await {
         done.unwrap().unwrap();
     }
     let mut admins = 0;
+    let mut owners = Vec::new();
     for name in ["Owner"]
         .into_iter()
         .map(String::from)
@@ -984,9 +986,24 @@ async fn auth_contract(r: &Repositories) {
     {
         if let Some(u) = auth.find_user_by_username(&name).await.unwrap() {
             admins += i32::from(u.is_admin);
+            if u.is_owner {
+                owners.push(u.id);
+            }
         }
     }
     assert_eq!(admins, 1, "exactly one first user is admin");
+    assert_eq!(owners.len(), 1, "exactly one first user is owner");
+    // A profile sync can never demote the owner.
+    auth.update_user_profile(&owners[0], None, None, false)
+        .await
+        .unwrap();
+    assert!(
+        auth.find_user_by_id(&owners[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .is_admin
+    );
     let owner = match auth.find_user_by_username("Owner").await.unwrap() {
         Some(owner) => owner,
         None => {
@@ -1000,9 +1017,7 @@ async fn auth_contract(r: &Repositories) {
         .unwrap()
         .is_none());
     // Later external users stay plain, and a repeated identity conflicts.
-    auth.create_external_user(external(100), true)
-        .await
-        .unwrap();
+    auth.create_external_user(external(100)).await.unwrap();
     let late = auth
         .find_user_by_external("forward", "ext100")
         .await
@@ -1010,7 +1025,7 @@ async fn auth_contract(r: &Repositories) {
         .unwrap();
     assert!(!late.is_admin);
     assert!(matches!(
-        auth.create_external_user(external(100), true).await,
+        auth.create_external_user(external(100)).await,
         Err(folio_auth::AuthError::Conflict)
     ));
     assert_eq!(auth.count_users().await.unwrap(), 18);

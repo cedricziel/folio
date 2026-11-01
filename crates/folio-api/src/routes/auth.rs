@@ -388,6 +388,7 @@ async fn setup_submit(
         email: None,
         display_name: None,
         is_admin: true,
+        is_owner: false,
         auth_source: SOURCE_LOCAL.to_string(),
         external_id: None,
     };

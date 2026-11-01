@@ -1020,21 +1020,32 @@ mod forward {
     }
 
     #[tokio::test]
-    async fn the_first_user_is_not_admin_when_a_mapping_decides() {
+    async fn the_owner_is_never_demoted_by_a_mapping() {
         let f = fwd_app(|c| {
             c.role_header = "Remote-Role".into();
             c.admin_role = Some("admin".into());
         })
         .await;
-        let req = with_identity("/", "first", &[("Remote-Role", "member")]);
+        let user = |name: &'static str| {
+            let store = f.store.clone();
+            async move {
+                store
+                    .find_user_by_external("forward", name)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        for _ in 0..2 {
+            let req = with_identity("/", "first", &[("Remote-Role", "member")]);
+            send_from(&f.app, TRUSTED, req).await;
+            let first = user("first").await;
+            assert!(first.is_owner && first.is_admin, "{first:?}");
+        }
+        let req = with_identity("/", "second", &[("Remote-Role", "member")]);
         send_from(&f.app, TRUSTED, req).await;
-        let first = f
-            .store
-            .find_user_by_external("forward", "first")
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!first.is_admin);
+        let second = user("second").await;
+        assert!(!second.is_owner && !second.is_admin);
     }
 
     fn all_identity_headers(c: &mut ForwardConfig) {

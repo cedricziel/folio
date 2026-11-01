@@ -34,6 +34,7 @@ fn user_from(row: SqliteRow) -> User {
         email: row.get("email"),
         display_name: row.get("display_name"),
         is_admin: row.get::<i64, _>("is_admin") != 0,
+        is_owner: row.get::<i64, _>("is_owner") != 0,
         auth_source: row.get("auth_source"),
         external_id: row.get("external_id"),
     }
@@ -51,8 +52,8 @@ impl AuthStore for SqliteAuthStore {
     async fn create_first_user(&self, user: User) -> Result<Option<User>, AuthError> {
         let result = sqlx::query(
             "INSERT INTO users
-             (id, username, username_normalized, password_hash, created_at, is_admin, auth_source)
-             SELECT $1, $2, $3, $4, $5, 1, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
+             (id, username, username_normalized, password_hash, created_at, is_admin, is_owner, auth_source)
+             SELECT $1, $2, $3, $4, $5, 1, 1, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
         )
         .bind(&user.id)
         .bind(&user.username)
@@ -91,18 +92,14 @@ impl AuthStore for SqliteAuthStore {
         })
     }
 
-    async fn create_external_user(
-        &self,
-        user: User,
-        admin_if_first: bool,
-    ) -> Result<(), AuthError> {
+    async fn create_external_user(&self, user: User) -> Result<(), AuthError> {
         sqlx::query(
             "INSERT INTO users
              (id, username, username_normalized, password_hash, created_at,
-              email, display_name, is_admin, auth_source, external_id)
+              email, display_name, is_admin, is_owner, auth_source, external_id)
              SELECT $1, $2, $3, $4, $5, $6, $7,
-                    CASE WHEN $8 = 1 OR ($11 = 1 AND NOT EXISTS (SELECT 1 FROM users))
-                         THEN 1 ELSE 0 END,
+                    CASE WHEN $8 = 1 OR NOT EXISTS (SELECT 1 FROM users) THEN 1 ELSE 0 END,
+                    CASE WHEN NOT EXISTS (SELECT 1 FROM users) THEN 1 ELSE 0 END,
                     $9, $10",
         )
         .bind(&user.id)
@@ -115,7 +112,6 @@ impl AuthStore for SqliteAuthStore {
         .bind(i64::from(user.is_admin))
         .bind(&user.auth_source)
         .bind(&user.external_id)
-        .bind(i64::from(admin_if_first))
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -146,7 +142,7 @@ impl AuthStore for SqliteAuthStore {
         display_name: Option<&str>,
         is_admin: bool,
     ) -> Result<(), AuthError> {
-        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = $3 WHERE id = $4")
+        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = CASE WHEN is_owner = 1 THEN 1 ELSE $3 END WHERE id = $4")
             .bind(email)
             .bind(display_name)
             .bind(i64::from(is_admin))

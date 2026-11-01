@@ -66,7 +66,7 @@ pub async fn sync_external_user(
         .await?
     {
         Some(mut user) => {
-            let is_admin = identity.admin.unwrap_or(user.is_admin);
+            let is_admin = user.is_owner || identity.admin.unwrap_or(user.is_admin);
             if user.email != identity.email
                 || user.display_name != identity.display_name
                 || user.is_admin != is_admin
@@ -94,14 +94,11 @@ pub async fn sync_external_user(
                 email: identity.email.clone(),
                 display_name: identity.display_name.clone(),
                 is_admin: identity.admin.unwrap_or(false),
+                is_owner: false,
                 auth_source: identity.source.clone(),
                 external_id: Some(identity.external_id.clone()),
             };
-            // Only without a provider-side mapping may the first user become owner.
-            match store
-                .create_external_user(user.clone(), identity.admin.is_none())
-                .await
-            {
+            match store.create_external_user(user.clone()).await {
                 Ok(()) => store
                     .find_user_by_external(&identity.source, &identity.external_id)
                     .await?

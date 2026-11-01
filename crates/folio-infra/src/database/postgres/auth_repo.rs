@@ -44,6 +44,7 @@ fn user_from(row: PgRow) -> User {
         email: row.get("email"),
         display_name: row.get("display_name"),
         is_admin: row.get::<bool, _>("is_admin"),
+        is_owner: row.get::<bool, _>("is_owner"),
         auth_source: row.get("auth_source"),
         external_id: row.get("external_id"),
     }
@@ -63,8 +64,8 @@ impl AuthStore for PostgresAuthStore {
         lock_first_user(&mut tx).await?;
         let result = sqlx::query(
             "INSERT INTO users
-             (id, username, username_normalized, password_hash, created_at, is_admin, auth_source)
-             SELECT $1, $2, $3, $4, $5, TRUE, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
+             (id, username, username_normalized, password_hash, created_at, is_admin, is_owner, auth_source)
+             SELECT $1, $2, $3, $4, $5, TRUE, TRUE, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
         )
         .bind(&user.id)
         .bind(&user.username)
@@ -104,19 +105,16 @@ impl AuthStore for PostgresAuthStore {
         })
     }
 
-    async fn create_external_user(
-        &self,
-        user: User,
-        admin_if_first: bool,
-    ) -> Result<(), AuthError> {
+    async fn create_external_user(&self, user: User) -> Result<(), AuthError> {
         let mut tx = self.pool.begin().await.map_err(err)?;
         lock_first_user(&mut tx).await?;
         sqlx::query(
             "INSERT INTO users
              (id, username, username_normalized, password_hash, created_at,
-              email, display_name, is_admin, auth_source, external_id)
+              email, display_name, is_admin, is_owner, auth_source, external_id)
              SELECT $1, $2, $3, $4, $5, $6, $7,
-                    $8::boolean OR ($11::boolean AND NOT EXISTS (SELECT 1 FROM users)),
+                    $8::boolean OR NOT EXISTS (SELECT 1 FROM users),
+                    NOT EXISTS (SELECT 1 FROM users),
                     $9, $10",
         )
         .bind(&user.id)
@@ -129,7 +127,6 @@ impl AuthStore for PostgresAuthStore {
         .bind(user.is_admin)
         .bind(&user.auth_source)
         .bind(&user.external_id)
-        .bind(admin_if_first)
         .execute(&mut *tx)
         .await
         .map_err(|e| match e {
@@ -160,7 +157,7 @@ impl AuthStore for PostgresAuthStore {
         display_name: Option<&str>,
         is_admin: bool,
     ) -> Result<(), AuthError> {
-        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = $3 WHERE id = $4")
+        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = ($3 OR is_owner) WHERE id = $4")
             .bind(email)
             .bind(display_name)
             .bind(is_admin)
