@@ -1,20 +1,29 @@
 name: Apple
 
-# Every push to main that touches the Apple app, the API spec or the design tokens goes to TestFlight.
+# Pull requests that touch the Apple app, the API spec or the design tokens run the tests.
+# TestFlight uploads run only for releases (called from release.yml) or by hand.
 # Secrets: MATCH_DEPLOY_KEY (ssh key with read access to the certificates repo), MATCH_GIT_URL,
 # MATCH_PASSWORD, MATCH_KEYCHAIN_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_CONTENT.
 
 on:
   pull_request:
-    paths: &paths
+    paths:
       - "apple/**"
       - "openapi/**"
       - "design/tokens.json"
       - ".github/workflows/apple.yml"
-  push:
-    branches: [main]
-    paths: *paths
   workflow_dispatch:
+    inputs:
+      version:
+        description: App version (CFBundleShortVersionString); empty keeps the project default
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: App version (CFBundleShortVersionString), the release version
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -52,6 +61,7 @@ jobs:
       run:
         working-directory: apple
     env: &signing
+      APP_VERSION: ${{ inputs.version }}
       MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       MATCH_KEYCHAIN_PASSWORD: ${{ secrets.MATCH_KEYCHAIN_PASSWORD }}
