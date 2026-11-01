@@ -6,7 +6,7 @@
 {% block content %}
 <article class="doc-view">
     <header class="doc-head">
-        <a href="/" class="back-link">{% call icons::arrow_left() %} Inbox</a>
+        <a href="/" class="back-link">{{ icons::arrow_left() }} Inbox</a>
         <div class="doc-head-row">
             <div class="doc-head-text">
                 <h1 class="title">{{ document.title }}</h1>
@@ -14,16 +14,16 @@
             </div>
             <div class="doc-actions">
                 {% if document.file_path.is_some() %}
-                <a href="/api/documents/{{ document.id }}/download" class="f-btn" download>{% call icons::download() %} Download</a>
+                <a href="/api/documents/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
                 <form action="/documents/{{ document.id }}/reprocess" method="post" data-turbo="false">
-                    <button type="submit" class="f-btn f-btn-quiet">{% call icons::refresh() %} Read again</button>
+                    <button type="submit" class="f-btn f-btn-quiet">{{ icons::refresh() }} Read again</button>
                 </form>
                 {% endif %}
                 <form action="/documents/{{ document.id }}/delete" method="post"
                       data-controller="confirm"
                       data-confirm-message-value="Delete '{{ document.title }}'? This cannot be undone."
                       data-action="submit->confirm#confirm">
-                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{% call icons::trash() %} Delete</button>
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{{ icons::trash() }} Delete</button>
                 </form>
             </div>
         </div>
@@ -112,7 +112,7 @@
                             <div class="f-palette dialog" role="dialog" aria-modal="true" aria-labelledby="tags-title">
                                 <div class="dialog-header">
                                     <h2 class="heading" id="tags-title">Edit tags</h2>
-                                    <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Close" data-action="click->tags#closeModal">{% call icons::close() %}</button>
+                                    <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Close" data-action="click->tags#closeModal">{{ icons::close() }}</button>
                                 </div>
                                 <p class="f-label">On this document</p>
                                 <div class="tag-list" data-tags-target="currentTags">

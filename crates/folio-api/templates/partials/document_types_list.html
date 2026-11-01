@@ -9,13 +9,13 @@
             <span class="manage-item-name">{{ doc_type.name }}</span>
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename document-type {{ doc_type.name }}"
-                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{% call icons::pencil() %}</button>
+                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{{ icons::pencil() }}</button>
                 <form action="/manage/document_types/{{ doc_type.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
                       data-confirm-message-value="Delete document-type '{{ doc_type.name }}'?"
                       data-action="submit->confirm#confirm"
                       data-turbo-frame="document-types-list">
-                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger icon-btn" aria-label="Delete document-type {{ doc_type.name }}">{% call icons::trash() %}</button>
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger icon-btn" aria-label="Delete document-type {{ doc_type.name }}">{{ icons::trash() }}</button>
                 </form>
             </div>
             <div class="manage-edit-form">

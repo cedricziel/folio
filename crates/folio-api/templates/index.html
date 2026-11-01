@@ -19,7 +19,7 @@
     {% when None %}
     {% endmatch %}
 
-    {% call counts::review_notice(review_count, first_review) %}
+    {{ counts::review_notice(review_count, first_review) }}
 
     {% include "partials/documents_frame.html" %}
 

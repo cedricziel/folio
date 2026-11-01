@@ -14,6 +14,6 @@
 <turbo-stream action="remove" target="document-{{ id }}"></turbo-stream>
 {% when None %}
 {% endmatch %}
-<turbo-stream action="replace" target="inbox-count"><template>{% call counts::inbox_badge(counts.inbox) %}</template></turbo-stream>
-<turbo-stream action="replace" target="all-count"><template>{% call counts::all_badge(counts.total) %}</template></turbo-stream>
-<turbo-stream action="replace" target="inbox-notice"><template>{% call counts::review_notice(counts.review, counts.first_review) %}</template></turbo-stream>
+<turbo-stream action="replace" target="inbox-count"><template>{{ counts::inbox_badge(counts.inbox) }}</template></turbo-stream>
+<turbo-stream action="replace" target="all-count"><template>{{ counts::all_badge(counts.total) }}</template></turbo-stream>
+<turbo-stream action="replace" target="inbox-notice"><template>{{ counts::review_notice(counts.review, counts.first_review) }}</template></turbo-stream>

@@ -9,13 +9,13 @@
             <span class="manage-item-name">{{ correspondent.name }}</span>
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename correspondent {{ correspondent.name }}"
-                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{% call icons::pencil() %}</button>
+                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{{ icons::pencil() }}</button>
                 <form action="/manage/correspondents/{{ correspondent.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
                       data-confirm-message-value="Delete correspondent '{{ correspondent.name }}'?"
                       data-action="submit->confirm#confirm"
                       data-turbo-frame="correspondents-list">
-                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger icon-btn" aria-label="Delete correspondent {{ correspondent.name }}">{% call icons::trash() %}</button>
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger icon-btn" aria-label="Delete correspondent {{ correspondent.name }}">{{ icons::trash() }}</button>
                 </form>
             </div>
             <div class="manage-edit-form">

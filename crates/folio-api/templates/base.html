@@ -1019,7 +1019,7 @@ if ("serviceWorker" in navigator) {
             aria-label="Close"
             data-action="click->upload-modal#close"
           >
-            {% call icons::close() %}
+            {{ icons::close() }}
           </button>
         </div>
         <form
@@ -1068,7 +1068,7 @@ if ("serviceWorker" in navigator) {
               class="f-btn"
               data-action="click->upload-modal#takePhoto"
             >
-              {% call icons::camera() %} Take a photo
+              {{ icons::camera() }} Take a photo
             </button>
             <span class="spacer"></span>
             <button
@@ -1103,7 +1103,7 @@ if ("serviceWorker" in navigator) {
         aria-label="Search documents"
       >
         <div class="palette-header">
-          {% call icons::search() %}
+          {{ icons::search() }}
           <input
             type="text"
             class="palette-input"
@@ -1129,7 +1129,7 @@ if ("serviceWorker" in navigator) {
     <div class="app">
       <aside class="sidebar" id="sidebar" aria-label="Main">
         <a class="brand" href="/">
-          <span class="brand-mark">{% call icons::mark() %}</span>
+          <span class="brand-mark">{{ icons::mark() }}</span>
           <span class="brand-name">Folio</span>
         </a>
 
@@ -1139,18 +1139,18 @@ if ("serviceWorker" in navigator) {
             href="/"
             {% if sidebar.active == "inbox" %}aria-current="page"{% endif %}
           >
-            {% call icons::inbox() %}
+            {{ icons::inbox() }}
             <span class="side-label">Inbox</span>
-            {% call counts::inbox_badge(sidebar.inbox_count) %}
+            {{ counts::inbox_badge(sidebar.inbox_count) }}
           </a>
           <a
             class="side-link"
             href="/?view=all"
             {% if sidebar.active == "all" %}aria-current="page"{% endif %}
           >
-            {% call icons::files() %}
+            {{ icons::files() }}
             <span class="side-label">All documents</span>
-            {% call counts::all_badge(sidebar.total_count) %}
+            {{ counts::all_badge(sidebar.total_count) }}
           </a>
         </nav>
 
@@ -1196,7 +1196,7 @@ if ("serviceWorker" in navigator) {
             href="/manage"
             {% if sidebar.active == "manage" %}aria-current="page"{% endif %}
           >
-            {% call icons::tag() %}
+            {{ icons::tag() }}
             <span class="side-label">Manage</span>
           </a>
           <a
@@ -1204,7 +1204,7 @@ if ("serviceWorker" in navigator) {
             href="/settings"
             {% if sidebar.active == "settings" %}aria-current="page"{% endif %}
           >
-            {% call icons::settings() %}
+            {{ icons::settings() }}
             <span class="side-label">Settings</span>
           </a>
           <button
@@ -1228,14 +1228,14 @@ if ("serviceWorker" in navigator) {
             aria-label="Open menu"
             data-action="click->nav#toggle"
           >
-            {% call icons::menu() %}
+            {{ icons::menu() }}
           </button>
           <button
             type="button"
             class="f-search search-trigger"
             data-action="click->command-palette#open"
           >
-            {% call icons::search() %}
+            {{ icons::search() }}
             <span class="search-label">Search documents</span>
             <kbd class="f-kbd">&#8984;K</kbd>
           </button>
@@ -1244,7 +1244,7 @@ if ("serviceWorker" in navigator) {
             class="f-btn f-btn-primary"
             data-action="click->upload-modal#open"
           >
-            {% call icons::upload() %}
+            {{ icons::upload() }}
             <span class="upload-label">Upload</span>
           </button>
         </header>
