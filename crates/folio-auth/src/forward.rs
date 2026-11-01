@@ -204,7 +204,7 @@ impl ForwardAuth {
         let groups: Vec<String> = self
             .groups_header
             .as_ref()
-            .and_then(&value)
+            .and_then(value)
             .map(|g| {
                 g.split(self.group_separator.as_str())
                     .map(str::trim)
@@ -213,7 +213,7 @@ impl ForwardAuth {
                     .collect()
             })
             .unwrap_or_default();
-        let role = self.role_header.as_ref().and_then(&value);
+        let role = self.role_header.as_ref().and_then(value);
         // Admin status is derived from the configured mapping only; with none,
         // `None` leaves it to the first-user rule.
         let admin = match (&self.admin_group, &self.admin_role) {
