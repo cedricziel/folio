@@ -45,11 +45,13 @@ public struct LiveFolioService: FolioService {
         }
     }
 
-    public func documents(correspondentID: UUID?, documentTypeID: UUID?) async throws -> [Document] {
+    public func documents(filter: DocumentFilter) async throws -> [Document] {
         try await call {
             let query = Operations.ListDocuments.Input.Query(
-                correspondentId: correspondentID?.uuidString.lowercased(),
-                documentTypeId: documentTypeID?.uuidString.lowercased())
+                correspondentId: filter.correspondentID?.uuidString.lowercased(),
+                documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
+                tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
+                createdAfter: filter.createdAfter, createdBefore: filter.createdBefore)
             return try await client.listDocuments(query: query).ok.body.json.documents.map { try Document($0) }
         }
     }
@@ -215,5 +217,15 @@ extension Document {
             documentTypeID: raw.documentTypeId.map(LiveFolioService.uuid),
             pageCount: raw.pageCount.map(Int.init), createdAt: raw.createdAt, updatedAt: raw.updatedAt
         )
+    }
+}
+
+extension Document {
+    /// The list and get endpoints add the document's tags to the plain document.
+    init(_ raw: Components.Schemas.DocumentView) throws {
+        try self.init(raw.value1)
+        tags = try raw.value2.tags.map {
+            try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color)
+        }
     }
 }
