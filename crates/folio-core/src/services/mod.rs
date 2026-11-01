@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
+
 use crate::error::Result;
 use crate::models::{CreateDocument, Document, DocumentFilter, Id};
 use crate::ports::{DocumentRepository, EmbeddingService, OcrService, SearchResult, SearchService};
@@ -141,8 +143,16 @@ impl IngestService {
     }
 }
 
+/// A document together with its relevance score for a search
+#[derive(Debug, Clone, Serialize)]
+pub struct ScoredDocument {
+    pub document: Document,
+    pub score: f32,
+}
+
 /// Service for semantic search
 pub struct SearchServiceFacade {
+    document_repo: Arc<dyn DocumentRepository>,
     embedding_service: Arc<dyn EmbeddingService>,
     search_service: Arc<dyn SearchService>,
 }
@@ -150,10 +160,12 @@ pub struct SearchServiceFacade {
 impl SearchServiceFacade {
     /// Create a new search service facade
     pub fn new(
+        document_repo: Arc<dyn DocumentRepository>,
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
     ) -> Self {
         Self {
+            document_repo,
             embedding_service,
             search_service,
         }
@@ -163,5 +175,20 @@ impl SearchServiceFacade {
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let query_embedding = self.embedding_service.generate_embedding(query).await?;
         self.search_service.search(&query_embedding, limit).await
+    }
+
+    /// Search by natural language query and resolve hits to full documents,
+    /// skipping hits whose document no longer exists
+    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<ScoredDocument>> {
+        let mut results = Vec::new();
+        for hit in self.search(query, limit).await? {
+            if let Some(document) = self.document_repo.find_by_id(hit.document_id).await? {
+                results.push(ScoredDocument {
+                    document,
+                    score: hit.score,
+                });
+            }
+        }
+        Ok(results)
     }
 }
