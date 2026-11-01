@@ -928,7 +928,7 @@ mod forward {
         send_from(
             &f.app,
             TRUSTED,
-            with_identity("/", "bob", &[("Remote-Groups", "family|admins")]),
+            with_identity("/", "bob", &[("Remote-Groups", "family,admins")]),
         )
         .await;
         assert!(user("bob").await.is_admin);

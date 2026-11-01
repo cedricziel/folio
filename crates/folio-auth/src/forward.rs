@@ -28,6 +28,7 @@ pub struct ForwardAuth {
     secret: Option<(HeaderName, String)>,
     /// Lifetime of sessions created from forward-auth logins.
     pub session_ttl_secs: i64,
+    group_separator: String,
     trusted: Vec<IpNet>,
 }
 
@@ -54,6 +55,8 @@ pub struct ForwardConfig {
     pub shared_secret: Option<String>,
     pub secret_header: String,
     pub session_ttl_secs: i64,
+    /// Separates group names in the groups header; Authentik uses `|`.
+    pub group_separator: String,
 }
 
 impl Default for ForwardConfig {
@@ -71,6 +74,7 @@ impl Default for ForwardConfig {
             shared_secret: None,
             secret_header: "X-Folio-Proxy-Secret".into(),
             session_ttl_secs: 12 * 3600,
+            group_separator: ",".into(),
         }
     }
 }
@@ -119,12 +123,23 @@ impl ForwardAuth {
             admin_role,
             secret,
             session_ttl_secs: config.session_ttl_secs,
+            group_separator: if config.group_separator.is_empty() {
+                ",".into()
+            } else {
+                config.group_separator
+            },
             trusted,
         })
     }
 
     pub fn has_trusted_proxies(&self) -> bool {
         !self.trusted.is_empty()
+    }
+
+    /// True when a trusted network covers every address, which makes the
+    /// peer check meaningless.
+    pub fn trusts_everyone(&self) -> bool {
+        self.trusted.iter().any(|net| net.prefix_len() == 0)
     }
 
     pub fn is_trusted(&self, peer: IpAddr) -> bool {
@@ -191,7 +206,7 @@ impl ForwardAuth {
             .as_ref()
             .and_then(&value)
             .map(|g| {
-                g.split([',', '|'])
+                g.split(self.group_separator.as_str())
                     .map(str::trim)
                     .filter(|g| !g.is_empty())
                     .map(str::to_string)
@@ -258,6 +273,13 @@ mod tests {
     }
 
     #[test]
+    fn flags_a_proxy_list_that_trusts_everyone() {
+        assert!(fwd(&["0.0.0.0/0"]).trusts_everyone());
+        assert!(fwd(&["10.0.0.0/8", "::/0"]).trusts_everyone());
+        assert!(!fwd(&["10.0.0.0/8", "192.168.1.5"]).trusts_everyone());
+    }
+
+    #[test]
     fn detects_repeated_identity_headers() {
         let f = fwd(&[]);
         let mut h = HeaderMap::new();
@@ -273,16 +295,17 @@ mod tests {
     fn parses_identity_and_groups() {
         let mut h = HeaderMap::new();
         h.insert("remote-user", "Alice".parse().unwrap());
-        h.insert("remote-groups", "admins, family|kids".parse().unwrap());
+        h.insert("remote-groups", "admins, family|kids,x".parse().unwrap());
         let configured = ForwardAuth::new(ForwardConfig {
             groups_header: "Remote-Groups".into(),
+            group_separator: "|".into(),
             ..ForwardConfig::default()
         })
         .unwrap();
         let id = configured.identity(&h).unwrap();
         assert_eq!(id.username, "Alice");
         assert_eq!(id.external_id, "alice");
-        assert_eq!(id.groups, ["admins", "family", "kids"]);
+        assert_eq!(id.groups, ["admins, family", "kids,x"]);
         assert!(fwd(&[]).identity(&h).unwrap().groups.is_empty());
         assert!(fwd(&[]).identity(&HeaderMap::new()).is_none());
     }

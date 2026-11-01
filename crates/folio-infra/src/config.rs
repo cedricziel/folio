@@ -141,6 +141,8 @@ pub struct ForwardAuthConfig {
     pub secret_header: String,
     /// Lifetime of sessions created by forward-auth logins, in seconds.
     pub session_ttl_secs: u64,
+    /// Separator between group names in `groups_header`.
+    pub group_separator: String,
 }
 
 impl Default for ForwardAuthConfig {
@@ -159,6 +161,7 @@ impl Default for ForwardAuthConfig {
             shared_secret: None,
             secret_header: "X-Folio-Proxy-Secret".to_string(),
             session_ttl_secs: 12 * 3600,
+            group_separator: ",".to_string(),
         }
     }
 }
@@ -321,6 +324,12 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AUTH__FORWARD__SESSION_TTL_SECS",
         legacy_env: &[],
         kind: ValueKind::Int,
+    },
+    Setting {
+        key: "auth.forward.group_separator",
+        env: "FOLIO_AUTH__FORWARD__GROUP_SEPARATOR",
+        legacy_env: &[],
+        kind: ValueKind::Str,
     },
     Setting {
         key: "database.url",

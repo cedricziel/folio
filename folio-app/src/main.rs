@@ -248,6 +248,7 @@ async fn main() -> Result<()> {
             admin_role: forward.admin_role.clone(),
             shared_secret: forward.shared_secret.clone(),
             secret_header: forward.secret_header.clone(),
+            group_separator: forward.group_separator.clone(),
             session_ttl_secs: i64::try_from(forward.session_ttl_secs).unwrap_or(i64::MAX / 4),
         })
         .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
@@ -259,6 +260,11 @@ async fn main() -> Result<()> {
         if forward.admin_role.is_some() && forward.role_header.is_empty() {
             tracing::warn!(
                 "auth.forward.admin_role is ignored because auth.forward.role_header is not set"
+            );
+        }
+        if settings.trusts_everyone() {
+            tracing::warn!(
+                "auth.forward.trusted_proxies covers every address; any client can then impersonate any user. Trust only your proxy's address"
             );
         }
         if !settings.has_trusted_proxies() {

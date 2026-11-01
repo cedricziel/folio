@@ -42,7 +42,8 @@ startup by the first three layers.
 | `auth.forward.user_id_header` | `FOLIO_AUTH__FORWARD__USER_ID_HEADER` | empty | Header carrying a stable account id (Pangolin: `Remote-User-Id`). When set, accounts are linked by it and `user_header` is only the display username; requests without it are unauthenticated. |
 | `auth.forward.email_header` | `FOLIO_AUTH__FORWARD__EMAIL_HEADER` | `Remote-Email` | Header carrying the email address. |
 | `auth.forward.name_header` | `FOLIO_AUTH__FORWARD__NAME_HEADER` | `Remote-Name` | Header carrying the display name. |
-| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | empty | Header carrying group names, separated by `,` or `\|`. Empty means groups are ignored. |
+| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | empty | Header carrying group names. Empty means groups are ignored. |
+| `auth.forward.group_separator` | `FOLIO_AUTH__FORWARD__GROUP_SEPARATOR` | `,` | Separator between group names in `groups_header` (Authentik: `\|`). |
 | `auth.forward.role_header` | `FOLIO_AUTH__FORWARD__ROLE_HEADER` | empty | Header carrying a single role name (Pangolin: `Remote-Role`). Empty means roles are ignored. |
 | `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. Needs `groups_header`. |
 | `auth.forward.shared_secret` | `FOLIO_AUTH__FORWARD__SHARED_SECRET` | unset | When set, the proxy must also send this value in `secret_header`; requests without it are treated as unauthenticated. |

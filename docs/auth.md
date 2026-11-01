@@ -68,6 +68,7 @@ trusted_proxies = ["172.18.0.5"]   # a single proxy address, see Trust below
 # email_header = "Remote-Email"    # Remote-Name
 # name_header = "Remote-Name"
 # groups_header = "Remote-Groups"  # off unless set
+# group_separator = ","            # between group names
 # admin_group = "folio-admins"     # needs groups_header
 # role_header = "Remote-Role"      # off unless set
 # admin_role = "admin"             # needs role_header
@@ -78,8 +79,10 @@ Environment: `FOLIO_AUTH__FORWARD__ENABLED=true`,
 
 - **Trust.** Headers are honoured only when the TCP peer address is in
   `trusted_proxies`. From any other peer they are removed and a warning is
-  logged. Do not list a range that untrusted clients can reach, and make sure
-  your proxy overwrites these headers instead of passing client values through.
+  logged. Trust a single proxy address (the one Folio sees as the peer), never
+  a broad range, and do not publish Folio's port: clients must only be able to
+  reach it through the proxy. Folio logs a warning when the list contains
+  `0.0.0.0/0` or `::/0`, which would let every client impersonate any user.
   With the list empty nothing is trusted.
 - **Shared secret.** Optionally set `shared_secret` (and `secret_header`,
   default `X-Folio-Proxy-Secret`) and have the proxy add that header to every
@@ -149,7 +152,7 @@ use Folio's own OAuth instead.
   email defaults apply; set `groups_header = "Remote-Groups"` to use groups.
 - **Authentik proxy outpost**: set `user_header = "X-authentik-username"`,
   `email_header = "X-authentik-email"`, `name_header = "X-authentik-name"`,
-  `groups_header = "X-authentik-groups"` (groups are `|` separated).
+  `groups_header = "X-authentik-groups"`, `group_separator = "|"`.
 - **oauth2-proxy**: pass `--set-xauthrequest` and map `X-Auth-Request-User`,
   `X-Auth-Request-Email`, `X-Auth-Request-Groups`.
 
