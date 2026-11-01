@@ -88,6 +88,8 @@ pub struct AuthCode {
     pub scopes: Vec<String>,
     pub audience: String,
     pub expires_at: i64,
+    /// Groups the code and every token derived from it.
+    pub grant_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +100,8 @@ pub struct AccessToken {
     pub scopes: Vec<String>,
     pub audience: String,
     pub expires_at: i64,
+    /// Groups the code and every token derived from it.
+    pub grant_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -108,6 +112,8 @@ pub struct RefreshToken {
     pub scopes: Vec<String>,
     pub audience: String,
     pub expires_at: i64,
+    /// Groups the code and every token derived from it.
+    pub grant_id: String,
 }
 
 /// The authenticated caller, inserted into request extensions by

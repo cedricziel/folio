@@ -36,6 +36,7 @@ startup by the first three layers.
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
 | `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | unset | Externally visible base URL, used in OAuth metadata, redirects and links in webhook payloads. Derived from the request when unset. |
 | `auth.required` | `FOLIO_AUTH__REQUIRED` | `true` | Require a login or token for the web UI and API. See [auth](auth.md). |
+| `auth.setup_token` | `FOLIO_AUTH__SETUP_TOKEN` | random per start | One-time secret that `/setup` requires while no user exists. When unset Folio generates one and logs the full setup URL at startup. Supports `FOLIO_AUTH__SETUP_TOKEN_FILE`. See [auth](auth.md). |
 | `auth.forward.enabled` | `FOLIO_AUTH__FORWARD__ENABLED` | `false` | Trust identity headers from a reverse proxy or SSO gateway. See [auth.md](auth.md#forward-auth). |
 | `auth.forward.trusted_proxies` | `FOLIO_AUTH__FORWARD__TRUSTED_PROXIES` | empty | Comma-separated CIDRs or addresses of the proxies whose headers are honoured. Headers from any other peer are ignored. |
 | `auth.forward.user_header` | `FOLIO_AUTH__FORWARD__USER_HEADER` | `Remote-User` | Header carrying the username. |

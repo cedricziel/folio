@@ -6,6 +6,7 @@
 {% match error %}{% when Some with (message) %}<div class="f-notice f-notice-danger" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
 <form method="post" action="/setup" class="auth-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="token" value="{{ token }}">
     <label class="f-label" for="username">Username</label>
     <input class="f-input" id="username" name="username" type="text" autocomplete="username" required autofocus>
     <label class="f-label" for="password">Password</label>

@@ -5,21 +5,35 @@ use argon2::password_hash::{
 };
 use argon2::Argon2;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-/// 256 bits of randomness, base64url encoded.
-pub fn random_token() -> String {
+/// 256 bits from the OS random source.
+pub fn random_secret() -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
+    bytes
+}
+
+/// 256 bits of randomness, base64url encoded.
+pub fn random_token() -> String {
+    URL_SAFE_NO_PAD.encode(random_secret())
 }
 
 /// Storage form of a bearer secret. High-entropy secrets need no salt or
 /// slow hash, a plain SHA-256 suffices.
 pub fn hash_token(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
+}
+
+/// Keyed MAC of `message`, base64url encoded. Used to bind CSRF tokens to a
+/// session under a secret only the server knows.
+pub fn hmac_token(key: &[u8], message: &str) -> String {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(message.as_bytes());
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
 
 pub fn ct_eq(a: &str, b: &str) -> bool {

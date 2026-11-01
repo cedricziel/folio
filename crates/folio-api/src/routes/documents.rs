@@ -423,9 +423,11 @@ pub(crate) async fn download_document(
     if let Some(size) = object.size {
         response = response.header(header::CONTENT_LENGTH, size);
     }
-    response
+    let mut response = response
         .body(Body::from_stream(object.stream))
-        .map_err(|_| ApiError::internal("Failed to build response"))
+        .map_err(|_| ApiError::internal("Failed to build response"))?;
+    super::file_response::harden(&mut response);
+    Ok(response)
 }
 
 /// `Content-Disposition: attachment` with an ASCII fallback and an RFC 6266

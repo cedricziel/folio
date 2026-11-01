@@ -22,6 +22,7 @@ use folio_infra::{create_pool, run_migrations, SqliteAuthStore};
 const BASE: &str = "http://folio.test";
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 const REDIRECT: &str = "http://127.0.0.1:33418/callback";
+const SETUP_TOKEN: &str = "test-setup-token";
 
 struct App {
     router: Router,
@@ -29,11 +30,19 @@ struct App {
 }
 
 async fn app() -> App {
+    app_at(Some(BASE)).await
+}
+
+async fn app_at(public_url: Option<&str>) -> App {
     let dir = tempfile::tempdir().unwrap();
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("t.db").display());
     let pool = create_pool(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()));
+    let auth = AuthState::new(
+        Arc::new(SqliteAuthStore::new(pool)),
+        public_url.map(String::from),
+    )
+    .with_setup_token(SETUP_TOKEN);
     let protected =
         Router::new()
             .route("/mcp", get(|| async { "ok" }))
@@ -112,17 +121,33 @@ fn csrf_from(body: &str) -> String {
     body[start..start + body[start..].find('"').unwrap()].to_string()
 }
 
+/// The `name=value` pair of the CSRF cookie a page just set.
+fn csrf_cookie(page: &Resp) -> String {
+    page.cookies()
+        .into_iter()
+        .find(|c| c.contains("folio_csrf="))
+        .expect("page sets a csrf cookie")
+}
+
 async fn setup_and_login(app: &App) -> String {
-    let page = send(app, Request::get("/setup").body(Body::empty()).unwrap()).await;
+    let page = send(
+        app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
     assert_eq!(page.status, StatusCode::OK);
     let csrf = csrf_from(&page.body);
-    let cookie = format!("folio_csrf={csrf}");
+    let cookie = csrf_cookie(&page);
     let done = send(
         app,
         form_req(
             "/setup",
             &cookie,
-            &format!("csrf={csrf}&username=owner&password=correct-horse-battery"),
+            &format!(
+                "csrf={csrf}&token={SETUP_TOKEN}&username=owner&password=correct-horse-battery"
+            ),
         ),
     )
     .await;
@@ -185,6 +210,7 @@ async fn obtain_code(app: &App, session: &str, client_id: &str) -> String {
     assert!(loc.as_str().starts_with(REDIRECT));
     let pairs: std::collections::HashMap<_, _> = loc.query_pairs().into_owned().collect();
     assert_eq!(pairs["state"], "xyz");
+    assert_eq!(pairs["iss"], BASE, "RFC 9207 issuer identification");
     pairs["code"].clone()
 }
 
@@ -218,6 +244,7 @@ async fn metadata_documents_have_expected_shape() {
         format!("{BASE}/oauth/register")
     );
     assert_eq!(meta["code_challenge_methods_supported"], json!(["S256"]));
+    assert_eq!(meta["authorization_response_iss_parameter_supported"], true);
     assert_eq!(
         meta["token_endpoint_auth_methods_supported"],
         json!(["none"])
@@ -232,6 +259,70 @@ async fn metadata_documents_have_expected_shape() {
         assert_eq!(prm["resource"], format!("{BASE}/mcp"));
         assert_eq!(prm["authorization_servers"], json!([BASE]));
     }
+}
+
+/// Requests as sent by a client that forges the headers a proxy would set.
+fn spoofed(uri: &str) -> Request<Body> {
+    Request::get(uri)
+        .header(header::HOST, "evil.example")
+        .header("x-forwarded-proto", "https")
+        .header("x-forwarded-host", "evil.example")
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn urls_come_from_public_url_never_from_request_headers() {
+    let app = app().await;
+    let meta = send(&app, spoofed("/.well-known/oauth-authorization-server"))
+        .await
+        .json();
+    assert_eq!(meta["issuer"], BASE);
+    let prm = send(&app, spoofed("/.well-known/oauth-protected-resource"))
+        .await
+        .json();
+    assert_eq!(prm["resource"], format!("{BASE}/mcp"));
+    let challenge = send(&app, spoofed("/mcp")).await;
+    let challenge = challenge.headers[header::WWW_AUTHENTICATE]
+        .to_str()
+        .unwrap();
+    assert!(challenge.contains(BASE) && !challenge.contains("evil.example"));
+
+    // Without a configured URL the fallback is fixed too, not taken from Host.
+    let bare = app_at(None).await;
+    let meta = send(&bare, spoofed("/.well-known/oauth-authorization-server"))
+        .await
+        .json();
+    assert!(!meta["issuer"].as_str().unwrap().contains("evil.example"));
+    assert!(meta["issuer"].as_str().unwrap().starts_with("http://"));
+}
+
+#[tokio::test]
+async fn cookies_are_secure_only_when_public_url_is_https() {
+    let session_cookie = |headers: &axum::http::HeaderMap| {
+        headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .find(|c| c.contains("folio_csrf"))
+            .unwrap()
+    };
+    let plain = app().await;
+    let login = send(&plain, spoofed("/setup?token=test-setup-token")).await;
+    assert!(
+        !session_cookie(&login.headers).contains("Secure"),
+        "X-Forwarded-Proto must not turn Secure on"
+    );
+
+    let tls = app_at(Some("https://folio.example.com")).await;
+    let setup = send(
+        &tls,
+        Request::get("/setup?token=test-setup-token")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(session_cookie(&setup.headers).contains("Secure"));
 }
 
 #[tokio::test]
@@ -268,6 +359,78 @@ async fn registration_accepts_valid_and_rejects_bad_redirects() {
     assert_eq!(r.json()["error"], "invalid_client_metadata");
 }
 
+fn register_req(body: String) -> Request<Body> {
+    Request::post("/oauth/register")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn registration_bounds_the_size_of_its_input() {
+    let app = app().await;
+    let uri = |n: usize| format!("https://a.example/{}", "x".repeat(n));
+
+    let too_big =
+        json!({"redirect_uris": ["https://a.example/cb"], "client_name": "x".repeat(20_000)});
+    let r = send(&app, register_req(too_big.to_string())).await;
+    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    let many: Vec<_> = (0..11).map(|i| format!("https://a.example/{i}")).collect();
+    let r = send(
+        &app,
+        register_req(json!({"redirect_uris": many}).to_string()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    let r = send(
+        &app,
+        register_req(json!({"redirect_uris": [uri(2100)]}).to_string()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json()["error"], "invalid_redirect_uri");
+
+    let long_name = json!({"redirect_uris": [uri(5)], "client_name": "n".repeat(201)});
+    let r = send(&app, register_req(long_name.to_string())).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json()["error"], "invalid_client_metadata");
+
+    let at_limits = json!({"redirect_uris": [uri(2048 - "https://a.example/".len())], "client_name": "n".repeat(200)});
+    let r = send(&app, register_req(at_limits.to_string())).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+}
+
+#[tokio::test]
+async fn registration_is_rate_limited_per_peer_ip() {
+    use axum::extract::ConnectInfo;
+    let app = app().await;
+    let from = |ip: &str| {
+        let mut req = register_req(json!({"redirect_uris": ["https://a.example/cb"]}).to_string());
+        let addr: std::net::SocketAddr = format!("{ip}:4000").parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    };
+
+    let mut limited = None;
+    for _ in 0..60 {
+        let r = send(&app, from("10.0.0.1")).await;
+        if r.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = Some(r);
+            break;
+        }
+        assert_eq!(r.status, StatusCode::CREATED);
+    }
+    let limited = limited.expect("a burst of registrations must hit the limit");
+    assert!(limited.headers.contains_key(header::RETRY_AFTER));
+    assert_eq!(
+        send(&app, from("10.0.0.2")).await.status,
+        StatusCode::CREATED,
+        "other peers are unaffected"
+    );
+}
+
 #[tokio::test]
 async fn setup_is_only_available_while_no_user_exists() {
     let app = app().await;
@@ -290,12 +453,58 @@ async fn setup_is_only_available_while_no_user_exists() {
 }
 
 #[tokio::test]
+async fn setup_requires_the_one_time_token() {
+    let app = app().await;
+    for uri in ["/setup", "/setup?token=wrong", "/setup?token="] {
+        let page = send(&app, Request::get(uri).body(Body::empty()).unwrap()).await;
+        assert_eq!(page.status, StatusCode::FORBIDDEN, "{uri}");
+        assert!(page.body.contains("Find the setup link in the server log"));
+        assert!(!page.body.contains("name=\"password\""));
+    }
+
+    // A valid CSRF pair without the right setup token creates nothing.
+    let page = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let csrf = csrf_from(&page.body);
+    for token in ["&token=", "&token=wrong"] {
+        let post = send(
+            &app,
+            form_req(
+                "/setup",
+                &csrf_cookie(&page),
+                &format!("csrf={csrf}{token}&username=evil&password=attacker-password-1"),
+            ),
+        )
+        .await;
+        assert_eq!(post.status, StatusCode::FORBIDDEN);
+    }
+    let login = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    assert_eq!(login.location(), "/setup", "no user may exist yet");
+
+    // The right token still works, and only once.
+    setup_and_login(&app).await;
+    let again = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(again.location(), "/login");
+}
+
+#[tokio::test]
 async fn login_rejects_bad_password_and_bad_csrf_and_open_redirects() {
     let app = app().await;
     setup_and_login(&app).await;
     let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
     let csrf = csrf_from(&page.body);
-    let cookie = format!("folio_csrf={csrf}");
+    let cookie = csrf_cookie(&page);
 
     let bad = send(
         &app,
@@ -345,6 +554,264 @@ async fn login_rejects_bad_password_and_bad_csrf_and_open_redirects() {
     assert!(session_cookie.contains("HttpOnly") && session_cookie.contains("SameSite=Lax"));
 }
 
+async fn login_attempt(app: &App, username: &str, password: &str, ip: Option<&str>) -> Resp {
+    let page = send(app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    let csrf = csrf_from(&page.body);
+    let mut req = form_req(
+        "/login",
+        &csrf_cookie(&page),
+        &format!(
+            "csrf={csrf}&username={}&password={}",
+            enc(username),
+            enc(password)
+        ),
+    );
+    if let Some(ip) = ip {
+        let addr: std::net::SocketAddr = format!("{ip}:5000").parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+    }
+    send(app, req).await
+}
+
+#[tokio::test]
+async fn repeated_failures_for_one_username_are_locked_out() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    for _ in 0..5 {
+        let r = login_attempt(&app, "owner", "wrong-password", None).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    }
+    // Even the right password is refused while locked, so guesses cannot be probed.
+    let locked = login_attempt(&app, "owner", "correct-horse-battery", None).await;
+    assert_eq!(locked.status, StatusCode::TOO_MANY_REQUESTS);
+    let wait: u64 = locked.headers[header::RETRY_AFTER]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(wait > 0);
+    // Case-insensitive usernames share one counter.
+    let upper = login_attempt(&app, "OWNER", "wrong", None).await;
+    assert_eq!(upper.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn repeated_failures_from_one_ip_are_locked_out() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    for i in 0..10 {
+        let r = login_attempt(
+            &app,
+            &format!("user{i}"),
+            "wrong-password",
+            Some("10.0.0.9"),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "attempt {i}");
+    }
+    let locked = login_attempt(&app, "owner", "correct-horse-battery", Some("10.0.0.9")).await;
+    assert_eq!(locked.status, StatusCode::TOO_MANY_REQUESTS);
+    let elsewhere = login_attempt(&app, "owner", "correct-horse-battery", Some("10.0.0.10")).await;
+    assert_eq!(elsewhere.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn overlong_passwords_are_rejected_without_hashing() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    let huge = "p".repeat(1025);
+    let r = login_attempt(&app, "owner", &huge, None).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+
+    let fresh = self::app().await;
+    let page = send(
+        &fresh,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let csrf = csrf_from(&page.body);
+    let r = send(
+        &fresh,
+        form_req(
+            "/setup",
+            &csrf_cookie(&page),
+            &format!("csrf={csrf}&token={SETUP_TOKEN}&username=owner&password={huge}"),
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn auth_pages_cannot_be_framed_or_cached() {
+    let app = app().await;
+    let setup = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let consent = send(
+        &app,
+        get_req(
+            &format!("/oauth/authorize?{}", authorize_query(&client)),
+            &session,
+        ),
+    )
+    .await;
+    let login = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    for (name, page) in [("setup", setup), ("login", login), ("consent", consent)] {
+        assert_eq!(page.status, StatusCode::OK, "{name}");
+        assert_eq!(page.headers["x-frame-options"], "DENY", "{name}");
+        assert_eq!(
+            page.headers[header::CONTENT_SECURITY_POLICY],
+            "frame-ancestors 'none'",
+            "{name}"
+        );
+        assert_eq!(page.headers[header::CACHE_CONTROL], "no-store", "{name}");
+    }
+}
+
+#[tokio::test]
+async fn logging_in_ends_the_previous_session() {
+    let app = app().await;
+    let old = setup_and_login(&app).await;
+    let old_session = old.split("; ").last().unwrap().to_string();
+    assert_eq!(
+        send(&app, get_req("/login", &old_session)).await.status,
+        StatusCode::SEE_OTHER,
+        "the first session is valid"
+    );
+
+    let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    let csrf = csrf_from(&page.body);
+    let done = send(
+        &app,
+        form_req(
+            "/login",
+            &format!("{}; {old_session}", csrf_cookie(&page)),
+            &format!("csrf={csrf}&username=owner&password=correct-horse-battery"),
+        ),
+    )
+    .await;
+    assert_eq!(done.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        send(&app, get_req("/login", &old_session)).await.status,
+        StatusCode::OK,
+        "the session presented at login is gone"
+    );
+    let fresh = done
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with("folio_session="))
+        .unwrap();
+    assert_eq!(
+        send(&app, get_req("/login", &fresh)).await.status,
+        StatusCode::SEE_OTHER
+    );
+}
+
+#[tokio::test]
+async fn csrf_tokens_are_bound_to_the_server_secret_and_the_session() {
+    let app = app().await;
+    let session_a = setup_and_login(&app).await;
+
+    // The token is not the cookie value, so planting both cookies is not enough.
+    let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    let token = csrf_from(&page.body);
+    let planted = csrf_cookie(&page);
+    assert_ne!(planted, format!("folio_csrf={token}"));
+    let body = |csrf: &str| format!("csrf={csrf}&username=owner&password=correct-horse-battery");
+    let forged_cookie = format!("folio_csrf={}", "z".repeat(43));
+    let r = send(
+        &app,
+        form_req("/login", &forged_cookie, &body(&"z".repeat(43))),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "self-made cookie+field pair"
+    );
+    let r = send(&app, form_req("/login", &planted, &body(&token))).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+
+    // A consent token minted for one session is useless in another.
+    let client = register(&app).await;
+    let q = authorize_query(&client);
+    let consent_a = send(&app, get_req(&format!("/oauth/authorize?{q}"), &session_a)).await;
+    let token_a = csrf_from(&consent_a.body);
+    let session_b = r
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with("folio_session="))
+        .unwrap();
+    let post = |session: &str, csrf: &str| {
+        form_req(
+            "/oauth/authorize",
+            session,
+            &format!("{q}&csrf={csrf}&decision=allow"),
+        )
+    };
+    let crossed = send(&app, post(&session_b, &token_a)).await;
+    assert_eq!(crossed.status, StatusCode::FORBIDDEN);
+    let own = send(&app, post(&session_a, &token_a)).await;
+    assert_eq!(own.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn https_public_url_uses_host_prefixed_cookies() {
+    let app = app_at(Some("https://folio.example.com")).await;
+    let page = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let set_cookie: Vec<String> = page
+        .headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    let csrf = set_cookie
+        .iter()
+        .find(|c| c.starts_with("__Host-folio_csrf="))
+        .expect("csrf cookie is __Host- prefixed");
+    assert!(csrf.contains("Secure") && csrf.contains("Path=/") && !csrf.contains("Domain"));
+
+    let done = send(
+        &app,
+        form_req(
+            "/setup",
+            &csrf_cookie(&page),
+            &format!(
+                "csrf={}&token={SETUP_TOKEN}&username=owner&password=correct-horse-battery",
+                csrf_from(&page.body)
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(done.status, StatusCode::SEE_OTHER);
+    let session = done
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with("__Host-folio_session="))
+        .expect("session cookie is __Host- prefixed");
+    // The prefixed session is honoured on the next request.
+    assert_eq!(
+        send(&app, get_req("/login", &session)).await.status,
+        StatusCode::SEE_OTHER
+    );
+}
+
 #[tokio::test]
 async fn authorize_redirects_anonymous_users_to_login_and_back() {
     let app = app().await;
@@ -385,6 +852,7 @@ async fn authorize_rejects_unregistered_redirect_and_missing_pkce() {
     .await;
     assert_eq!(res.status, StatusCode::SEE_OTHER);
     assert!(res.location().contains("error=invalid_request"));
+    assert!(res.location().contains(&format!("iss={}", enc(BASE))));
 }
 
 #[tokio::test]
@@ -437,7 +905,11 @@ async fn full_flow_yields_a_token_the_validator_accepts() {
     // Revocation invalidates the token.
     let revoked = send(
         &app,
-        form_req("/oauth/revoke", "", &format!("token={access}")),
+        form_req(
+            "/oauth/revoke",
+            "",
+            &format!("token={access}&client_id={client}"),
+        ),
     )
     .await;
     assert_eq!(revoked.status, StatusCode::OK);
@@ -529,19 +1001,89 @@ async fn refresh_rotation_invalidates_the_old_refresh_token() {
     let second = second.json();
     assert_ne!(second["refresh_token"], first["refresh_token"]);
 
+    let new_access = second["access_token"].as_str().unwrap();
+    assert_eq!(mcp_status(&app, new_access).await, StatusCode::OK);
+
     let replay = exchange(&app, &refresh(old)).await;
     assert_eq!(replay.json()["error"], "invalid_grant");
+}
 
-    let new_access = second["access_token"].as_str().unwrap();
-    let ok = send(
-        &app,
+async fn mcp_status(app: &App, access: &str) -> StatusCode {
+    send(
+        app,
         Request::get("/mcp")
-            .header(header::AUTHORIZATION, format!("Bearer {new_access}"))
+            .header(header::AUTHORIZATION, format!("Bearer {access}"))
             .body(Body::empty())
             .unwrap(),
     )
+    .await
+    .status
+}
+
+#[tokio::test]
+async fn refresh_token_reuse_revokes_the_whole_grant() {
+    let app = app().await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let code = obtain_code(&app, &session, &client).await;
+    let first = exchange(&app, &code_body(&client, &code, VERIFIER))
+        .await
+        .json();
+    let refresh =
+        |t: &str| format!("grant_type=refresh_token&client_id={client}&refresh_token={t}");
+    let second = exchange(&app, &refresh(first["refresh_token"].as_str().unwrap()))
+        .await
+        .json();
+    let (access1, access2) = (
+        first["access_token"].as_str().unwrap(),
+        second["access_token"].as_str().unwrap(),
+    );
+    assert_eq!(mcp_status(&app, access2).await, StatusCode::OK);
+
+    // A stolen, already-rotated refresh token shows up again.
+    let replay = exchange(&app, &refresh(first["refresh_token"].as_str().unwrap())).await;
+    assert_eq!(replay.json()["error"], "invalid_grant");
+
+    assert_eq!(mcp_status(&app, access1).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(mcp_status(&app, access2).await, StatusCode::UNAUTHORIZED);
+    let live = exchange(&app, &refresh(second["refresh_token"].as_str().unwrap())).await;
+    assert_eq!(live.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn revoke_checks_the_client_and_kills_the_whole_grant() {
+    let app = app().await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let other = register(&app).await;
+    let code = obtain_code(&app, &session, &client).await;
+    let tokens = exchange(&app, &code_body(&client, &code, VERIFIER))
+        .await
+        .json();
+    let (access, refresh) = (
+        tokens["access_token"].as_str().unwrap(),
+        tokens["refresh_token"].as_str().unwrap(),
+    );
+    let revoke = |client_id: &str| {
+        form_req(
+            "/oauth/revoke",
+            "",
+            &format!("token={refresh}&client_id={client_id}"),
+        )
+    };
+
+    // Another client cannot revoke it (and learns nothing).
+    assert_eq!(send(&app, revoke(&other)).await.status, StatusCode::OK);
+    assert_eq!(mcp_status(&app, access).await, StatusCode::OK);
+
+    assert_eq!(send(&app, revoke(&client)).await.status, StatusCode::OK);
+    assert_eq!(mcp_status(&app, access).await, StatusCode::UNAUTHORIZED);
+    let refreshed = exchange(
+        &app,
+        &format!("grant_type=refresh_token&client_id={client}&refresh_token={refresh}"),
+    )
     .await;
-    assert_eq!(ok.status, StatusCode::OK);
+    assert_eq!(refreshed.json()["error"], "invalid_grant");
 }
 
 #[tokio::test]
@@ -563,6 +1105,7 @@ async fn denying_consent_returns_access_denied() {
     .await;
     assert!(done.location().contains("error=access_denied"));
     assert!(done.location().contains("state=xyz"));
+    assert!(done.location().contains(&format!("iss={}", enc(BASE))));
 }
 
 mod enforcement {
@@ -575,6 +1118,7 @@ mod enforcement {
         let pool = create_pool(&url).await.unwrap();
         run_migrations(&pool).await.unwrap();
         let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()))
+            .with_setup_token(SETUP_TOKEN)
             .with_required(required);
         let mut pages = Router::new();
         for path in [
@@ -586,9 +1130,14 @@ mod enforcement {
             "/api/openapi.json",
             "/api/docs",
             "/mcp",
+            "/manifest.webmanifest",
+            "/sw.js",
         ] {
             pages = pages.route(path, get(|| async { "ok" }));
         }
+        pages = pages
+            .route("/api/tags", axum::routing::post(|| async { "created" }))
+            .route("/share", axum::routing::post(|| async { "stored" }));
         App {
             router: auth_router(auth.clone())
                 .merge(pages)
@@ -638,7 +1187,10 @@ mod enforcement {
     #[tokio::test]
     async fn setup_is_open_only_while_no_user_exists() {
         let app = guarded(true).await;
-        assert_eq!(status(&app, "/setup").await, StatusCode::OK);
+        assert_eq!(
+            status(&app, &format!("/setup?token={SETUP_TOKEN}")).await,
+            StatusCode::OK
+        );
         setup_and_login(&app).await;
         let after = send(&app, Request::get("/setup").body(Body::empty()).unwrap()).await;
         assert_eq!(after.status, StatusCode::SEE_OTHER);
@@ -744,6 +1296,164 @@ mod enforcement {
         assert_eq!(status(&app, "/").await, StatusCode::OK);
         assert_eq!(status(&app, "/api/documents").await, StatusCode::OK);
     }
+
+    #[tokio::test]
+    async fn pwa_assets_are_public_and_anonymous_shares_are_not_accepted() {
+        let app = guarded(true).await;
+        setup_and_login(&app).await;
+        for path in ["/manifest.webmanifest", "/sw.js"] {
+            assert_eq!(status(&app, path).await, StatusCode::OK, "{path}");
+        }
+
+        let share = |cookie: &str| {
+            Request::post("/share")
+                .header(header::CONTENT_TYPE, "multipart/form-data; boundary=x")
+                .header(header::COOKIE, cookie)
+                .body(Body::from("--x--\r\n"))
+                .unwrap()
+        };
+        let anonymous = send(&app, share("")).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+        assert!(anonymous.body.contains("share again"));
+        assert!(anonymous.body.contains("/login"));
+    }
+
+    #[tokio::test]
+    async fn api_challenges_point_at_the_api_resource_metadata() {
+        let app = guarded(true).await;
+        let prm = send(
+            &app,
+            Request::get("/.well-known/oauth-protected-resource/api")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(prm.status, StatusCode::OK);
+        assert_eq!(prm.json()["resource"], format!("{BASE}/api"));
+        assert_eq!(prm.json()["authorization_servers"], json!([BASE]));
+
+        let denied = send(
+            &app,
+            Request::get("/api/documents").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert!(denied.headers[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap()
+            .contains(&format!(
+                "resource_metadata=\"{BASE}/.well-known/oauth-protected-resource/api\""
+            )));
+    }
+
+    #[tokio::test]
+    async fn cookie_writes_must_be_same_origin() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let write = |extra: &[(&str, &str)]| {
+            let mut req = Request::post("/api/tags").header(header::COOKIE, &session);
+            for (k, v) in extra {
+                req = req.header(*k, *v);
+            }
+            req.body(Body::empty()).unwrap()
+        };
+        let ok = [
+            vec![],
+            vec![("sec-fetch-site", "same-origin")],
+            vec![("sec-fetch-site", "none")],
+            vec![("origin", BASE)],
+        ];
+        for headers in ok {
+            let r = send(&app, write(&headers)).await;
+            assert_eq!(r.status, StatusCode::OK, "{headers:?}");
+        }
+        let forbidden = [
+            vec![("sec-fetch-site", "cross-site")],
+            vec![("sec-fetch-site", "same-site")],
+            vec![("origin", "https://evil.example")],
+            vec![("origin", "null")],
+            // Fetch metadata wins over a spoofable-looking Origin.
+            vec![("sec-fetch-site", "cross-site"), ("origin", BASE)],
+        ];
+        for headers in forbidden {
+            let r = send(&app, write(&headers)).await;
+            assert_eq!(r.status, StatusCode::FORBIDDEN, "{headers:?}");
+        }
+        // Reads are not state-changing.
+        let read = Request::get("/api/documents")
+            .header(header::COOKIE, &session)
+            .header("sec-fetch-site", "cross-site")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(&app, read).await.status, StatusCode::OK);
+    }
+
+    /// Runs consent for an `/api` audience with the given scopes and returns the access token.
+    async fn api_token(app: &App, session: &str, scope: &str) -> String {
+        let client = register(app).await;
+        let api = enc(&format!("{BASE}/api"));
+        let q = format!(
+            "{}&scope={}",
+            authorize_query(&client).replace(&enc(&format!("{BASE}/mcp")), &api),
+            enc(scope)
+        );
+        let page = send(app, get_req(&format!("/oauth/authorize?{q}"), session)).await;
+        let csrf = csrf_from(&page.body);
+        let done = send(
+            app,
+            form_req(
+                "/oauth/authorize",
+                session,
+                &format!("{q}&csrf={csrf}&decision=allow"),
+            ),
+        )
+        .await;
+        let loc = url::Url::parse(&done.location()).unwrap();
+        let code = loc
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .to_string();
+        let body = code_body(&client, &code, VERIFIER).replace(&enc(&format!("{BASE}/mcp")), &api);
+        let tokens = exchange(app, &body).await.json();
+        tokens["access_token"].as_str().unwrap().to_string()
+    }
+
+    fn bearer(method: &str, uri: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn read_only_token_cannot_write_through_the_api() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let read_only = api_token(&app, &session, "documents:read").await;
+
+        let read = send(&app, bearer("GET", "/api/documents", &read_only)).await;
+        assert_eq!(read.status, StatusCode::OK);
+        let write = send(&app, bearer("POST", "/api/tags", &read_only)).await;
+        assert_eq!(write.status, StatusCode::FORBIDDEN);
+        assert_eq!(write.json()["error"], "insufficient_scope");
+        assert!(write.headers[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap()
+            .contains("insufficient_scope"));
+
+        let writer = api_token(&app, &session, "documents:write").await;
+        assert_eq!(
+            send(&app, bearer("POST", "/api/tags", &writer))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let read_with_write_only = send(&app, bearer("GET", "/api/documents", &writer)).await;
+        assert_eq!(read_with_write_only.status, StatusCode::FORBIDDEN);
+    }
 }
 
 mod forward {
@@ -765,6 +1475,10 @@ mod forward {
     }
 
     async fn fwd_app(configure: impl FnOnce(&mut ForwardConfig)) -> Fwd {
+        fwd_app_at(BASE, configure).await
+    }
+
+    async fn fwd_app_at(base: &str, configure: impl FnOnce(&mut ForwardConfig)) -> Fwd {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::connect(&format!("sqlite:{}/t.db?mode=rwc", dir.path().display()))
             .await
@@ -780,7 +1494,9 @@ mod forward {
         };
         configure(&mut config);
         let forward = ForwardAuth::new(config).unwrap();
-        let auth = AuthState::new(store.clone(), Some(BASE.into())).with_forward(forward);
+        let auth = AuthState::new(store.clone(), Some(base.into()))
+            .with_setup_token(SETUP_TOKEN)
+            .with_forward(forward);
         let router = auth_router(auth.clone())
             .merge(Router::new().route("/", get(|| async { "home" })).route(
                 "/static/echo",
@@ -862,7 +1578,7 @@ mod forward {
         let session = res
             .cookies()
             .into_iter()
-            .find(|c| c.starts_with("folio_session="))
+            .find(|c| c.contains("folio_session="))
             .expect("session cookie");
 
         let alice = f
@@ -1211,7 +1927,7 @@ mod forward {
     fn session_cookie(res: &Resp) -> String {
         res.cookies()
             .into_iter()
-            .find(|c| c.starts_with("folio_session="))
+            .find(|c| c.contains("folio_session="))
             .expect("session cookie")
     }
 
@@ -1283,6 +1999,61 @@ mod forward {
         assert_eq!(session_count(&f).await, 0);
         let again = send_from(&f.app, UNTRUSTED, get_req("/", &cookie)).await;
         assert_eq!(again.status, StatusCode::SEE_OTHER);
+    }
+
+    #[tokio::test]
+    async fn forward_sessions_pass_the_csrf_and_same_origin_checks() {
+        let f = fwd_app(|_| {}).await;
+        let client = register(&f.app).await;
+        let q = authorize_query(&client);
+        let uri = format!("/oauth/authorize?{q}");
+        let page = send_from(&f.app, TRUSTED, with_identity(&uri, "erin", &[])).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        let session = session_cookie(&page);
+        let csrf = csrf_from(&page.body);
+
+        let post = |uri: &str, body: String, site: &str| {
+            let mut req = form_req(uri, &session, &body);
+            req.headers_mut()
+                .insert("Remote-User", "erin".parse().unwrap());
+            req.headers_mut()
+                .insert("sec-fetch-site", site.parse().unwrap());
+            req
+        };
+        // The session-bound CSRF token from the consent page is accepted.
+        let body = format!("{q}&csrf={csrf}&decision=allow");
+        let own = send_from(
+            &f.app,
+            TRUSTED,
+            post("/oauth/authorize", body, "same-origin"),
+        )
+        .await;
+        assert_eq!(own.status, StatusCode::SEE_OTHER, "{}", own.body);
+        assert!(own.location().starts_with(REDIRECT));
+
+        // Cookie-authenticated writes elsewhere need a same-origin browser request.
+        let crossed = send_from(&f.app, TRUSTED, post("/", String::new(), "cross-site")).await;
+        assert_eq!(crossed.status, StatusCode::FORBIDDEN);
+        let same = send_from(&f.app, TRUSTED, post("/", String::new(), "same-origin")).await;
+        assert_eq!(same.status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn forward_sessions_use_the_host_prefixed_cookie_over_https() {
+        let f = fwd_app_at("https://folio.example.com", |_| {}).await;
+        let login = send_from(&f.app, TRUSTED, with_identity("/", "erin", &[])).await;
+        assert_eq!(login.status, StatusCode::OK);
+        let cookie = session_cookie(&login);
+        assert!(cookie.starts_with("__Host-folio_session="), "{cookie}");
+        let again = send_from(&f.app, UNTRUSTED, get_req("/", &cookie)).await;
+        assert_eq!(again.status, StatusCode::OK);
+
+        let anonymous = Request::get("/")
+            .header("Cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        send_from(&f.app, TRUSTED, anonymous).await;
+        assert_eq!(session_count(&f).await, 0);
     }
 
     #[tokio::test]
