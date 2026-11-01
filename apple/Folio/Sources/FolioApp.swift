@@ -23,6 +23,7 @@ final class AppModel {
 
     init() {
         serverURL = store.load()
+        if serverURL != nil { FileProviderDomain.register() }
     }
 
     static func makeService(for url: URL) -> any FolioService {
@@ -31,11 +32,13 @@ final class AppModel {
 
     func connected(to url: URL) {
         serverURL = url
+        FileProviderDomain.register()
     }
 
     func changeServer() {
         store.save(nil)
         serverURL = nil
+        FileProviderDomain.unregister()
     }
 }
 
