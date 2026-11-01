@@ -6,11 +6,13 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use folio_core::models::{CreateDocumentType, DocumentType, UpdateDocumentType};
 
 use crate::error::{ApiError, ApiResult};
+use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -25,13 +27,37 @@ pub fn router() -> Router<AppState> {
 }
 
 /// List all document types
-async fn list_document_types(State(state): State<AppState>) -> ApiResult<Json<Vec<DocumentType>>> {
+#[utoipa::path(
+    get,
+    path = "/api/document_types",
+    operation_id = "listDocumentTypes",
+    tag = "document_types",
+    responses(
+        (status = 200, description = "All document types", body = Vec<DocumentType>),
+        InternalError,
+    )
+)]
+pub(crate) async fn list_document_types(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<DocumentType>>> {
     let document_types = state.document_type_repo.list().await?;
     Ok(Json(document_types))
 }
 
 /// Get a single document type by ID
-async fn get_document_type(
+#[utoipa::path(
+    get,
+    path = "/api/document_types/{id}",
+    operation_id = "getDocumentType",
+    tag = "document_types",
+    params(("id" = Uuid, Path, description = "Document type ID")),
+    responses(
+        (status = 200, description = "The document type", body = DocumentType),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn get_document_type(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<DocumentType>> {
@@ -45,13 +71,26 @@ async fn get_document_type(
 }
 
 /// Request body for creating a document type
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateDocumentTypeRequest {
     name: String,
 }
 
 /// Create a new document type
-async fn create_document_type(
+#[utoipa::path(
+    post,
+    path = "/api/document_types",
+    operation_id = "createDocumentType",
+    tag = "document_types",
+    request_body = CreateDocumentTypeRequest,
+    responses(
+        (status = 200, description = "The created document type", body = DocumentType),
+        BadRequest,
+        Conflict,
+        InternalError,
+    )
+)]
+pub(crate) async fn create_document_type(
     State(state): State<AppState>,
     Json(req): Json<CreateDocumentTypeRequest>,
 ) -> ApiResult<Json<DocumentType>> {
@@ -64,13 +103,28 @@ async fn create_document_type(
 }
 
 /// Request body for updating a document type
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateDocumentTypeRequest {
     name: Option<String>,
 }
 
 /// Update a document type
-async fn update_document_type(
+#[utoipa::path(
+    put,
+    path = "/api/document_types/{id}",
+    operation_id = "updateDocumentType",
+    tag = "document_types",
+    params(("id" = Uuid, Path, description = "Document type ID")),
+    request_body = UpdateDocumentTypeRequest,
+    responses(
+        (status = 200, description = "The updated document type", body = DocumentType),
+        BadRequest,
+        NotFound,
+        Conflict,
+        InternalError,
+    )
+)]
+pub(crate) async fn update_document_type(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateDocumentTypeRequest>,
@@ -84,7 +138,19 @@ async fn update_document_type(
 }
 
 /// Delete a document type
-async fn delete_document_type(
+#[utoipa::path(
+    delete,
+    path = "/api/document_types/{id}",
+    operation_id = "deleteDocumentType",
+    tag = "document_types",
+    params(("id" = Uuid, Path, description = "Document type ID")),
+    responses(
+        (status = 200, description = "The document type was deleted"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn delete_document_type(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {

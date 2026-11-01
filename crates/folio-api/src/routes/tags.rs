@@ -6,11 +6,13 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use folio_core::models::{CreateTag, Tag, UpdateTag};
 
 use crate::error::{ApiError, ApiResult};
+use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -20,13 +22,38 @@ pub fn router() -> Router<AppState> {
 }
 
 /// List all tags
-async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<Vec<Tag>>> {
+#[utoipa::path(
+    get,
+    path = "/api/tags",
+    operation_id = "listTags",
+    tag = "tags",
+    responses(
+        (status = 200, description = "All tags", body = Vec<Tag>),
+        InternalError,
+    )
+)]
+pub(crate) async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<Vec<Tag>>> {
     let tags = state.tag_repo.list().await?;
     Ok(Json(tags))
 }
 
 /// Get a single tag by ID
-async fn get_tag(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Json<Tag>> {
+#[utoipa::path(
+    get,
+    path = "/api/tags/{id}",
+    operation_id = "getTag",
+    tag = "tags",
+    params(("id" = Uuid, Path, description = "Tag ID")),
+    responses(
+        (status = 200, description = "The tag", body = Tag),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn get_tag(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<Tag>> {
     let tag = state
         .tag_repo
         .find_by_id(id)
@@ -37,14 +64,27 @@ async fn get_tag(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResu
 }
 
 /// Request body for creating a tag
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateTagRequest {
     name: String,
     color: Option<String>,
 }
 
 /// Create a new tag
-async fn create_tag(
+#[utoipa::path(
+    post,
+    path = "/api/tags",
+    operation_id = "createTag",
+    tag = "tags",
+    request_body = CreateTagRequest,
+    responses(
+        (status = 200, description = "The created tag", body = Tag),
+        BadRequest,
+        Conflict,
+        InternalError,
+    )
+)]
+pub(crate) async fn create_tag(
     State(state): State<AppState>,
     Json(req): Json<CreateTagRequest>,
 ) -> ApiResult<Json<Tag>> {
@@ -60,14 +100,30 @@ async fn create_tag(
 }
 
 /// Request body for updating a tag
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateTagRequest {
     name: Option<String>,
+    #[schema(value_type = Option<String>)]
     color: Option<Option<String>>,
 }
 
 /// Update a tag
-async fn update_tag(
+#[utoipa::path(
+    put,
+    path = "/api/tags/{id}",
+    operation_id = "updateTag",
+    tag = "tags",
+    params(("id" = Uuid, Path, description = "Tag ID")),
+    request_body = UpdateTagRequest,
+    responses(
+        (status = 200, description = "The updated tag", body = Tag),
+        BadRequest,
+        NotFound,
+        Conflict,
+        InternalError,
+    )
+)]
+pub(crate) async fn update_tag(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateTagRequest>,
@@ -87,7 +143,22 @@ async fn update_tag(
 }
 
 /// Delete a tag
-async fn delete_tag(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Json<()>> {
+#[utoipa::path(
+    delete,
+    path = "/api/tags/{id}",
+    operation_id = "deleteTag",
+    tag = "tags",
+    params(("id" = Uuid, Path, description = "Tag ID")),
+    responses(
+        (status = 200, description = "The tag was deleted"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn delete_tag(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<()>> {
     state.tag_repo.delete(id).await?;
     Ok(Json(()))
 }
