@@ -358,7 +358,18 @@ fn with_cookies(mut response: Response, cookies: impl IntoIterator<Item = String
 
 fn render<T: Template>(template: T, status: StatusCode) -> Response {
     match template.render() {
-        Ok(body) => (status, Html(body)).into_response(),
+        Ok(body) => {
+            let mut response = (status, Html(body)).into_response();
+            let h = response.headers_mut();
+            // Clickjacking and back-button exposure of credentials and consent.
+            h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+            h.insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("frame-ancestors 'none'"),
+            );
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+        }
         Err(e) => {
             tracing::error!("template error: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()

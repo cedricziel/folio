@@ -629,6 +629,39 @@ async fn overlong_passwords_are_rejected_without_hashing() {
 }
 
 #[tokio::test]
+async fn auth_pages_cannot_be_framed_or_cached() {
+    let app = app().await;
+    let setup = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let consent = send(
+        &app,
+        get_req(
+            &format!("/oauth/authorize?{}", authorize_query(&client)),
+            &session,
+        ),
+    )
+    .await;
+    let login = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    for (name, page) in [("setup", setup), ("login", login), ("consent", consent)] {
+        assert_eq!(page.status, StatusCode::OK, "{name}");
+        assert_eq!(page.headers["x-frame-options"], "DENY", "{name}");
+        assert_eq!(
+            page.headers[header::CONTENT_SECURITY_POLICY],
+            "frame-ancestors 'none'",
+            "{name}"
+        );
+        assert_eq!(page.headers[header::CACHE_CONTROL], "no-store", "{name}");
+    }
+}
+
+#[tokio::test]
 async fn authorize_redirects_anonymous_users_to_login_and_back() {
     let app = app().await;
     setup_and_login(&app).await;
