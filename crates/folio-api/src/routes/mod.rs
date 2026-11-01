@@ -10,6 +10,8 @@ mod settings;
 mod tags;
 mod view;
 
+pub use events::turbo_streams_for;
+
 use axum::{extract::DefaultBodyLimit, Router};
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 
