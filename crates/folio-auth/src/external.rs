@@ -23,7 +23,7 @@ pub struct ExternalIdentity {
     pub display_name: Option<String>,
     pub groups: Vec<String>,
     /// `Some` when the provider decides admin status (group or role mapping);
-    /// `None` leaves it to the first-user rule and manual changes.
+    /// `None` leaves it to manual changes.
     pub admin: Option<bool>,
 }
 
@@ -40,8 +40,8 @@ pub enum ExternalError {
 /// Finds or creates the local user for an external identity, refreshes its
 /// profile and replaces its external group memberships.
 ///
-/// With `identity.admin` set, admin status follows it on every call. Without
-/// it, only the very first user becomes admin.
+/// With `identity.admin` set, admin status follows it on every call, except
+/// for the owner (the very first account), who always stays admin.
 pub async fn sync_external_user(
     store: &dyn AuthStore,
     mut identity: ExternalIdentity,
