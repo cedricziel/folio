@@ -8,6 +8,7 @@ pub mod forward;
 pub mod openapi;
 pub mod routes;
 pub mod state;
+pub mod telemetry;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use forward::forward_auth;

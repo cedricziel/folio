@@ -21,6 +21,8 @@ authors = ["Folio Contributors"]
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
+bytes = "1"
+tempfile = "3"
 
 # Web framework
 axum = { version = "0.8", features = ["macros", "multipart"] }
@@ -59,7 +61,6 @@ base64 = "0.22"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-tempfile = "3"
 
 # HTTP client (for AI APIs)
 reqwest = { version = "0.13", features = ["json"] }
@@ -68,6 +69,9 @@ reqwest = { version = "0.13", features = ["json"] }
 utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
 utoipa-scalar = "0.4"
 
+# Object storage
+object_store = { version = "0.14", default-features = false, features = ["fs", "aws"] }
+
 # Webhook signing
 hmac = "0.12"
 sha2 = "0.10"
@@ -75,6 +79,14 @@ hex = "0.4"
 
 # Embedded static assets
 rust-embed = { version = "8", features = ["mime-guess"] }
+
+# OpenTelemetry
+opentelemetry = "0.33"
+opentelemetry_sdk = "0.33"
+opentelemetry-otlp = { version = "0.33", features = ["grpc-tonic"] }
+opentelemetry-appender-tracing = "0.33"
+opentelemetry-http = "0.33"
+tracing-opentelemetry = "0.34"
 
 # Image processing
 image = "0.25"
