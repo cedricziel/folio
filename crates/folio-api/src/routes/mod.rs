@@ -1,13 +1,13 @@
 //! API routes
 
-mod correspondents;
-mod document_types;
-mod documents;
-mod events;
+pub(crate) mod correspondents;
+pub(crate) mod document_types;
+pub(crate) mod documents;
+pub(crate) mod events;
 mod manage;
 mod pages;
 mod settings;
-mod tags;
+pub(crate) mod tags;
 
 use axum::{extract::DefaultBodyLimit, Router};
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
@@ -19,6 +19,8 @@ pub fn create_router(state: AppState) -> Router {
     let router = Router::new()
         // API routes
         .nest("/api", api_router())
+        // OpenAPI spec and docs viewer
+        .merge(crate::openapi::router())
         // Page routes (HTMX)
         .merge(pages::router())
         // Management routes (correspondents, document types, tags)

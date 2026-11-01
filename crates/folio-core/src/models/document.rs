@@ -65,8 +65,10 @@ impl std::fmt::Display for ProcessingStatus {
 
 /// A document in the system
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Document {
     /// Unique identifier
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
 
     /// Document title
@@ -85,9 +87,11 @@ pub struct Document {
     pub mime_type: Option<String>,
 
     /// Associated correspondent (sender)
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub correspondent_id: Option<Id>,
 
     /// Document type classification
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub document_type_id: Option<Id>,
 
     /// Number of pages in the document (for PDFs and multi-page images)

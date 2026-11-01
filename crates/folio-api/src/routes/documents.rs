@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, error};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use axum::response::{IntoResponse, Redirect, Response};
@@ -16,6 +17,7 @@ use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocumen
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
+use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -32,21 +34,36 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Query parameters for listing documents
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ListDocumentsQuery {
+    /// Only return documents from this correspondent
     correspondent_id: Option<Uuid>,
+    /// Only return documents of this type
     document_type_id: Option<Uuid>,
 }
 
 /// Response for document list
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DocumentListResponse {
     documents: Vec<Document>,
+    /// Number of documents returned
     count: usize,
 }
 
-/// List all documents
-async fn list_documents(
+/// List documents, optionally filtered by correspondent or document type
+#[utoipa::path(
+    get,
+    path = "/api/documents",
+    operation_id = "listDocuments",
+    tag = "documents",
+    params(ListDocumentsQuery),
+    responses(
+        (status = 200, description = "Matching documents", body = DocumentListResponse),
+        InternalError,
+    )
+)]
+pub(crate) async fn list_documents(
     State(state): State<AppState>,
     Query(query): Query<ListDocumentsQuery>,
 ) -> ApiResult<Json<DocumentListResponse>> {
@@ -67,7 +84,19 @@ async fn list_documents(
 }
 
 /// Get a single document by ID
-async fn get_document(
+#[utoipa::path(
+    get,
+    path = "/api/documents/{id}",
+    operation_id = "getDocument",
+    tag = "documents",
+    params(("id" = Uuid, Path, description = "Document ID")),
+    responses(
+        (status = 200, description = "The document", body = Document),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn get_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Document>> {
@@ -81,7 +110,7 @@ async fn get_document(
 }
 
 /// Request body for creating a document
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateDocumentRequest {
     title: String,
     content: Option<String>,
@@ -89,8 +118,20 @@ pub struct CreateDocumentRequest {
     document_type_id: Option<Uuid>,
 }
 
-/// Create a new document
-async fn create_document(
+/// Create a new document without a file
+#[utoipa::path(
+    post,
+    path = "/api/documents",
+    operation_id = "createDocument",
+    tag = "documents",
+    request_body = CreateDocumentRequest,
+    responses(
+        (status = 200, description = "The created document", body = Document),
+        BadRequest,
+        InternalError,
+    )
+)]
+pub(crate) async fn create_document(
     State(state): State<AppState>,
     Json(req): Json<CreateDocumentRequest>,
 ) -> ApiResult<Json<Document>> {
@@ -110,7 +151,19 @@ async fn create_document(
 }
 
 /// Delete a document
-async fn delete_document(
+#[utoipa::path(
+    delete,
+    path = "/api/documents/{id}",
+    operation_id = "deleteDocument",
+    tag = "documents",
+    params(("id" = Uuid, Path, description = "Document ID")),
+    responses(
+        (status = 200, description = "The document was deleted"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn delete_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {
@@ -118,8 +171,31 @@ async fn delete_document(
     Ok(Json(()))
 }
 
-/// Upload a document with file
-async fn upload_document(
+/// Multipart form accepted by the upload endpoint
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct UploadDocumentRequest {
+    /// The file to store and run through OCR
+    #[schema(value_type = String, format = Binary)]
+    file: Vec<u8>,
+    /// Document title; defaults to the file name
+    title: Option<String>,
+}
+
+/// Upload a document file
+#[utoipa::path(
+    post,
+    path = "/api/documents/upload",
+    operation_id = "uploadDocument",
+    tag = "documents",
+    request_body(content = UploadDocumentRequest, content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "The created document", body = Document),
+        BadRequest,
+        InternalError,
+    )
+)]
+pub(crate) async fn upload_document(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> ApiResult<Json<Document>> {
@@ -213,18 +289,25 @@ async fn upload_document(
 }
 
 /// Search request body (for POST)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SearchRequest {
+    /// Natural-language query
     query: String,
+    /// Maximum number of results
     #[serde(default = "default_limit")]
+    #[schema(default = 10)]
     limit: usize,
 }
 
 /// Search query parameters (for GET)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct SearchQueryParams {
+    /// Natural-language query
     q: String,
+    /// Maximum number of results
     #[serde(default = "default_limit")]
+    #[param(default = 10)]
     limit: usize,
 }
 
@@ -233,19 +316,31 @@ fn default_limit() -> usize {
 }
 
 /// Search response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResponse {
     results: Vec<SearchResultWithDocument>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResultWithDocument {
     document: Document,
+    /// Similarity score; higher is closer
     score: f32,
 }
 
 /// Search documents by semantic similarity
-async fn search_documents(
+#[utoipa::path(
+    post,
+    path = "/api/documents/search",
+    operation_id = "searchDocumentsByBody",
+    tag = "documents",
+    request_body = SearchRequest,
+    responses(
+        (status = 200, description = "Documents ranked by similarity", body = SearchResponse),
+        InternalError,
+    )
+)]
+pub(crate) async fn search_documents(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
@@ -265,8 +360,19 @@ async fn search_documents(
     Ok(Json(SearchResponse { results }))
 }
 
-/// Search documents by semantic similarity (GET handler for command palette)
-async fn search_documents_get(
+/// Search documents by semantic similarity using query parameters
+#[utoipa::path(
+    get,
+    path = "/api/documents/search",
+    operation_id = "searchDocuments",
+    tag = "documents",
+    params(SearchQueryParams),
+    responses(
+        (status = 200, description = "Documents ranked by similarity", body = SearchResponse),
+        InternalError,
+    )
+)]
+pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
     Query(params): Query<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
@@ -286,8 +392,27 @@ async fn search_documents_get(
     Ok(Json(SearchResponse { results }))
 }
 
-/// Download a document file
-async fn download_document(
+/// Binary payload of a stored file
+#[derive(ToSchema)]
+#[schema(value_type = String, format = Binary)]
+#[allow(dead_code)]
+pub struct FileContent(Vec<u8>);
+
+/// Download the original file of a document
+#[utoipa::path(
+    get,
+    path = "/api/documents/{id}/download",
+    operation_id = "downloadDocument",
+    tag = "documents",
+    params(("id" = Uuid, Path, description = "Document ID")),
+    responses(
+        (status = 200, description = "The original file; the Content-Type matches the upload",
+            body = FileContent, content_type = "application/octet-stream"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn download_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
