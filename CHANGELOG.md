@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.0](https://github.com/cedricziel/folio/compare/v0.1.0-alpha.2...v0.1.0) (2026-11-01)
+
+
+### Features
+
+* **api:** include tags and filters in the document list API ([#83](https://github.com/cedricziel/folio/issues/83)) ([839115c](https://github.com/cedricziel/folio/commit/839115ceeb2840c4a203bbb4536af98e6276ed3e))
+* **api:** include tags and names in documents and filter the list by tag and date ([e29d70d](https://github.com/cedricziel/folio/commit/e29d70dc5fa625e24aa2fdbc9e32ef65fcee1e6e))
+* **apple:** read tags from the API and filter documents on the server ([da3a6e3](https://github.com/cedricziel/folio/commit/da3a6e392d854f93427eec5315ae4ff1e70b8867))
+
+
+### Bug Fixes
+
+* **apple:** declare the File Provider document group ([bcb113b](https://github.com/cedricziel/folio/commit/bcb113b63c0ea48662d4d3dfe5cd1840cd2caacc))
+* **apple:** declare the File Provider document group ([#74](https://github.com/cedricziel/folio/issues/74)) ([7253c60](https://github.com/cedricziel/folio/commit/7253c604b1263b4487395a9b2404e4ca51622bd3))
+* **apple:** derive build numbers from the UTC build time ([2ce54c5](https://github.com/cedricziel/folio/commit/2ce54c5d9657ef8c859ef7208e4678aa090f39d9))
+* **apple:** tell gym the macOS build targets the macosx SDK ([0e0fbfd](https://github.com/cedricziel/folio/commit/0e0fbfdb79161235af694acc06ab6e6020e6ac8b))
+* **apple:** tell gym the macOS build targets the macosx SDK ([#75](https://github.com/cedricziel/folio/issues/75)) ([6a90528](https://github.com/cedricziel/folio/commit/6a90528428ba8daaa583a015a5d27678a937e130))
+* **apple:** use the commit count as the build number ([52ac2de](https://github.com/cedricziel/folio/commit/52ac2defbe2f3fec60041105bb9f375eefe294ef))
+* **apple:** use the commit count as the build number ([#85](https://github.com/cedricziel/folio/issues/85)) ([478a6f5](https://github.com/cedricziel/folio/commit/478a6f5eaae4ecfe1626bd389642061d570c1c80))
+* **web:** address the UX review findings ([#77](https://github.com/cedricziel/folio/issues/77)) ([340b3fc](https://github.com/cedricziel/folio/commit/340b3fc81f5f57b3761440f9541dab96b181aeea))
+* **web:** neutral generated placeholders, tidy palette dates and list meta ([46157ca](https://github.com/cedricziel/folio/commit/46157caca78d1879bb08db9e915fe85b26e70183))
+
 ## [0.1.0-alpha.2](https://github.com/cedricziel/folio/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-11-01)
 
 
