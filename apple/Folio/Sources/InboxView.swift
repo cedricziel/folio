@@ -15,6 +15,7 @@ struct InboxView: View {
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var pendingDelete: Document?
     @State private var showScanner = false
+    @State private var problem: String?
     @State private var scannedPages: ScannedPages?
 
     init(serverURL: URL, service: any FolioService, onChangeServer: @escaping () -> Void) {
@@ -89,50 +90,71 @@ struct InboxView: View {
                 )
             }
         #endif
-            .sheet(item: $scannedPages) { scan in
-                ScanReviewView(
-                    model: ScanReviewViewModel(pages: scan.images, service: service),
-                    onFinished: {
-                        scannedPages = nil
-                        Task { await list.load() }
+        .sheet(item: $scannedPages) { scan in
+            ScanReviewView(
+                model: ScanReviewViewModel(pages: scan.images, service: service),
+                onFinished: {
+                    scannedPages = nil
+                    Task { await list.load() }
+                }
+            )
+        }
+        .fileImporter(
+            isPresented: $showFileImporter, allowedContentTypes: [.pdf, .image], allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case let .failure(error):
+                problem = error.localizedDescription
+            case let .success(urls):
+                Task {
+                    let loaded = await Self.readFiles(urls)
+                    if !loaded.failed.isEmpty {
+                        problem = "Couldn't read \(loaded.failed.joined(separator: ", "))."
                     }
-                )
+                    await uploads.upload(loaded.files)
+                }
             }
-            .fileImporter(
-                isPresented: $showFileImporter, allowedContentTypes: [.pdf, .image], allowsMultipleSelection: true
-            ) { result in
-                guard case let .success(urls) = result else { return }
-                let files = urls.compactMap { try? UploadFile(contentsOf: $0) }
-                Task { await uploads.upload(files) }
-            }
-            .onChange(of: photoSelection) { _, items in
-                guard !items.isEmpty else { return }
-                photoSelection = []
-                Task { await uploads.upload(await loadPhotos(items)) }
-            }
-            .confirmationDialog(
-                "Delete this document?",
-                isPresented: Binding(get: { pendingDelete != nil }, set: {
+        }
+        .alert(
+            "Something went wrong",
+            isPresented: Binding(
+                get: { problem != nil || list.actionError != nil },
+                set: { if !$0 { problem = nil; list.dismissActionError() } })
+        ) {
+            Button("OK") {}
+        } message: {
+            Text(problem ?? list.actionError ?? "")
+        }
+        .onChange(of: photoSelection) { _, items in
+            guard !items.isEmpty else { return }
+            photoSelection = []
+            Task { await uploads.upload(await loadPhotos(items)) }
+        }
+        .confirmationDialog(
+            "Delete this document?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: {
                     if !$0 {
                         pendingDelete = nil
                     }
                 }),
-                presenting: pendingDelete
-            ) { document in
-                Button("Delete", role: .destructive) {
-                    Task { await list.delete(document) }
-                }
-                Button("Keep", role: .cancel) {}
-            } message: { document in
-                Text("\(document.title) will be removed from your archive.")
+            presenting: pendingDelete
+        ) { document in
+            Button("Delete", role: .destructive) {
+                Task { await list.delete(document) }
             }
+            Button("Keep", role: .cancel) {}
+        } message: { document in
+            Text("\(document.title) will be removed from your archive.")
+        }
     }
 
     @ViewBuilder
     private var placeholder: some View {
         switch list.phase {
         case .loading,
-             .idle where list.rows.isEmpty:
+            .idle where list.rows.isEmpty:
             Text("Reading your inbox…")
                 .font(FolioTheme.Typography.body)
                 .foregroundStyle(Color.inkMuted)
@@ -177,7 +199,7 @@ struct InboxView: View {
                 text: .ink
             )
             .task {
-                try? await Task.sleep(for: .seconds(3))
+                guard (try? await Task.sleep(for: .seconds(3))) != nil else { return }
                 uploads.dismiss()
             }
         case let .failed(message, _):
@@ -222,6 +244,22 @@ struct InboxView: View {
             .disabled(!DocumentScanner.isSupported)
         }
     #endif
+
+    /// Reads off the main actor so large files do not freeze the UI.
+    private nonisolated static func readFiles(_ urls: [URL]) async -> (files: [UploadFile], failed: [String]) {
+        await Task.detached {
+            var files: [UploadFile] = []
+            var failed: [String] = []
+            for url in urls {
+                if let file = try? UploadFile(contentsOf: url) {
+                    files.append(file)
+                } else {
+                    failed.append(url.lastPathComponent)
+                }
+            }
+            return (files, failed)
+        }.value
+    }
 
     private func loadPhotos(_ items: [PhotosPickerItem]) async -> [UploadFile] {
         var files: [UploadFile] = []

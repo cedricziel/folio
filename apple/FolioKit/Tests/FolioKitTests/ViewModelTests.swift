@@ -120,6 +120,34 @@ struct DocumentStatusTests {
     }
 }
 
+@MainActor struct DocumentListFailureTests {
+    @Test func failedDeleteKeepsTheListAndReportsTransiently() async {
+        let doc = Document(title: "Keep", content: "text")
+        let service = MockFolioService(documents: [doc])
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
+        await model.load()
+        await service.setFailure(.unreachable)
+        await model.delete(doc)
+        #expect(model.phase == .loaded)
+        #expect(model.rows.count == 1)
+        #expect(model.actionError == "Couldn't reach the server.")
+        model.dismissActionError()
+        #expect(model.actionError == nil)
+    }
+
+    @Test func lookupsAreRetriedAfterAFailure() async {
+        let person = Correspondent(name: "Stadtwerke")
+        let service = MockFolioService(documents: [Document(title: "A")], correspondents: [person])
+        await service.setFailLookups(true)
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
+        await model.search("")
+        #expect(model.correspondents.isEmpty)
+        await service.setFailLookups(false)
+        await model.search("")
+        #expect(model.correspondents[person.id] == "Stadtwerke")
+    }
+}
+
 @MainActor struct DocumentDetailViewModelTests {
     @Test func metadataListsRecordsInMono() {
         let model = DocumentDetailViewModel(
@@ -186,6 +214,16 @@ struct DocumentStatusTests {
         let model = UploadViewModel(service: service) {}
         await model.upload([file("a.pdf"), file("b.pdf"), file("c.pdf")])
         #expect(model.state == .failed(message: "Couldn't reach the server.", uploaded: 1))
+    }
+
+    @Test func aSecondBatchWhileOneIsRunningIsIgnored() async {
+        let service = MockFolioService()
+        let model = UploadViewModel(service: service) {}
+        let first = Task { await model.upload([file("a.pdf"), file("b.pdf")]) }
+        while model.state == .idle { await Task.yield() }
+        await model.upload([file("c.pdf")])
+        await first.value
+        #expect(await service.uploads.map(\.filename).contains("c.pdf") == false)
     }
 
     @Test func emptySelectionDoesNothing() async {
