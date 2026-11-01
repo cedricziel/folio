@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 struct InboxView: View {
     let serverURL: URL
     let service: any FolioService
-    let onChangeServer: () -> Void
+    let onSignOut: () -> Void
 
     @State private var list: DocumentListViewModel
     @State private var uploads: UploadViewModel
@@ -18,10 +18,10 @@ struct InboxView: View {
     @State private var problem: String?
     @State private var scannedPages: ScannedPages?
 
-    init(serverURL: URL, service: any FolioService, onChangeServer: @escaping () -> Void) {
+    init(serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void) {
         self.serverURL = serverURL
         self.service = service
-        self.onChangeServer = onChangeServer
+        self.onSignOut = onSignOut
         let list = DocumentListViewModel(service: service)
         _list = State(initialValue: list)
         _uploads = State(
@@ -166,7 +166,7 @@ struct InboxView: View {
                 Text(message)
             } actions: {
                 Button("Try again") { Task { await list.load() } }
-                Button("Change server", action: onChangeServer)
+                Button("Sign out", action: onSignOut)
             }
         case .loaded where list.rows.isEmpty:
             ContentUnavailableView {
@@ -226,7 +226,7 @@ struct InboxView: View {
             }
             Menu("Server", systemImage: "gearshape") {
                 Text(serverURL.absoluteString)
-                Button("Change server", action: onChangeServer)
+                Button("Sign out", action: onSignOut)
             }
         }
     }
