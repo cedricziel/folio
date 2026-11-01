@@ -1,0 +1,265 @@
+{
+  "$comment": "Screen tour shared by scripts/screens.mjs (verify skill) and e2e/tests/a11y.spec.ts + e2e/tests/visual.spec.ts. phase: empty = before seeding, seeded = after. auth: on | off | any. path may use {doc:<title>}, {tag:<name>}, {workflow:<name>}, {setup} (with the logged setup token) or {consent}. steps: open (palette | upload | tags | menu), type, press, pause (ms), fill [label, value], click (accessible name of a button or link), wait (visible text). mask: hidden in visual snapshots (dates, toasts; tags until tag tones stop depending on random ids).",
+  "viewports": [
+    {
+      "name": "desktop",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "name": "tablet",
+      "width": 768,
+      "height": 1024
+    },
+    {
+      "name": "mobile",
+      "width": 390,
+      "height": 844,
+      "isMobile": true,
+      "hasTouch": true
+    }
+  ],
+  "themes": [
+    "light",
+    "dark"
+  ],
+  "mask": [
+    ".row-side .f-meta",
+    ".doc-head .f-meta",
+    ".doc-aside dd .f-meta",
+    ".toast-container",
+    ".f-tag"
+  ],
+  "screens": [
+    {
+      "name": "setup",
+      "path": "{setup}",
+      "phase": "empty",
+      "auth": "on",
+      "wait": "Create the owner account"
+    },
+    {
+      "name": "inbox-empty",
+      "path": "/",
+      "phase": "empty",
+      "auth": "any",
+      "wait": "Your paperwork, filed."
+    },
+    {
+      "name": "login",
+      "path": "/login",
+      "phase": "seeded",
+      "auth": "on",
+      "loggedOut": true,
+      "wait": "Sign in",
+      "snapshot": true
+    },
+    {
+      "name": "login-error",
+      "path": "/login",
+      "phase": "seeded",
+      "auth": "on",
+      "loggedOut": true,
+      "steps": [
+        {
+          "fill": [
+            "Username",
+            "nobody"
+          ]
+        },
+        {
+          "fill": [
+            "Password",
+            "wrong-password-123"
+          ]
+        },
+        {
+          "click": "Sign in"
+        },
+        {
+          "wait": "Sign in"
+        }
+      ]
+    },
+    {
+      "name": "consent",
+      "path": "{consent}",
+      "phase": "seeded",
+      "auth": "on",
+      "wait": "Allow"
+    },
+    {
+      "name": "oauth-error",
+      "path": "/oauth/authorize?client_id=unknown",
+      "phase": "seeded",
+      "auth": "on",
+      "wait": "This request can't continue"
+    },
+    {
+      "name": "inbox",
+      "path": "/",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Kündigungsbestätigung Fitnessstudio",
+      "snapshot": true
+    },
+    {
+      "name": "all-documents",
+      "path": "/?view=all",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Jahresabrechnung Strom 2025"
+    },
+    {
+      "name": "filtered",
+      "path": "/?view=all&tag_id={tag:Tax 2025}",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Clear filter"
+    },
+    {
+      "name": "document",
+      "path": "{doc:Jahresabrechnung Strom 2025}",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Text Folio read",
+      "snapshot": true
+    },
+    {
+      "name": "document-tags",
+      "path": "{doc:Jahresabrechnung Strom 2025}",
+      "phase": "seeded",
+      "auth": "any",
+      "steps": [
+        {
+          "click": "Edit tags"
+        },
+        {
+          "wait": "Add a tag"
+        }
+      ]
+    },
+    {
+      "name": "document-failed",
+      "path": "{doc:scan_0042}",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Text Folio read"
+    },
+    {
+      "name": "document-long-title",
+      "path": "{doc:Nebenkostenabrechnung für den Abrechnungszeitraum 01.01.2024 bis 31.12.2024 Venloer Straße}",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Text Folio read"
+    },
+    {
+      "name": "palette",
+      "path": "/",
+      "phase": "seeded",
+      "auth": "any",
+      "steps": [
+        {
+          "open": "palette"
+        },
+        {
+          "type": "rechnung"
+        },
+        {
+          "pause": 800
+        },
+        {
+          "wait": "Beitragsrechnung Kfz-Versicherung"
+        }
+      ]
+    },
+    {
+      "name": "upload",
+      "path": "/",
+      "phase": "seeded",
+      "auth": "any",
+      "steps": [
+        {
+          "open": "upload"
+        },
+        {
+          "wait": "Upload a document"
+        }
+      ]
+    },
+    {
+      "name": "menu",
+      "path": "/",
+      "phase": "seeded",
+      "auth": "any",
+      "viewports": [
+        "mobile",
+        "tablet"
+      ],
+      "steps": [
+        {
+          "open": "menu"
+        }
+      ]
+    },
+    {
+      "name": "manage",
+      "path": "/manage",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Utilities"
+    },
+    {
+      "name": "settings",
+      "path": "/settings",
+      "phase": "seeded",
+      "auth": "any"
+    },
+    {
+      "name": "sources",
+      "path": "/settings/sources",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Scanner inbox"
+    },
+    {
+      "name": "source-new",
+      "path": "/settings/sources/new",
+      "phase": "seeded",
+      "auth": "any"
+    },
+    {
+      "name": "workflows",
+      "path": "/workflows",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "File power bills"
+    },
+    {
+      "name": "workflow-new",
+      "path": "/workflows/new",
+      "phase": "seeded",
+      "auth": "any"
+    },
+    {
+      "name": "workflow-edit",
+      "path": "{workflow:File power bills}",
+      "phase": "seeded",
+      "auth": "any"
+    },
+    {
+      "name": "not-found",
+      "path": "/documents/00000000-0000-0000-0000-000000000000",
+      "phase": "seeded",
+      "auth": "any",
+      "status": 404
+    },
+    {
+      "name": "unknown-route",
+      "path": "/does-not-exist",
+      "phase": "seeded",
+      "auth": "any",
+      "status": 404
+    }
+  ]
+}
