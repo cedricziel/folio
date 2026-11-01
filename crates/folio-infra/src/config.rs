@@ -93,11 +93,17 @@ impl Default for StorageConfig {
 pub struct AuthConfig {
     /// Require a session or token for the web UI and API.
     pub required: bool,
+    /// One-time secret for `/setup` while no user exists. A random one is
+    /// generated and logged at startup when unset.
+    pub setup_token: Option<String>,
 }
 
 impl Default for AuthConfig {
     fn default() -> Self {
-        Self { required: true }
+        Self {
+            required: true,
+            setup_token: None,
+        }
     }
 }
 
@@ -179,6 +185,12 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AUTH__REQUIRED",
         legacy_env: &[],
         kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "auth.setup_token",
+        env: "FOLIO_AUTH__SETUP_TOKEN",
+        legacy_env: &[],
+        kind: ValueKind::Str,
     },
     Setting {
         key: "database.url",

@@ -40,6 +40,7 @@ pub struct AuthState {
     pub public_url: Option<String>,
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
+    setup_token: Arc<str>,
 }
 
 impl AuthState {
@@ -49,7 +50,24 @@ impl AuthState {
             store,
             public_url,
             required: true,
+            setup_token: random_token().into(),
         }
+    }
+
+    /// Replaces the generated one-time setup token (for example with an
+    /// operator-chosen value from the configuration).
+    pub fn with_setup_token(mut self, token: impl Into<Arc<str>>) -> Self {
+        self.setup_token = token.into();
+        self
+    }
+
+    /// Secret that must accompany `/setup` while no user exists.
+    pub fn setup_token(&self) -> &str {
+        &self.setup_token
+    }
+
+    fn setup_token_ok(&self, given: Option<&str>) -> bool {
+        given.is_some_and(|g| !g.is_empty() && ct_eq(g, &self.setup_token))
     }
 
     pub fn with_required(mut self, required: bool) -> Self {
@@ -303,8 +321,13 @@ fn is_secure(base: &str) -> bool {
 #[template(path = "auth/setup.html")]
 struct SetupTemplate {
     csrf: String,
+    token: String,
     error: Option<String>,
 }
+
+#[derive(Template)]
+#[template(path = "auth/setup_locked.html")]
+struct SetupLockedTemplate;
 
 #[derive(Template)]
 #[template(path = "auth/login.html")]
@@ -342,13 +365,32 @@ async fn theme() -> impl IntoResponse {
 
 // ---- setup / login / logout -------------------------------------------------
 
-async fn setup_page(State(auth): State<AuthState>, headers: HeaderMap) -> Response {
+#[derive(Deserialize)]
+struct SetupQuery {
+    token: Option<String>,
+}
+
+async fn setup_page(
+    State(auth): State<AuthState>,
+    headers: HeaderMap,
+    Query(q): Query<SetupQuery>,
+) -> Response {
     if auth.store.count_users().await.unwrap_or(1) > 0 {
         return Redirect::to("/login").into_response();
     }
+    let Some(token) = q.token.filter(|t| auth.setup_token_ok(Some(t))) else {
+        return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
+    };
     let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
     with_cookies(
-        render(SetupTemplate { csrf, error: None }, StatusCode::OK),
+        render(
+            SetupTemplate {
+                csrf,
+                token,
+                error: None,
+            },
+            StatusCode::OK,
+        ),
         cookie,
     )
 }
@@ -358,6 +400,7 @@ struct SetupForm {
     username: String,
     password: String,
     csrf: String,
+    token: Option<String>,
 }
 
 async fn setup_submit(
@@ -369,10 +412,17 @@ async fn setup_submit(
     if !csrf_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if auth.store.count_users().await.unwrap_or(1) > 0 {
+        return Redirect::to("/login").into_response();
+    }
+    if !auth.setup_token_ok(form.token.as_deref()) {
+        return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
+    }
     let form_error = |msg: &str| {
         render(
             SetupTemplate {
                 csrf: form.csrf.clone(),
+                token: form.token.clone().unwrap_or_default(),
                 error: Some(msg.to_string()),
             },
             StatusCode::UNPROCESSABLE_ENTITY,

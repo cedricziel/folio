@@ -200,8 +200,23 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks);
 
-    let auth = AuthState::new(auth_store, config.server.public_url.clone())
+    let mut auth = AuthState::new(auth_store.clone(), config.server.public_url.clone())
         .with_required(config.auth.required);
+    if let Some(token) = config.auth.setup_token.as_deref().filter(|t| !t.is_empty()) {
+        auth = auth.with_setup_token(token);
+    }
+    if config.auth.required && auth_store.count_users().await.unwrap_or(1) == 0 {
+        let base = config
+            .server
+            .public_url
+            .clone()
+            .unwrap_or_else(|| format!("http://{}:{}", config.server.host, config.server.port));
+        tracing::warn!(
+            "\n\n  No owner account exists yet. Open this link to create it:\n\n    {}/setup?token={}\n\n  The link works until the first account is created.\n",
+            base.trim_end_matches('/'),
+            auth.setup_token()
+        );
+    }
 
     // Create router
     let mcp = folio_mcp::router(

@@ -22,6 +22,7 @@ use folio_infra::{create_pool, run_migrations, SqliteAuthStore};
 const BASE: &str = "http://folio.test";
 const VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 const REDIRECT: &str = "http://127.0.0.1:33418/callback";
+const SETUP_TOKEN: &str = "test-setup-token";
 
 struct App {
     router: Router,
@@ -33,7 +34,8 @@ async fn app() -> App {
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("t.db").display());
     let pool = create_pool(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()));
+    let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()))
+        .with_setup_token(SETUP_TOKEN);
     let protected =
         Router::new()
             .route("/mcp", get(|| async { "ok" }))
@@ -113,7 +115,13 @@ fn csrf_from(body: &str) -> String {
 }
 
 async fn setup_and_login(app: &App) -> String {
-    let page = send(app, Request::get("/setup").body(Body::empty()).unwrap()).await;
+    let page = send(
+        app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
     assert_eq!(page.status, StatusCode::OK);
     let csrf = csrf_from(&page.body);
     let cookie = format!("folio_csrf={csrf}");
@@ -122,7 +130,9 @@ async fn setup_and_login(app: &App) -> String {
         form_req(
             "/setup",
             &cookie,
-            &format!("csrf={csrf}&username=owner&password=correct-horse-battery"),
+            &format!(
+                "csrf={csrf}&token={SETUP_TOKEN}&username=owner&password=correct-horse-battery"
+            ),
         ),
     )
     .await;
@@ -287,6 +297,45 @@ async fn setup_is_only_available_while_no_user_exists() {
     .await;
     assert_eq!(post.location(), "/login");
     assert!(!session.is_empty());
+}
+
+#[tokio::test]
+async fn setup_requires_the_one_time_token() {
+    let app = app().await;
+    for uri in ["/setup", "/setup?token=wrong", "/setup?token="] {
+        let page = send(&app, Request::get(uri).body(Body::empty()).unwrap()).await;
+        assert_eq!(page.status, StatusCode::FORBIDDEN, "{uri}");
+        assert!(page.body.contains("Find the setup link in the server log"));
+        assert!(!page.body.contains("name=\"password\""));
+    }
+
+    // A forged POST with a valid CSRF pair but no or a wrong token creates nothing.
+    let csrf = "c".repeat(43);
+    for token in ["", "&token=wrong"] {
+        let post = send(
+            &app,
+            form_req(
+                "/setup",
+                &format!("folio_csrf={csrf}"),
+                &format!("csrf={csrf}{token}&username=evil&password=attacker-password-1"),
+            ),
+        )
+        .await;
+        assert_eq!(post.status, StatusCode::FORBIDDEN);
+    }
+    let login = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    assert_eq!(login.location(), "/setup", "no user may exist yet");
+
+    // The right token still works, and only once.
+    setup_and_login(&app).await;
+    let again = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(again.location(), "/login");
 }
 
 #[tokio::test]
@@ -575,6 +624,7 @@ mod enforcement {
         let pool = create_pool(&url).await.unwrap();
         run_migrations(&pool).await.unwrap();
         let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()))
+            .with_setup_token(SETUP_TOKEN)
             .with_required(required);
         let mut pages = Router::new();
         for path in [
@@ -639,7 +689,10 @@ mod enforcement {
     #[tokio::test]
     async fn setup_is_open_only_while_no_user_exists() {
         let app = guarded(true).await;
-        assert_eq!(status(&app, "/setup").await, StatusCode::OK);
+        assert_eq!(
+            status(&app, &format!("/setup?token={SETUP_TOKEN}")).await,
+            StatusCode::OK
+        );
         setup_and_login(&app).await;
         let after = send(&app, Request::get("/setup").body(Body::empty()).unwrap()).await;
         assert_eq!(after.status, StatusCode::SEE_OTHER);
