@@ -39,10 +39,17 @@ startup by the first three layers.
 | `auth.forward.enabled` | `FOLIO_AUTH__FORWARD__ENABLED` | `false` | Trust identity headers from a reverse proxy or SSO gateway. See [auth.md](auth.md#forward-auth). |
 | `auth.forward.trusted_proxies` | `FOLIO_AUTH__FORWARD__TRUSTED_PROXIES` | empty | Comma-separated CIDRs or addresses of the proxies whose headers are honoured. Headers from any other peer are ignored. |
 | `auth.forward.user_header` | `FOLIO_AUTH__FORWARD__USER_HEADER` | `Remote-User` | Header carrying the username. |
+| `auth.forward.user_id_header` | `FOLIO_AUTH__FORWARD__USER_ID_HEADER` | empty | Header carrying a stable account id (Pangolin: `Remote-User-Id`). When set, accounts are linked by it and `user_header` is only the display username; requests without it are unauthenticated. |
 | `auth.forward.email_header` | `FOLIO_AUTH__FORWARD__EMAIL_HEADER` | `Remote-Email` | Header carrying the email address. |
 | `auth.forward.name_header` | `FOLIO_AUTH__FORWARD__NAME_HEADER` | `Remote-Name` | Header carrying the display name. |
-| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | `Remote-Groups` | Header carrying group names, separated by `,` or `\|`. |
-| `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. |
+| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | empty | Header carrying group names. Empty means groups are ignored. |
+| `auth.forward.group_separator` | `FOLIO_AUTH__FORWARD__GROUP_SEPARATOR` | `,` | Separator between group names in `groups_header` (Authentik: `\|`). |
+| `auth.forward.role_header` | `FOLIO_AUTH__FORWARD__ROLE_HEADER` | empty | Header carrying a single role name (Pangolin: `Remote-Role`). Empty means roles are ignored. |
+| `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. Needs `groups_header`. |
+| `auth.forward.shared_secret` | `FOLIO_AUTH__FORWARD__SHARED_SECRET` | unset | When set, the proxy must also send this value in `secret_header`; requests without it are treated as unauthenticated. |
+| `auth.forward.secret_header` | `FOLIO_AUTH__FORWARD__SECRET_HEADER` | `X-Folio-Proxy-Secret` | Header carrying the shared secret. |
+| `auth.forward.session_ttl_secs` | `FOLIO_AUTH__FORWARD__SESSION_TTL_SECS` | `43200` | Lifetime of sessions created by forward-auth logins (12 hours). Local logins last 14 days. |
+| `auth.forward.admin_role` | `FOLIO_AUTH__FORWARD__ADMIN_ROLE` | unset | Users with this role are admins. Needs `role_header`. |
 | `auth.oidc.enabled` | `FOLIO_AUTH__OIDC__ENABLED` | `false` | Let users sign in through an OpenID Connect provider. See [auth.md](auth.md#openid-connect). |
 | `auth.oidc.issuer` | `FOLIO_AUTH__OIDC__ISSUER` | unset | Issuer URL of the provider, for example `https://auth.example.com/application/o/folio/`. Discovery reads `<issuer>/.well-known/openid-configuration`. |
 | `auth.oidc.client_id` | `FOLIO_AUTH__OIDC__CLIENT_ID` | unset | Client ID registered at the provider. |

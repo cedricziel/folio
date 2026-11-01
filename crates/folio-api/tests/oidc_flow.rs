@@ -427,6 +427,7 @@ fn local_owner() -> folio_auth::User {
         email: None,
         display_name: None,
         is_admin: true,
+        is_owner: true,
         auth_source: "local".into(),
         external_id: None,
     }

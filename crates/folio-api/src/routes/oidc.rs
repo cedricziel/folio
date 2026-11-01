@@ -222,7 +222,7 @@ pub(crate) async fn callback(
     // Without trustworthy groups, keep what is stored instead of demoting.
     let synced = match known {
         Some(existing) if !result.groups_known => Ok(existing),
-        _ => sync_external_user(&*auth.store, identity, provider.admin_group()).await,
+        _ => sync_external_user(&*auth.store, identity).await,
     };
     let user = match synced {
         Ok(user) => user,
@@ -241,7 +241,7 @@ pub(crate) async fn callback(
     if let Some(old) = cookie(&headers, SESSION_COOKIE) {
         let _ = auth.store.delete_session(&hash_token(&old)).await;
     }
-    let Some(session) = create_session(&auth, &user).await else {
+    let Some(session) = create_session(&auth, &user, SESSION_TTL_SECS).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     if let Err(e) = auth

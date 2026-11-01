@@ -85,7 +85,6 @@ impl AuthState {
         self
     }
 
-    /// Validator for a protected resource path such as `/mcp`.
     /// The user's groups in both namespaces, resolved on demand so callers
     /// (session or token holders alike) always see current memberships.
     pub async fn effective_groups(&self, user_id: &str) -> Vec<Group> {
@@ -95,6 +94,7 @@ impl AuthState {
         })
     }
 
+    /// Validator for a protected resource path such as `/mcp`.
     pub fn validator(&self, resource_path: &str) -> TokenValidator {
         TokenValidator::new(self.store.clone(), self.public_url.clone(), resource_path)
     }
@@ -296,18 +296,18 @@ fn login_redirect(next: &str) -> Redirect {
 }
 
 async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<String> {
-    let id = create_session(auth, user).await?;
+    let id = create_session(auth, user, SESSION_TTL_SECS).await?;
     Some(set_cookie(SESSION_COOKIE, &id, SESSION_TTL_SECS, secure))
 }
 
 /// Stores a new session for the user and returns its cookie value.
-pub(crate) async fn create_session(auth: &AuthState, user: &User) -> Option<String> {
+pub(crate) async fn create_session(auth: &AuthState, user: &User, ttl: i64) -> Option<String> {
     let id = random_token();
     auth.store
         .create_session(Session {
             id_hash: hash_token(&id),
             user_id: user.id.clone(),
-            expires_at: now() + SESSION_TTL_SECS,
+            expires_at: now() + ttl,
         })
         .await
         .map_err(|e| tracing::error!("session create failed: {e}"))
@@ -454,6 +454,7 @@ async fn setup_submit(
         email: None,
         display_name: None,
         is_admin: true,
+        is_owner: false,
         auth_source: SOURCE_LOCAL.to_string(),
         external_id: None,
     };

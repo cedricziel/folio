@@ -21,6 +21,16 @@ fn err(e: sqlx::Error) -> AuthError {
     AuthError::Store(e.to_string())
 }
 
+/// READ COMMITTED lets parallel inserts all see an empty `users` table; the
+/// lock makes the emptiness check and the insert one critical section.
+async fn lock_first_user(tx: &mut sqlx::PgConnection) -> Result<(), AuthError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(7101)")
+        .execute(tx)
+        .await
+        .map(|_| ())
+        .map_err(err)
+}
+
 fn split(scopes: &str) -> Vec<String> {
     scopes.split_whitespace().map(String::from).collect()
 }
@@ -34,6 +44,7 @@ fn user_from(row: PgRow) -> User {
         email: row.get("email"),
         display_name: row.get("display_name"),
         is_admin: row.get::<bool, _>("is_admin"),
+        is_owner: row.get::<bool, _>("is_owner"),
         auth_source: row.get("auth_source"),
         external_id: row.get("external_id"),
     }
@@ -49,19 +60,22 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn create_first_user(&self, user: User) -> Result<Option<User>, AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        lock_first_user(&mut tx).await?;
         let result = sqlx::query(
             "INSERT INTO users
-             (id, username, username_normalized, password_hash, created_at, is_admin, auth_source)
-             SELECT $1, $2, $3, $4, $5, TRUE, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
+             (id, username, username_normalized, password_hash, created_at, is_admin, is_owner, auth_source)
+             SELECT $1, $2, $3, $4, $5, TRUE, TRUE, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
         )
         .bind(&user.id)
         .bind(&user.username)
         .bind(user.username.to_lowercase())
         .bind(&user.password_hash)
         .bind(user.created_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(err)?;
+        tx.commit().await.map_err(err)?;
         Ok((result.rows_affected() == 1).then_some(user))
     }
 
@@ -91,6 +105,37 @@ impl AuthStore for PostgresAuthStore {
         })
     }
 
+    async fn create_external_user(&self, user: User) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        lock_first_user(&mut tx).await?;
+        sqlx::query(
+            "INSERT INTO users
+             (id, username, username_normalized, password_hash, created_at,
+              email, display_name, is_admin, is_owner, auth_source, external_id)
+             SELECT $1, $2, $3, $4, $5, $6, $7,
+                    $8::boolean OR NOT EXISTS (SELECT 1 FROM users),
+                    NOT EXISTS (SELECT 1 FROM users),
+                    $9, $10",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(user.username.to_lowercase())
+        .bind(&user.password_hash)
+        .bind(user.created_at)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(user.is_admin)
+        .bind(&user.auth_source)
+        .bind(&user.external_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
+            other => err(other),
+        })?;
+        tx.commit().await.map_err(err)
+    }
+
     async fn find_user_by_external(
         &self,
         source: &str,
@@ -112,7 +157,7 @@ impl AuthStore for PostgresAuthStore {
         display_name: Option<&str>,
         is_admin: bool,
     ) -> Result<(), AuthError> {
-        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = $3 WHERE id = $4")
+        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = ($3 OR is_owner) WHERE id = $4")
             .bind(email)
             .bind(display_name)
             .bind(is_admin)
@@ -124,13 +169,20 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn set_external_groups(&self, user_id: &str, groups: &[String]) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        // Serialises syncs for this user so the diff below cannot go stale.
+        sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(err)?;
         let mut current: Vec<String> = sqlx::query_scalar(
             "SELECT g.name FROM auth_group_members m
              JOIN auth_groups g ON g.id = m.group_id
              WHERE m.user_id = $1 AND g.source = 'external'",
         )
         .bind(user_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(err)?;
         let mut wanted = groups.to_vec();
@@ -141,7 +193,6 @@ impl AuthStore for PostgresAuthStore {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await.map_err(err)?;
         sqlx::query(
             "DELETE FROM auth_group_members
              WHERE user_id = $1
@@ -164,7 +215,8 @@ impl AuthStore for PostgresAuthStore {
             .map_err(err)?;
             sqlx::query(
                 "INSERT INTO auth_group_members (group_id, user_id)
-                 SELECT id, $1 FROM auth_groups WHERE source = 'external' AND name = $2",
+                 SELECT id, $1 FROM auth_groups WHERE source = 'external' AND name = $2
+                 ON CONFLICT DO NOTHING",
             )
             .bind(user_id)
             .bind(name)

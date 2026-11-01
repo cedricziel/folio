@@ -16,6 +16,9 @@ pub struct User {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub is_admin: bool,
+    /// Set once, atomically, for the very first account. The owner is always
+    /// admin and is never demoted by an external group or role mapping.
+    pub is_owner: bool,
     /// Where the account comes from: [`SOURCE_LOCAL`], [`SOURCE_FORWARD`], ...
     pub auth_source: String,
     /// The identifier at the external provider; `None` for local accounts.

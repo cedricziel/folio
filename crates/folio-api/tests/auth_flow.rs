@@ -749,8 +749,9 @@ mod enforcement {
 mod forward {
     use super::*;
     use axum::extract::ConnectInfo;
+    use axum::http::HeaderMap;
     use folio_api::{enforce_auth, forward_auth};
-    use folio_auth::{AuthStore, ForwardAuth, GroupSource};
+    use folio_auth::{AuthStore, ForwardAuth, ForwardConfig, GroupSource};
     use folio_infra::Database;
     use std::net::SocketAddr;
 
@@ -763,7 +764,7 @@ mod forward {
         pool: sqlx::SqlitePool,
     }
 
-    async fn fwd_app(admin_group: Option<&str>, user_header: &str) -> Fwd {
+    async fn fwd_app(configure: impl FnOnce(&mut ForwardConfig)) -> Fwd {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::connect(&format!("sqlite:{}/t.db?mode=rwc", dir.path().display()))
             .await
@@ -773,18 +774,23 @@ mod forward {
             unreachable!()
         };
         let store = db.repositories().await.auth;
-        let forward = ForwardAuth::new(
-            user_header,
-            "Remote-Email",
-            "Remote-Name",
-            "Remote-Groups",
-            &["10.0.0.0/8".to_string()],
-            admin_group.map(String::from),
-        )
-        .unwrap();
+        let mut config = ForwardConfig {
+            trusted_proxies: vec!["10.0.0.0/8".to_string()],
+            ..ForwardConfig::default()
+        };
+        configure(&mut config);
+        let forward = ForwardAuth::new(config).unwrap();
         let auth = AuthState::new(store.clone(), Some(BASE.into())).with_forward(forward);
         let router = auth_router(auth.clone())
-            .merge(Router::new().route("/", get(|| async { "home" })))
+            .merge(Router::new().route("/", get(|| async { "home" })).route(
+                "/static/echo",
+                get(|headers: HeaderMap| async move {
+                    let mut names: Vec<_> =
+                        headers.keys().map(|k| k.as_str().to_string()).collect();
+                    names.sort();
+                    names.join(",")
+                }),
+            ))
             .layer(middleware::from_fn_with_state(auth.clone(), enforce_auth))
             .layer(middleware::from_fn_with_state(auth, forward_auth));
         Fwd {
@@ -801,7 +807,9 @@ mod forward {
     }
 
     fn with_identity(uri: &str, user: &str, extra: &[(&str, &str)]) -> Request<Body> {
-        let mut b = Request::get(uri).header("Remote-User", user);
+        let mut b = Request::get(uri)
+            .header("Accept", "text/html")
+            .header("Remote-User", user);
         for (k, v) in extra {
             b = b.header(*k, *v);
         }
@@ -810,7 +818,7 @@ mod forward {
 
     #[tokio::test]
     async fn headers_from_an_untrusted_peer_are_ignored() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let res = send_from(&f.app, UNTRUSTED, with_identity("/", "alice", &[])).await;
         assert_eq!(res.status, StatusCode::SEE_OTHER);
         assert!(res.location().starts_with("/login"));
@@ -820,7 +828,7 @@ mod forward {
 
     #[tokio::test]
     async fn requests_without_a_peer_address_are_not_trusted() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let res = send(&f.app, with_identity("/", "alice", &[])).await;
         assert_eq!(res.status, StatusCode::SEE_OTHER);
         assert_eq!(f.store.count_users().await.unwrap(), 0);
@@ -828,7 +836,7 @@ mod forward {
 
     #[tokio::test]
     async fn trusted_peer_without_header_is_not_logged_in() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let res = send_from(
             &f.app,
             TRUSTED,
@@ -840,7 +848,7 @@ mod forward {
 
     #[tokio::test]
     async fn trusted_peer_gets_a_session_and_the_first_user_is_admin() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let req = with_identity(
             "/",
             "Alice",
@@ -885,7 +893,11 @@ mod forward {
 
     #[tokio::test]
     async fn admin_group_maps_to_admin_and_follows_the_idp() {
-        let f = fwd_app(Some("admins"), "Remote-User").await;
+        let f = fwd_app(|c| {
+            c.groups_header = "Remote-Groups".into();
+            c.admin_group = Some("admins".into());
+        })
+        .await;
         send_from(
             &f.app,
             TRUSTED,
@@ -916,7 +928,7 @@ mod forward {
         send_from(
             &f.app,
             TRUSTED,
-            with_identity("/", "bob", &[("Remote-Groups", "family|admins")]),
+            with_identity("/", "bob", &[("Remote-Groups", "family,admins")]),
         )
         .await;
         assert!(user("bob").await.is_admin);
@@ -930,8 +942,352 @@ mod forward {
     }
 
     #[tokio::test]
+    async fn a_forged_groups_header_cannot_grant_admin_by_default() {
+        // Pangolin's Badger does not strip Remote-Groups, so a client can send it.
+        let f = fwd_app(|c| c.admin_group = Some("folio-admins".into())).await;
+        send_from(&f.app, TRUSTED, with_identity("/", "owner", &[])).await;
+        let forged = with_identity("/", "mallory", &[("Remote-Groups", "folio-admins")]);
+        assert_eq!(
+            send_from(&f.app, TRUSTED, forged).await.status,
+            StatusCode::OK
+        );
+        let mallory = f
+            .store
+            .find_user_by_external("forward", "mallory")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!mallory.is_admin);
+        assert!(f.store.user_groups(&mallory.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn admin_role_header_maps_to_admin_and_follows_the_proxy() {
+        let f = fwd_app(|c| {
+            c.role_header = "Remote-Role".into();
+            c.admin_role = Some("admin".into());
+        })
+        .await;
+        let as_role = |role: &'static str| with_identity("/", "pat", &[("Remote-Role", role)]);
+        let pat = || async {
+            f.store
+                .find_user_by_external("forward", "pat")
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        send_from(&f.app, TRUSTED, with_identity("/", "owner", &[])).await;
+        send_from(&f.app, TRUSTED, as_role("member")).await;
+        assert!(!pat().await.is_admin);
+        send_from(&f.app, TRUSTED, as_role("admin")).await;
+        assert!(pat().await.is_admin);
+        send_from(&f.app, TRUSTED, as_role("member")).await;
+        assert!(!pat().await.is_admin);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn simultaneous_first_requests_for_one_user_all_succeed() {
+        let f = fwd_app(|_| {}).await;
+        let statuses: Vec<StatusCode> = futures::future::join_all(
+            (0..16).map(|_| send_from(&f.app, TRUSTED, with_identity("/", "newcomer", &[]))),
+        )
+        .await
+        .into_iter()
+        .map(|r| r.status)
+        .collect();
+        assert!(
+            statuses.iter().all(|s| *s == StatusCode::OK),
+            "{statuses:?}"
+        );
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn only_one_of_several_simultaneous_first_users_becomes_admin() {
+        let f = fwd_app(|_| {}).await;
+        futures::future::join_all((0..16).map(|i| {
+            send_from(
+                &f.app,
+                TRUSTED,
+                with_identity("/", &format!("user{i}"), &[]),
+            )
+        }))
+        .await;
+        let admins: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        assert_eq!(f.store.count_users().await.unwrap(), 16);
+        assert_eq!(admins, 1);
+    }
+
+    #[tokio::test]
+    async fn the_owner_is_never_demoted_by_a_mapping() {
+        let f = fwd_app(|c| {
+            c.role_header = "Remote-Role".into();
+            c.admin_role = Some("admin".into());
+        })
+        .await;
+        let user = |name: &'static str| {
+            let store = f.store.clone();
+            async move {
+                store
+                    .find_user_by_external("forward", name)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        for _ in 0..2 {
+            let req = with_identity("/", "first", &[("Remote-Role", "member")]);
+            send_from(&f.app, TRUSTED, req).await;
+            let first = user("first").await;
+            assert!(first.is_owner && first.is_admin, "{first:?}");
+        }
+        let req = with_identity("/", "second", &[("Remote-Role", "member")]);
+        send_from(&f.app, TRUSTED, req).await;
+        let second = user("second").await;
+        assert!(!second.is_owner && !second.is_admin);
+    }
+
+    fn all_identity_headers(c: &mut ForwardConfig) {
+        c.groups_header = "Remote-Groups".into();
+        c.role_header = "Remote-Role".into();
+        c.admin_group = Some("admins".into());
+    }
+
+    #[tokio::test]
+    async fn every_identity_header_is_stripped_from_untrusted_peers() {
+        let f = fwd_app(all_identity_headers).await;
+        // No user header at all: the other headers must still not get through.
+        let req = Request::get("/static/echo")
+            .header("Remote-Email", "x@example.com")
+            .header("Remote-Name", "X")
+            .header("Remote-Groups", "admins")
+            .header("Remote-Role", "admin")
+            .header("X-Keep", "1")
+            .body(Body::empty())
+            .unwrap();
+        let res = send_from(&f.app, UNTRUSTED, req).await;
+        assert_eq!(res.body, "x-keep");
+    }
+
+    #[tokio::test]
+    async fn trusted_requests_without_a_user_header_lose_the_other_identity_headers() {
+        let f = fwd_app(all_identity_headers).await;
+        let req = Request::get("/static/echo")
+            .header("Remote-Email", "x@example.com")
+            .header("Remote-Groups", "admins")
+            .body(Body::empty())
+            .unwrap();
+        let res = send_from(&f.app, TRUSTED, req).await;
+        assert_eq!(res.body, "");
+    }
+
+    #[tokio::test]
+    async fn repeated_identity_headers_are_rejected() {
+        let f = fwd_app(all_identity_headers).await;
+        let doubled = |name: &str| {
+            Request::get("/")
+                .header("Remote-User", "alice")
+                .header(name, "one")
+                .header(name, "two")
+                .body(Body::empty())
+                .unwrap()
+        };
+        for name in [
+            "Remote-User",
+            "Remote-Email",
+            "Remote-Name",
+            "Remote-Groups",
+            "Remote-Role",
+        ] {
+            let res = send_from(&f.app, TRUSTED, doubled(name)).await;
+            assert_eq!(res.status, StatusCode::BAD_REQUEST, "{name}");
+        }
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn machine_paths_never_honour_forward_headers() {
+        let f = fwd_app(|_| {}).await;
+        let cases = [
+            ("GET", "/.well-known/oauth-authorization-server", None),
+            ("POST", "/oauth/token", None),
+            ("POST", "/oauth/register", None),
+            ("POST", "/oauth/revoke", None),
+            ("GET", "/mcp", None),
+            ("GET", "/mcp/sse", None),
+            ("GET", "/api/documents", Some("Bearer not-a-real-token")),
+        ];
+        for (method, path, bearer) in cases {
+            let mut b = Request::builder()
+                .method(method)
+                .uri(path)
+                .header("Remote-User", "mallory");
+            if let Some(bearer) = bearer {
+                b = b.header(header::AUTHORIZATION, bearer);
+            }
+            let res = send_from(&f.app, TRUSTED, b.body(Body::empty()).unwrap()).await;
+            assert!(res.cookies().is_empty(), "{path} set a session");
+            if path.starts_with("/api") {
+                assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{path}");
+            }
+        }
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_configured_shared_secret_must_accompany_the_identity() {
+        let f = fwd_app(|c| c.shared_secret = Some("s3cret-value".into())).await;
+        let echo = |secret: Option<&str>| {
+            let mut b = Request::get("/static/echo").header("Remote-User", "alice");
+            if let Some(secret) = secret {
+                b = b.header("X-Folio-Proxy-Secret", secret);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        for secret in [None, Some("wrong"), Some("s3cret-value-and-more")] {
+            let res = send_from(&f.app, TRUSTED, echo(secret)).await;
+            assert!(res.cookies().is_empty(), "{secret:?}");
+            assert_eq!(res.body, "", "{secret:?}: headers must not leak through");
+        }
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+
+        let ok = send_from(&f.app, TRUSTED, echo(Some("s3cret-value"))).await;
+        assert_eq!(ok.status, StatusCode::OK);
+        assert!(
+            !ok.body.contains("secret"),
+            "the secret header is not passed on: {}",
+            ok.body
+        );
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stable_id_header_links_the_account_and_the_name_is_display_only() {
+        let f = fwd_app(|c| c.user_id_header = "Remote-User-Id".into()).await;
+        let as_user = |id: Option<&str>, name: &str| {
+            let mut b = Request::get("/")
+                .header("Accept", "text/html")
+                .header("Remote-User", name);
+            if let Some(id) = id {
+                b = b.header("Remote-User-Id", id);
+            }
+            b.body(Body::empty()).unwrap()
+        };
+        let first = send_from(&f.app, TRUSTED, as_user(Some("u-1"), "alice")).await;
+        assert_eq!(first.status, StatusCode::OK);
+        let alice = f
+            .store
+            .find_user_by_external("forward", "u-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(alice.username, "alice");
+
+        // The same id under another display name is still the same account.
+        let renamed = send_from(&f.app, TRUSTED, as_user(Some("u-1"), "alice-renamed")).await;
+        assert_eq!(renamed.status, StatusCode::OK);
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+
+        // Another id cannot take over the name.
+        let clash = send_from(&f.app, TRUSTED, as_user(Some("u-2"), "alice")).await;
+        assert_eq!(clash.status, StatusCode::FORBIDDEN);
+
+        // Without the id header there is no identity at all.
+        let anonymous = send_from(&f.app, TRUSTED, as_user(None, "alice")).await;
+        assert_eq!(anonymous.status, StatusCode::SEE_OTHER);
+        assert_eq!(f.store.count_users().await.unwrap(), 1);
+    }
+
+    async fn session_count(f: &Fwd) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    }
+
+    fn session_cookie(res: &Resp) -> String {
+        res.cookies()
+            .into_iter()
+            .find(|c| c.starts_with("folio_session="))
+            .expect("session cookie")
+    }
+
+    #[tokio::test]
+    async fn forward_sessions_are_short_lived_and_reused() {
+        let f = fwd_app(|_| {}).await;
+        let first = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let set_cookie = first
+            .headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .find(|c| c.starts_with("folio_session="))
+            .unwrap();
+        assert!(set_cookie.contains("Max-Age=43200"), "{set_cookie}");
+        let expires: i64 = sqlx::query_scalar("SELECT expires_at FROM sessions")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!((expires - now - 43200).abs() < 60, "{}", expires - now);
+
+        let cookie = session_cookie(&first);
+        for _ in 0..3 {
+            send_from(
+                &f.app,
+                TRUSTED,
+                with_identity("/", "alice", &[("Cookie", &cookie)]),
+            )
+            .await;
+        }
+        assert_eq!(session_count(&f).await, 1);
+    }
+
+    #[tokio::test]
+    async fn requests_that_are_not_page_loads_do_not_create_sessions() {
+        let f = fwd_app(|_| {}).await;
+        for _ in 0..16 {
+            let req = Request::get("/")
+                .header("Accept", "application/json")
+                .header("Remote-User", "alice")
+                .body(Body::empty())
+                .unwrap();
+            let res = send_from(&f.app, TRUSTED, req).await;
+            assert!(res.cookies().is_empty());
+        }
+        assert_eq!(session_count(&f).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_forward_session_ends_when_the_proxy_stops_vouching_for_the_user() {
+        let f = fwd_app(|_| {}).await;
+        let login = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let cookie = session_cookie(&login);
+        // Any other peer keeps working with the cookie alone.
+        let elsewhere = send_from(&f.app, UNTRUSTED, get_req("/", &cookie)).await;
+        assert_eq!(elsewhere.status, StatusCode::OK);
+
+        // The proxy now forwards the browser without an identity: signed out upstream.
+        let anonymous = Request::get("/")
+            .header("Cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = send_from(&f.app, TRUSTED, anonymous).await;
+        assert_eq!(res.status, StatusCode::SEE_OTHER);
+        assert_eq!(session_count(&f).await, 0);
+        let again = send_from(&f.app, UNTRUSTED, get_req("/", &cookie)).await;
+        assert_eq!(again.status, StatusCode::SEE_OTHER);
+    }
+
+    #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;
         send_from(
             &f.app,
             TRUSTED,
@@ -972,7 +1328,7 @@ mod forward {
 
     #[tokio::test]
     async fn a_forwarded_name_cannot_take_over_a_local_account() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let _owner_session = setup_and_login_with(&f.app).await;
         let res = send_from(&f.app, TRUSTED, with_identity("/", "OWNER", &[])).await;
         assert_eq!(res.status, StatusCode::FORBIDDEN);
@@ -981,10 +1337,11 @@ mod forward {
 
     #[tokio::test]
     async fn header_names_are_configurable() {
-        let f = fwd_app(None, "X-Authentik-Username").await;
+        let f = fwd_app(|c| c.user_header = "X-Authentik-Username".into()).await;
         let ignored = send_from(&f.app, TRUSTED, with_identity("/", "dave", &[])).await;
         assert_eq!(ignored.status, StatusCode::SEE_OTHER);
         let req = Request::get("/")
+            .header("Accept", "text/html")
             .header("X-Authentik-Username", "dave")
             .body(Body::empty())
             .unwrap();
@@ -993,7 +1350,7 @@ mod forward {
 
     #[tokio::test]
     async fn oauth_authorize_works_through_forward_auth() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let client = register(&f.app).await;
         let uri = format!("/oauth/authorize?{}", authorize_query(&client));
         let res = send_from(&f.app, TRUSTED, with_identity(&uri, "erin", &[])).await;

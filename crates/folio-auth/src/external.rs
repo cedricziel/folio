@@ -8,6 +8,7 @@ use crate::{
 };
 
 const MAX_USERNAME_LEN: usize = 64;
+const MAX_EXTERNAL_ID_LEN: usize = 255;
 const MAX_GROUPS: usize = 200;
 const MAX_GROUP_LEN: usize = 200;
 
@@ -21,6 +22,9 @@ pub struct ExternalIdentity {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub groups: Vec<String>,
+    /// `Some` when the provider decides admin status (group or role mapping);
+    /// `None` leaves it to manual changes.
+    pub admin: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -36,16 +40,20 @@ pub enum ExternalError {
 /// Finds or creates the local user for an external identity, refreshes its
 /// profile and replaces its external group memberships.
 ///
-/// With `admin_group` set, admin status follows membership of that group on
-/// every call. Without it, only the very first user becomes admin.
+/// With `identity.admin` set, admin status follows it on every call, except
+/// for the owner (the very first account), who always stays admin.
 pub async fn sync_external_user(
     store: &dyn AuthStore,
     mut identity: ExternalIdentity,
-    admin_group: Option<&str>,
 ) -> Result<User, ExternalError> {
     identity.username = identity.username.trim().to_string();
     let name = &identity.username;
-    if name.is_empty() || name.len() > MAX_USERNAME_LEN || name.chars().any(char::is_control) {
+    if name.is_empty()
+        || name.len() > MAX_USERNAME_LEN
+        || name.chars().any(char::is_control)
+        || identity.external_id.is_empty()
+        || identity.external_id.len() > MAX_EXTERNAL_ID_LEN
+    {
         return Err(ExternalError::Invalid);
     }
     identity
@@ -53,14 +61,12 @@ pub async fn sync_external_user(
         .retain(|g| !g.is_empty() && g.len() <= MAX_GROUP_LEN);
     identity.groups.truncate(MAX_GROUPS);
 
-    let in_admin_group = admin_group.map(|g| identity.groups.iter().any(|x| x == g));
-
     let user = match store
         .find_user_by_external(&identity.source, &identity.external_id)
         .await?
     {
         Some(mut user) => {
-            let is_admin = in_admin_group.unwrap_or(user.is_admin);
+            let is_admin = user.is_owner || identity.admin.unwrap_or(user.is_admin);
             if user.email != identity.email
                 || user.display_name != identity.display_name
                 || user.is_admin != is_admin
@@ -80,7 +86,6 @@ pub async fn sync_external_user(
             user
         }
         None => {
-            let first = store.count_users().await? == 0;
             let user = User {
                 id: uuid::Uuid::new_v4().to_string(),
                 username: identity.username.clone(),
@@ -88,13 +93,22 @@ pub async fn sync_external_user(
                 created_at: now(),
                 email: identity.email.clone(),
                 display_name: identity.display_name.clone(),
-                is_admin: in_admin_group.unwrap_or(false) || first,
+                is_admin: identity.admin.unwrap_or(false),
+                is_owner: false,
                 auth_source: identity.source.clone(),
                 external_id: Some(identity.external_id.clone()),
             };
-            match store.create_user(user.clone()).await {
-                Ok(()) => user,
-                Err(AuthError::Conflict) => return Err(ExternalError::UsernameTaken),
+            match store.create_external_user(user.clone()).await {
+                Ok(()) => store
+                    .find_user_by_external(&identity.source, &identity.external_id)
+                    .await?
+                    .unwrap_or(user),
+                // Either a concurrent first request created this very identity
+                // (use it) or the username belongs to someone else.
+                Err(AuthError::Conflict) => store
+                    .find_user_by_external(&identity.source, &identity.external_id)
+                    .await?
+                    .ok_or(ExternalError::UsernameTaken)?,
                 Err(e) => return Err(e.into()),
             }
         }

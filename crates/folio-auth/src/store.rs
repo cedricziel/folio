@@ -23,6 +23,10 @@ pub trait AuthStore: Send + Sync {
     /// Inserts a user. Returns [`AuthError::Conflict`] when the username or the
     /// external identity is already taken.
     async fn create_user(&self, user: User) -> Result<(), AuthError>;
+    /// Like [`Self::create_user`]; the user becomes owner and admin when no
+    /// user exists yet. The check is atomic with the insert, so parallel first
+    /// requests cannot all become owner.
+    async fn create_external_user(&self, user: User) -> Result<(), AuthError>;
     async fn find_user_by_external(
         &self,
         source: &str,

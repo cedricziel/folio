@@ -53,15 +53,26 @@ web UI and the MCP login work the same way with any of them.
 A reverse proxy or SSO gateway authenticates the user and passes the identity
 in headers. Folio logs that user in without asking for a password.
 
+> **Every header Folio reads must be overwritten or stripped by your proxy.**
+> Folio cannot tell a header set by the proxy from one a client sent along: if
+> the proxy forwards a client-supplied copy of any header you configured, that
+> client can impersonate any user, or become an admin. Configure only headers
+> your proxy sets itself on every authenticated request, and check that it
+> removes incoming copies of them.
+
 ```toml
 [auth.forward]
 enabled = true
-trusted_proxies = ["10.0.0.0/8", "172.16.0.5"]
-admin_group = "folio-admins"   # optional
-# user_header = "Remote-User"  # defaults: Remote-User, Remote-Email,
-# email_header = "Remote-Email" # Remote-Name, Remote-Groups
+trusted_proxies = ["172.18.0.5"]   # a single proxy address, see Trust below
+# user_id_header = "Remote-User-Id" # stable id, recommended when available
+# user_header = "Remote-User"      # defaults: Remote-User, Remote-Email,
+# email_header = "Remote-Email"    # Remote-Name
 # name_header = "Remote-Name"
-# groups_header = "Remote-Groups"
+# groups_header = "Remote-Groups"  # off unless set
+# group_separator = ","            # between group names
+# admin_group = "folio-admins"     # needs groups_header
+# role_header = "Remote-Role"      # off unless set
+# admin_role = "admin"             # needs role_header
 ```
 
 Environment: `FOLIO_AUTH__FORWARD__ENABLED=true`,
@@ -69,27 +80,55 @@ Environment: `FOLIO_AUTH__FORWARD__ENABLED=true`,
 
 - **Trust.** Headers are honoured only when the TCP peer address is in
   `trusted_proxies`. From any other peer they are removed and a warning is
-  logged. Do not list a range that untrusted clients can reach, and make sure
-  your proxy overwrites these headers instead of passing client values through.
+  logged. Trust a single proxy address (the one Folio sees as the peer), never
+  a broad range, and do not publish Folio's port: clients must only be able to
+  reach it through the proxy. Folio logs a warning when the list contains
+  `0.0.0.0/0` or `::/0`, which would let every client impersonate any user.
   With the list empty nothing is trusted.
+- **Shared secret.** Optionally set `shared_secret` (and `secret_header`,
+  default `X-Folio-Proxy-Secret`) and have the proxy add that header to every
+  request. Folio then treats requests without the right value as
+  unauthenticated, which protects you if the proxy's address is ever reachable
+  by someone else. The secret header is removed before the request is handled.
+- **Machine paths.** Identity headers are never honoured on `/oauth/token`,
+  `/oauth/register`, `/oauth/revoke`, `/.well-known/*`, `/mcp` and on `/api`
+  requests that carry a bearer token. Those use OAuth, not the gateway.
 - **Users.** The first request for a name creates the account (no local
-  password) and links it by name. A name that already belongs to another
+  password) and links it by name. With `user_id_header` set, accounts are
+  linked by that stable id instead, and the user header is only the username
+  shown in Folio (it is taken from the first request and does not follow later
+  renames). Prefer this whenever your gateway offers an id: names can be
+  reused, ids cannot. A name that already belongs to another
   account, such as the local owner, is refused with `403`.
 - **Admins.** The first user of a fresh install is the owner and admin. With
-  `admin_group` set, admin status follows membership of that group on every
-  request. Without it only the first user is admin.
-- **Groups.** The groups header replaces the user's external groups on every
-  request. External groups and local groups are separate namespaces: an IdP
-  group `admins` never matches a local group `admins`.
-- **Sessions.** A trusted request sets a normal session cookie. After that the
-  cookie works on its own, so API clients and MCP clients still use OAuth
-  tokens, which are not affected by the headers.
+  `admin_group` (and `groups_header`) or `admin_role` (and `role_header`) set,
+  admin status follows that mapping on every request. Without a mapping only
+  the first user is admin. A mapping whose header is not configured is ignored.
+- **Groups.** Off by default. With `groups_header` set, that header replaces
+  the user's external groups on every request. External groups and local
+  groups are separate namespaces: an IdP group `admins` never matches a local
+  group `admins`.
+- **Sessions.** A trusted page load (a request that accepts `text/html`) sets
+  a normal session cookie that lasts `session_ttl_secs` (12 hours by default,
+  shorter than the 14 days of a local login) and is reused on later requests.
+  Other cookieless requests, such as scripts that only send the headers, get
+  no session and are not logged in; API and MCP clients use OAuth tokens,
+  which the headers never affect.
+- **Logout.** Folio's own sign-out only deletes the session; the next request
+  through the proxy signs the user in again while the gateway session lives.
+  Sign out at the gateway. Once the gateway session ends, the proxy stops
+  sending the identity and Folio deletes the forward-auth session on the next
+  trusted request that arrives without it. Accounts that came from the gateway
+  have no local password, so they can only sign in through it.
 
 ### Pangolin
 
-Pangolin (Badger) forwards `Remote-User`, `Remote-Email`, `Remote-Name` and
-`Remote-Groups` when SSO is enabled on the resource, which match the defaults.
-Pangolin reaches Folio from its Newt/Gerbil network, so trust that address:
+When SSO is enabled on a resource, Pangolin (Badger) sends `Remote-User`,
+`Remote-Email`, `Remote-Name`, `Remote-Role` and `Remote-User-Id`. It does
+**not** send groups, and it does **not** strip a `Remote-Groups` header a
+client sends. So do not set `groups_header` or `admin_group` for Pangolin:
+any signed-in user could send `Remote-Groups: folio-admins` and become an
+admin. Map admins by role instead:
 
 ```yaml
 services:
@@ -97,21 +136,24 @@ services:
     environment:
       FOLIO_SERVER__PUBLIC_URL: https://folio.example.com
       FOLIO_AUTH__FORWARD__ENABLED: "true"
-      FOLIO_AUTH__FORWARD__TRUSTED_PROXIES: 172.18.0.0/16   # the Docker network of Newt
-      FOLIO_AUTH__FORWARD__ADMIN_GROUP: folio-admins
+      FOLIO_AUTH__FORWARD__TRUSTED_PROXIES: 172.18.0.5   # the Newt container
+      FOLIO_AUTH__FORWARD__USER_ID_HEADER: Remote-User-Id
+      FOLIO_AUTH__FORWARD__ROLE_HEADER: Remote-Role
+      FOLIO_AUTH__FORWARD__ADMIN_ROLE: admin
 ```
 
+Pangolin reaches Folio from its Newt/Gerbil network, so trust that address.
 Enable SSO on the Pangolin resource. Add the `/mcp` and `/oauth/*` paths as
 auth-bypass rules, because MCP clients cannot sign in through the gateway and
 use Folio's own OAuth instead.
 
 ### Other gateways
 
-- **Authelia** (Caddy, nginx, Traefik forward auth): the same defaults apply,
-  `Remote-User`, `Remote-Groups`, `Remote-Name`, `Remote-Email`.
+- **Authelia** (Caddy, nginx, Traefik forward auth): the same user, name and
+  email defaults apply; set `groups_header = "Remote-Groups"` to use groups.
 - **Authentik proxy outpost**: set `user_header = "X-authentik-username"`,
   `email_header = "X-authentik-email"`, `name_header = "X-authentik-name"`,
-  `groups_header = "X-authentik-groups"` (groups are `|` separated).
+  `groups_header = "X-authentik-groups"`, `group_separator = "|"`.
 - **oauth2-proxy**: pass `--set-xauthrequest` and map `X-Auth-Request-User`,
   `X-Auth-Request-Email`, `X-Auth-Request-Groups`.
 

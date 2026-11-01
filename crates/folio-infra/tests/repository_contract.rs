@@ -1060,22 +1060,85 @@ async fn auth_contract(r: &Repositories) {
         email: None,
         display_name: None,
         is_admin: false,
+        is_owner: false,
         auth_source: "local".into(),
         external_id: None,
     };
 
     assert_eq!(auth.count_users().await.unwrap(), 0);
-    let owner = auth
-        .create_first_user(user("Owner"))
+    // Simultaneous first logins (setup form and external providers): the
+    // emptiness check is atomic with the insert, so exactly one becomes owner.
+    let external = |i: usize| User {
+        auth_source: "forward".into(),
+        external_id: Some(format!("ext{i}")),
+        ..user(&format!("ext{i}"))
+    };
+    let mut tasks = tokio::task::JoinSet::new();
+    {
+        let auth = r.auth.clone();
+        let owner = user("Owner");
+        tasks.spawn(async move { auth.create_first_user(owner).await.map(|u| u.is_some()) });
+    }
+    for i in 0..16 {
+        let auth = r.auth.clone();
+        let u = external(i);
+        tasks.spawn(async move { auth.create_external_user(u).await.map(|()| true) });
+    }
+    while let Some(done) = tasks.join_next().await {
+        done.unwrap().unwrap();
+    }
+    let mut admins = 0;
+    let mut owners = Vec::new();
+    for name in ["Owner"]
+        .into_iter()
+        .map(String::from)
+        .chain((0..16).map(|i| format!("ext{i}")))
+    {
+        if let Some(u) = auth.find_user_by_username(&name).await.unwrap() {
+            admins += i32::from(u.is_admin);
+            if u.is_owner {
+                owners.push(u.id);
+            }
+        }
+    }
+    assert_eq!(admins, 1, "exactly one first user is admin");
+    assert_eq!(owners.len(), 1, "exactly one first user is owner");
+    // A profile sync can never demote the owner.
+    auth.update_user_profile(&owners[0], None, None, false)
         .await
-        .unwrap()
         .unwrap();
+    assert!(
+        auth.find_user_by_id(&owners[0])
+            .await
+            .unwrap()
+            .unwrap()
+            .is_admin
+    );
+    let owner = match auth.find_user_by_username("Owner").await.unwrap() {
+        Some(owner) => owner,
+        None => {
+            auth.create_user(user("Owner")).await.unwrap();
+            auth.find_user_by_username("Owner").await.unwrap().unwrap()
+        }
+    };
     assert!(auth
         .create_first_user(user("second"))
         .await
         .unwrap()
         .is_none());
-    assert_eq!(auth.count_users().await.unwrap(), 1);
+    // Later external users stay plain, and a repeated identity conflicts.
+    auth.create_external_user(external(100)).await.unwrap();
+    let late = auth
+        .find_user_by_external("forward", "ext100")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!late.is_admin);
+    assert!(matches!(
+        auth.create_external_user(external(100)).await,
+        Err(folio_auth::AuthError::Conflict)
+    ));
+    assert_eq!(auth.count_users().await.unwrap(), 18);
     let by_name = auth.find_user_by_username("oWnEr").await.unwrap().unwrap();
     assert_eq!(by_name.id, owner.id);
     assert_eq!(by_name.username, "Owner");
@@ -1091,16 +1154,6 @@ async fn auth_contract(r: &Repositories) {
             .unwrap()
             .username,
         "Owner"
-    );
-
-    assert!(
-        owner.is_admin
-            || auth
-                .find_user_by_id(&owner.id)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_admin
     );
 
     // External users: linked by (source, external id), usernames stay unique
@@ -1162,6 +1215,36 @@ async fn auth_contract(r: &Repositories) {
     assert_eq!(names(auth.user_groups(&alice.id).await.unwrap()), ["kids"]);
     auth.set_external_groups(&alice.id, &[]).await.unwrap();
     assert!(auth.user_groups(&alice.id).await.unwrap().is_empty());
+
+    // Simultaneous syncs for one user (parallel first requests) must all
+    // succeed and leave exactly one of the requested sets behind.
+    let sets: Vec<Vec<String>> = vec![
+        vec!["a".into(), "b".into()],
+        vec!["b".into(), "c".into()],
+        vec!["a".into()],
+        vec!["c".into(), "d".into(), "a".into()],
+    ];
+    let mut tasks = tokio::task::JoinSet::new();
+    for i in 0..24 {
+        let auth = r.auth.clone();
+        let id = alice.id.clone();
+        let set = sets[i % sets.len()].clone();
+        tasks.spawn(async move { auth.set_external_groups(&id, &set).await });
+    }
+    while let Some(done) = tasks.join_next().await {
+        done.unwrap().expect("concurrent group sync failed");
+    }
+    let mut left = names(auth.user_groups(&alice.id).await.unwrap());
+    left.sort();
+    assert!(
+        sets.iter().any(|set| {
+            let mut set = set.clone();
+            set.sort();
+            set == left
+        }),
+        "mixed result: {left:?}"
+    );
+    auth.set_external_groups(&alice.id, &[]).await.unwrap();
 
     let far = i64::MAX / 2;
     auth.create_session(Session {

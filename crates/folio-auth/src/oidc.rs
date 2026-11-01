@@ -177,10 +177,6 @@ impl OidcProvider {
         self.settings.auto_create_users
     }
 
-    pub fn admin_group(&self) -> Option<&str> {
-        self.settings.admin_group.as_deref()
-    }
-
     /// Fetches the discovery document ahead of the first login.
     pub async fn warm_up(&self) -> Result<(), OidcError> {
         self.metadata().await.map(|_| ())
@@ -445,6 +441,11 @@ impl OidcProvider {
                 .collect(),
             _ => Vec::new(),
         };
+        let admin = self
+            .settings
+            .admin_group
+            .as_deref()
+            .map(|g| groups.iter().any(|x| x == g));
         ExternalIdentity {
             source: self.source.clone(),
             external_id: subject.to_string(),
@@ -452,6 +453,7 @@ impl OidcProvider {
             email,
             display_name: claim_str(claims, "name"),
             groups,
+            admin,
         }
     }
 

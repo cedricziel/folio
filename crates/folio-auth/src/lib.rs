@@ -16,7 +16,7 @@ pub mod server;
 pub mod store;
 pub mod validator;
 
-pub use forward::ForwardAuth;
+pub use forward::{ForwardAuth, ForwardConfig};
 pub use model::{
     AccessToken, AuthCode, AuthContext, Group, GroupSource, OAuthClient, OidcLogin, RefreshToken,
     Session, User, SCOPES,

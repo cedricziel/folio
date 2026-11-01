@@ -228,11 +228,25 @@ pub struct ForwardAuthConfig {
     pub user_header: String,
     pub email_header: String,
     pub name_header: String,
+    /// Empty (the default) means group headers are ignored.
     pub groups_header: String,
+    /// Empty (the default) means role headers are ignored.
+    pub role_header: String,
+    /// Empty (the default) links accounts by the user header.
+    pub user_id_header: String,
     /// CIDRs or addresses of the proxies whose headers are honoured.
     pub trusted_proxies: Vec<String>,
-    /// Members of this (external) group become admins.
+    /// Members of this (external) group become admins; needs `groups_header`.
     pub admin_group: Option<String>,
+    /// Users with this role become admins; needs `role_header`.
+    pub admin_role: Option<String>,
+    /// When set, the proxy must also send it in `secret_header`.
+    pub shared_secret: Option<String>,
+    pub secret_header: String,
+    /// Lifetime of sessions created by forward-auth logins, in seconds.
+    pub session_ttl_secs: u64,
+    /// Separator between group names in `groups_header`.
+    pub group_separator: String,
 }
 
 impl Default for ForwardAuthConfig {
@@ -242,9 +256,16 @@ impl Default for ForwardAuthConfig {
             user_header: "Remote-User".to_string(),
             email_header: "Remote-Email".to_string(),
             name_header: "Remote-Name".to_string(),
-            groups_header: "Remote-Groups".to_string(),
+            groups_header: String::new(),
+            role_header: String::new(),
+            user_id_header: String::new(),
             trusted_proxies: Vec::new(),
             admin_group: None,
+            admin_role: None,
+            shared_secret: None,
+            secret_header: "X-Folio-Proxy-Secret".to_string(),
+            session_ttl_secs: 12 * 3600,
+            group_separator: ",".to_string(),
         }
     }
 }
@@ -336,6 +357,8 @@ pub struct McpConfig {
 pub enum ValueKind {
     Str,
     Port,
+    /// A non-negative whole number
+    Int,
     Bool,
     /// Comma-separated values
     List,
@@ -410,6 +433,18 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::Str,
     },
     Setting {
+        key: "auth.forward.role_header",
+        env: "FOLIO_AUTH__FORWARD__ROLE_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.user_id_header",
+        env: "FOLIO_AUTH__FORWARD__USER_ID_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
         key: "auth.forward.trusted_proxies",
         env: "FOLIO_AUTH__FORWARD__TRUSTED_PROXIES",
         legacy_env: &[],
@@ -418,6 +453,36 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "auth.forward.admin_group",
         env: "FOLIO_AUTH__FORWARD__ADMIN_GROUP",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.admin_role",
+        env: "FOLIO_AUTH__FORWARD__ADMIN_ROLE",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.shared_secret",
+        env: "FOLIO_AUTH__FORWARD__SHARED_SECRET",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.secret_header",
+        env: "FOLIO_AUTH__FORWARD__SECRET_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.session_ttl_secs",
+        env: "FOLIO_AUTH__FORWARD__SESSION_TTL_SECS",
+        legacy_env: &[],
+        kind: ValueKind::Int,
+    },
+    Setting {
+        key: "auth.forward.group_separator",
+        env: "FOLIO_AUTH__FORWARD__GROUP_SEPARATOR",
         legacy_env: &[],
         kind: ValueKind::Str,
     },
@@ -750,6 +815,11 @@ fn to_value(setting: &Setting, raw: String) -> Result<figment::value::Value, fig
             .parse::<u16>()
             .map(Value::from)
             .map_err(|_| invalid("a port number")),
+        ValueKind::Int => raw
+            .trim()
+            .parse::<u64>()
+            .map(Value::from)
+            .map_err(|_| invalid("a whole number")),
         ValueKind::List => {
             let items: Vec<&str> = raw
                 .split(',')
@@ -870,6 +940,7 @@ mod tests {
                 ("storage.backend", _) => ("s3", "s3"),
                 (_, ValueKind::Str) => ("sample-value", "sample-value"),
                 (_, ValueKind::Port) => ("4242", "4242"),
+                (_, ValueKind::Int) => ("4242", "4242"),
                 (_, ValueKind::Bool) => ("true", "true"),
                 (_, ValueKind::List) => ("a.example, b.example", r#"["a.example","b.example"]"#),
             };
@@ -891,6 +962,7 @@ mod tests {
                 let (sample, expected) = match setting.kind {
                     ValueKind::Str => ("legacy-value", "legacy-value"),
                     ValueKind::Port => ("4343", "4343"),
+                    ValueKind::Int => ("4343", "4343"),
                     ValueKind::Bool => ("true", "true"),
                     ValueKind::List => ("legacy.example", r#"["legacy.example"]"#),
                 };
@@ -917,6 +989,11 @@ mod tests {
         );
         assert_eq!(config.auth.forward.admin_group.as_deref(), Some("admins"));
         assert_eq!(config.auth.forward.user_header, "Remote-User");
+        assert!(
+            config.auth.forward.groups_header.is_empty()
+                && config.auth.forward.role_header.is_empty(),
+            "group and role headers must be opt-in"
+        );
     }
 
     #[test]

@@ -63,6 +63,7 @@ async fn issue(server: &Server, token: &str, scopes: &[&str]) {
             email: None,
             display_name: None,
             is_admin: true,
+            is_owner: false,
             auth_source: "local".into(),
             external_id: None,
         })
