@@ -8,7 +8,12 @@ How Folio is configured: startup configuration from `config.toml` and the enviro
 
 ### Requirement: Startup configuration
 
-The system SHALL read `config.toml` at startup and let environment variables prefixed `FOLIO_` override it. It SHALL configure the server host and port, the database URL, the storage path, and fallback AI settings. Each of the `[server]`, `[database]`, `[storage]` and `[ai]` sections must be present; keys missing inside a section default to `127.0.0.1`, `3000`, `sqlite:folio.db?mode=rwc`, `./data` and provider `openai`.
+The system SHALL start without a `config.toml`. Every setting has a built-in default (`127.0.0.1`, `3000`, `sqlite:folio.db?mode=rwc`, `./data` and provider `openai`), `config.toml` (or the file named by `FOLIO_CONFIG`) overrides the defaults, and environment variables override `config.toml`. Settings stored in the database override all of these for the keys the database manages.
+
+#### Scenario: No config file
+
+- **WHEN** Folio starts without a `config.toml` and without `FOLIO_*` variables
+- **THEN** it listens on `127.0.0.1:3000` using the default database URL and storage path
 
 #### Scenario: Key missing from a section
 
@@ -17,17 +22,27 @@ The system SHALL read `config.toml` at startup and let environment variables pre
 
 ### Requirement: Environment overrides
 
-Every `_` after the `FOLIO_` prefix SHALL be read as a section separator, so only keys without an underscore can be overridden: `FOLIO_SERVER_HOST`, `FOLIO_SERVER_PORT`, `FOLIO_DATABASE_URL`, `FOLIO_STORAGE_PATH` and `FOLIO_AI_PROVIDER`.
+The system SHALL read nested keys from environment variables prefixed `FOLIO_` with a double underscore as the section separator, for example `FOLIO_SERVER__PORT`, `FOLIO_DATABASE__URL`, `FOLIO_STORAGE__PATH`, `FOLIO_AI__PROVIDER`, `FOLIO_AI__OPENAI_API_KEY` and `FOLIO_AI__ANTHROPIC_API_KEY`. The single-underscore names `FOLIO_SERVER_HOST`, `FOLIO_SERVER_PORT`, `FOLIO_DATABASE_URL`, `FOLIO_STORAGE_PATH`, `FOLIO_AI_PROVIDER`, `FOLIO_AI_OPENAI_API_KEY` and `FOLIO_AI_ANTHROPIC_API_KEY` SHALL keep working as deprecated aliases that log a warning, and the double-underscore name SHALL win when both are set. Any variable SHALL also be readable from a file named by the same variable with a `_FILE` suffix; setting both is an error.
 
 #### Scenario: Override the port
 
-- **WHEN** the server starts with `FOLIO_SERVER_PORT=8080`
+- **WHEN** the server starts with `FOLIO_SERVER__PORT=8080`
 - **THEN** it listens on port 8080 regardless of `config.toml`
 
 #### Scenario: Override a key that contains an underscore
 
-- **WHEN** the server starts with `FOLIO_AI_OPENAI_API_KEY` set
-- **THEN** the value is not applied, and the OpenAI key falls back to `config.toml` or the database
+- **WHEN** the server starts with `FOLIO_AI__OPENAI_API_KEY` set
+- **THEN** the value is applied as the OpenAI key fallback
+
+#### Scenario: Secret from a file
+
+- **WHEN** the server starts with `FOLIO_AI__OPENAI_API_KEY_FILE=/run/secrets/openai`
+- **THEN** the OpenAI key is the file contents without the trailing newline
+
+#### Scenario: Deprecated alias
+
+- **WHEN** the server starts with `FOLIO_AI_OPENAI_API_KEY` set and no `FOLIO_AI__OPENAI_API_KEY`
+- **THEN** the value is applied and a deprecation warning is logged
 
 ### Requirement: Database settings
 
