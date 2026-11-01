@@ -13,6 +13,7 @@ use uuid::Uuid;
 use axum::response::{IntoResponse, Redirect, Response};
 
 use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
+use folio_core::services::SearchServiceFacade;
 
 use folio_infra::JobType;
 
@@ -328,6 +329,26 @@ pub struct SearchResultWithDocument {
     score: f32,
 }
 
+async fn semantic_search(
+    state: &AppState,
+    query: &str,
+    limit: usize,
+) -> ApiResult<Vec<SearchResultWithDocument>> {
+    let facade = SearchServiceFacade::new(
+        state.document_repo.clone(),
+        state.embedding_service.clone(),
+        state.search_service.clone(),
+    );
+    let hits = facade.hybrid_search(query, limit).await?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchResultWithDocument {
+            document: h.document,
+            score: h.score,
+        })
+        .collect())
+}
+
 /// Search documents by semantic similarity
 #[utoipa::path(
     post,
@@ -344,18 +365,7 @@ pub(crate) async fn search_documents(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
-    let search_results = state.search_documents(&req.query, req.limit).await?;
-
-    // Fetch full document details
-    let mut results = Vec::new();
-    for result in search_results {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
-            results.push(SearchResultWithDocument {
-                document,
-                score: result.score,
-            });
-        }
-    }
+    let results = semantic_search(&state, &req.query, req.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }
@@ -376,18 +386,7 @@ pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
     Query(params): Query<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
-    let search_results = state.search_documents(&params.q, params.limit).await?;
-
-    // Fetch full document details
-    let mut results = Vec::new();
-    for result in search_results {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
-            results.push(SearchResultWithDocument {
-                document,
-                score: result.score,
-            });
-        }
-    }
+    let results = semantic_search(&state, &params.q, params.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }

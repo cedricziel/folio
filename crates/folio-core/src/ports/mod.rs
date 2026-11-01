@@ -5,6 +5,7 @@
 mod ai;
 mod health;
 mod repository;
+mod storage;
 
 pub use ai::{
     EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
@@ -15,3 +16,4 @@ pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,
 };
+pub use storage::{FileStore, ProcessingQueue, ProcessingStatus};
