@@ -66,7 +66,6 @@ impl AuthState {
         self
     }
 
-    /// Validator for a protected resource path such as `/mcp`.
     /// The user's groups in both namespaces, resolved on demand so callers
     /// (session or token holders alike) always see current memberships.
     pub async fn effective_groups(&self, user_id: &str) -> Vec<Group> {
@@ -76,6 +75,7 @@ impl AuthState {
         })
     }
 
+    /// Validator for a protected resource path such as `/mcp`.
     pub fn validator(&self, resource_path: &str) -> TokenValidator {
         TokenValidator::new(self.store.clone(), self.public_url.clone(), resource_path)
     }
