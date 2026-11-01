@@ -25,8 +25,7 @@ counts %}
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="/static/fonts/fonts.css" />
     <link rel="stylesheet" href="/static/tokens.css" />
     <link rel="stylesheet" href="/static/components.css" />
     <link rel="stylesheet" href="/static/style.css" />
@@ -36,9 +35,12 @@ counts %}
         if (theme) document.documentElement.dataset.theme = theme;
       })();
     </script>
+    <script type="importmap">
+      {"imports": {"@hotwired/turbo": "/static/vendor/turbo.js", "@hotwired/stimulus": "/static/vendor/stimulus.js"}}
+    </script>
     <script type="module">
-      import * as Turbo from "/static/vendor/turbo.js";
-import { Application, Controller } from "/static/vendor/stimulus.js";
+      import * as Turbo from "@hotwired/turbo";
+import { Application, Controller } from "@hotwired/stimulus";
 
 window.Stimulus = Application.start();
 

@@ -1,9 +1,12 @@
 // Caches the app shell (styles, scripts, icons) so Folio opens fast and can
 // show an offline page. Pages, documents and API responses are never cached:
 // they hold private data and must always come from the server.
-const CACHE = "folio-shell-v1";
+const CACHE = "folio-shell-v2";
 
 const SHELL = [
+  "/static/fonts/fonts.css",
+  "/static/fonts/geist-latin-wght-normal.woff2",
+  "/static/fonts/geist-mono-latin-wght-normal.woff2",
   "/static/tokens.css",
   "/static/components.css",
   "/static/style.css",
