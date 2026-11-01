@@ -6,11 +6,13 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use folio_core::models::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 
 use crate::error::{ApiError, ApiResult};
+use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -25,13 +27,37 @@ pub fn router() -> Router<AppState> {
 }
 
 /// List all correspondents
-async fn list_correspondents(State(state): State<AppState>) -> ApiResult<Json<Vec<Correspondent>>> {
+#[utoipa::path(
+    get,
+    path = "/api/correspondents",
+    operation_id = "listCorrespondents",
+    tag = "correspondents",
+    responses(
+        (status = 200, description = "All correspondents", body = Vec<Correspondent>),
+        InternalError,
+    )
+)]
+pub(crate) async fn list_correspondents(
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<Correspondent>>> {
     let correspondents = state.correspondent_repo.list().await?;
     Ok(Json(correspondents))
 }
 
 /// Get a single correspondent by ID
-async fn get_correspondent(
+#[utoipa::path(
+    get,
+    path = "/api/correspondents/{id}",
+    operation_id = "getCorrespondent",
+    tag = "correspondents",
+    params(("id" = Uuid, Path, description = "Correspondent ID")),
+    responses(
+        (status = 200, description = "The correspondent", body = Correspondent),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn get_correspondent(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Correspondent>> {
@@ -45,13 +71,26 @@ async fn get_correspondent(
 }
 
 /// Request body for creating a correspondent
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateCorrespondentRequest {
     name: String,
 }
 
 /// Create a new correspondent
-async fn create_correspondent(
+#[utoipa::path(
+    post,
+    path = "/api/correspondents",
+    operation_id = "createCorrespondent",
+    tag = "correspondents",
+    request_body = CreateCorrespondentRequest,
+    responses(
+        (status = 200, description = "The created correspondent", body = Correspondent),
+        BadRequest,
+        Conflict,
+        InternalError,
+    )
+)]
+pub(crate) async fn create_correspondent(
     State(state): State<AppState>,
     Json(req): Json<CreateCorrespondentRequest>,
 ) -> ApiResult<Json<Correspondent>> {
@@ -64,13 +103,28 @@ async fn create_correspondent(
 }
 
 /// Request body for updating a correspondent
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateCorrespondentRequest {
     name: Option<String>,
 }
 
 /// Update a correspondent
-async fn update_correspondent(
+#[utoipa::path(
+    put,
+    path = "/api/correspondents/{id}",
+    operation_id = "updateCorrespondent",
+    tag = "correspondents",
+    params(("id" = Uuid, Path, description = "Correspondent ID")),
+    request_body = UpdateCorrespondentRequest,
+    responses(
+        (status = 200, description = "The updated correspondent", body = Correspondent),
+        BadRequest,
+        NotFound,
+        Conflict,
+        InternalError,
+    )
+)]
+pub(crate) async fn update_correspondent(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateCorrespondentRequest>,
@@ -84,7 +138,19 @@ async fn update_correspondent(
 }
 
 /// Delete a correspondent
-async fn delete_correspondent(
+#[utoipa::path(
+    delete,
+    path = "/api/correspondents/{id}",
+    operation_id = "deleteCorrespondent",
+    tag = "correspondents",
+    params(("id" = Uuid, Path, description = "Correspondent ID")),
+    responses(
+        (status = 200, description = "The correspondent was deleted"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn delete_correspondent(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {
