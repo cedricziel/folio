@@ -2,11 +2,14 @@
 
 use std::sync::Arc;
 
+use folio_core::error::Result;
+use folio_core::ports::SearchResult;
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentStore, DocumentTypeRepository,
     EmbeddingService, HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository,
 };
-use folio_infra::{JobQueue, ThumbnailService};
+use folio_core::services::SearchServiceFacade;
+use folio_infra::{JobQueue, PipelineContext, ThumbnailService};
 
 use folio_core::EventBroadcaster;
 
@@ -23,6 +26,7 @@ pub struct AppState {
     pub ocr_service: Arc<dyn OcrService>,
     pub embedding_service: Arc<dyn EmbeddingService>,
     pub search_service: Arc<dyn SearchService>,
+    pub pipeline: Arc<PipelineContext>,
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
     pub store: Arc<dyn DocumentStore>,
@@ -41,6 +45,7 @@ impl AppState {
         ocr_service: Arc<dyn OcrService>,
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
+        pipeline: Arc<PipelineContext>,
         thumbnail_service: Arc<ThumbnailService>,
         job_queue: JobQueue,
         store: Arc<dyn DocumentStore>,
@@ -55,6 +60,7 @@ impl AppState {
             ocr_service,
             embedding_service,
             search_service,
+            pipeline,
             thumbnail_service,
             job_queue,
             store,
@@ -67,5 +73,26 @@ impl AppState {
     pub fn with_health_checks(mut self, checks: Vec<Arc<dyn HealthCheck>>) -> Self {
         self.health_checks = checks.into();
         self
+    }
+}
+
+impl AppState {
+    /// Search documents: literal title/text matches first, then semantic neighbours
+    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let facade = SearchServiceFacade::new(
+            self.document_repo.clone(),
+            self.embedding_service.clone(),
+            self.search_service.clone(),
+        );
+        Ok(facade
+            .hybrid_search(query, limit)
+            .await?
+            .into_iter()
+            .map(|s| SearchResult {
+                document_id: s.document.id,
+                score: s.score,
+                snippet: None,
+            })
+            .collect())
     }
 }

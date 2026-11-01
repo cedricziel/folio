@@ -8,8 +8,8 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument, UpdateDocumentType,
-    UpdateTag,
+    DocumentFilter, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag, UpdateCorrespondent,
+    UpdateDocument, UpdateDocumentType, UpdateTag,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -76,6 +76,8 @@ struct DocumentRow {
     correspondent_id: Option<String>,
     document_type_id: Option<String>,
     page_count: Option<i64>,
+    ocr_status: String,
+    embed_status: String,
     created_at: String,
     updated_at: String,
 }
@@ -94,6 +96,8 @@ impl TryFrom<DocumentRow> for Document {
             correspondent_id: parse_optional_uuid(row.correspondent_id)?,
             document_type_id: parse_optional_uuid(row.document_type_id)?,
             page_count: row.page_count.map(|c| c as u32),
+            ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
+            embed_status: row.embed_status.parse().map_err(Error::Repository)?,
             created_at: row
                 .created_at
                 .parse::<DateTime<Utc>>()
@@ -180,7 +184,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let id_str = id.to_string();
         let row: Option<DocumentRow> = sqlx::query_as(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, created_at, updated_at
+                    correspondent_id, document_type_id, page_count, ocr_status, embed_status, created_at, updated_at
              FROM documents WHERE id = ?",
         )
         .bind(&id_str)
@@ -194,7 +198,8 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
         let mut qb = QueryBuilder::<Sqlite>::new(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, created_at, updated_at
+                    correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                     created_at, updated_at
              FROM documents WHERE 1 = 1",
         );
 
@@ -252,11 +257,17 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn create(&self, params: CreateDocument) -> Result<Document> {
         let id = Id::new_v4();
         let now = Utc::now();
+        let ocr_status = if params.content.is_some() {
+            ProcessingStatus::Done
+        } else {
+            ProcessingStatus::Pending
+        };
 
         sqlx::query(
             "INSERT INTO documents (id, title, content, original_filename, mime_type,
-                                    correspondent_id, document_type_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    correspondent_id, document_type_id, ocr_status,
+                                    created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&params.title)
@@ -265,6 +276,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(&params.mime_type)
         .bind(params.correspondent_id.map(|id| id.to_string()))
         .bind(params.document_type_id.map(|id| id.to_string()))
+        .bind(ocr_status.as_str())
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(&self.pool)
@@ -281,6 +293,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,
             page_count: None,
+            ocr_status,
+            embed_status: ProcessingStatus::Pending,
             created_at: now,
             updated_at: now,
         })
@@ -323,6 +337,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             correspondent_id,
             document_type_id,
             page_count: existing.page_count,
+            ocr_status: existing.ocr_status,
+            embed_status: existing.embed_status,
             created_at: existing.created_at,
             updated_at: now,
         })
@@ -384,6 +400,85 @@ impl DocumentRepository for SqliteDocumentRepository {
         }
 
         Ok(())
+    }
+
+    async fn set_stage_status(
+        &self,
+        id: Id,
+        stage: ProcessingStage,
+        status: ProcessingStatus,
+    ) -> Result<()> {
+        let sql = match stage {
+            ProcessingStage::Ocr => "UPDATE documents SET ocr_status = ? WHERE id = ?",
+            ProcessingStage::Embed => "UPDATE documents SET embed_status = ? WHERE id = ?",
+        };
+        sqlx::query(sql)
+            .bind(status.as_str())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(())
+    }
+
+    async fn complete_ocr(&self, id: Id, content: &str) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ? WHERE id = ?",
+        )
+        .bind(content)
+        .bind(Utc::now().to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
+        let sql = match stage {
+            ProcessingStage::Ocr => {
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                        created_at, updated_at
+                 FROM documents WHERE ocr_status = 'pending' ORDER BY created_at"
+            }
+            ProcessingStage::Embed => {
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                        created_at, updated_at
+                 FROM documents WHERE embed_status = 'pending' ORDER BY created_at"
+            }
+        };
+        let rows: Vec<DocumentRow> = sqlx::query_as(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
+        let ids: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM documents WHERE content IS NOT NULL AND content != ''")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        sqlx::query(
+            "UPDATE documents SET embed_status = 'pending'
+             WHERE content IS NOT NULL AND content != ''",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        ids.into_iter().map(|(id,)| parse_uuid(&id)).collect()
     }
 
     async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>> {

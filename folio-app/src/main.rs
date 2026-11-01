@@ -16,8 +16,8 @@ use folio_core::services::LibraryService;
 use folio_core::EventBroadcaster;
 use folio_infra::{
     build_store, cleanup_legacy_layout, migrate_legacy_layout, Config, Database,
-    DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, Worker,
-    WorkerConfig,
+    DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
+    ThumbnailService, Worker, WorkerConfig,
 };
 use folio_mcp::McpOptions;
 
@@ -75,7 +75,6 @@ async fn main() -> Result<()> {
     info!("  Server: {}:{}", config.server.host, config.server.port);
     info!("  Database: {}", redact_url(&config.database.url));
     info!("  Storage: {:?}", config.storage.backend);
-    info!("  AI Provider: {}", config.ai.provider);
 
     // Initialize database
     let database = Database::connect(&config.database.url)
@@ -124,15 +123,10 @@ async fn main() -> Result<()> {
     .await
     .context("Failed to migrate stored files to object keys")?;
 
-    // Create AI services (dynamic - reads from database settings with config.toml fallback)
-    let ocr_service = Arc::new(DynamicOcrService::new(
-        settings_repo.clone(),
-        config.ai.clone(),
-    ));
-    let embedding_service = Arc::new(DynamicEmbeddingService::new(
-        settings_repo.clone(),
-        config.ai.clone(),
-    ));
+    // Create AI services (providers follow the database settings, config.toml keys as fallback)
+    let pipeline = PipelineContext::new(settings_repo.clone(), config.ai.clone());
+    let ocr_service = Arc::new(DynamicOcrService::new(pipeline.clone()));
+    let embedding_service = Arc::new(DynamicEmbeddingService::new(pipeline.clone()));
     let search_service = repos.search;
 
     // Create job queue
@@ -153,6 +147,7 @@ async fn main() -> Result<()> {
         ocr_service.clone(),
         embedding_service.clone(),
         search_service.clone(),
+        pipeline.clone(),
         thumbnail_service.clone(),
         store.clone(),
         WorkerConfig::default(),
@@ -204,6 +199,7 @@ async fn main() -> Result<()> {
         ocr_service,
         embedding_service,
         search_service,
+        pipeline,
         thumbnail_service,
         job_queue,
         store,

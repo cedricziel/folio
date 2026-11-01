@@ -31,3 +31,7 @@ anyhow = { workspace = true }
 # Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[features]
+# Local ONNX embeddings (embeddings.provider = "fastembed")
+fastembed = ["folio-infra/fastembed"]

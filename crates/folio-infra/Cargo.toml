@@ -49,6 +49,14 @@ tempfile = { workspace = true }
 # Image processing
 image = { workspace = true }
 
+[features]
+# Local ONNX embeddings (downloads onnxruntime and models); off by default to keep builds small
+fastembed = ["dep:fastembed"]
+
+[dependencies.fastembed]
+version = "5"
+optional = true
+
 [dev-dependencies]
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 hmac = "0.12"

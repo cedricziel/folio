@@ -7,9 +7,14 @@ mod settings;
 mod tag;
 
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
-pub use document::{CreateDocument, Document, DocumentFilter, DocumentStatus, UpdateDocument};
+pub use document::{
+    CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
+    UpdateDocument,
+};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
-pub use settings::{AiSettings, ProcessingSettings, Setting};
+pub use settings::{
+    AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
+};
 pub use tag::{CreateTag, Tag, UpdateTag};
 
 /// Unique identifier type alias
