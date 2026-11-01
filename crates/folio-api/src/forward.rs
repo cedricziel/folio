@@ -14,9 +14,7 @@ use folio_auth::{
     model::SOURCE_FORWARD,
 };
 
-use crate::routes::auth::{
-    cookie, create_session, is_secure, set_cookie, AuthState, SESSION_COOKIE,
-};
+use crate::routes::auth::{cookie, create_session, set_cookie, AuthState};
 
 /// Requests that authenticate with OAuth or bearer tokens. They bypass the
 /// gateway, so identity headers on them can only be forged.
@@ -119,9 +117,9 @@ pub async fn forward_auth(
     let Some(session_id) = create_session(&auth, &user, ttl).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    set_request_session(request.headers_mut(), Some(&session_id));
-    let secure = is_secure(&auth.base(request.headers()));
-    let set = set_cookie(SESSION_COOKIE, &session_id, ttl, secure);
+    let name = auth.session_cookie_name();
+    set_request_session(request.headers_mut(), name, Some(&session_id));
+    let set = set_cookie(name, &session_id, ttl, auth.secure());
 
     let mut response = next.run(request).await;
     if let Ok(value) = HeaderValue::from_str(&set) {
@@ -140,8 +138,8 @@ fn accepts_html(headers: &HeaderMap) -> bool {
 
 /// Replaces the session cookie in the request's `Cookie` header (or removes
 /// it with `None`), keeping other cookies.
-fn set_request_session(headers: &mut HeaderMap, session_id: Option<&str>) {
-    let prefix = format!("{SESSION_COOKIE}=");
+fn set_request_session(headers: &mut HeaderMap, name: &str, session_id: Option<&str>) {
+    let prefix = format!("{name}=");
     let merged = headers
         .get_all(header::COOKIE)
         .iter()
@@ -165,23 +163,23 @@ fn set_request_session(headers: &mut HeaderMap, session_id: Option<&str>) {
 /// the browser (signed out upstream): a session that forward auth created is
 /// deleted so the cookie cannot outlive the gateway login.
 async fn end_forward_session(auth: &AuthState, mut request: Request, next: Next) -> Response {
+    let name = auth.session_cookie_name();
     let ended = match (
-        cookie(request.headers(), SESSION_COOKIE),
+        cookie(request.headers(), name),
         auth.current_user(request.headers()).await,
     ) {
         (Some(id), Some(user)) if user.auth_source == SOURCE_FORWARD => {
             if let Err(e) = auth.store.delete_session(&hash_token(&id)).await {
                 tracing::error!("session delete failed: {e}");
             }
-            set_request_session(request.headers_mut(), None);
+            set_request_session(request.headers_mut(), name, None);
             true
         }
         _ => false,
     };
-    let secure = is_secure(&auth.base(request.headers()));
     let mut response = next.run(request).await;
     if ended {
-        if let Ok(value) = HeaderValue::from_str(&set_cookie(SESSION_COOKIE, "", 0, secure)) {
+        if let Ok(value) = HeaderValue::from_str(&set_cookie(name, "", 0, auth.secure())) {
             response.headers_mut().append(header::SET_COOKIE, value);
         }
     }

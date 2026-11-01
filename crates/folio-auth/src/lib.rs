@@ -9,6 +9,7 @@
 pub mod crypto;
 pub mod external;
 pub mod forward;
+pub mod limit;
 pub mod model;
 pub mod oidc;
 pub mod redirect;

@@ -1,15 +1,10 @@
 //! Sign in through an OpenID Connect provider: start and callback.
 
-use std::{
-    collections::HashMap,
-    net::{IpAddr, SocketAddr},
-    sync::Mutex,
-    time::{Duration, Instant},
-};
+use std::net::SocketAddr;
 
 use axum::{
     extract::{ConnectInfo, Query, Request, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Redirect, Response},
 };
 use folio_auth::{
@@ -23,14 +18,11 @@ use folio_auth::{
 use serde::Deserialize;
 
 use super::auth::{
-    cookie, create_session, error_page_with, is_secure, set_cookie, with_cookies, AuthState,
-    NextQuery, SESSION_COOKIE, SESSION_TTL_SECS,
+    cookie, create_session, error_page_with, set_cookie, with_cookies, AuthState, NextQuery,
+    SESSION_TTL_SECS,
 };
 
 const LOGIN_TTL_SECS: i64 = 600;
-const START_WINDOW: Duration = Duration::from_secs(60);
-const STARTS_PER_WINDOW: u32 = 30;
-const MAX_TRACKED_CLIENTS: usize = 10_000;
 
 /// The `__Host-` prefix pins the cookie to this exact host and to https; it is
 /// only valid together with `Secure`.
@@ -42,29 +34,8 @@ fn browser_cookie_name(secure: bool) -> &'static str {
     }
 }
 
-/// Caps how often one client address can start a login, since every start
-/// stores a row.
-#[derive(Default)]
-pub(crate) struct StartLimiter(Mutex<HashMap<IpAddr, (Instant, u32)>>);
-
-impl StartLimiter {
-    fn allow(&self, ip: IpAddr) -> bool {
-        let mut seen = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let now = Instant::now();
-        if seen.len() >= MAX_TRACKED_CLIENTS {
-            seen.retain(|_, (since, _)| now.duration_since(*since) < START_WINDOW);
-        }
-        let entry = seen.entry(ip).or_insert((now, 0));
-        if now.duration_since(entry.0) >= START_WINDOW {
-            *entry = (now, 0);
-        }
-        entry.1 += 1;
-        entry.1 <= STARTS_PER_WINDOW
-    }
-}
-
-fn redirect_uri(auth: &AuthState, headers: &HeaderMap) -> String {
-    format!("{}/auth/oidc/callback", auth.base(headers))
+fn redirect_uri(auth: &AuthState) -> String {
+    format!("{}/auth/oidc/callback", auth.base())
 }
 
 pub(crate) async fn start(State(auth): State<AuthState>, request: Request) -> Response {
@@ -74,16 +45,19 @@ pub(crate) async fn start(State(auth): State<AuthState>, request: Request) -> Re
     let peer = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
-        .map_or(IpAddr::from([0, 0, 0, 0]), |c| c.0.ip());
-    if !auth.oidc_starts.allow(peer) {
-        return StatusCode::TOO_MANY_REQUESTS.into_response();
+        .map_or_else(|| "unknown".to_string(), |c| c.0.ip().to_string());
+    if let Err(seconds) = auth.oidc_start_allowed(&peer) {
+        let mut response = StatusCode::TOO_MANY_REQUESTS.into_response();
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        return response;
     }
-    let headers = request.headers();
     let q = Query::<NextQuery>::try_from_uri(request.uri())
         .map(|q| q.0)
         .unwrap_or(NextQuery { next: None });
-    let secure = is_secure(&auth.base(headers));
-    let request = match provider.authorize(&redirect_uri(&auth, headers)).await {
+    let secure = auth.secure();
+    let request = match provider.authorize(&redirect_uri(&auth)).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("starting the OIDC login failed: {e}");
@@ -136,7 +110,7 @@ pub(crate) async fn callback(
     let Some(provider) = auth.oidc.clone() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let secure = is_secure(&auth.base(&headers));
+    let secure = auth.secure();
     let clear = set_cookie(browser_cookie_name(secure), "", 0, secure);
     let fail = |message: &str, status: StatusCode| {
         with_cookies(error_page_with(message, status), [clear.clone()])
@@ -180,7 +154,7 @@ pub(crate) async fn callback(
 
     let result = match provider
         .complete(
-            &redirect_uri(&auth, &headers),
+            &redirect_uri(&auth),
             &code,
             &login.nonce,
             &login.pkce_verifier,
@@ -213,7 +187,10 @@ pub(crate) async fn callback(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-    if known.is_none() && !provider.auto_create_users() {
+    // An empty table lets the first sign-in create the owner even when new
+    // accounts are otherwise off.
+    let first_user = known.is_none() && auth.store.count_users().await.unwrap_or(1) == 0;
+    if known.is_none() && !provider.auto_create_users() && !first_user {
         return fail(
             "New accounts are not created through single sign-on here.",
             StatusCode::FORBIDDEN,
@@ -238,7 +215,7 @@ pub(crate) async fn callback(
         }
     };
     // A login replaces the session it was started with.
-    if let Some(old) = cookie(&headers, SESSION_COOKIE) {
+    if let Some(old) = cookie(&headers, auth.session_cookie_name()) {
         let _ = auth.store.delete_session(&hash_token(&old)).await;
     }
     let Some(session) = create_session(&auth, &user, SESSION_TTL_SECS).await else {
@@ -251,7 +228,12 @@ pub(crate) async fn callback(
     {
         tracing::warn!("storing the ID token failed: {e}");
     }
-    let session = set_cookie(SESSION_COOKIE, &session, SESSION_TTL_SECS, secure);
+    let session = set_cookie(
+        auth.session_cookie_name(),
+        &session,
+        SESSION_TTL_SECS,
+        secure,
+    );
     with_cookies(
         Redirect::to(&safe_next(Some(&login.next))).into_response(),
         [clear, session],

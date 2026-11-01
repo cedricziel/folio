@@ -119,7 +119,7 @@ pub struct ServerConfig {
 impl ServerConfig {
     /// Base URL other systems can use to reach this instance
     pub fn base_url(&self) -> String {
-        match &self.public_url {
+        match self.public_url.as_deref().filter(|u| !u.is_empty()) {
             Some(url) => url.trim_end_matches('/').to_string(),
             None => format!("http://{}:{}", self.host, self.port),
         }
@@ -133,6 +133,17 @@ impl Default for ServerConfig {
             port: 3000,
             public_url: None,
         }
+    }
+}
+
+impl ServerConfig {
+    /// Whether the listener is only reachable from this machine.
+    pub fn is_loopback(&self) -> bool {
+        let host = self.host.trim_matches(|c| c == '[' || c == ']');
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
     }
 }
 
@@ -208,6 +219,9 @@ pub struct AuthConfig {
     pub required: bool,
     pub forward: ForwardAuthConfig,
     pub oidc: OidcConfig,
+    /// One-time secret for `/setup` while no user exists. A random one is
+    /// generated and logged at startup when unset.
+    pub setup_token: Option<String>,
 }
 
 impl Default for AuthConfig {
@@ -216,6 +230,7 @@ impl Default for AuthConfig {
             required: true,
             forward: ForwardAuthConfig::default(),
             oidc: OidcConfig::default(),
+            setup_token: None,
         }
     }
 }
@@ -487,6 +502,12 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::Str,
     },
     Setting {
+        key: "auth.setup_token",
+        env: "FOLIO_AUTH__SETUP_TOKEN",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
         key: "auth.oidc.enabled",
         env: "FOLIO_AUTH__OIDC__ENABLED",
         legacy_env: &[],
@@ -645,6 +666,27 @@ pub const SETTINGS: &[Setting] = &[
 ];
 
 impl Config {
+    /// Rejects combinations that are unsafe to run. Called once at startup.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.auth.required {
+            return Ok(());
+        }
+        match self.server.public_url.as_deref().filter(|u| !u.is_empty()) {
+            Some(url) if !(url.starts_with("https://") || url.starts_with("http://")) => Err(
+                format!("server.public_url must start with http:// or https://, got {url:?}"),
+            ),
+            Some(_) => Ok(()),
+            None if self.server.is_loopback() => Ok(()),
+            None => Err(format!(
+                "server.public_url (FOLIO_SERVER__PUBLIC_URL) is required when auth is enabled \
+                 and the server listens on {}: tokens, OAuth metadata and cookie flags are \
+                 derived from it, never from request headers. Set it to the externally visible \
+                 URL, for example https://folio.example.com",
+                self.server.host
+            )),
+        }
+    }
+
     /// Load configuration from `config.toml` (or the file named by
     /// `FOLIO_CONFIG`) and the process environment.
     #[allow(clippy::result_large_err)]
@@ -922,6 +964,33 @@ mod tests {
         assert_eq!(config.server.port, 3000);
         assert_eq!(config.storage.path, "./data");
         assert!(config.ai.openai_api_key.is_none());
+    }
+
+    #[test]
+    fn public_url_is_required_when_auth_is_exposed() {
+        let exposed = |pairs: &[(&str, &str)]| load(pairs).validate();
+        assert!(exposed(&[]).is_ok(), "loopback default needs no public URL");
+        for host in ["127.0.0.1", "::1", "localhost"] {
+            assert!(exposed(&[("FOLIO_SERVER__HOST", host)]).is_ok(), "{host}");
+        }
+        let err = exposed(&[("FOLIO_SERVER__HOST", "0.0.0.0")]).unwrap_err();
+        assert!(err.contains("FOLIO_SERVER__PUBLIC_URL"), "{err}");
+        assert!(exposed(&[("FOLIO_SERVER__HOST", "folio.lan")]).is_err());
+        assert!(exposed(&[
+            ("FOLIO_SERVER__HOST", "0.0.0.0"),
+            ("FOLIO_SERVER__PUBLIC_URL", "https://folio.example.com"),
+        ])
+        .is_ok());
+        assert!(exposed(&[
+            ("FOLIO_SERVER__HOST", "0.0.0.0"),
+            ("FOLIO_SERVER__PUBLIC_URL", "folio.example.com"),
+        ])
+        .is_err());
+        assert!(exposed(&[
+            ("FOLIO_SERVER__HOST", "0.0.0.0"),
+            ("FOLIO_AUTH__REQUIRED", "false"),
+        ])
+        .is_ok());
     }
 
     #[test]

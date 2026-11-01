@@ -15,6 +15,11 @@ use crate::{
 pub const CODE_TTL_SECS: i64 = 60;
 pub const ACCESS_TTL_SECS: i64 = 3600;
 pub const REFRESH_TTL_SECS: i64 = 30 * 24 * 3600;
+pub const MAX_REDIRECT_URIS: usize = 10;
+pub const MAX_REDIRECT_URI_BYTES: usize = 2048;
+pub const MAX_CLIENT_NAME_CHARS: usize = 200;
+/// Clients that never obtained a token are dropped after this long.
+pub const UNUSED_CLIENT_TTL_SECS: i64 = 24 * 3600;
 /// Paths of protected resources a token may be bound to.
 pub const RESOURCE_PATHS: [&str; 2] = ["/mcp", "/api"];
 
@@ -126,13 +131,15 @@ pub fn authorization_server_metadata(base: &str) -> Value {
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
+        "authorization_response_iss_parameter_supported": true,
         "scopes_supported": SCOPES,
     })
 }
 
-pub fn protected_resource_metadata(base: &str) -> Value {
+/// RFC 9728 metadata for the resource served at `resource_path`.
+pub fn protected_resource_metadata(base: &str, resource_path: &str) -> Value {
     json!({
-        "resource": format!("{base}{}", RESOURCE_PATHS[0]),
+        "resource": format!("{base}{resource_path}"),
         "authorization_servers": [base],
         "scopes_supported": SCOPES,
         "bearer_methods_supported": ["header"],
@@ -198,13 +205,24 @@ impl OAuthServer {
     /// RFC 7591 registration of a public client.
     pub async fn register_client(&self, req: RegistrationRequest) -> Result<Value, OAuthError> {
         let invalid = |m: &str| OAuthError::new("invalid_client_metadata", m);
-        if req.redirect_uris.is_empty() || req.redirect_uris.len() > 10 {
+        if req.redirect_uris.is_empty() || req.redirect_uris.len() > MAX_REDIRECT_URIS {
             return Err(OAuthError::new(
                 "invalid_redirect_uri",
-                "provide between 1 and 10 redirect_uris",
+                format!("provide between 1 and {MAX_REDIRECT_URIS} redirect_uris"),
             ));
         }
+        if req.client_name.as_deref().map_or(0, |n| n.chars().count()) > MAX_CLIENT_NAME_CHARS {
+            return Err(invalid(&format!(
+                "client_name is limited to {MAX_CLIENT_NAME_CHARS} characters"
+            )));
+        }
         for uri in &req.redirect_uris {
+            if uri.len() > MAX_REDIRECT_URI_BYTES {
+                return Err(OAuthError::new(
+                    "invalid_redirect_uri",
+                    format!("redirect_uris are limited to {MAX_REDIRECT_URI_BYTES} bytes"),
+                ));
+            }
             validate_redirect_uri(uri).map_err(|m| OAuthError::new("invalid_redirect_uri", m))?;
         }
         if req
@@ -229,7 +247,7 @@ impl OAuthServer {
         }
         let name: String = req
             .client_name
-            .map(|n| n.trim().chars().take(100).collect())
+            .map(|n| n.trim().to_string())
             .filter(|n: &String| !n.is_empty())
             .unwrap_or_else(|| "Unnamed application".to_string());
 
@@ -339,13 +357,13 @@ impl OAuthServer {
                 scopes: v.scopes.clone(),
                 audience: v.audience.clone(),
                 expires_at: now() + CODE_TTL_SECS,
+                grant_id: uuid::Uuid::new_v4().to_string(),
             })
             .await?;
         Ok(code)
     }
 
     pub async fn token(&self, base: &str, req: TokenRequest) -> Result<Value, OAuthError> {
-        let _ = self.store.purge_expired(now()).await;
         let client_id = req
             .client_id
             .as_deref()
@@ -399,8 +417,14 @@ impl OAuthServer {
             return Err(grant_err("PKCE verification failed"));
         }
         check_resource(base, req.resource.as_deref(), &record.audience)?;
-        self.issue_tokens(client_id, &record.user_id, record.scopes, record.audience)
-            .await
+        self.issue_tokens(
+            client_id,
+            &record.user_id,
+            record.scopes,
+            record.audience,
+            record.grant_id,
+        )
+        .await
     }
 
     async fn refresh_grant(
@@ -414,11 +438,15 @@ impl OAuthServer {
             .refresh_token
             .as_deref()
             .ok_or_else(|| OAuthError::new("invalid_request", "refresh_token is required"))?;
-        let record = self
-            .store
-            .take_refresh_token(&hash_token(token))
-            .await?
-            .ok_or_else(|| grant_err("invalid refresh token"))?;
+        let token_hash = hash_token(token);
+        let Some(record) = self.store.take_refresh_token(&token_hash).await? else {
+            // A rotated token coming back means it leaked: end the whole grant.
+            if let Some(grant_id) = self.store.used_refresh_grant(&token_hash).await? {
+                tracing::warn!("refresh token reuse detected; revoking its grant");
+                self.store.revoke_grant(&grant_id).await?;
+            }
+            return Err(grant_err("invalid refresh token"));
+        };
         if record.expires_at <= now() || !ct_eq(&record.client_id, client_id) {
             return Err(grant_err("invalid refresh token"));
         }
@@ -434,8 +462,14 @@ impl OAuthServer {
                 requested
             }
         };
-        self.issue_tokens(client_id, &record.user_id, scopes, record.audience)
-            .await
+        self.issue_tokens(
+            client_id,
+            &record.user_id,
+            scopes,
+            record.audience,
+            record.grant_id,
+        )
+        .await
     }
 
     async fn issue_tokens(
@@ -444,10 +478,12 @@ impl OAuthServer {
         user_id: &str,
         scopes: Vec<String>,
         audience: String,
+        grant_id: String,
     ) -> Result<Value, OAuthError> {
         let access = random_token();
         let refresh = random_token();
         let issued = now();
+        self.store.mark_client_used(client_id, issued).await?;
         self.store
             .insert_access_token(AccessToken {
                 token_hash: hash_token(&access),
@@ -456,6 +492,7 @@ impl OAuthServer {
                 scopes: scopes.clone(),
                 audience: audience.clone(),
                 expires_at: issued + ACCESS_TTL_SECS,
+                grant_id: grant_id.clone(),
             })
             .await?;
         self.store
@@ -466,6 +503,7 @@ impl OAuthServer {
                 scopes: scopes.clone(),
                 audience,
                 expires_at: issued + REFRESH_TTL_SECS,
+                grant_id,
             })
             .await?;
         Ok(json!({
@@ -477,8 +515,23 @@ impl OAuthServer {
         }))
     }
 
+    /// Housekeeping for a periodic task: expired codes, tokens and sessions,
+    /// and clients that registered but never got a token.
+    pub async fn purge(&self) -> Result<(), AuthError> {
+        let now = now();
+        self.store.purge_expired(now).await?;
+        let removed = self
+            .store
+            .purge_unused_clients(now - UNUSED_CLIENT_TTL_SECS)
+            .await?;
+        if removed > 0 {
+            tracing::info!("purged {removed} unused OAuth clients");
+        }
+        Ok(())
+    }
+
     /// RFC 7009: unknown tokens are not an error.
-    pub async fn revoke(&self, token: &str) -> Result<(), AuthError> {
-        self.store.revoke_token(&hash_token(token)).await
+    pub async fn revoke(&self, token: &str, client_id: &str) -> Result<(), AuthError> {
+        self.store.revoke_token(&hash_token(token), client_id).await
     }
 }

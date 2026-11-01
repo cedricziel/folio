@@ -277,6 +277,7 @@ struct Folio {
     router: Router,
     store: Arc<dyn AuthStore>,
     mock: Mock,
+    auth: AuthState,
     _dir: tempfile::TempDir,
 }
 
@@ -324,8 +325,9 @@ async fn folio_with(tweak: impl FnOnce(&mut OidcSettings)) -> Folio {
     let auth = AuthState::new(store.clone(), Some(BASE.into())).with_oidc(client);
     let router = auth_router(auth.clone())
         .merge(Router::new().route("/", get(|| async { "home" })))
-        .layer(middleware::from_fn_with_state(auth, enforce_auth));
+        .layer(middleware::from_fn_with_state(auth.clone(), enforce_auth));
     Folio {
+        auth,
         router,
         store,
         mock,
@@ -675,9 +677,10 @@ async fn admin_group_maps_to_admin() {
 #[tokio::test]
 async fn unknown_users_are_refused_without_auto_create() {
     let f = folio_with(|c| c.auto_create_users = false).await;
+    f.store.create_first_user(local_owner()).await.unwrap();
     let res = login(&f, "/").await;
     assert_eq!(res.status, StatusCode::FORBIDDEN);
-    assert_eq!(f.store.count_users().await.unwrap(), 0);
+    assert_eq!(f.store.count_users().await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -694,7 +697,7 @@ async fn a_provider_username_cannot_take_over_a_local_account() {
 async fn local_login_can_be_switched_off() {
     let f = folio_with(|c| c.allow_local_login = false).await;
     // No setup page either: the first OIDC user becomes the owner.
-    let setup = send(&f, get_req("/setup", "")).await;
+    let setup = send(&f, get_req(&setup_url(&f), "")).await;
     assert_eq!(setup.status, StatusCode::SEE_OTHER);
     assert_eq!(setup.location(), "/login");
     let page = send(&f, get_req("/login", "")).await;
@@ -725,18 +728,23 @@ async fn local_login_can_be_switched_off() {
     );
 }
 
+fn logout_request(f: &Folio, session_cookie: &str) -> Request<Body> {
+    let id = session_cookie.split_once('=').unwrap().1;
+    let csrf = f.auth.csrf_session_token(id);
+    Request::post("/logout")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, session_cookie)
+        .body(Body::from(format!("csrf={csrf}")))
+        .unwrap()
+}
+
 #[tokio::test]
 async fn logout_ends_the_provider_session_when_advertised() {
     let f = folio().await;
     f.mock.with(|s| s.end_session = true);
     let res = login(&f, "/").await;
     let session = res.cookie("folio_session").unwrap();
-    let csrf = "c".repeat(43);
-    let logout = Request::post("/logout")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::COOKIE, format!("{session}; folio_csrf={csrf}"))
-        .body(Body::from(format!("csrf={csrf}")))
-        .unwrap();
+    let logout = logout_request(&f, &session);
     let out = send(&f, logout).await;
     assert_eq!(out.status, StatusCode::SEE_OTHER);
     let target = url::Url::parse(&out.location()).unwrap();
@@ -761,12 +769,7 @@ async fn logout_stays_local_without_an_end_session_endpoint() {
     let f = folio().await;
     let res = login(&f, "/").await;
     let session = res.cookie("folio_session").unwrap();
-    let csrf = "c".repeat(43);
-    let logout = Request::post("/logout")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::COOKIE, format!("{session}; folio_csrf={csrf}"))
-        .body(Body::from(format!("csrf={csrf}")))
-        .unwrap();
+    let logout = logout_request(&f, &session);
     assert_eq!(send(&f, logout).await.location(), "/login");
 }
 
@@ -865,15 +868,37 @@ async fn a_new_login_replaces_the_session_it_was_started_with() {
     );
 }
 
+fn setup_url(f: &Folio) -> String {
+    format!("/setup?token={}", f.auth.setup_token())
+}
+
 #[tokio::test]
-async fn the_setup_page_offers_sso_only_when_it_can_create_the_first_user() {
-    let f = folio().await;
-    let page = send(&f, get_req("/setup", "")).await;
-    assert!(page.body.contains("Sign in with Authentik"));
+async fn the_setup_page_offers_sso_for_the_first_owner() {
+    // With no user yet, signing in creates the owner even without auto-create.
     let f = folio_with(|c| c.auto_create_users = false).await;
-    let page = send(&f, get_req("/setup", "")).await;
+    let page = send(&f, get_req(&setup_url(&f), "")).await;
     assert_eq!(page.status, StatusCode::OK);
-    assert!(!page.body.contains("Sign in with Authentik"));
+    assert!(page.body.contains("Sign in with Authentik"));
+}
+
+#[tokio::test]
+async fn the_first_sign_in_creates_the_owner_even_without_auto_create() {
+    let f = folio_with(|c| c.auto_create_users = false).await;
+    assert_eq!(login(&f, "/").await.status, StatusCode::SEE_OTHER);
+    let source = format!("oidc:{}", f.mock.with(|s| s.base.clone()));
+    let user = f
+        .store
+        .find_user_by_external(&source, "user-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(user.is_owner && user.is_admin);
+    // Everyone after that needs an existing account.
+    f.mock.with(|s| {
+        s.claims.insert("sub".into(), json!("user-2"));
+        s.claims.insert("preferred_username".into(), json!("bob"));
+    });
+    assert_eq!(login(&f, "/").await.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

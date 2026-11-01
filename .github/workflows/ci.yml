@@ -21,6 +21,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check migration versions
+        run: |
+          for dir in migrations/sqlite migrations/postgres; do
+            dupes=$(ls "$dir" | cut -d_ -f1 | sort | uniq -d)
+            if [ -n "$dupes" ]; then echo "::error::duplicate migration versions in $dir: $dupes"; exit 1; fi
+          done
+          if ! diff <(ls migrations/sqlite) <(ls migrations/postgres); then
+            echo "::error::migrations/sqlite and migrations/postgres must contain the same files"; exit 1
+          fi
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
