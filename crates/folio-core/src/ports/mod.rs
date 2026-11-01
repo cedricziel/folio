@@ -5,7 +5,10 @@
 mod ai;
 mod repository;
 
-pub use ai::{EmbeddingService, OcrService, SearchResult, SearchService};
+pub use ai::{
+    EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
+    SearchService,
+};
 pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,

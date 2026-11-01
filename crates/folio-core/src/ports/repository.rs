@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::error::Result;
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, Setting, Tag, UpdateCorrespondent, UpdateDocument,
-    UpdateDocumentType, UpdateTag,
+    DocumentFilter, DocumentType, Id, ProcessingStage, ProcessingStatus, Setting, Tag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
 };
 
 /// Repository for document operations
@@ -32,6 +32,25 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Update the page count for a document
     async fn set_page_count(&self, id: Id, page_count: u32) -> Result<()>;
+
+    /// Set the status of one pipeline stage
+    async fn set_stage_status(
+        &self,
+        id: Id,
+        stage: ProcessingStage,
+        status: ProcessingStatus,
+    ) -> Result<()>;
+
+    /// Store OCR output (possibly empty) and mark the OCR stage done
+    async fn complete_ocr(&self, id: Id, content: &str) -> Result<()>;
+
+    /// List documents whose given stage is still pending
+    async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>>;
+
+    /// Mark the embedding stage pending for every document that has text
+    ///
+    /// Returns the ids of the affected documents.
+    async fn reset_embedding_status(&self) -> Result<Vec<Id>>;
 
     /// Get tags for a document
     async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>>;
