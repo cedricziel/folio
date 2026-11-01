@@ -81,7 +81,6 @@ impl AuthState {
 /// state implements `FromRef<S> for AuthState`.
 pub struct RequireUser(pub User);
 
-#[axum::async_trait]
 impl<S> FromRequestParts<S> for RequireUser
 where
     AuthState: FromRef<S>,

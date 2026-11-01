@@ -6,12 +6,14 @@ use axum::{
     Json,
 };
 use serde::Serialize;
+use utoipa::ToSchema;
 
 use folio_core::error::Error as DomainError;
 
 /// API error response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorResponse {
+    /// Human-readable error message
     pub error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,

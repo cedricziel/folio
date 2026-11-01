@@ -30,15 +30,15 @@ pub fn router() -> Router<AppState> {
             post(create_correspondent_form),
         )
         .route(
-            "/manage/correspondents/:id/edit",
+            "/manage/correspondents/{id}/edit",
             get(edit_correspondent_form),
         )
         .route(
-            "/manage/correspondents/:id/update",
+            "/manage/correspondents/{id}/update",
             post(update_correspondent_form),
         )
         .route(
-            "/manage/correspondents/:id/delete",
+            "/manage/correspondents/{id}/delete",
             post(delete_correspondent_form),
         )
         // Document Types
@@ -48,23 +48,23 @@ pub fn router() -> Router<AppState> {
             post(create_document_type_form),
         )
         .route(
-            "/manage/document_types/:id/edit",
+            "/manage/document_types/{id}/edit",
             get(edit_document_type_form),
         )
         .route(
-            "/manage/document_types/:id/update",
+            "/manage/document_types/{id}/update",
             post(update_document_type_form),
         )
         .route(
-            "/manage/document_types/:id/delete",
+            "/manage/document_types/{id}/delete",
             post(delete_document_type_form),
         )
         // Tags
         .route("/manage/tags", get(tags_list))
         .route("/manage/tags/create", post(create_tag_form))
-        .route("/manage/tags/:id/edit", get(edit_tag_form))
-        .route("/manage/tags/:id/update", post(update_tag_form))
-        .route("/manage/tags/:id/delete", post(delete_tag_form))
+        .route("/manage/tags/{id}/edit", get(edit_tag_form))
+        .route("/manage/tags/{id}/update", post(update_tag_form))
+        .route("/manage/tags/{id}/delete", post(delete_tag_form))
 }
 
 // ============================================================================

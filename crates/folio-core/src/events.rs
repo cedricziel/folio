@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 /// Event types that can be broadcast to clients
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentEvent {
     /// Document was created

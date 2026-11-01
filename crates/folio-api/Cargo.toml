@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 # Core domain
-folio-core = { workspace = true }
+folio-core = { workspace = true, features = ["openapi"] }
 folio-infra = { workspace = true }
 folio-auth = { workspace = true }
 
@@ -28,6 +28,10 @@ askama_axum = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# OpenAPI
+utoipa = { workspace = true }
+utoipa-scalar = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }

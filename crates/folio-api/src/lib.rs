@@ -4,6 +4,7 @@
 
 pub mod error;
 pub mod events;
+pub mod openapi;
 pub mod routes;
 pub mod state;
 

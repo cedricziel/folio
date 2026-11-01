@@ -99,8 +99,16 @@ fn default_ai_provider() -> String {
 
 /// Maps `FOLIO_SERVER_PUBLIC_URL` to `server.public_url`: only the first
 /// underscore separates section from key, since keys contain underscores.
+/// A double underscore (`FOLIO_AUTH__REQUIRED`) is accepted as the separator too.
 fn env_provider() -> Env {
-    Env::prefixed("FOLIO_").map(|key| key.as_str().replacen('_', ".", 1).into())
+    Env::prefixed("FOLIO_").map(|key| {
+        let key = key.as_str();
+        if key.contains("__") {
+            key.replacen("__", ".", 1).into()
+        } else {
+            key.replacen('_', ".", 1).into()
+        }
+    })
 }
 
 impl Config {
@@ -165,7 +173,7 @@ mod tests {
             jail.set_env("FOLIO_DATABASE_URL", "sqlite::memory:");
             jail.set_env("FOLIO_STORAGE_PATH", "./data");
             jail.set_env("FOLIO_AI_OPENAI_API_KEY", "sk-test");
-            jail.set_env("FOLIO_AUTH_REQUIRED", "false");
+            jail.set_env("FOLIO_AUTH__REQUIRED", "false");
             let config = Config::load_from("missing.toml")?;
             assert_eq!(
                 config.server.public_url.as_deref(),

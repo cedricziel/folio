@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup
+.PHONY: build run test lint format clean dev setup openapi
 
 # Default target
 all: build
@@ -30,6 +30,10 @@ lint:
 # Format code
 format:
 	cargo fmt --all
+
+# Regenerate openapi/openapi.json from the Rust code
+openapi:
+	UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi
 
 # Check formatting
 format-check:

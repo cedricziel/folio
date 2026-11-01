@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use folio_auth::{
     AccessToken, AuthCode, AuthError, AuthStore, OAuthClient, RefreshToken, Session, User,
 };
-use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use sqlx::{sqlite::SqliteRow, AssertSqlSafe, Row, SqlitePool};
 
+// Table names interpolated into SQL below are compile-time constants.
 pub struct SqliteAuthStore {
     pool: SqlitePool,
 }
@@ -249,11 +250,13 @@ impl AuthStore for SqliteAuthStore {
 
     async fn revoke_token(&self, token_hash: &str) -> Result<(), AuthError> {
         for table in ["oauth_access_tokens", "oauth_refresh_tokens"] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE token_hash = ?"))
-                .bind(token_hash)
-                .execute(&self.pool)
-                .await
-                .map_err(err)?;
+            sqlx::query(AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE token_hash = ?"
+            )))
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await
+            .map_err(err)?;
         }
         Ok(())
     }
@@ -265,11 +268,13 @@ impl AuthStore for SqliteAuthStore {
             "oauth_refresh_tokens",
             "sessions",
         ] {
-            sqlx::query(&format!("DELETE FROM {table} WHERE expires_at <= ?"))
-                .bind(now)
-                .execute(&self.pool)
-                .await
-                .map_err(err)?;
+            sqlx::query(AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE expires_at <= ?"
+            )))
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(err)?;
         }
         Ok(())
     }
@@ -286,10 +291,10 @@ async fn insert_token(
     audience: &str,
     expires_at: i64,
 ) -> Result<(), AuthError> {
-    sqlx::query(&format!(
+    sqlx::query(AssertSqlSafe(format!(
         "INSERT INTO {table} (token_hash, client_id, user_id, scopes, audience, expires_at)
          VALUES (?, ?, ?, ?, ?, ?)"
-    ))
+    )))
     .bind(hash)
     .bind(client_id)
     .bind(user_id)
