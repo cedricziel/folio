@@ -15,12 +15,13 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::Semaphore;
 use url::{form_urlencoded, Url};
 
 use folio_auth::{
     base_url,
     crypto::{ct_eq, hash_password, hash_token, random_token, verify_password},
-    limit::RateLimiter,
+    limit::{FailureLimiter, RateLimiter},
     redirect::safe_next,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
@@ -37,7 +38,23 @@ const MIN_PASSWORD_LEN: usize = 12;
 /// Dynamic client registrations a peer may make in a burst; the allowance
 /// refills over an hour.
 const REGISTER_BURST: u32 = 20;
+const MAX_PASSWORD_LEN: usize = 1024;
+const MAX_CONCURRENT_HASHES: usize = 4;
+/// Failed logins tolerated before lockout. Per IP is looser because several
+/// people can share an address.
+const LOGIN_FAILURES_PER_USER: u32 = 5;
+const LOGIN_FAILURES_PER_IP: u32 = 10;
 const REGISTER_BODY_LIMIT: usize = 16 * 1024;
+
+fn login_limiter(free_attempts: u32) -> FailureLimiter {
+    use std::time::Duration;
+    FailureLimiter::new(
+        free_attempts,
+        Duration::from_secs(30),
+        Duration::from_secs(15 * 60),
+        Duration::from_secs(3600),
+    )
+}
 
 /// State for the auth routes and the [`RequireUser`] extractor.
 #[derive(Clone)]
@@ -49,6 +66,10 @@ pub struct AuthState {
     pub required: bool,
     setup_token: Arc<str>,
     register_limit: Arc<RateLimiter>,
+    login_by_ip: Arc<FailureLimiter>,
+    login_by_user: Arc<FailureLimiter>,
+    /// Bounds concurrent argon2 hashes, which are memory-hungry.
+    hash_permits: Arc<Semaphore>,
 }
 
 impl AuthState {
@@ -59,6 +80,9 @@ impl AuthState {
             public_url,
             required: true,
             setup_token: random_token().into(),
+            login_by_ip: Arc::new(login_limiter(LOGIN_FAILURES_PER_IP)),
+            login_by_user: Arc::new(login_limiter(LOGIN_FAILURES_PER_USER)),
+            hash_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_HASHES)),
             register_limit: Arc::new(RateLimiter::new(
                 REGISTER_BURST,
                 REGISTER_BURST as f64 / 3600.0,
@@ -104,6 +128,16 @@ impl AuthState {
     /// Validator for a protected resource path such as `/mcp`.
     pub fn validator(&self, resource_path: &str) -> TokenValidator {
         TokenValidator::new(self.store.clone(), self.public_url.clone(), resource_path)
+    }
+
+    /// Runs a password hash on the blocking pool, at most
+    /// [`MAX_CONCURRENT_HASHES`] at a time.
+    async fn hash_work<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+    ) -> Option<T> {
+        let _permit = self.hash_permits.acquire().await.ok()?;
+        tokio::task::spawn_blocking(work).await.ok()
     }
 
     fn base(&self) -> String {
@@ -461,10 +495,15 @@ async fn setup_submit(
     if username.is_empty() || username.len() > 64 {
         return form_error("Choose a username of up to 64 characters.");
     }
-    if form.password.chars().count() < MIN_PASSWORD_LEN {
+    let password_len = form.password.chars().count();
+    if password_len < MIN_PASSWORD_LEN {
         return form_error("Use a password of at least 12 characters.");
     }
-    let Ok(password_hash) = hash_password(&form.password) else {
+    if password_len > MAX_PASSWORD_LEN {
+        return form_error("Use a password of at most 1024 characters.");
+    }
+    let password = form.password.clone();
+    let Some(Ok(password_hash)) = auth.hash_work(move || hash_password(&password)).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let user = User {
@@ -528,6 +567,7 @@ struct LoginForm {
 async fn login_submit(
     State(auth): State<AuthState>,
     headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     Form(form): Form<LoginForm>,
 ) -> Response {
     let secure = is_secure(&auth.base());
@@ -535,34 +575,80 @@ async fn login_submit(
         return StatusCode::FORBIDDEN.into_response();
     }
     let next = safe_next(form.next.as_deref());
-    let user = auth
-        .store
-        .find_user_by_username(form.username.trim())
-        .await
-        .ok()
-        .flatten();
-    // Hash against a throwaway when the user is unknown so timing does not
-    // reveal which usernames exist.
-    let verified = match &user {
-        Some(u) => verify_password(&form.password, &u.password_hash),
-        None => {
-            let _ = hash_password(&form.password);
-            false
-        }
-    };
-    match user.filter(|_| verified) {
-        Some(user) => match start_session(&auth, &user, secure).await {
-            Some(session) => with_cookies(Redirect::to(&next).into_response(), [session]),
-            None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-        },
-        None => render(
+    let username = form.username.trim().to_lowercase();
+    let retry_after = auth
+        .login_by_ip
+        .check(&ip)
+        .err()
+        .max(auth.login_by_user.check(&username).err());
+    if let Some(seconds) = retry_after {
+        let mut response = render(
             LoginTemplate {
                 csrf: form.csrf,
                 next,
-                error: Some("That username and password don't match.".into()),
+                error: Some(format!(
+                    "Too many failed attempts. Try again in {}.",
+                    wait_text(seconds)
+                )),
             },
-            StatusCode::UNAUTHORIZED,
-        ),
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
+        return response;
+    }
+
+    let user = auth
+        .store
+        .find_user_by_username(&username)
+        .await
+        .ok()
+        .flatten();
+    let verified = if form.password.chars().count() > MAX_PASSWORD_LEN {
+        false
+    } else {
+        let password = form.password.clone();
+        // Hash against a throwaway when the user is unknown so timing does not
+        // reveal which usernames exist.
+        let stored = user.as_ref().map(|u| u.password_hash.clone());
+        auth.hash_work(move || match stored {
+            Some(hash) => verify_password(&password, &hash),
+            None => {
+                let _ = hash_password(&password);
+                false
+            }
+        })
+        .await
+        .unwrap_or(false)
+    };
+    match user.filter(|_| verified) {
+        Some(user) => {
+            auth.login_by_user.record_success(&username);
+            match start_session(&auth, &user, secure).await {
+                Some(session) => with_cookies(Redirect::to(&next).into_response(), [session]),
+                None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+        None => {
+            auth.login_by_ip.record_failure(&ip);
+            auth.login_by_user.record_failure(&username);
+            render(
+                LoginTemplate {
+                    csrf: form.csrf,
+                    next,
+                    error: Some("That username and password don't match.".into()),
+                },
+                StatusCode::UNAUTHORIZED,
+            )
+        }
+    }
+}
+
+fn wait_text(seconds: u64) -> String {
+    match seconds {
+        0..=59 => format!("{seconds} seconds"),
+        s => format!("{} minutes", s.div_ceil(60)),
     }
 }
 

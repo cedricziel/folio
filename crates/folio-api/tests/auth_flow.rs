@@ -537,6 +537,97 @@ async fn login_rejects_bad_password_and_bad_csrf_and_open_redirects() {
     assert!(session_cookie.contains("HttpOnly") && session_cookie.contains("SameSite=Lax"));
 }
 
+async fn login_attempt(app: &App, username: &str, password: &str, ip: Option<&str>) -> Resp {
+    let page = send(app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    let csrf = csrf_from(&page.body);
+    let mut req = form_req(
+        "/login",
+        &format!("folio_csrf={csrf}"),
+        &format!(
+            "csrf={csrf}&username={}&password={}",
+            enc(username),
+            enc(password)
+        ),
+    );
+    if let Some(ip) = ip {
+        let addr: std::net::SocketAddr = format!("{ip}:5000").parse().unwrap();
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(addr));
+    }
+    send(app, req).await
+}
+
+#[tokio::test]
+async fn repeated_failures_for_one_username_are_locked_out() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    for _ in 0..5 {
+        let r = login_attempt(&app, "owner", "wrong-password", None).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    }
+    // Even the right password is refused while locked, so guesses cannot be probed.
+    let locked = login_attempt(&app, "owner", "correct-horse-battery", None).await;
+    assert_eq!(locked.status, StatusCode::TOO_MANY_REQUESTS);
+    let wait: u64 = locked.headers[header::RETRY_AFTER]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(wait > 0);
+    // Case-insensitive usernames share one counter.
+    let upper = login_attempt(&app, "OWNER", "wrong", None).await;
+    assert_eq!(upper.status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn repeated_failures_from_one_ip_are_locked_out() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    for i in 0..10 {
+        let r = login_attempt(
+            &app,
+            &format!("user{i}"),
+            "wrong-password",
+            Some("10.0.0.9"),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "attempt {i}");
+    }
+    let locked = login_attempt(&app, "owner", "correct-horse-battery", Some("10.0.0.9")).await;
+    assert_eq!(locked.status, StatusCode::TOO_MANY_REQUESTS);
+    let elsewhere = login_attempt(&app, "owner", "correct-horse-battery", Some("10.0.0.10")).await;
+    assert_eq!(elsewhere.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn overlong_passwords_are_rejected_without_hashing() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    let huge = "p".repeat(1025);
+    let r = login_attempt(&app, "owner", &huge, None).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+
+    let fresh = self::app().await;
+    let page = send(
+        &fresh,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let csrf = csrf_from(&page.body);
+    let r = send(
+        &fresh,
+        form_req(
+            "/setup",
+            &format!("folio_csrf={csrf}"),
+            &format!("csrf={csrf}&token={SETUP_TOKEN}&username=owner&password={huge}"),
+        ),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 #[tokio::test]
 async fn authorize_redirects_anonymous_users_to_login_and_back() {
     let app = app().await;
