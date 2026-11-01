@@ -97,6 +97,19 @@ a:not([class]):hover,
   min-height: 100dvh;
 }
 
+/* The sidebar sticks at viewport height, so its own background ends there on
+   long pages. Paint the column on the grid so it spans the whole page. */
+@media (min-width: 769px) {
+  .app {
+    background: linear-gradient(
+      to right,
+      var(--paper-sunken) 247px,
+      var(--rule) 247px 248px,
+      transparent 248px
+    );
+  }
+}
+
 .sidebar {
   position: sticky;
   top: 0;
