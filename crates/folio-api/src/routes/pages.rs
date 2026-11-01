@@ -618,33 +618,12 @@ async fn search_documents(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Html<String>> {
-    // Try to generate embedding for query - fall back to a title search if AI is not available
-    let documents = match state.embedding_service.generate_embedding(&query.q).await {
-        Ok(query_embedding) => {
-            let search_results = state
-                .search_service
-                .search(&query_embedding, 10)
-                .await
-                .unwrap_or_default();
-
-            let mut documents = Vec::new();
-            for result in search_results {
-                if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await
-                {
-                    documents.push(document);
-                }
-            }
-            documents
+    let mut documents = Vec::new();
+    for result in state.search_documents(&query.q, 10).await? {
+        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
+            documents.push(document);
         }
-        Err(_) => {
-            let all_docs = state.document_repo.list(None).await.unwrap_or_default();
-            let query_lower = query.q.to_lowercase();
-            all_docs
-                .into_iter()
-                .filter(|doc| doc.title.to_lowercase().contains(&query_lower))
-                .collect()
-        }
-    };
+    }
 
     let template = SearchResultsTemplate {
         rows: view::rows(&state, documents).await?,

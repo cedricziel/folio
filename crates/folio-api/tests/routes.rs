@@ -12,7 +12,9 @@ use folio_core::{
     models::{CreateDocument, CreateTag},
     EventBroadcaster,
 };
-use folio_infra::{Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService};
+use folio_infra::{
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -46,19 +48,17 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let auth_store = repos.auth.clone();
 
     let ai = Config::default().ai;
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let state = AppState::new(
         repos.documents,
         repos.tags,
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         Arc::new(ThumbnailService::new(&storage_path)),
         repos.jobs,
         storage_path,
