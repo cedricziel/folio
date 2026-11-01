@@ -31,8 +31,64 @@ impl Nav {
     }
 }
 
+tokio::task_local! {
+    /// The signed-in user of the request being handled, set by `enforce_auth`
+    /// so page handlers need no extractor of their own.
+    pub static CURRENT_USER: SidebarUser;
+}
+
+/// The signed-in user as the sidebar shows them
+#[derive(Debug, Clone)]
+pub struct SidebarUser {
+    pub name: String,
+    pub initials: String,
+    /// "Owner", "Admin" or empty
+    pub role: &'static str,
+    pub csrf: String,
+}
+
+impl SidebarUser {
+    pub fn new(user: &folio_auth::User, csrf: String) -> Self {
+        let name = user
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&user.username)
+            .to_string();
+        let role = if user.is_owner {
+            "Owner"
+        } else if user.is_admin {
+            "Admin"
+        } else {
+            ""
+        };
+        Self {
+            initials: initials(&name),
+            name,
+            role,
+            csrf,
+        }
+    }
+}
+
+/// Up to two uppercase letters: the first letters of the first two words
+fn initials(name: &str) -> String {
+    let mut letters: Vec<char> = name
+        .split(|c: char| !c.is_alphanumeric())
+        .filter_map(|w| w.chars().next())
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect();
+    if letters.is_empty() {
+        letters.push('?');
+    }
+    letters.into_iter().collect()
+}
+
 /// Data the sidebar needs on every page
 pub struct Sidebar {
+    pub user: Option<SidebarUser>,
     pub active: &'static str,
     pub inbox_count: usize,
     pub total_count: usize,
@@ -50,6 +106,7 @@ impl Sidebar {
     /// Like `load`, for pages that already fetched every document
     pub async fn build(state: &AppState, nav: Nav, documents: &[Document]) -> ApiResult<Self> {
         Ok(Self {
+            user: CURRENT_USER.try_with(Clone::clone).ok(),
             active: nav.as_str(),
             inbox_count: inbox_count(documents),
             total_count: documents.len(),
@@ -285,5 +342,13 @@ mod tests {
         assert_eq!(row(None, None, Some(3)).reading_label(), "Reading 3 pages…");
         assert_eq!(row(None, None, Some(1)).reading_label(), "Reading 1 page…");
         assert_eq!(row(None, None, None).reading_label(), "Reading…");
+    }
+
+    #[test]
+    fn initials_take_two_words_or_one_letter() {
+        assert_eq!(initials("ada lovelace"), "AL");
+        assert_eq!(initials("ada"), "A");
+        assert_eq!(initials("ada.king-lovelace"), "AK");
+        assert_eq!(initials("--"), "?");
     }
 }
