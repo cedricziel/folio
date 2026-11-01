@@ -37,3 +37,6 @@
 !.claude/hooks/
 !.claude/skills/
 !.claude/commands/
+
+# Node (front-end asset vendoring)
+/web/node_modules/

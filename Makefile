@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup tokens
+.PHONY: build run test lint format clean dev setup tokens assets
 
 # Default target
 all: build
@@ -34,6 +34,11 @@ format:
 # Regenerate static/tokens.css and static/components.css from design/
 tokens:
 	cargo run -p xtask -- tokens
+
+# Re-copy vendored scripts and fonts from npm into static/
+assets:
+	npm ci --prefix web
+	npm run vendor --prefix web
 
 # Check formatting
 format-check:
