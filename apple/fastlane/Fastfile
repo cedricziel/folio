@@ -113,6 +113,12 @@ def mac_installer_identity
   name
 end
 
+# The release workflow passes the release version (e.g. 0.1.0) so the app version matches the server.
+def marketing_version_arg
+  version = ENV["APP_VERSION"].to_s.strip.sub(/\Av/, "")
+  version.empty? ? "" : " MARKETING_VERSION=#{version}"
+end
+
 def beta_build(platform:, destination:)
   register_bundle_ids unless ENV["CI"]
   key = load_app_store_connect_api_key
@@ -132,7 +138,7 @@ def beta_build(platform:, destination:)
     sdk: mac ? "macosx" : "iphoneos",
     export_method: "app-store",
     export_team_id: TEAM_ID,
-    xcargs: "#{XCODEBUILD_FLAGS} CURRENT_PROJECT_VERSION=#{build_number}",
+    xcargs: "#{XCODEBUILD_FLAGS} CURRENT_PROJECT_VERSION=#{build_number}#{marketing_version_arg}",
     output_directory: File.join(APPLE_DIR, "build", platform),
     clean: true
   }
