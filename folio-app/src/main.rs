@@ -232,6 +232,19 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks);
 
+    // Expired logins, codes, tokens and sessions are only dropped here; without
+    // it unauthenticated OIDC starts would pile up rows.
+    let purge_store = auth_store.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+        loop {
+            tick.tick().await;
+            if let Err(e) = purge_store.purge_expired(folio_auth::server::now()).await {
+                tracing::warn!("purging expired auth data failed: {e}");
+            }
+        }
+    });
+
     let mut auth = AuthState::new(auth_store, config.server.public_url.clone())
         .with_required(config.auth.required);
     let forward = &config.auth.forward;
