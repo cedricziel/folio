@@ -4,8 +4,10 @@
 //! domain operations using the port traits.
 
 mod eventing;
+mod workflow_engine;
 
 pub use eventing::EventingDocumentRepository;
+pub use workflow_engine::WorkflowEngine;
 
 use std::sync::Arc;
 
