@@ -15,6 +15,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
 use folio_core::services::SearchServiceFacade;
 
+use folio_infra::JobType;
+
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
@@ -242,19 +244,12 @@ pub(crate) async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Extract text from document using OCR
-    let content = state
-        .ocr_service
-        .extract_text(&file_data, &mime_type)
-        .await
-        .ok();
-
     // Create document record
     let document = state
         .document_repo
         .create(CreateDocument {
             title,
-            content: content.clone(),
+            content: None,
             original_filename: filename.clone(),
             mime_type: Some(mime_type),
             correspondent_id: None,
@@ -273,16 +268,15 @@ pub(crate) async fn upload_document(
         }
     }
 
-    // Generate and store embedding for search
-    if let Some(ref text) = content {
-        if !text.is_empty() {
-            if let Ok(embedding) = state.embedding_service.generate_embedding(text).await {
-                let _ = state
-                    .search_service
-                    .store_embedding(document.id, &embedding)
-                    .await;
-            }
-        }
+    // OCR and embedding run in the background pipeline
+    if let Err(e) = state
+        .job_queue
+        .enqueue(JobType::ProcessDocument {
+            document_id: document.id,
+        })
+        .await
+    {
+        error!("Failed to enqueue document processing job: {}", e);
     }
 
     // Re-fetch to get updated document with file_path
@@ -345,7 +339,7 @@ async fn semantic_search(
         state.embedding_service.clone(),
         state.search_service.clone(),
     );
-    let hits = facade.search_documents(query, limit).await?;
+    let hits = facade.hybrid_search(query, limit).await?;
     Ok(hits
         .into_iter()
         .map(|h| SearchResultWithDocument {

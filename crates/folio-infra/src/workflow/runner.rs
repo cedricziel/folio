@@ -1,0 +1,223 @@
+//! Executes queued workflow runs
+
+use std::sync::Arc;
+
+use chrono::Utc;
+use tracing::{info, warn};
+
+use folio_core::error::Error;
+use folio_core::models::{
+    validate_webhook_url, Id, RunStatus, UpdateDocument, WorkflowAction, WorkflowRun,
+};
+use folio_core::ports::{DocumentRepository, WorkflowRepository};
+
+use super::webhook::{WebhookClient, WebhookRequest};
+
+/// Attempts per run before it is marked failed
+pub const MAX_ATTEMPTS: u32 = 5;
+
+/// What the caller should do with the job that triggered the execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunOutcome {
+    /// Every action finished
+    Succeeded,
+    /// An action failed in a way that may heal; run the job again later
+    Retry,
+    /// The run is over and will not be retried
+    Failed,
+}
+
+struct ActionFailure {
+    message: String,
+    retryable: bool,
+    response_status: Option<u16>,
+}
+
+/// Runs the actions of a [`WorkflowRun`], recording progress and errors on it
+///
+/// Actions run in order and each is at-least-once: a run that is retried
+/// resumes at the action that failed rather than repeating finished ones.
+/// Document changes go through the unwrapped repository on purpose, so a
+/// workflow's own edits never trigger `document.updated` workflows again.
+pub struct WorkflowRunner {
+    workflows: Arc<dyn WorkflowRepository>,
+    documents: Arc<dyn DocumentRepository>,
+    client: WebhookClient,
+}
+
+impl WorkflowRunner {
+    pub fn new(
+        workflows: Arc<dyn WorkflowRepository>,
+        documents: Arc<dyn DocumentRepository>,
+        client: WebhookClient,
+    ) -> Self {
+        Self {
+            workflows,
+            documents,
+            client,
+        }
+    }
+
+    /// Make one attempt at a run
+    pub async fn execute(&self, run_id: Id) -> folio_core::Result<RunOutcome> {
+        let Some(mut run) = self.workflows.find_run(run_id).await? else {
+            warn!("Workflow run {run_id} no longer exists");
+            return Ok(RunOutcome::Failed);
+        };
+        if run.status.is_terminal() {
+            return Ok(match run.status {
+                RunStatus::Succeeded => RunOutcome::Succeeded,
+                _ => RunOutcome::Failed,
+            });
+        }
+
+        let Some(workflow) = self.workflows.find_by_id(run.workflow_id).await? else {
+            self.finish(
+                &mut run,
+                RunStatus::Failed,
+                Some("Workflow no longer exists".into()),
+            )
+            .await?;
+            return Ok(RunOutcome::Failed);
+        };
+
+        run.attempts += 1;
+        let skip = run.completed_actions as usize;
+        for (index, action) in workflow.actions.iter().enumerate().skip(skip) {
+            match self.perform(action, &run).await {
+                Ok(response_status) => {
+                    run.completed_actions = index as u32 + 1;
+                    run.response_status = response_status.or(run.response_status);
+                    self.workflows.update_run(&run).await?;
+                }
+                Err(failure) => {
+                    run.response_status = failure.response_status;
+                    let give_up = !failure.retryable || run.attempts >= MAX_ATTEMPTS;
+                    if give_up {
+                        self.finish(&mut run, RunStatus::Failed, Some(failure.message))
+                            .await?;
+                        return Ok(RunOutcome::Failed);
+                    }
+                    run.last_error = Some(failure.message);
+                    self.workflows.update_run(&run).await?;
+                    return Ok(RunOutcome::Retry);
+                }
+            }
+        }
+
+        self.finish(&mut run, RunStatus::Succeeded, None).await?;
+        info!(
+            "Workflow run {} succeeded after {} attempt(s)",
+            run.id, run.attempts
+        );
+        Ok(RunOutcome::Succeeded)
+    }
+
+    async fn finish(
+        &self,
+        run: &mut WorkflowRun,
+        status: RunStatus,
+        error: Option<String>,
+    ) -> folio_core::Result<()> {
+        run.status = status;
+        run.last_error = error;
+        run.finished_at = Some(Utc::now());
+        self.workflows.update_run(run).await
+    }
+
+    /// Returns the webhook's HTTP status when the action was a webhook
+    async fn perform(
+        &self,
+        action: &WorkflowAction,
+        run: &WorkflowRun,
+    ) -> Result<Option<u16>, ActionFailure> {
+        match action {
+            WorkflowAction::Webhook {
+                url,
+                headers,
+                secret,
+                ..
+            } => {
+                validate_webhook_url(url).map_err(|e| ActionFailure {
+                    message: e.to_string(),
+                    retryable: false,
+                    response_status: None,
+                })?;
+                let result = self
+                    .client
+                    .send(WebhookRequest {
+                        url,
+                        headers,
+                        secret: secret.as_deref(),
+                        event: run.event,
+                        delivery_id: run.id,
+                        body: &run.payload,
+                    })
+                    .await;
+                match result.error {
+                    None => Ok(result.status),
+                    Some(message) => Err(ActionFailure {
+                        message,
+                        retryable: result.retryable,
+                        response_status: result.status,
+                    }),
+                }
+            }
+            local => self.perform_local(local, run).await.map(|()| None),
+        }
+    }
+
+    async fn perform_local(
+        &self,
+        action: &WorkflowAction,
+        run: &WorkflowRun,
+    ) -> Result<(), ActionFailure> {
+        let document_id = run.document_id.ok_or_else(|| ActionFailure {
+            message: "Run has no document to change".into(),
+            retryable: false,
+            response_status: None,
+        })?;
+
+        let result = match action {
+            WorkflowAction::AddTags { tag_ids } => {
+                let mut result = Ok(());
+                for tag_id in tag_ids {
+                    result = self.documents.add_tag(document_id, *tag_id).await;
+                    if result.is_err() {
+                        break;
+                    }
+                }
+                result
+            }
+            WorkflowAction::SetCorrespondent { correspondent_id } => self
+                .documents
+                .update(
+                    document_id,
+                    UpdateDocument {
+                        correspondent_id: Some(Some(*correspondent_id)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ()),
+            WorkflowAction::SetDocumentType { document_type_id } => self
+                .documents
+                .update(
+                    document_id,
+                    UpdateDocument {
+                        document_type_id: Some(Some(*document_type_id)),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|_| ()),
+            WorkflowAction::Webhook { .. } => unreachable!("webhooks are handled by the caller"),
+        };
+
+        result.map_err(|e| ActionFailure {
+            retryable: !matches!(e, Error::NotFound { .. } | Error::Validation(_)),
+            message: e.to_string(),
+            response_status: None,
+        })
+    }
+}

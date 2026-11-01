@@ -4,6 +4,7 @@ mod auth_repo;
 mod document_repo;
 mod search;
 mod settings_repo;
+mod workflow_repo;
 
 use std::str::FromStr;
 
@@ -17,6 +18,7 @@ pub use document_repo::{
 };
 pub use search::PostgresSearchService;
 pub use settings_repo::PostgresSettingsRepository;
+pub use workflow_repo::PostgresWorkflowRepository;
 
 /// Create a new PostgreSQL connection pool
 pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {

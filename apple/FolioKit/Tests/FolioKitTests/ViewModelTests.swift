@@ -264,6 +264,33 @@ struct DocumentStatusTests {
         #expect(model.state == .idle)
     }
 
+    @Test func signsInBeforeCheckingTheServer() async {
+        let service = MockFolioService()
+        var events: [String] = []
+        let model = OnboardingViewModel(
+            store: MemoryServerConfigStore(), makeService: { _ in service },
+            signIn: { events.append("sign-in \($0.absoluteString)") }
+        ) { _ in }
+        model.address = "folio.local"
+        await model.connect()
+        #expect(events == ["sign-in https://folio.local"])
+        #expect(await service.pings == 1)
+    }
+
+    @Test func aFailedSignInIsNotPersistedAndSkipsThePing() async {
+        let store = MemoryServerConfigStore()
+        let service = MockFolioService()
+        let model = OnboardingViewModel(
+            store: store, makeService: { _ in service },
+            signIn: { _ in throw FolioError.signInFailed("Sign-in was cancelled or denied.") }
+        ) { _ in }
+        model.address = "folio.local"
+        await model.connect()
+        #expect(store.url == nil)
+        #expect(await service.pings == 0)
+        #expect(model.state == .failed("Sign-in was cancelled or denied."))
+    }
+
     @Test func unreachableServerIsNotPersisted() async {
         let store = MemoryServerConfigStore()
         let service = MockFolioService()

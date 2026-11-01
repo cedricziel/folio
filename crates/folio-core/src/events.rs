@@ -1,8 +1,22 @@
 //! Domain events for real-time updates
 
+use std::sync::Arc;
+
 use serde::Serialize;
 use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::models::{Document, Tag};
+
+/// What a document looked like just before it was deleted
+///
+/// Workflows need it to evaluate conditions and build the payload after the
+/// row is gone. It never goes over SSE.
+#[derive(Debug, Clone)]
+pub struct DeletedDocument {
+    pub document: Document,
+    pub tags: Vec<Tag>,
+}
 
 /// Event types that can be broadcast to clients
 #[derive(Debug, Clone, Serialize)]
@@ -18,7 +32,14 @@ pub enum DocumentEvent {
     /// Document OCR completed
     OcrComplete { document_id: Uuid },
     /// Document was deleted
-    Deleted { document_id: Uuid },
+    Deleted {
+        document_id: Uuid,
+        #[serde(skip)]
+        #[cfg_attr(feature = "openapi", schema(ignore))]
+        snapshot: Option<Arc<DeletedDocument>>,
+    },
+    /// Background processing (thumbnails, OCR, embedding) finished
+    Processed { document_id: Uuid },
 }
 
 impl DocumentEvent {
@@ -29,7 +50,8 @@ impl DocumentEvent {
             | Self::Updated { document_id }
             | Self::ThumbnailReady { document_id }
             | Self::OcrComplete { document_id }
-            | Self::Deleted { document_id } => *document_id,
+            | Self::Deleted { document_id, .. }
+            | Self::Processed { document_id } => *document_id,
         }
     }
 
@@ -41,6 +63,7 @@ impl DocumentEvent {
             Self::ThumbnailReady { .. } => "thumbnail_ready",
             Self::OcrComplete { .. } => "ocr_complete",
             Self::Deleted { .. } => "deleted",
+            Self::Processed { .. } => "processed",
         }
     }
 }

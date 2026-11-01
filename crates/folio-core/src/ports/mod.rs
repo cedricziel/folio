@@ -6,11 +6,16 @@ mod ai;
 mod health;
 mod repository;
 mod storage;
+mod workflow;
 
-pub use ai::{EmbeddingService, OcrService, SearchResult, SearchService};
+pub use ai::{
+    EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
+    SearchService,
+};
 pub use health::HealthCheck;
 pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,
 };
 pub use storage::{FileStore, ProcessingQueue, ProcessingStatus};
+pub use workflow::{FileMetadata, WorkflowJobQueue, WorkflowRepository};

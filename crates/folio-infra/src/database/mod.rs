@@ -20,7 +20,7 @@ use sqlx::{PgPool, SqlitePool};
 use folio_auth::AuthStore;
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SearchService,
-    SettingsRepository, TagRepository,
+    SettingsRepository, TagRepository, WorkflowRepository,
 };
 
 use crate::queue::JobQueue;
@@ -29,12 +29,12 @@ pub use health::DatabaseHealthCheck;
 pub use postgres::{
     PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
     PostgresDocumentTypeRepository, PostgresSearchService, PostgresSettingsRepository,
-    PostgresTagRepository,
+    PostgresTagRepository, PostgresWorkflowRepository,
 };
 pub use sqlite::{
     create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
     SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
-    SqliteSettingsRepository, SqliteTagRepository,
+    SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
 };
 
 /// Supported database backends
@@ -93,6 +93,7 @@ pub struct Repositories {
     pub correspondents: Arc<dyn CorrespondentRepository>,
     pub document_types: Arc<dyn DocumentTypeRepository>,
     pub settings: Arc<dyn SettingsRepository>,
+    pub workflows: Arc<dyn WorkflowRepository>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
     pub auth: Arc<dyn AuthStore>,
@@ -133,6 +134,7 @@ impl Database {
                 correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
                 document_types: Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
                 settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
+                workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
                 search: Arc::new(SqliteSearchService::new(pool.clone())),
                 jobs: JobQueue::sqlite(pool.clone()),
                 auth: Arc::new(SqliteAuthStore::new(pool.clone())),
@@ -143,12 +145,24 @@ impl Database {
                 correspondents: Arc::new(PostgresCorrespondentRepository::new(pool.clone())),
                 document_types: Arc::new(PostgresDocumentTypeRepository::new(pool.clone())),
                 settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
+                workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
                 search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                 jobs: JobQueue::postgres(pool.clone()),
                 auth: Arc::new(PostgresAuthStore::new(pool.clone())),
             },
         }
     }
+}
+
+/// Migrated throw-away database for tests; each pooled connection of an
+/// in-memory SQLite database would see its own empty schema, so use a file.
+#[cfg(test)]
+pub(crate) async fn test_pool() -> (SqlitePool, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("test.db").display());
+    let pool = create_pool(&url).await.unwrap();
+    run_migrations(&pool).await.unwrap();
+    (pool, dir)
 }
 
 #[cfg(test)]
