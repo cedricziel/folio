@@ -949,11 +949,34 @@ async fn auth_contract(r: &Repositories) {
     assert!(auth.find_access_token("a1").await.unwrap().is_none());
     assert!(auth.take_refresh_token("r2").await.unwrap().is_none());
 
+    let login = |state: &str, exp: i64| folio_auth::OidcLogin {
+        state_hash: state.into(),
+        browser_hash: "browser".into(),
+        nonce: "nonce".into(),
+        pkce_verifier: "verifier".into(),
+        next: "/documents".into(),
+        expires_at: exp,
+    };
+    auth.insert_oidc_login(login("s1", far)).await.unwrap();
+    let taken = auth.take_oidc_login("s1").await.unwrap().unwrap();
+    assert_eq!(taken.browser_hash, "browser");
+    assert_eq!(taken.nonce, "nonce");
+    assert_eq!(taken.pkce_verifier, "verifier");
+    assert_eq!(taken.next, "/documents");
+    assert_eq!(taken.expires_at, far);
+    assert!(
+        auth.take_oidc_login("s1").await.unwrap().is_none(),
+        "a callback can be replayed only once"
+    );
+    assert!(auth.take_oidc_login("unknown").await.unwrap().is_none());
+    auth.insert_oidc_login(login("stale", 5)).await.unwrap();
+
     auth.insert_access_token(access("old", 5)).await.unwrap();
     auth.insert_code(code("oldcode", 5)).await.unwrap();
     auth.purge_expired(10).await.unwrap();
     assert!(auth.find_access_token("old").await.unwrap().is_none());
     assert!(auth.take_code("oldcode").await.unwrap().is_none());
+    assert!(auth.take_oidc_login("stale").await.unwrap().is_none());
 }
 
 async fn run_contract(db: &Database) {
