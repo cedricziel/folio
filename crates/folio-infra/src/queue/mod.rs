@@ -57,6 +57,8 @@ pub enum JobType {
     GenerateEmbedding { document_id: Uuid },
     /// Process a newly uploaded document (all steps)
     ProcessDocument { document_id: Uuid },
+    /// Execute the actions of a workflow run
+    ExecuteWorkflowRun { run_id: Uuid },
 }
 
 impl JobType {
@@ -66,6 +68,7 @@ impl JobType {
             JobType::ExtractText { .. } => "extract_text",
             JobType::GenerateEmbedding { .. } => "generate_embedding",
             JobType::ProcessDocument { .. } => "process_document",
+            JobType::ExecuteWorkflowRun { .. } => "execute_workflow_run",
         }
     }
 }
@@ -85,6 +88,8 @@ pub struct Job {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
 }
+
+const DEFAULT_MAX_ATTEMPTS: i32 = 3;
 
 /// SQLite-backed job queue
 #[derive(Clone)]
@@ -111,6 +116,18 @@ impl JobQueue {
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
     ) -> Result<Uuid> {
+        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS)
+            .await
+    }
+
+    /// Enqueue a job with its own retry budget
+    #[instrument(skip(self))]
+    pub async fn enqueue_with_max_attempts(
+        &self,
+        job_type: JobType,
+        scheduled_at: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<Uuid> {
         let id = Uuid::new_v4();
         let now = Utc::now();
         let type_name = job_type.type_name();
@@ -120,12 +137,13 @@ impl JobQueue {
         sqlx::query(
             r#"
             INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at)
-            VALUES (?, ?, ?, 'pending', 0, 3, ?, ?, ?)
+            VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
         .bind(type_name)
         .bind(&payload)
+        .bind(max_attempts)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .bind(scheduled_at.to_rfc3339())

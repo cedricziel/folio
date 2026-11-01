@@ -13,6 +13,7 @@ use folio_core::ports::{DocumentRepository, EmbeddingService, OcrService, Search
 use super::{JobQueue, JobType};
 use crate::storage::FileStorage;
 use crate::thumbnail::ThumbnailService;
+use crate::workflow::{RunOutcome, WorkflowRunner};
 
 /// Configuration for the job worker
 #[derive(Debug, Clone)]
@@ -49,6 +50,7 @@ pub struct Worker {
     storage: FileStorage,
     config: WorkerConfig,
     event_broadcaster: EventBroadcaster,
+    workflow_runner: Option<Arc<WorkflowRunner>>,
 }
 
 impl Worker {
@@ -75,7 +77,14 @@ impl Worker {
             storage: FileStorage::new(storage_path),
             config,
             event_broadcaster,
+            workflow_runner: None,
         }
+    }
+
+    /// Let this worker execute workflow runs
+    pub fn with_workflow_runner(mut self, runner: Arc<WorkflowRunner>) -> Self {
+        self.workflow_runner = Some(runner);
+        self
     }
 
     /// Start the worker (runs until shutdown signal)
@@ -216,6 +225,22 @@ impl Worker {
                 self.process_embedding(*document_id).await
             }
             JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
+            JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
+        }
+    }
+
+    /// Run a workflow; a retryable failure is reported as an error so the queue backs off
+    async fn execute_workflow_run(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let runner = self
+            .workflow_runner
+            .as_ref()
+            .ok_or("Workflow runner is not configured")?;
+        match runner.execute(run_id).await? {
+            RunOutcome::Retry => Err("Workflow action failed, will retry".into()),
+            RunOutcome::Succeeded | RunOutcome::Failed => Ok(()),
         }
     }
 
@@ -372,7 +397,7 @@ impl Worker {
             .unwrap_or("application/octet-stream");
 
         // Step 1: Generate thumbnail(s) and get page count for PDFs
-        let (thumbnail_ok, page_count) = if mime_type == "application/pdf" {
+        let (_, page_count) = if mime_type == "application/pdf" {
             // Get page count
             let count = match self.thumbnail_service.get_pdf_page_count(&data).await {
                 Ok(c) => c,
@@ -530,11 +555,9 @@ impl Worker {
 
         info!("Completed processing document {}", document_id);
 
-        // Emit final updated event if any processing happened
-        if thumbnail_ok {
-            self.event_broadcaster
-                .send(DocumentEvent::Updated { document_id });
-        }
+        // The SSE stream replays this as the legacy `updated` frame for the UI.
+        self.event_broadcaster
+            .send(DocumentEvent::Processed { document_id });
 
         Ok(())
     }

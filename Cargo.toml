@@ -60,6 +60,11 @@ reqwest = { version = "0.13", features = ["json"] }
 utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
 utoipa-scalar = "0.4"
 
+# Webhook signing
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
 # Image processing
 image = "0.25"
 

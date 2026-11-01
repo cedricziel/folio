@@ -3,6 +3,7 @@
 mod document_repo;
 mod health;
 mod settings_repo;
+mod workflow_repo;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -14,6 +15,7 @@ pub use document_repo::{
 };
 pub use health::DatabaseHealthCheck;
 pub use settings_repo::SqliteSettingsRepository;
+pub use workflow_repo::SqliteWorkflowRepository;
 
 /// Create a new SQLite connection pool
 pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
