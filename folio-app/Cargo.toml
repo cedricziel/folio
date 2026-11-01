@@ -13,6 +13,8 @@ path = "src/main.rs"
 folio-core = { workspace = true }
 folio-infra = { workspace = true }
 folio-api = { workspace = true }
+folio-auth = { workspace = true }
+folio-mcp = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

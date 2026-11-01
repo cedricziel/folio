@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, SqlitePool};
 use uuid::Uuid;
 
+use async_trait::async_trait;
+
 use folio_core::error::Result;
+use folio_core::ports::{ProcessingQueue, ProcessingStatus};
 
 /// Job status
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,5 +169,27 @@ impl JobQueue {
     /// Check if a document has any failed jobs
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         dispatch!(self, has_failed_jobs_for_document(document_id))
+    }
+}
+
+#[async_trait]
+impl ProcessingQueue for JobQueue {
+    async fn enqueue_processing(&self, document_id: Uuid) -> Result<()> {
+        self.enqueue(JobType::ProcessDocument { document_id })
+            .await
+            .map(|_| ())
+    }
+
+    async fn processing_status(&self, document_id: Uuid) -> Result<ProcessingStatus> {
+        let active = self.find_active_jobs_for_document(document_id).await?;
+        if active.iter().any(|j| j.status == JobStatus::Processing) {
+            Ok(ProcessingStatus::Processing)
+        } else if !active.is_empty() {
+            Ok(ProcessingStatus::Pending)
+        } else if self.has_failed_jobs_for_document(document_id).await? {
+            Ok(ProcessingStatus::Failed)
+        } else {
+            Ok(ProcessingStatus::Completed)
+        }
     }
 }

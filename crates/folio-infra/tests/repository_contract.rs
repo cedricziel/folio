@@ -422,6 +422,139 @@ async fn documents_contract(r: &Repositories) {
     );
 }
 
+async fn document_filter_contract(r: &Repositories) {
+    let tax = r
+        .tags
+        .create(CreateTag {
+            name: "filter-tax".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let home = r
+        .tags
+        .create(CreateTag {
+            name: "filter-home".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let acme = r
+        .correspondents
+        .create(CreateCorrespondent {
+            name: "Filter Acme".into(),
+        })
+        .await
+        .unwrap();
+
+    let mut invoice = new_document("Filter invoice");
+    invoice.content = Some("Total due: 100 EUR for March".into());
+    let invoice = r.documents.create(invoice).await.unwrap();
+    let mut letter = new_document("Filter letter");
+    letter.content = Some("Dear Sir".into());
+    let letter = r.documents.create(letter).await.unwrap();
+    r.documents.add_tag(invoice.id, tax.id).await.unwrap();
+    r.documents.add_tag(invoice.id, home.id).await.unwrap();
+    r.documents.add_tag(letter.id, home.id).await.unwrap();
+    r.documents
+        .update(
+            invoice.id,
+            UpdateDocument {
+                correspondent_id: Some(Some(acme.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let ids = |docs: Vec<folio_core::models::Document>| {
+        docs.into_iter().map(|d| d.id).collect::<Vec<_>>()
+    };
+    let list =
+        |filter: DocumentFilter| async move { r.documents.list(Some(filter)).await.unwrap() };
+
+    // Every term must match, case-insensitively, in any order and field
+    let by_terms = list(DocumentFilter {
+        search_query: Some("100 INVOICE".into()),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(by_terms), vec![invoice.id]);
+    // LIKE wildcards in user input match literally
+    let wildcard = list(DocumentFilter {
+        search_query: Some("%".into()),
+        ..Default::default()
+    })
+    .await;
+    assert!(wildcard.is_empty());
+
+    // A document must carry all requested tags; repeated ids count once
+    let all_tags = list(DocumentFilter {
+        tag_ids: Some(vec![tax.id, home.id]),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(all_tags), vec![invoice.id]);
+    let repeated = list(DocumentFilter {
+        tag_ids: Some(vec![tax.id, tax.id]),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(repeated), vec![invoice.id]);
+    let one_tag = list(DocumentFilter {
+        tag_ids: Some(vec![home.id]),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(one_tag.len(), 2);
+
+    // Filters combine
+    let combined = list(DocumentFilter {
+        tag_ids: Some(vec![home.id]),
+        correspondent_id: Some(acme.id),
+        search_query: Some("march".into()),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(combined), vec![invoice.id]);
+    let none = list(DocumentFilter {
+        tag_ids: Some(vec![tax.id]),
+        correspondent_id: Some(Id::new_v4()),
+        ..Default::default()
+    })
+    .await;
+    assert!(none.is_empty());
+
+    // created_after is inclusive, created_before exclusive
+    let stored = r.documents.find_by_id(invoice.id).await.unwrap().unwrap();
+    let at = stored.created_at;
+    let has = |docs: &[folio_core::models::Document]| docs.iter().any(|d| d.id == invoice.id);
+    let from = list(DocumentFilter {
+        created_after: Some(at),
+        ..Default::default()
+    })
+    .await;
+    assert!(has(&from));
+    let until_exact = list(DocumentFilter {
+        created_before: Some(at),
+        ..Default::default()
+    })
+    .await;
+    assert!(!has(&until_exact));
+    let until_later = list(DocumentFilter {
+        created_before: Some(at + Duration::seconds(1)),
+        ..Default::default()
+    })
+    .await;
+    assert!(has(&until_later));
+    let future = list(DocumentFilter {
+        created_after: Some(Utc::now() + Duration::days(1)),
+        ..Default::default()
+    })
+    .await;
+    assert!(future.is_empty());
+}
+
 async fn settings_contract(r: &Repositories) {
     let seeded = r.settings.get("ai.provider").await.unwrap().unwrap();
     assert_eq!(seeded.value, "local");
@@ -758,6 +891,7 @@ async fn run_contract(db: &Database) {
     correspondents_contract(&repos).await;
     document_types_contract(&repos).await;
     documents_contract(&repos).await;
+    document_filter_contract(&repos).await;
     settings_contract(&repos).await;
     search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
     jobs_contract(&repos).await;
