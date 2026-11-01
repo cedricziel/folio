@@ -40,6 +40,19 @@ pub struct Config {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Externally reachable base URL, used for links in webhook payloads.
+    /// Defaults to `http://<host>:<port>`.
+    pub public_url: Option<String>,
+}
+
+impl ServerConfig {
+    /// Base URL other systems can use to reach this instance
+    pub fn base_url(&self) -> String {
+        match &self.public_url {
+            Some(url) => url.trim_end_matches('/').to_string(),
+            None => format!("http://{}:{}", self.host, self.port),
+        }
+    }
 }
 
 impl Default for ServerConfig {
@@ -47,6 +60,7 @@ impl Default for ServerConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3000,
+            public_url: None,
         }
     }
 }
@@ -133,6 +147,12 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_SERVER__PORT",
         legacy_env: &["FOLIO_SERVER_PORT"],
         kind: ValueKind::Port,
+    },
+    Setting {
+        key: "server.public_url",
+        env: "FOLIO_SERVER__PUBLIC_URL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
     },
     Setting {
         key: "database.url",

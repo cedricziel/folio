@@ -10,12 +10,14 @@ use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
 use folio_api::{create_router, AppState};
+use folio_core::services::{EventingDocumentRepository, WorkflowEngine};
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
     create_pool, run_migrations, Config, DatabaseHealthCheck, DynamicEmbeddingService,
     DynamicOcrService, FileStorage, JobQueue, SqliteCorrespondentRepository,
     SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
-    SqliteSettingsRepository, SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
+    SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository, StorageFileMetadata,
+    ThumbnailService, WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };
 
 #[tokio::main]
@@ -84,6 +86,7 @@ async fn main() -> Result<()> {
     let correspondent_repo = Arc::new(SqliteCorrespondentRepository::new(pool.clone()));
     let document_type_repo = Arc::new(SqliteDocumentTypeRepository::new(pool.clone()));
     let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
+    let workflow_repo = Arc::new(SqliteWorkflowRepository::new(pool.clone()));
 
     // Create AI services (dynamic - reads from database settings with config.toml fallback)
     let ocr_service = Arc::new(DynamicOcrService::new(
@@ -103,6 +106,33 @@ async fn main() -> Result<()> {
     // Create event broadcaster for SSE
     let event_broadcaster = EventBroadcaster::new(100);
 
+    // The HTTP layer gets a repository that announces creates, updates, and
+    // deletes; the worker and workflow actions keep the plain one so they
+    // control their own events.
+    let api_document_repo = Arc::new(EventingDocumentRepository::new(
+        document_repo.clone(),
+        event_broadcaster.clone(),
+    ));
+
+    let webhook_client = WebhookClient::new();
+    let public_url = config.server.base_url();
+    let workflow_runner = Arc::new(WorkflowRunner::new(
+        workflow_repo.clone(),
+        document_repo.clone(),
+        webhook_client.clone(),
+    ));
+    let workflow_engine = Arc::new(WorkflowEngine::new(
+        workflow_repo.clone(),
+        document_repo.clone(),
+        correspondent_repo.clone(),
+        document_type_repo.clone(),
+        Arc::new(job_queue.clone()),
+        Arc::new(StorageFileMetadata::new(FileStorage::new(
+            &config.storage.path,
+        ))),
+        public_url.clone(),
+    ));
+
     info!("Services initialized");
 
     // Create shutdown channel for worker
@@ -119,7 +149,11 @@ async fn main() -> Result<()> {
         &config.storage.path,
         WorkerConfig::default(),
         event_broadcaster.clone(),
-    );
+    )
+    .with_workflow_runner(workflow_runner);
+
+    let engine_handle =
+        tokio::spawn(workflow_engine.run(event_broadcaster.subscribe(), shutdown_tx.subscribe()));
 
     let worker_handle = tokio::spawn(async move {
         worker.run(shutdown_rx).await;
@@ -132,7 +166,7 @@ async fn main() -> Result<()> {
         vec![Arc::new(DatabaseHealthCheck::new(pool.clone()))];
 
     let state = AppState::new(
-        document_repo,
+        api_document_repo,
         tag_repo,
         correspondent_repo,
         document_type_repo,
@@ -144,6 +178,9 @@ async fn main() -> Result<()> {
         job_queue,
         config.storage.path.clone(),
         event_broadcaster,
+        workflow_repo,
+        webhook_client,
+        public_url,
     )
     .with_health_checks(health_checks);
 
@@ -171,6 +208,7 @@ async fn main() -> Result<()> {
 
     // Wait for worker to finish (with timeout)
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), worker_handle).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), engine_handle).await;
 
     info!("Folio shutdown complete");
     Ok(())

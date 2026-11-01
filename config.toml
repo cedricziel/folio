@@ -4,6 +4,8 @@
 [server]
 host = "127.0.0.1"
 port = 3000
+# Base URL used in webhook payload links; defaults to http://host:port
+# public_url = "https://folio.example.com"
 
 [database]
 url = "sqlite:folio.db?mode=rwc"
