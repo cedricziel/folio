@@ -2,14 +2,14 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument,
-    UpdateDocumentType, UpdateTag,
+    DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -19,6 +19,13 @@ use super::map_write_error;
 
 fn repo_err(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
+}
+
+/// Escape LIKE wildcards so user input matches literally
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn not_found(entity_type: &'static str, id: Id) -> Error {
@@ -34,6 +41,7 @@ macro_rules! select_documents {
         concat!(
             "SELECT id, title, content, original_filename, file_path, mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
+            "ocr_status, embed_status, ",
             "created_at, updated_at ",
             "FROM documents ",
             $tail
@@ -54,13 +62,17 @@ struct DocumentRow {
     page_count: Option<i32>,
     source_type: String,
     source_meta: Option<String>,
+    ocr_status: String,
+    embed_status: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
 
-impl From<DocumentRow> for Document {
-    fn from(row: DocumentRow) -> Self {
-        Document {
+impl TryFrom<DocumentRow> for Document {
+    type Error = Error;
+
+    fn try_from(row: DocumentRow) -> Result<Self> {
+        Ok(Document {
             id: row.id,
             title: row.title,
             content: row.content,
@@ -71,9 +83,11 @@ impl From<DocumentRow> for Document {
             document_type_id: row.document_type_id,
             page_count: row.page_count.map(|c| c as u32),
             source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
+            ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
+            embed_status: row.embed_status.parse().map_err(Error::Repository)?,
             created_at: row.created_at,
             updated_at: row.updated_at,
-        }
+        })
     }
 }
 
@@ -155,45 +169,76 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
 
-        Ok(row.map(Into::into))
+        row.map(TryInto::try_into).transpose()
     }
 
     async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
-        let filter = filter.unwrap_or_default();
-        let rows: Vec<DocumentRow> = if let Some(correspondent_id) = filter.correspondent_id {
-            sqlx::query_as(select_documents!(
-                "WHERE correspondent_id = $1 ORDER BY created_at DESC"
-            ))
-            .bind(correspondent_id)
-            .fetch_all(&self.pool)
-            .await
-        } else if let Some(document_type_id) = filter.document_type_id {
-            sqlx::query_as(select_documents!(
-                "WHERE document_type_id = $1 ORDER BY created_at DESC"
-            ))
-            .bind(document_type_id)
-            .fetch_all(&self.pool)
-            .await
-        } else {
-            sqlx::query_as(select_documents!("ORDER BY created_at DESC"))
-                .fetch_all(&self.pool)
-                .await
-        }
-        .map_err(repo_err)?;
+        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE TRUE"));
 
-        Ok(rows.into_iter().map(Into::into).collect())
+        if let Some(filter) = filter {
+            if let Some(id) = filter.correspondent_id {
+                qb.push(" AND correspondent_id = ").push_bind(id);
+            }
+            if let Some(id) = filter.document_type_id {
+                qb.push(" AND document_type_id = ").push_bind(id);
+            }
+            if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
+                // Duplicates would make the distinct count below unreachable
+                tag_ids.sort();
+                tag_ids.dedup();
+                qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
+                let mut sep = qb.separated(", ");
+                for tag_id in &tag_ids {
+                    sep.push_bind(*tag_id);
+                }
+                qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
+                    .push_bind(tag_ids.len() as i64)
+                    .push(")");
+            }
+            if let Some(query) = filter.search_query {
+                for term in query.split_whitespace() {
+                    let pattern = format!("%{}%", escape_like(term));
+                    qb.push(" AND (title ILIKE ")
+                        .push_bind(pattern.clone())
+                        .push(" ESCAPE '\\' OR content ILIKE ")
+                        .push_bind(pattern)
+                        .push(" ESCAPE '\\')");
+                }
+            }
+            if let Some(after) = filter.created_after {
+                qb.push(" AND created_at >= ").push_bind(after);
+            }
+            if let Some(before) = filter.created_before {
+                qb.push(" AND created_at < ").push_bind(before);
+            }
+        }
+
+        qb.push(" ORDER BY created_at DESC");
+
+        let rows: Vec<DocumentRow> = qb
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn create(&self, params: CreateDocument) -> Result<Document> {
         let id = Id::new_v4();
         let now = Utc::now();
+        let ocr_status = if params.content.is_some() {
+            ProcessingStatus::Done
+        } else {
+            ProcessingStatus::Pending
+        };
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
 
         sqlx::query(
             "INSERT INTO documents (id, title, content, original_filename, mime_type,
-                                    correspondent_id, document_type_id, source_type, source_meta,
-                                    created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)",
+                                    correspondent_id, document_type_id, ocr_status,
+                                    source_type, source_meta, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
         )
         .bind(id)
         .bind(&params.title)
@@ -202,6 +247,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(&params.mime_type)
         .bind(params.correspondent_id)
         .bind(params.document_type_id)
+        .bind(ocr_status.as_str())
         .bind(params.source.kind.as_str())
         .bind(params.source.metadata_json())
         .bind(now)
@@ -233,6 +279,8 @@ impl DocumentRepository for PostgresDocumentRepository {
             document_type_id: params.document_type_id,
             page_count: None,
             source: params.source,
+            ocr_status,
+            embed_status: ProcessingStatus::Pending,
             created_at: now,
             updated_at: now,
         })
@@ -276,6 +324,8 @@ impl DocumentRepository for PostgresDocumentRepository {
             document_type_id,
             page_count: existing.page_count,
             source: existing.source,
+            ocr_status: existing.ocr_status,
+            embed_status: existing.embed_status,
             created_at: existing.created_at,
             updated_at: now,
         })
@@ -314,6 +364,66 @@ impl DocumentRepository for PostgresDocumentRepository {
                 .bind(id),
         )
         .await
+    }
+
+    async fn set_stage_status(
+        &self,
+        id: Id,
+        stage: ProcessingStage,
+        status: ProcessingStatus,
+    ) -> Result<()> {
+        let sql = match stage {
+            ProcessingStage::Ocr => "UPDATE documents SET ocr_status = $1 WHERE id = $2",
+            ProcessingStage::Embed => "UPDATE documents SET embed_status = $1 WHERE id = $2",
+        };
+        sqlx::query(sql)
+            .bind(status.as_str())
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        Ok(())
+    }
+
+    async fn complete_ocr(&self, id: Id, content: &str) -> Result<()> {
+        self.touch_one(
+            id,
+            sqlx::query(
+                "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
+                 WHERE id = $3",
+            )
+            .bind(content.to_string())
+            .bind(Utc::now())
+            .bind(id),
+        )
+        .await
+    }
+
+    async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
+        let sql = match stage {
+            ProcessingStage::Ocr => {
+                select_documents!("WHERE ocr_status = 'pending' ORDER BY created_at")
+            }
+            ProcessingStage::Embed => {
+                select_documents!("WHERE embed_status = 'pending' ORDER BY created_at")
+            }
+        };
+        let rows: Vec<DocumentRow> = sqlx::query_as(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
+        sqlx::query_scalar(
+            "UPDATE documents SET embed_status = 'pending'
+             WHERE content IS NOT NULL AND content != ''
+             RETURNING id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)
     }
 
     async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>> {

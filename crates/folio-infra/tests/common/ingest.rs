@@ -8,9 +8,9 @@ use folio_core::models::{
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowTrigger,
 };
 use folio_core::ports::{DocumentRepository, IngestLedger, IngestSink, WorkflowRepository};
-use folio_core::services::{EventingDocumentRepository, IngestPipeline, WorkflowEngine};
+use folio_core::services::{EventingDocumentRepository, Importer, IngestPipeline, WorkflowEngine};
 use folio_core::EventBroadcaster;
-use folio_infra::{Database, FileStorage, StorageDocumentImporter, StorageFileMetadata};
+use folio_infra::{Database, FileStorage, StorageFileMetadata};
 
 pub struct Harness {
     pub pipeline: Arc<IngestPipeline>,
@@ -52,10 +52,10 @@ impl Harness {
             repos.tags,
             workflows.clone(),
             ledger.clone(),
-            Arc::new(StorageDocumentImporter::new(
+            Arc::new(Importer::new(
                 eventing,
-                FileStorage::new(&dir),
-                queue.clone(),
+                Arc::new(FileStorage::new(&dir)),
+                Arc::new(queue.clone()),
             )),
         ));
         let engine = WorkflowEngine::new(

@@ -2,14 +2,14 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument,
-    UpdateDocumentType, UpdateTag,
+    DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -29,6 +29,13 @@ impl SqliteDocumentRepository {
 // Helper to convert sqlx error to domain error
 fn map_sqlx_error(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
+}
+
+// Escape LIKE wildcards so user input matches literally
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 // Helper to map a write error, turning unique violations into `Duplicate`
@@ -71,6 +78,8 @@ struct DocumentRow {
     page_count: Option<i64>,
     source_type: String,
     source_meta: Option<String>,
+    ocr_status: String,
+    embed_status: String,
     created_at: String,
     updated_at: String,
 }
@@ -90,6 +99,8 @@ impl TryFrom<DocumentRow> for Document {
             document_type_id: parse_optional_uuid(row.document_type_id)?,
             page_count: row.page_count.map(|c| c as u32),
             source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
+            ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
+            embed_status: row.embed_status.parse().map_err(Error::Repository)?,
             created_at: row
                 .created_at
                 .parse::<DateTime<Utc>>()
@@ -176,8 +187,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let id_str = id.to_string();
         let row: Option<DocumentRow> = sqlx::query_as(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, source_type, source_meta,
-                    created_at, updated_at
+                    correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status, created_at, updated_at
              FROM documents WHERE id = ?",
         )
         .bind(&id_str)
@@ -189,52 +199,60 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
-        // Base query - for simplicity, we'll handle basic filtering
-        let rows: Vec<DocumentRow> = if let Some(filter) = filter {
-            if let Some(correspondent_id) = filter.correspondent_id {
-                sqlx::query_as(
-                    "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, page_count, source_type, source_meta,
-                    created_at, updated_at
-                     FROM documents WHERE correspondent_id = ? ORDER BY created_at DESC",
-                )
-                .bind(correspondent_id.to_string())
-                .fetch_all(&self.pool)
-                .await
-                .map_err(map_sqlx_error)?
-            } else if let Some(document_type_id) = filter.document_type_id {
-                sqlx::query_as(
-                    "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, page_count, source_type, source_meta,
-                    created_at, updated_at
-                     FROM documents WHERE document_type_id = ? ORDER BY created_at DESC",
-                )
-                .bind(document_type_id.to_string())
-                .fetch_all(&self.pool)
-                .await
-                .map_err(map_sqlx_error)?
-            } else {
-                sqlx::query_as(
-                    "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, page_count, source_type, source_meta,
-                    created_at, updated_at
-                     FROM documents ORDER BY created_at DESC",
-                )
-                .fetch_all(&self.pool)
-                .await
-                .map_err(map_sqlx_error)?
+        let mut qb = QueryBuilder::<Sqlite>::new(
+            "SELECT id, title, content, original_filename, file_path, mime_type,
+                    correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status,
+                     created_at, updated_at
+             FROM documents WHERE 1 = 1",
+        );
+
+        if let Some(filter) = filter {
+            if let Some(id) = filter.correspondent_id {
+                qb.push(" AND correspondent_id = ")
+                    .push_bind(id.to_string());
             }
-        } else {
-            sqlx::query_as(
-                "SELECT id, title, content, original_filename, file_path, mime_type,
-                        correspondent_id, document_type_id, page_count, source_type, source_meta,
-                    created_at, updated_at
-                 FROM documents ORDER BY created_at DESC",
-            )
+            if let Some(id) = filter.document_type_id {
+                qb.push(" AND document_type_id = ")
+                    .push_bind(id.to_string());
+            }
+            if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
+                // Duplicates would make the distinct count below unreachable
+                tag_ids.sort();
+                tag_ids.dedup();
+                qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
+                let mut sep = qb.separated(", ");
+                for tag_id in &tag_ids {
+                    sep.push_bind(tag_id.to_string());
+                }
+                qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
+                    .push_bind(tag_ids.len() as i64)
+                    .push(")");
+            }
+            if let Some(query) = filter.search_query {
+                for term in query.split_whitespace() {
+                    let pattern = format!("%{}%", escape_like(term));
+                    qb.push(" AND (title LIKE ")
+                        .push_bind(pattern.clone())
+                        .push(" ESCAPE '\\' OR content LIKE ")
+                        .push_bind(pattern)
+                        .push(" ESCAPE '\\')");
+                }
+            }
+            if let Some(after) = filter.created_after {
+                qb.push(" AND created_at >= ").push_bind(after.to_rfc3339());
+            }
+            if let Some(before) = filter.created_before {
+                qb.push(" AND created_at < ").push_bind(before.to_rfc3339());
+            }
+        }
+
+        qb.push(" ORDER BY created_at DESC");
+
+        let rows: Vec<DocumentRow> = qb
+            .build_query_as()
             .fetch_all(&self.pool)
             .await
-            .map_err(map_sqlx_error)?
-        };
+            .map_err(map_sqlx_error)?;
 
         rows.into_iter().map(TryInto::try_into).collect()
     }
@@ -242,13 +260,18 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn create(&self, params: CreateDocument) -> Result<Document> {
         let id = Id::new_v4();
         let now = Utc::now();
+        let ocr_status = if params.content.is_some() {
+            ProcessingStatus::Done
+        } else {
+            ProcessingStatus::Pending
+        };
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
 
         sqlx::query(
             "INSERT INTO documents (id, title, content, original_filename, mime_type,
-                                    correspondent_id, document_type_id, source_type, source_meta,
-                                    created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    correspondent_id, document_type_id, ocr_status,
+                                    source_type, source_meta, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&params.title)
@@ -257,6 +280,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(&params.mime_type)
         .bind(params.correspondent_id.map(|id| id.to_string()))
         .bind(params.document_type_id.map(|id| id.to_string()))
+        .bind(ocr_status.as_str())
         .bind(params.source.kind.as_str())
         .bind(params.source.metadata_json())
         .bind(now.to_rfc3339())
@@ -266,12 +290,15 @@ impl DocumentRepository for SqliteDocumentRepository {
         .map_err(map_sqlx_error)?;
 
         for tag_id in &params.tag_ids {
-            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
-                .bind(id.to_string())
-                .bind(tag_id.to_string())
-                .execute(&mut *tx)
-                .await
-                .map_err(map_sqlx_error)?;
+            sqlx::query(
+                "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(id.to_string())
+            .bind(tag_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
         }
         tx.commit().await.map_err(map_sqlx_error)?;
 
@@ -286,6 +313,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             document_type_id: params.document_type_id,
             page_count: None,
             source: params.source,
+            ocr_status,
+            embed_status: ProcessingStatus::Pending,
             created_at: now,
             updated_at: now,
         })
@@ -329,6 +358,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             document_type_id,
             page_count: existing.page_count,
             source: existing.source,
+            ocr_status: existing.ocr_status,
+            embed_status: existing.embed_status,
             created_at: existing.created_at,
             updated_at: now,
         })
@@ -390,6 +421,85 @@ impl DocumentRepository for SqliteDocumentRepository {
         }
 
         Ok(())
+    }
+
+    async fn set_stage_status(
+        &self,
+        id: Id,
+        stage: ProcessingStage,
+        status: ProcessingStatus,
+    ) -> Result<()> {
+        let sql = match stage {
+            ProcessingStage::Ocr => "UPDATE documents SET ocr_status = ? WHERE id = ?",
+            ProcessingStage::Embed => "UPDATE documents SET embed_status = ? WHERE id = ?",
+        };
+        sqlx::query(sql)
+            .bind(status.as_str())
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(())
+    }
+
+    async fn complete_ocr(&self, id: Id, content: &str) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ? WHERE id = ?",
+        )
+        .bind(content)
+        .bind(Utc::now().to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
+        let sql = match stage {
+            ProcessingStage::Ocr => {
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status,
+                        created_at, updated_at
+                 FROM documents WHERE ocr_status = 'pending' ORDER BY created_at"
+            }
+            ProcessingStage::Embed => {
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, page_count, source_type, source_meta, ocr_status, embed_status,
+                        created_at, updated_at
+                 FROM documents WHERE embed_status = 'pending' ORDER BY created_at"
+            }
+        };
+        let rows: Vec<DocumentRow> = sqlx::query_as(sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
+        let ids: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM documents WHERE content IS NOT NULL AND content != ''")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
+
+        sqlx::query(
+            "UPDATE documents SET embed_status = 'pending'
+             WHERE content IS NOT NULL AND content != ''",
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        ids.into_iter().map(|(id,)| parse_uuid(&id)).collect()
     }
 
     async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>> {

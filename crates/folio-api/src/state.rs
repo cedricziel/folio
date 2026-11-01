@@ -2,14 +2,16 @@
 
 use std::sync::Arc;
 
+use folio_core::error::Result;
 use folio_core::models::IngestionSourceDef;
 use folio_core::ports::{
     CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentTypeRepository,
-    EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory, OcrService, SearchService,
-    SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
+    EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory, OcrService, SearchResult,
+    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
+use folio_core::services::{Importer, SearchServiceFacade};
 use folio_infra::{
-    FileStorage, JobQueue, SourceFactory, StorageDocumentImporter, ThumbnailService, WebhookClient,
+    FileStorage, JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient,
 };
 
 use folio_core::EventBroadcaster;
@@ -37,6 +39,7 @@ pub struct AppState {
     pub ocr_service: Arc<dyn OcrService>,
     pub embedding_service: Arc<dyn EmbeddingService>,
     pub search_service: Arc<dyn SearchService>,
+    pub pipeline: Arc<PipelineContext>,
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
     pub storage_path: String,
@@ -76,6 +79,7 @@ impl AppState {
         ocr_service: Arc<dyn OcrService>,
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
+        pipeline: Arc<PipelineContext>,
         thumbnail_service: Arc<ThumbnailService>,
         job_queue: JobQueue,
         storage_path: String,
@@ -85,10 +89,10 @@ impl AppState {
         public_url: String,
         ingestion: IngestionState,
     ) -> Self {
-        let importer = Arc::new(StorageDocumentImporter::new(
+        let importer = Arc::new(Importer::new(
             document_repo.clone(),
-            FileStorage::new(&storage_path),
-            job_queue.clone(),
+            Arc::new(FileStorage::new(&storage_path)),
+            Arc::new(job_queue.clone()),
         ));
         Self {
             document_repo,
@@ -99,6 +103,7 @@ impl AppState {
             ocr_service,
             embedding_service,
             search_service,
+            pipeline,
             thumbnail_service,
             job_queue,
             storage_path,
@@ -116,5 +121,26 @@ impl AppState {
     pub fn with_health_checks(mut self, checks: Vec<Arc<dyn HealthCheck>>) -> Self {
         self.health_checks = checks.into();
         self
+    }
+}
+
+impl AppState {
+    /// Search documents: literal title/text matches first, then semantic neighbours
+    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let facade = SearchServiceFacade::new(
+            self.document_repo.clone(),
+            self.embedding_service.clone(),
+            self.search_service.clone(),
+        );
+        Ok(facade
+            .hybrid_search(query, limit)
+            .await?
+            .into_iter()
+            .map(|s| SearchResult {
+                document_id: s.document.id,
+                score: s.score,
+                snippet: None,
+            })
+            .collect())
     }
 }

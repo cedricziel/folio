@@ -4,6 +4,8 @@ members = [
     "crates/folio-core",
     "crates/folio-infra",
     "crates/folio-api",
+    "crates/folio-auth",
+    "crates/folio-mcp",
     "folio-app",
     "xtask",
 ]
@@ -49,10 +51,15 @@ dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# MCP
+rmcp = { version = "3.8", default-features = false }
+base64 = "0.22"
+
 # Utilities
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3"
 
 # HTTP client (for AI APIs)
 reqwest = { version = "0.13", features = ["json"] }
@@ -76,3 +83,5 @@ image = "0.25"
 folio-core = { path = "crates/folio-core" }
 folio-infra = { path = "crates/folio-infra" }
 folio-api = { path = "crates/folio-api" }
+folio-auth = { path = "crates/folio-auth" }
+folio-mcp = { path = "crates/folio-mcp" }

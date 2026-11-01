@@ -10,10 +10,11 @@ use axum::Router;
 use http_body_util::BodyExt;
 use uuid::Uuid;
 
-use folio_api::{create_router, AppState, EventBroadcaster, IngestionState};
+use folio_api::{create_router, AppState, AuthState, EventBroadcaster, IngestionState};
 use folio_core::models::IngestionSourceDef;
 use folio_infra::{
-    Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, WebhookClient,
+    Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
+    WebhookClient,
 };
 
 pub struct Harness {
@@ -36,6 +37,7 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let auth = AuthState::new(repos.auth.clone(), None).with_required(false);
 
     let ai = folio_infra::config::AiConfig {
         provider: "local".into(),
@@ -45,6 +47,7 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
     let thumbnails = Arc::new(ThumbnailService::new(&storage));
     thumbnails.init().await.unwrap();
 
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
     let state = AppState::new(
         repos.documents,
@@ -52,13 +55,10 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage,
-        )),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         thumbnails,
         repos.jobs,
         storage,
@@ -69,7 +69,7 @@ pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harnes
         ingestion,
     );
     Harness {
-        app: create_router(state.clone()),
+        app: create_router(state.clone(), auth),
         state,
     }
 }

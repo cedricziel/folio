@@ -12,10 +12,10 @@ use uuid::Uuid;
 
 use axum::response::{IntoResponse, Redirect, Response};
 
-use folio_core::events::DocumentEvent;
 use folio_core::models::{
     CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
 };
+use folio_core::services::{NewUpload, SearchServiceFacade};
 
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
@@ -244,64 +244,17 @@ pub(crate) async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Extract text from document using OCR
-    let content = state
-        .ocr_service
-        .extract_text(&file_data, &mime_type)
-        .await
-        .ok();
-
-    // Create document record
     let document = state
-        .document_repo
-        .create(CreateDocument {
-            title,
-            content: content.clone(),
-            original_filename: filename.clone(),
+        .importer
+        .import(NewUpload {
+            title: Some(title),
+            filename: filename.unwrap_or_else(|| "upload".to_string()),
             mime_type: Some(mime_type),
+            data: file_data,
             source: DocumentSource::of(SourceKind::Api),
-            ..Default::default()
+            tag_ids: Vec::new(),
         })
         .await?;
-
-    // Store the file
-    let storage = folio_infra::FileStorage::new(&state.storage_path);
-    if let Some(fname) = filename {
-        if let Ok(file_path) = storage.store(document.id, &fname, &file_data).await {
-            let _ = state
-                .document_repo
-                .set_file_path(document.id, &file_path)
-                .await;
-        }
-    }
-
-    // Generate and store embedding for search
-    if let Some(ref text) = content {
-        if !text.is_empty() {
-            if let Ok(embedding) = state.embedding_service.generate_embedding(text).await {
-                let _ = state
-                    .search_service
-                    .store_embedding(document.id, &embedding)
-                    .await;
-            }
-        }
-    }
-
-    // Only a successful inline OCR counts as processed. Otherwise the document
-    // has no content, and the worker's repair pass reprocesses it and emits
-    // the event when that finishes.
-    if content.is_some() {
-        state.event_broadcaster.send(DocumentEvent::Processed {
-            document_id: document.id,
-        });
-    }
-
-    // Re-fetch to get updated document with file_path
-    let document = state
-        .document_repo
-        .find_by_id(document.id)
-        .await?
-        .unwrap_or(document);
 
     Ok(Json(document))
 }
@@ -346,6 +299,26 @@ pub struct SearchResultWithDocument {
     score: f32,
 }
 
+async fn semantic_search(
+    state: &AppState,
+    query: &str,
+    limit: usize,
+) -> ApiResult<Vec<SearchResultWithDocument>> {
+    let facade = SearchServiceFacade::new(
+        state.document_repo.clone(),
+        state.embedding_service.clone(),
+        state.search_service.clone(),
+    );
+    let hits = facade.hybrid_search(query, limit).await?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchResultWithDocument {
+            document: h.document,
+            score: h.score,
+        })
+        .collect())
+}
+
 /// Search documents by semantic similarity
 #[utoipa::path(
     post,
@@ -362,28 +335,7 @@ pub(crate) async fn search_documents(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
-    // Generate embedding for query
-    let query_embedding = state
-        .embedding_service
-        .generate_embedding(&req.query)
-        .await?;
-
-    // Search for similar documents
-    let search_results = state
-        .search_service
-        .search(&query_embedding, req.limit)
-        .await?;
-
-    // Fetch full document details
-    let mut results = Vec::new();
-    for result in search_results {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
-            results.push(SearchResultWithDocument {
-                document,
-                score: result.score,
-            });
-        }
-    }
+    let results = semantic_search(&state, &req.query, req.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }
@@ -404,28 +356,7 @@ pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
     Query(params): Query<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
-    // Generate embedding for query
-    let query_embedding = state
-        .embedding_service
-        .generate_embedding(&params.q)
-        .await?;
-
-    // Search for similar documents
-    let search_results = state
-        .search_service
-        .search(&query_embedding, params.limit)
-        .await?;
-
-    // Fetch full document details
-    let mut results = Vec::new();
-    for result in search_results {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
-            results.push(SearchResultWithDocument {
-                document,
-                score: result.score,
-            });
-        }
-    }
+    let results = semantic_search(&state, &params.q, params.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }

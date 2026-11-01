@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use sqlx::{PgPool, SqlitePool};
 
+use folio_auth::AuthStore;
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, IngestLedger,
     SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
@@ -26,14 +27,15 @@ use crate::queue::JobQueue;
 
 pub use health::DatabaseHealthCheck;
 pub use postgres::{
-    PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
-    PostgresIngestLedger, PostgresSearchService, PostgresSettingsRepository,
-    PostgresSourceRepository, PostgresTagRepository, PostgresWorkflowRepository,
+    PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
+    PostgresDocumentTypeRepository, PostgresIngestLedger, PostgresSearchService,
+    PostgresSettingsRepository, PostgresSourceRepository, PostgresTagRepository,
+    PostgresWorkflowRepository,
 };
 pub use sqlite::{
-    create_pool, run_migrations, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteSearchService,
-    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
+    create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger,
+    SqliteSearchService, SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
     SqliteWorkflowRepository,
 };
 
@@ -98,6 +100,7 @@ pub struct Repositories {
     pub ledger: Arc<dyn IngestLedger>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
+    pub auth: Arc<dyn AuthStore>,
 }
 
 impl Database {
@@ -140,6 +143,7 @@ impl Database {
                 ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
                 search: Arc::new(SqliteSearchService::new(pool.clone())),
                 jobs: JobQueue::sqlite(pool.clone()),
+                auth: Arc::new(SqliteAuthStore::new(pool.clone())),
             },
             Self::Postgres(pool) => Repositories {
                 documents: Arc::new(PostgresDocumentRepository::new(pool.clone())),
@@ -152,9 +156,21 @@ impl Database {
                 ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
                 search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                 jobs: JobQueue::postgres(pool.clone()),
+                auth: Arc::new(PostgresAuthStore::new(pool.clone())),
             },
         }
     }
+}
+
+/// Migrated throw-away database for tests; each pooled connection of an
+/// in-memory SQLite database would see its own empty schema, so use a file.
+#[cfg(test)]
+pub(crate) async fn test_pool() -> (SqlitePool, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("test.db").display());
+    let pool = create_pool(&url).await.unwrap();
+    run_migrations(&pool).await.unwrap();
+    (pool, dir)
 }
 
 #[cfg(test)]

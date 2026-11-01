@@ -15,7 +15,8 @@ Both hand every file to the same code path as a manual upload. The new document 
 | JSON API    | `api`         | none                                                                         |
 | Folder      | `folder`      | source name, relative path, original file name                               |
 | Email       | `email`       | account, mailbox, message id, from, to, subject, date, attachment name and type |
-| MCP, share  | `mcp`, `share`| reserved                                                                     |
+| MCP         | `mcp`         | none (files added with the `upload_document` tool)                           |
+| Share       | `share`       | reserved                                                                     |
 
 The source is part of the document in the JSON API (`source`), in the webhook payload (`document.source`), and on the document page.
 

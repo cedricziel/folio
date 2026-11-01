@@ -2,12 +2,10 @@
 
 mod email;
 mod folder;
-mod importer;
 mod mime;
 
 pub use email::{parse_mail, EmailSource, ParsedMail};
 pub use folder::{is_ignored_name, FolderSource};
-pub use importer::StorageDocumentImporter;
 pub use mime::guess_mime;
 
 use std::sync::Arc;

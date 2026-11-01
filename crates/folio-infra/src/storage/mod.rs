@@ -7,7 +7,10 @@ use tokio::io::AsyncWriteExt;
 use tracing::instrument;
 use uuid::Uuid;
 
+use async_trait::async_trait;
+
 use folio_core::error::{Error, Result};
+use folio_core::ports::FileStore;
 
 /// File storage service for storing document files
 pub struct FileStorage {
@@ -125,6 +128,17 @@ fn sanitize_filename(filename: &str) -> String {
         format!("document_{}", sanitized)
     } else {
         sanitized
+    }
+}
+
+#[async_trait]
+impl FileStore for FileStorage {
+    async fn store(&self, document_id: Uuid, filename: &str, data: &[u8]) -> Result<String> {
+        FileStorage::store(self, document_id, filename, data).await
+    }
+
+    async fn read(&self, relative_path: &str) -> Result<Vec<u8>> {
+        FileStorage::read(self, relative_path).await
     }
 }
 

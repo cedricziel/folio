@@ -4,9 +4,10 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::models::{
-    Document, DocumentSource, Id, IngestItem, IngestOutcome, IngestionSourceDef,
-    IngestionSourceInput, LedgerEntry, PollReport, SourceStatus,
+    Document, Id, IngestItem, IngestOutcome, IngestionSourceDef, IngestionSourceInput, LedgerEntry,
+    PollReport, SourceStatus,
 };
+use crate::services::NewUpload;
 
 /// Receives items found by a source
 #[async_trait]
@@ -37,23 +38,13 @@ pub trait IngestionSourceFactory: Send + Sync {
     fn build(&self, def: &IngestionSourceDef) -> Result<Box<dyn IngestionSource>>;
 }
 
-/// Everything needed to store one new document
-pub struct ImportRequest {
-    pub title: String,
-    pub filename: String,
-    pub mime_type: String,
-    pub data: Vec<u8>,
-    pub source: DocumentSource,
-    pub tag_ids: Vec<Id>,
-}
-
 /// The single path that turns bytes into a stored document
 ///
 /// Creates the record (which announces `document.uploaded`), stores the file,
 /// and schedules background processing.
 #[async_trait]
 pub trait DocumentImporter: Send + Sync {
-    async fn import(&self, request: ImportRequest) -> Result<Document>;
+    async fn import(&self, upload: NewUpload) -> Result<Document>;
 }
 
 /// Persistence for managed sources and the status of every source

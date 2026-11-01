@@ -9,13 +9,14 @@ use axum::{
     routing::post,
     Router,
 };
-use folio_api::{create_router, AppState, IngestionState};
+use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::{
     models::{WorkflowAction, WorkflowRun, WorkflowTrigger},
     EventBroadcaster,
 };
 use folio_infra::{
-    Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, WebhookClient,
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
+    ThumbnailService, WebhookClient,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -34,6 +35,10 @@ impl Drop for TestApp {
 }
 
 async fn test_app() -> TestApp {
+    test_app_with_auth(false).await
+}
+
+async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let dir = std::env::temp_dir().join(format!("folio-workflows-api-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let storage_path = dir.to_str().unwrap().to_string();
@@ -44,7 +49,9 @@ async fn test_app() -> TestApp {
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
 
+    let auth = AuthState::new(repos.auth.clone(), None).with_required(auth_required);
     let ai = Config::default().ai;
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
     let state = AppState::new(
         repos.documents,
@@ -52,13 +59,10 @@ async fn test_app() -> TestApp {
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         Arc::new(ThumbnailService::new(&storage_path)),
         repos.jobs,
         storage_path,
@@ -70,7 +74,7 @@ async fn test_app() -> TestApp {
     );
 
     TestApp {
-        router: create_router(state.clone()),
+        router: create_router(state.clone(), auth),
         state,
         dir,
     }
@@ -470,4 +474,27 @@ async fn create_rejects_the_mask_and_errors_hide_credentials() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(!error.to_string().contains("pw"));
+}
+
+#[tokio::test]
+async fn workflows_sit_behind_authentication() {
+    let app = test_app_with_auth(true).await;
+
+    let (status, _) = send(&app, "GET", "/api/workflows", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = send(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("http://localhost/x")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Pages redirect to login instead of rendering
+    let (status, _) = send(&app, "GET", "/workflows", None).await;
+    assert!(
+        status == StatusCode::SEE_OTHER || status == StatusCode::UNAUTHORIZED,
+        "unexpected status {status}"
+    );
 }

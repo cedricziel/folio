@@ -1,0 +1,15 @@
+{% extends "auth/layout.html" %}
+{% block title %}Sign in to Folio{% endblock %}
+{% block content %}
+<h1 class="auth-title">Sign in</h1>
+{% match error %}{% when Some with (message) %}<div class="f-notice f-notice-danger" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
+<form method="post" action="/login" class="auth-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label class="f-label" for="username">Username</label>
+    <input class="f-input" id="username" name="username" type="text" autocomplete="username" required autofocus>
+    <label class="f-label" for="password">Password</label>
+    <input class="f-input" id="password" name="password" type="password" autocomplete="current-password" required>
+    <button class="f-btn f-btn-primary" type="submit">Sign in</button>
+</form>
+{% endblock %}

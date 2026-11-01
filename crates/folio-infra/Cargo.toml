@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 # Core domain
 folio-core = { workspace = true }
+folio-auth = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -57,7 +58,17 @@ native-tls = "0.2"
 tokio-native-tls = "0.3"
 futures = { workspace = true }
 
+# Temporary files for PDF/OCR tooling
+tempfile = "3"
+
+[features]
+# Local ONNX embeddings (downloads onnxruntime and models); off by default to keep builds small
+fastembed = ["dep:fastembed"]
+
+[dependencies.fastembed]
+version = "5"
+optional = true
+
 [dev-dependencies]
 axum = { workspace = true }
-tempfile = "3"
 testcontainers-modules = { version = "0.15", features = ["postgres"] }

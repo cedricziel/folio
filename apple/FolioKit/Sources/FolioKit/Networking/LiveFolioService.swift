@@ -44,6 +44,25 @@ public struct LiveFolioService: FolioService {
         }
     }
 
+    public func documents(correspondentID: UUID?, documentTypeID: UUID?) async throws -> [Document] {
+        try await call {
+            let query = Operations.ListDocuments.Input.Query(
+                correspondentId: correspondentID?.uuidString.lowercased(),
+                documentTypeId: documentTypeID?.uuidString.lowercased())
+            return try await client.listDocuments(query: query).ok.body.json.documents.map { try Document($0) }
+        }
+    }
+
+    /// The server only offers this as a form post that redirects back to the document page.
+    public func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
+        var request = await authorized(url: endpoint("api/documents/\(documentID.uuidString.lowercased())/tags"))
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("tag_id=\(tagID.uuidString.lowercased())".utf8)
+        let (data, response) = try await transfer { try await session.data(for: request) }
+        try check(response, body: data)
+    }
+
     public func deleteDocument(id: Document.ID) async throws {
         try await call {
             _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).ok

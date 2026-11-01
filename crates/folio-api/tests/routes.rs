@@ -7,13 +7,14 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
-use folio_api::{create_router, AppState, IngestionState};
+use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::{
     models::{CreateDocument, CreateTag},
     EventBroadcaster,
 };
 use folio_infra::{
-    Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, WebhookClient,
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
+    ThumbnailService, WebhookClient,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -31,6 +32,10 @@ impl Drop for TestApp {
 }
 
 async fn test_app() -> TestApp {
+    test_app_with_auth(false).await
+}
+
+async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let dir = std::env::temp_dir().join(format!("folio-routes-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let storage_path = dir.to_str().unwrap().to_string();
@@ -41,8 +46,10 @@ async fn test_app() -> TestApp {
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let auth_store = repos.auth.clone();
 
     let ai = Config::default().ai;
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
     let state = AppState::new(
         repos.documents,
@@ -50,13 +57,10 @@ async fn test_app() -> TestApp {
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         Arc::new(ThumbnailService::new(&storage_path)),
         repos.jobs,
         storage_path,
@@ -68,7 +72,10 @@ async fn test_app() -> TestApp {
     );
 
     TestApp {
-        router: create_router(state.clone()),
+        router: create_router(
+            state.clone(),
+            AuthState::new(auth_store, None).with_required(auth_required),
+        ),
         state,
         dir,
     }
@@ -186,4 +193,19 @@ async fn update_tag_clears_color_on_null_and_keeps_it_when_absent() {
     assert_eq!(status, StatusCode::OK);
     assert!(body["color"].is_null());
     assert_eq!(body["name"], "Taxes");
+}
+
+#[tokio::test]
+async fn full_router_enforces_auth_when_required() {
+    let app = test_app_with_auth(true).await;
+    let (status, _) = request(&app, "GET", "/api/tags").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = request(&app, "GET", "/.well-known/oauth-authorization-server").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = request(&app, "GET", "/api/openapi.json").await;
+    assert_eq!(status, StatusCode::OK);
+    for probe in ["/healthz", "/readyz"] {
+        let (status, _) = request(&app, "GET", probe).await;
+        assert_eq!(status, StatusCode::OK, "{probe} must stay unauthenticated");
+    }
 }

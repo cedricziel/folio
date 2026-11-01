@@ -8,6 +8,7 @@ license.workspace = true
 # Core domain
 folio-core = { workspace = true, features = ["openapi"] }
 folio-infra = { workspace = true }
+folio-auth = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -43,11 +44,15 @@ tracing = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
+url = "2"
 
 # Async traits
 async-trait = { workspace = true }
 
 [dev-dependencies]
+base64 = "0.22"
+sha2 = "0.10"
+tempfile = "3"
 http-body-util = "0.1"
 tower = { workspace = true, features = ["util"] }
 tokio = { workspace = true, features = ["test-util"] }

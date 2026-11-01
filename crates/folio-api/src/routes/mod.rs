@@ -1,6 +1,7 @@
 //! API routes
 
 mod assets;
+pub mod auth;
 pub(crate) mod correspondents;
 pub(crate) mod document_types;
 pub(crate) mod documents;
@@ -27,8 +28,10 @@ pub use health::HealthChecks;
 use crate::state::AppState;
 
 /// Create the main application router
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let health = health::router(state.health_checks.clone());
+    let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
+    let auth_routes = auth::router(auth);
 
     let router = Router::new()
         // API routes
@@ -49,9 +52,12 @@ pub fn create_router(state: AppState) -> Router {
         .merge(source_pages::router())
         // SSE events
         .merge(events::router())
+        // Login, setup and OAuth authorization server
+        .merge(auth_routes)
         // Static files
         .merge(assets::router())
         // Middleware
+        .layer(enforcement)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)

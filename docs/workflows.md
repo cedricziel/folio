@@ -9,7 +9,7 @@ A workflow has a trigger, optional conditions (all must match), and ordered acti
 | Event                | Fires when                                                                 |
 | -------------------- | -------------------------------------------------------------------------- |
 | `document.uploaded`  | A document is created. Once per document and workflow.                     |
-| `document.processed` | Background processing (thumbnails, OCR, embedding) finished. Once per document and workflow. |
+| `document.processed` | The background pipeline reached its last stage (embedding done or skipped). Not sent when a stage fails for good. Once per document and workflow. |
 | `document.updated`   | Title, correspondent, document type, or tags changed.                      |
 | `document.deleted`   | A document was deleted. Only webhook actions can run for it.               |
 | `ingest.received`    | A file or email attachment was found by an ingestion source, before it is imported. Only `skip_import` runs. See [ingestion](ingestion.md). |

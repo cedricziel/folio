@@ -11,6 +11,7 @@ COPY folio-app ./folio-app
 COPY migrations ./migrations
 COPY xtask ./xtask
 COPY static ./static
+COPY design ./design
 RUN cargo build --release --locked --bin folio-app
 
 FROM debian:bookworm-slim
@@ -20,13 +21,17 @@ LABEL org.opencontainers.image.title="Folio" \
       org.opencontainers.image.source="https://github.com/cedricziel/folio" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
-# pdftoppm and pdfinfo come from poppler-utils, convert from imagemagick.
+# pdftoppm, pdfinfo and pdftotext come from poppler-utils, convert from imagemagick,
+# tesseract-ocr is the default local OCR engine.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libssl3 \
         poppler-utils \
         imagemagick \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-deu \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin folio \
     && mkdir -p /app /data \

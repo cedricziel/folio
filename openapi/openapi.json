@@ -2050,6 +2050,8 @@
         "required": [
           "id",
           "title",
+          "ocr_status",
+          "embed_status",
           "created_at",
           "updated_at"
         ],
@@ -2082,6 +2084,10 @@
             "format": "uuid",
             "description": "Document type classification"
           },
+          "embed_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the embedding stage"
+          },
           "file_path": {
             "type": [
               "string",
@@ -2100,6 +2106,10 @@
               "null"
             ],
             "description": "MIME type of the original document"
+          },
+          "ocr_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the OCR stage"
           },
           "original_filename": {
             "type": [
@@ -2617,6 +2627,17 @@
             "type": "string"
           }
         }
+      },
+      "ProcessingStatus": {
+        "type": "string",
+        "description": "State of one pipeline stage for one document",
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed",
+          "skipped"
+        ]
       },
       "RunStatus": {
         "type": "string",

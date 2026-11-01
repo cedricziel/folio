@@ -11,14 +11,15 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
+use super::NewUpload;
 use crate::error::{Error, Result};
 use crate::models::{
     CreateTag, Id, IngestItem, IngestOutcome, IngestionSourceDef, LedgerEntry, PollReport,
     SourceStatus, WorkflowAction, WorkflowTrigger,
 };
 use crate::ports::{
-    DocumentImporter, DocumentRepository, ImportRequest, IngestLedger, IngestSink,
-    IngestionSourceFactory, SourceRepository, TagRepository, WorkflowRepository,
+    DocumentImporter, DocumentRepository, IngestLedger, IngestSink, IngestionSourceFactory,
+    SourceRepository, TagRepository, WorkflowRepository,
 };
 
 /// A claim without a document older than this is treated as left over from a crash
@@ -145,10 +146,10 @@ impl IngestSink for IngestPipeline {
         let imported = async {
             let tag_ids = self.resolve_tags(&item.tags).await?;
             self.importer
-                .import(ImportRequest {
-                    title: item.filename.clone(),
+                .import(NewUpload {
+                    title: Some(item.filename.clone()),
                     filename: item.filename,
-                    mime_type: item.mime_type,
+                    mime_type: Some(item.mime_type),
                     data: item.data,
                     source: item.source,
                     tag_ids,
