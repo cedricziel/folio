@@ -787,7 +787,7 @@ async fn logout(
 
 // ---- metadata and registration ----------------------------------------------
 
-async fn as_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<Value> {
+async fn as_metadata(State(auth): State<AuthState>) -> Json<Value> {
     Json(authorization_server_metadata(&auth.base()))
 }
 
@@ -1038,11 +1038,7 @@ async fn authorize_submit(
 
 // ---- token and revoke -------------------------------------------------------
 
-async fn token(
-    State(auth): State<AuthState>,
-    headers: HeaderMap,
-    Form(req): Form<TokenRequest>,
-) -> Response {
+async fn token(State(auth): State<AuthState>, Form(req): Form<TokenRequest>) -> Response {
     match auth.server.token(&auth.base(), req).await {
         Ok(body) => oauth_json(StatusCode::OK, body),
         Err(e) => oauth_error(e),
