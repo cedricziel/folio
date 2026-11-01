@@ -24,6 +24,21 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+      - if: steps.release.outputs.prs_created == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+      - if: steps.release.outputs.prs_created == 'true'
+        name: Sync Cargo.lock with the release version
+        run: |
+          cargo update --workspace --offline || cargo update --workspace
+          if ! git diff --quiet Cargo.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "chore: sync Cargo.lock with the release version"
+            git push
+          fi
 
   image:
     needs: release-please
