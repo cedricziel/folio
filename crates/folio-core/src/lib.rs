@@ -10,6 +10,7 @@ pub mod error;
 pub mod events;
 pub mod models;
 pub mod ports;
+pub mod redact;
 pub mod services;
 
 pub use error::{Error, Result};
