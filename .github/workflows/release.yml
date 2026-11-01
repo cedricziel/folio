@@ -74,7 +74,6 @@ jobs:
           name="folio-${TAG}-${{ matrix.target }}"
           mkdir -p "dist/${name}"
           cp target/release/folio-app config.toml LICENSE "dist/${name}/"
-          cp -R static "dist/${name}/static"
           tar -C dist -czf "${name}.tar.gz" "${name}"
           shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
       - name: Upload to release
