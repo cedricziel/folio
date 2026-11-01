@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use sqlx::{PgPool, SqlitePool};
 
+use folio_auth::AuthStore;
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SearchService,
     SettingsRepository, TagRepository,
@@ -26,13 +27,14 @@ use crate::queue::JobQueue;
 
 pub use health::DatabaseHealthCheck;
 pub use postgres::{
-    PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
-    PostgresSearchService, PostgresSettingsRepository, PostgresTagRepository,
+    PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
+    PostgresDocumentTypeRepository, PostgresSearchService, PostgresSettingsRepository,
+    PostgresTagRepository,
 };
 pub use sqlite::{
-    create_pool, run_migrations, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
-    SqliteTagRepository,
+    create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
+    SqliteSettingsRepository, SqliteTagRepository,
 };
 
 /// Supported database backends
@@ -93,6 +95,7 @@ pub struct Repositories {
     pub settings: Arc<dyn SettingsRepository>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
+    pub auth: Arc<dyn AuthStore>,
 }
 
 impl Database {
@@ -132,6 +135,7 @@ impl Database {
                 settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
                 search: Arc::new(SqliteSearchService::new(pool.clone())),
                 jobs: JobQueue::sqlite(pool.clone()),
+                auth: Arc::new(SqliteAuthStore::new(pool.clone())),
             },
             Self::Postgres(pool) => Repositories {
                 documents: Arc::new(PostgresDocumentRepository::new(pool.clone())),
@@ -141,6 +145,7 @@ impl Database {
                 settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
                 search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                 jobs: JobQueue::postgres(pool.clone()),
+                auth: Arc::new(PostgresAuthStore::new(pool.clone())),
             },
         }
     }

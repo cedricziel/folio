@@ -1,5 +1,6 @@
 //! SQLite adapters
 
+mod auth_repo;
 mod document_repo;
 mod search;
 mod settings_repo;
@@ -9,6 +10,7 @@ use std::str::FromStr;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
+pub use auth_repo::SqliteAuthStore;
 pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,

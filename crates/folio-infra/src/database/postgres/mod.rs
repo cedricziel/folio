@@ -1,5 +1,6 @@
 //! PostgreSQL adapters
 
+mod auth_repo;
 mod document_repo;
 mod search;
 mod settings_repo;
@@ -9,6 +10,7 @@ use std::str::FromStr;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
+pub use auth_repo::PostgresAuthStore;
 pub use document_repo::{
     PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
     PostgresTagRepository,

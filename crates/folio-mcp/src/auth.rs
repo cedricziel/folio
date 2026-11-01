@@ -28,6 +28,22 @@ impl McpAuth {
     }
 }
 
+/// Middleware that turns the caller validated by `folio_auth::require_bearer`
+/// into the [`McpAuth`] the tools check. Layer it inside `require_bearer`.
+pub async fn bridge_auth_context(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some(context) = request.extensions().get::<folio_auth::AuthContext>() {
+        let auth = McpAuth::new(
+            Some(context.user_id.clone()),
+            context.scopes.iter().cloned().collect(),
+        );
+        request.extensions_mut().insert(auth);
+    }
+    next.run(request).await
+}
+
 /// Fail unless the request is allowed to use `scope`
 pub(crate) fn require_scope(ctx: &RequestContext<RoleServer>, scope: &str) -> Result<(), String> {
     match auth_of(&ctx.extensions) {
