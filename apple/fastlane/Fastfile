@@ -126,7 +126,7 @@ def beta_build(platform:, destination:)
 
   mac = platform == "macos"
   testflight_platform = mac ? "osx" : "ios"
-  build_number = Time.now.utc.strftime("%Y%m%d.%H%M")
+  build_number = sh("git", "rev-list", "--count", "HEAD", log: false).strip
   build_params = {
     project: PROJECT,
     scheme: "Folio",
