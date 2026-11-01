@@ -41,3 +41,7 @@ reqwest = { workspace = true }
 
 # Image processing
 image = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

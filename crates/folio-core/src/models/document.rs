@@ -129,4 +129,8 @@ pub struct DocumentFilter {
     pub document_type_id: Option<Id>,
     pub tag_ids: Option<Vec<Id>>,
     pub search_query: Option<String>,
+    /// Only documents created at or after this instant
+    pub created_after: Option<DateTime<Utc>>,
+    /// Only documents created at or before this instant
+    pub created_before: Option<DateTime<Utc>>,
 }
