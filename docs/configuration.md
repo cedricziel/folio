@@ -41,8 +41,10 @@ startup by the first three layers.
 | `auth.forward.user_header` | `FOLIO_AUTH__FORWARD__USER_HEADER` | `Remote-User` | Header carrying the username. |
 | `auth.forward.email_header` | `FOLIO_AUTH__FORWARD__EMAIL_HEADER` | `Remote-Email` | Header carrying the email address. |
 | `auth.forward.name_header` | `FOLIO_AUTH__FORWARD__NAME_HEADER` | `Remote-Name` | Header carrying the display name. |
-| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | `Remote-Groups` | Header carrying group names, separated by `,` or `\|`. |
-| `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. |
+| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | empty | Header carrying group names, separated by `,` or `\|`. Empty means groups are ignored. |
+| `auth.forward.role_header` | `FOLIO_AUTH__FORWARD__ROLE_HEADER` | empty | Header carrying a single role name (Pangolin: `Remote-Role`). Empty means roles are ignored. |
+| `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. Needs `groups_header`. |
+| `auth.forward.admin_role` | `FOLIO_AUTH__FORWARD__ADMIN_ROLE` | unset | Users with this role are admins. Needs `role_header`. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Directory for stored documents and thumbnails. |
 | `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |

@@ -50,21 +50,20 @@ pub async fn forward_auth(
         return next.run(request).await;
     };
 
-    let user =
-        match sync_external_user(&*auth.store, identity, forward.admin_group.as_deref()).await {
-            Ok(user) => user,
-            Err(ExternalError::UsernameTaken | ExternalError::Invalid) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    "This account can't sign in through the gateway.",
-                )
-                    .into_response();
-            }
-            Err(ExternalError::Store(e)) => {
-                tracing::error!("forward auth failed: {e}");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
+    let user = match sync_external_user(&*auth.store, identity).await {
+        Ok(user) => user,
+        Err(ExternalError::UsernameTaken | ExternalError::Invalid) => {
+            return (
+                StatusCode::FORBIDDEN,
+                "This account can't sign in through the gateway.",
+            )
+                .into_response();
+        }
+        Err(ExternalError::Store(e)) => {
+            tracing::error!("forward auth failed: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     forward.strip(request.headers_mut());
 
     let has_session = match auth.current_user(request.headers()).await {

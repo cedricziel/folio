@@ -124,11 +124,16 @@ pub struct ForwardAuthConfig {
     pub user_header: String,
     pub email_header: String,
     pub name_header: String,
+    /// Empty (the default) means group headers are ignored.
     pub groups_header: String,
+    /// Empty (the default) means role headers are ignored.
+    pub role_header: String,
     /// CIDRs or addresses of the proxies whose headers are honoured.
     pub trusted_proxies: Vec<String>,
-    /// Members of this (external) group become admins.
+    /// Members of this (external) group become admins; needs `groups_header`.
     pub admin_group: Option<String>,
+    /// Users with this role become admins; needs `role_header`.
+    pub admin_role: Option<String>,
 }
 
 impl Default for ForwardAuthConfig {
@@ -138,9 +143,11 @@ impl Default for ForwardAuthConfig {
             user_header: "Remote-User".to_string(),
             email_header: "Remote-Email".to_string(),
             name_header: "Remote-Name".to_string(),
-            groups_header: "Remote-Groups".to_string(),
+            groups_header: String::new(),
+            role_header: String::new(),
             trusted_proxies: Vec::new(),
             admin_group: None,
+            admin_role: None,
         }
     }
 }
@@ -255,6 +262,12 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::Str,
     },
     Setting {
+        key: "auth.forward.role_header",
+        env: "FOLIO_AUTH__FORWARD__ROLE_HEADER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
         key: "auth.forward.trusted_proxies",
         env: "FOLIO_AUTH__FORWARD__TRUSTED_PROXIES",
         legacy_env: &[],
@@ -263,6 +276,12 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "auth.forward.admin_group",
         env: "FOLIO_AUTH__FORWARD__ADMIN_GROUP",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.admin_role",
+        env: "FOLIO_AUTH__FORWARD__ADMIN_ROLE",
         legacy_env: &[],
         kind: ValueKind::Str,
     },
@@ -521,6 +540,11 @@ mod tests {
         );
         assert_eq!(config.auth.forward.admin_group.as_deref(), Some("admins"));
         assert_eq!(config.auth.forward.user_header, "Remote-User");
+        assert!(
+            config.auth.forward.groups_header.is_empty()
+                && config.auth.forward.role_header.is_empty(),
+            "group and role headers must be opt-in"
+        );
     }
 
     #[test]

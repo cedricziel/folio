@@ -882,7 +882,11 @@ mod forward {
 
     #[tokio::test]
     async fn admin_group_maps_to_admin_and_follows_the_idp() {
-        let f = fwd_app(|c| c.admin_group = Some("admins".into())).await;
+        let f = fwd_app(|c| {
+            c.groups_header = "Remote-Groups".into();
+            c.admin_group = Some("admins".into());
+        })
+        .await;
         send_from(
             &f.app,
             TRUSTED,
@@ -927,8 +931,52 @@ mod forward {
     }
 
     #[tokio::test]
+    async fn a_forged_groups_header_cannot_grant_admin_by_default() {
+        // Pangolin's Badger does not strip Remote-Groups, so a client can send it.
+        let f = fwd_app(|c| c.admin_group = Some("folio-admins".into())).await;
+        send_from(&f.app, TRUSTED, with_identity("/", "owner", &[])).await;
+        let forged = with_identity("/", "mallory", &[("Remote-Groups", "folio-admins")]);
+        assert_eq!(
+            send_from(&f.app, TRUSTED, forged).await.status,
+            StatusCode::OK
+        );
+        let mallory = f
+            .store
+            .find_user_by_external("forward", "mallory")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!mallory.is_admin);
+        assert!(f.store.user_groups(&mallory.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn admin_role_header_maps_to_admin_and_follows_the_proxy() {
+        let f = fwd_app(|c| {
+            c.role_header = "Remote-Role".into();
+            c.admin_role = Some("admin".into());
+        })
+        .await;
+        let as_role = |role: &'static str| with_identity("/", "pat", &[("Remote-Role", role)]);
+        let pat = || async {
+            f.store
+                .find_user_by_external("forward", "pat")
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        send_from(&f.app, TRUSTED, with_identity("/", "owner", &[])).await;
+        send_from(&f.app, TRUSTED, as_role("member")).await;
+        assert!(!pat().await.is_admin);
+        send_from(&f.app, TRUSTED, as_role("admin")).await;
+        assert!(pat().await.is_admin);
+        send_from(&f.app, TRUSTED, as_role("member")).await;
+        assert!(!pat().await.is_admin);
+    }
+
+    #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
-        let f = fwd_app(|_| {}).await;
+        let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;
         send_from(
             &f.app,
             TRUSTED,

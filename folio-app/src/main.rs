@@ -241,10 +241,22 @@ async fn main() -> Result<()> {
             email_header: forward.email_header.clone(),
             name_header: forward.name_header.clone(),
             groups_header: forward.groups_header.clone(),
+            role_header: forward.role_header.clone(),
             trusted_proxies: forward.trusted_proxies.clone(),
             admin_group: forward.admin_group.clone(),
+            admin_role: forward.admin_role.clone(),
         })
         .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
+        if forward.admin_group.is_some() && forward.groups_header.is_empty() {
+            tracing::warn!(
+                "auth.forward.admin_group is ignored because auth.forward.groups_header is not set"
+            );
+        }
+        if forward.admin_role.is_some() && forward.role_header.is_empty() {
+            tracing::warn!(
+                "auth.forward.admin_role is ignored because auth.forward.role_header is not set"
+            );
+        }
         if !settings.has_trusted_proxies() {
             tracing::warn!(
                 "auth.forward is enabled without trusted_proxies; every request will be treated as unauthenticated"

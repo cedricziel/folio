@@ -16,8 +16,12 @@ pub struct ForwardAuth {
     pub user_header: HeaderName,
     pub email_header: HeaderName,
     pub name_header: HeaderName,
-    pub groups_header: HeaderName,
-    pub admin_group: Option<String>,
+    /// `None` means the groups header is never read.
+    pub groups_header: Option<HeaderName>,
+    /// `None` means the role header is never read.
+    pub role_header: Option<HeaderName>,
+    admin_group: Option<String>,
+    admin_role: Option<String>,
     trusted: Vec<IpNet>,
 }
 
@@ -27,10 +31,16 @@ pub struct ForwardConfig {
     pub user_header: String,
     pub email_header: String,
     pub name_header: String,
+    /// Empty disables groups: the header is neither read nor trusted.
     pub groups_header: String,
+    /// Empty disables roles.
+    pub role_header: String,
     /// CIDRs (`10.0.0.0/8`) and bare addresses of the trusted proxies.
     pub trusted_proxies: Vec<String>,
+    /// Only effective together with `groups_header`.
     pub admin_group: Option<String>,
+    /// Only effective together with `role_header`.
+    pub admin_role: Option<String>,
 }
 
 impl Default for ForwardConfig {
@@ -39,9 +49,11 @@ impl Default for ForwardConfig {
             user_header: "Remote-User".into(),
             email_header: "Remote-Email".into(),
             name_header: "Remote-Name".into(),
-            groups_header: "Remote-Groups".into(),
+            groups_header: String::new(),
+            role_header: String::new(),
             trusted_proxies: Vec::new(),
             admin_group: None,
+            admin_role: None,
         }
     }
 }
@@ -51,6 +63,10 @@ impl ForwardAuth {
         let header = |h: &str| {
             HeaderName::from_bytes(h.trim().as_bytes())
                 .map_err(|_| format!("invalid header name: {h}"))
+        };
+        let optional = |h: &str| {
+            let h = h.trim();
+            (!h.is_empty()).then(|| header(h)).transpose()
         };
         let trusted = config
             .trusted_proxies
@@ -62,12 +78,23 @@ impl ForwardAuth {
                     .map_err(|_| format!("invalid trusted proxy: {p}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let groups_header = optional(&config.groups_header)?;
+        let role_header = optional(&config.role_header)?;
+        // A mapping without its header would demote everyone, so it is dropped.
+        let admin_group = config
+            .admin_group
+            .filter(|g| !g.is_empty() && groups_header.is_some());
+        let admin_role = config
+            .admin_role
+            .filter(|r| !r.is_empty() && role_header.is_some());
         Ok(Self {
             user_header: header(&config.user_header)?,
             email_header: header(&config.email_header)?,
             name_header: header(&config.name_header)?,
-            groups_header: header(&config.groups_header)?,
-            admin_group: config.admin_group.filter(|g| !g.is_empty()),
+            groups_header,
+            role_header,
+            admin_group,
+            admin_role,
             trusted,
         })
     }
@@ -87,12 +114,11 @@ impl ForwardAuth {
 
     /// Removes the identity headers so later layers never see unverified values.
     pub fn strip(&self, headers: &mut HeaderMap) {
-        for name in [
-            &self.user_header,
-            &self.email_header,
-            &self.name_header,
-            &self.groups_header,
-        ] {
+        for name in [&self.user_header, &self.email_header, &self.name_header]
+            .into_iter()
+            .chain(&self.groups_header)
+            .chain(&self.role_header)
+        {
             headers.remove(name);
         }
     }
@@ -108,7 +134,10 @@ impl ForwardAuth {
                 .map(str::to_string)
         };
         let username = value(&self.user_header)?;
-        let groups = value(&self.groups_header)
+        let groups: Vec<String> = self
+            .groups_header
+            .as_ref()
+            .and_then(&value)
             .map(|g| {
                 g.split([',', '|'])
                     .map(str::trim)
@@ -117,6 +146,16 @@ impl ForwardAuth {
                     .collect()
             })
             .unwrap_or_default();
+        let role = self.role_header.as_ref().and_then(&value);
+        // Admin status is derived from the configured mapping only; with none,
+        // `None` leaves it to the first-user rule.
+        let admin = match (&self.admin_group, &self.admin_role) {
+            (None, None) => None,
+            (group, role_name) => Some(
+                group.as_ref().is_some_and(|g| groups.contains(g))
+                    || role_name.as_ref().is_some_and(|r| role.as_ref() == Some(r)),
+            ),
+        };
         Some(ExternalIdentity {
             source: SOURCE_FORWARD.to_string(),
             external_id: username.to_lowercase(),
@@ -124,6 +163,7 @@ impl ForwardAuth {
             email: value(&self.email_header),
             display_name: value(&self.name_header),
             groups,
+            admin,
         })
     }
 }
@@ -170,10 +210,16 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("remote-user", "Alice".parse().unwrap());
         h.insert("remote-groups", "admins, family|kids".parse().unwrap());
-        let id = fwd(&["10.0.0.0/8"]).identity(&h).unwrap();
+        let configured = ForwardAuth::new(ForwardConfig {
+            groups_header: "Remote-Groups".into(),
+            ..ForwardConfig::default()
+        })
+        .unwrap();
+        let id = configured.identity(&h).unwrap();
         assert_eq!(id.username, "Alice");
         assert_eq!(id.external_id, "alice");
         assert_eq!(id.groups, ["admins", "family", "kids"]);
+        assert!(fwd(&[]).identity(&h).unwrap().groups.is_empty());
         assert!(fwd(&[]).identity(&HeaderMap::new()).is_none());
     }
 }

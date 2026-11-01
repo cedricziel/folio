@@ -21,6 +21,9 @@ pub struct ExternalIdentity {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub groups: Vec<String>,
+    /// `Some` when the provider decides admin status (group or role mapping);
+    /// `None` leaves it to the first-user rule and manual changes.
+    pub admin: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -36,12 +39,11 @@ pub enum ExternalError {
 /// Finds or creates the local user for an external identity, refreshes its
 /// profile and replaces its external group memberships.
 ///
-/// With `admin_group` set, admin status follows membership of that group on
-/// every call. Without it, only the very first user becomes admin.
+/// With `identity.admin` set, admin status follows it on every call. Without
+/// it, only the very first user becomes admin.
 pub async fn sync_external_user(
     store: &dyn AuthStore,
     mut identity: ExternalIdentity,
-    admin_group: Option<&str>,
 ) -> Result<User, ExternalError> {
     identity.username = identity.username.trim().to_string();
     let name = &identity.username;
@@ -53,14 +55,12 @@ pub async fn sync_external_user(
         .retain(|g| !g.is_empty() && g.len() <= MAX_GROUP_LEN);
     identity.groups.truncate(MAX_GROUPS);
 
-    let in_admin_group = admin_group.map(|g| identity.groups.iter().any(|x| x == g));
-
     let user = match store
         .find_user_by_external(&identity.source, &identity.external_id)
         .await?
     {
         Some(mut user) => {
-            let is_admin = in_admin_group.unwrap_or(user.is_admin);
+            let is_admin = identity.admin.unwrap_or(user.is_admin);
             if user.email != identity.email
                 || user.display_name != identity.display_name
                 || user.is_admin != is_admin
@@ -88,7 +88,7 @@ pub async fn sync_external_user(
                 created_at: now(),
                 email: identity.email.clone(),
                 display_name: identity.display_name.clone(),
-                is_admin: in_admin_group.unwrap_or(false) || first,
+                is_admin: identity.admin.unwrap_or(false) || first,
                 auth_source: identity.source.clone(),
                 external_id: Some(identity.external_id.clone()),
             };
