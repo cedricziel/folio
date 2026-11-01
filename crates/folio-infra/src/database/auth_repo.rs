@@ -4,9 +4,8 @@ use async_trait::async_trait;
 use folio_auth::{
     AccessToken, AuthCode, AuthError, AuthStore, OAuthClient, RefreshToken, Session, User,
 };
-use sqlx::{sqlite::SqliteRow, AssertSqlSafe, Row, SqlitePool};
+use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
-// Table names interpolated into SQL below are compile-time constants.
 pub struct SqliteAuthStore {
     pool: SqlitePool,
 }
@@ -45,11 +44,12 @@ impl AuthStore for SqliteAuthStore {
 
     async fn create_first_user(&self, user: User) -> Result<Option<User>, AuthError> {
         let result = sqlx::query(
-            "INSERT INTO users (id, username, password_hash, created_at)
-             SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)",
+            "INSERT INTO users (id, username, username_normalized, password_hash, created_at)
+             SELECT $1, $2, $3, $4, $5 WHERE NOT EXISTS (SELECT 1 FROM users)",
         )
         .bind(&user.id)
         .bind(&user.username)
+        .bind(user.username.to_lowercase())
         .bind(&user.password_hash)
         .bind(user.created_at)
         .execute(&self.pool)
@@ -59,8 +59,8 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
-        sqlx::query("SELECT * FROM users WHERE username = ?")
-            .bind(username)
+        sqlx::query("SELECT * FROM users WHERE username_normalized = $1")
+            .bind(username.to_lowercase())
             .fetch_optional(&self.pool)
             .await
             .map(|r| r.map(user_from))
@@ -68,7 +68,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn find_user_by_id(&self, id: &str) -> Result<Option<User>, AuthError> {
-        sqlx::query("SELECT * FROM users WHERE id = ?")
+        sqlx::query("SELECT * FROM users WHERE id = $1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -77,7 +77,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn create_session(&self, s: Session) -> Result<(), AuthError> {
-        sqlx::query("INSERT INTO sessions (id_hash, user_id, expires_at) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO sessions (id_hash, user_id, expires_at) VALUES ($1, $2, $3)")
             .bind(s.id_hash)
             .bind(s.user_id)
             .bind(s.expires_at)
@@ -88,7 +88,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn find_session(&self, id_hash: &str) -> Result<Option<Session>, AuthError> {
-        sqlx::query("SELECT id_hash, user_id, expires_at FROM sessions WHERE id_hash = ?")
+        sqlx::query("SELECT id_hash, user_id, expires_at FROM sessions WHERE id_hash = $1")
             .bind(id_hash)
             .fetch_optional(&self.pool)
             .await
@@ -103,7 +103,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn delete_session(&self, id_hash: &str) -> Result<(), AuthError> {
-        sqlx::query("DELETE FROM sessions WHERE id_hash = ?")
+        sqlx::query("DELETE FROM sessions WHERE id_hash = $1")
             .bind(id_hash)
             .execute(&self.pool)
             .await
@@ -116,7 +116,7 @@ impl AuthStore for SqliteAuthStore {
             serde_json::to_string(&c.redirect_uris).map_err(|e| AuthError::Store(e.to_string()))?;
         sqlx::query(
             "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at)
-             VALUES (?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4)",
         )
         .bind(c.client_id)
         .bind(c.client_name)
@@ -129,7 +129,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn find_client(&self, client_id: &str) -> Result<Option<OAuthClient>, AuthError> {
-        let row = sqlx::query("SELECT * FROM oauth_clients WHERE client_id = ?")
+        let row = sqlx::query("SELECT * FROM oauth_clients WHERE client_id = $1")
             .bind(client_id)
             .fetch_optional(&self.pool)
             .await
@@ -151,7 +151,7 @@ impl AuthStore for SqliteAuthStore {
         sqlx::query(
             "INSERT INTO oauth_codes
              (code_hash, client_id, user_id, redirect_uri, code_challenge, scopes, audience, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(c.code_hash)
         .bind(c.client_id)
@@ -168,7 +168,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn take_code(&self, code_hash: &str) -> Result<Option<AuthCode>, AuthError> {
-        let row = sqlx::query("DELETE FROM oauth_codes WHERE code_hash = ? RETURNING *")
+        let row = sqlx::query("DELETE FROM oauth_codes WHERE code_hash = $1 RETURNING *")
             .bind(code_hash)
             .fetch_optional(&self.pool)
             .await
@@ -188,7 +188,7 @@ impl AuthStore for SqliteAuthStore {
     async fn insert_access_token(&self, t: AccessToken) -> Result<(), AuthError> {
         insert_token(
             &self.pool,
-            "oauth_access_tokens",
+            INSERT_ACCESS,
             &t.token_hash,
             &t.client_id,
             &t.user_id,
@@ -200,7 +200,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn find_access_token(&self, token_hash: &str) -> Result<Option<AccessToken>, AuthError> {
-        let row = sqlx::query("SELECT * FROM oauth_access_tokens WHERE token_hash = ?")
+        let row = sqlx::query("SELECT * FROM oauth_access_tokens WHERE token_hash = $1")
             .bind(token_hash)
             .fetch_optional(&self.pool)
             .await
@@ -218,7 +218,7 @@ impl AuthStore for SqliteAuthStore {
     async fn insert_refresh_token(&self, t: RefreshToken) -> Result<(), AuthError> {
         insert_token(
             &self.pool,
-            "oauth_refresh_tokens",
+            INSERT_REFRESH,
             &t.token_hash,
             &t.client_id,
             &t.user_id,
@@ -233,7 +233,7 @@ impl AuthStore for SqliteAuthStore {
         &self,
         token_hash: &str,
     ) -> Result<Option<RefreshToken>, AuthError> {
-        let row = sqlx::query("DELETE FROM oauth_refresh_tokens WHERE token_hash = ? RETURNING *")
+        let row = sqlx::query("DELETE FROM oauth_refresh_tokens WHERE token_hash = $1 RETURNING *")
             .bind(token_hash)
             .fetch_optional(&self.pool)
             .await
@@ -249,41 +249,48 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn revoke_token(&self, token_hash: &str) -> Result<(), AuthError> {
-        for table in ["oauth_access_tokens", "oauth_refresh_tokens"] {
-            sqlx::query(AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE token_hash = ?"
-            )))
+        sqlx::query("DELETE FROM oauth_access_tokens WHERE token_hash = $1")
             .bind(token_hash)
             .execute(&self.pool)
             .await
             .map_err(err)?;
-        }
+        sqlx::query("DELETE FROM oauth_refresh_tokens WHERE token_hash = $1")
+            .bind(token_hash)
+            .execute(&self.pool)
+            .await
+            .map_err(err)?;
         Ok(())
     }
 
     async fn purge_expired(&self, now: i64) -> Result<(), AuthError> {
-        for table in [
-            "oauth_codes",
-            "oauth_access_tokens",
-            "oauth_refresh_tokens",
-            "sessions",
-        ] {
-            sqlx::query(AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE expires_at <= ?"
-            )))
-            .bind(now)
-            .execute(&self.pool)
-            .await
-            .map_err(err)?;
+        let statements = [
+            "DELETE FROM oauth_codes WHERE expires_at <= $1",
+            "DELETE FROM oauth_access_tokens WHERE expires_at <= $1",
+            "DELETE FROM oauth_refresh_tokens WHERE expires_at <= $1",
+            "DELETE FROM sessions WHERE expires_at <= $1",
+        ];
+        for sql in statements {
+            sqlx::query(sql)
+                .bind(now)
+                .execute(&self.pool)
+                .await
+                .map_err(err)?;
         }
         Ok(())
     }
 }
 
+const INSERT_ACCESS: &str = "INSERT INTO oauth_access_tokens
+    (token_hash, client_id, user_id, scopes, audience, expires_at)
+    VALUES ($1, $2, $3, $4, $5, $6)";
+const INSERT_REFRESH: &str = "INSERT INTO oauth_refresh_tokens
+    (token_hash, client_id, user_id, scopes, audience, expires_at)
+    VALUES ($1, $2, $3, $4, $5, $6)";
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_token(
     pool: &SqlitePool,
-    table: &str,
+    sql: &'static str,
     hash: &str,
     client_id: &str,
     user_id: &str,
@@ -291,18 +298,15 @@ async fn insert_token(
     audience: &str,
     expires_at: i64,
 ) -> Result<(), AuthError> {
-    sqlx::query(AssertSqlSafe(format!(
-        "INSERT INTO {table} (token_hash, client_id, user_id, scopes, audience, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)"
-    )))
-    .bind(hash)
-    .bind(client_id)
-    .bind(user_id)
-    .bind(scopes.join(" "))
-    .bind(audience)
-    .bind(expires_at)
-    .execute(pool)
-    .await
-    .map(|_| ())
-    .map_err(err)
+    sqlx::query(sql)
+        .bind(hash)
+        .bind(client_id)
+        .bind(user_id)
+        .bind(scopes.join(" "))
+        .bind(audience)
+        .bind(expires_at)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(err)
 }
