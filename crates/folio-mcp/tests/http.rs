@@ -142,7 +142,6 @@ async fn disabled_setting_hides_endpoint() {
 
     assert!(post().await.unwrap().status().is_success());
 
-    use folio_core::ports::SettingsRepository;
     fx.settings.set("mcp.enabled", "false").await.unwrap();
     assert_eq!(post().await.unwrap().status(), 404);
 

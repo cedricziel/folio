@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base64::Engine;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use folio_core::models::{Document, Id, Tag};
 use folio_core::ports::ProcessingStatus;
 use folio_core::services::{
@@ -14,7 +14,7 @@ use folio_core::Error;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    Implementation, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
     ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
     ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
 };
@@ -98,7 +98,7 @@ struct SearchArgs {
     document_type: Option<String>,
     /// Only documents added on or after this date (YYYY-MM-DD or RFC 3339)
     date_from: Option<String>,
-    /// Only documents added on or before this date (YYYY-MM-DD or RFC 3339)
+    /// Only documents added up to and including this date (YYYY-MM-DD), or before this instant (RFC 3339)
     date_to: Option<String>,
     /// Maximum number of results (default 10, max 50)
     limit: Option<usize>,
@@ -512,7 +512,7 @@ impl FolioMcp {
     }
 
     #[tool(
-        description = "Remove tags (by name) from a document. The tags themselves are kept.",
+        description = "Remove tags (by name) from a document; names it does not have are ignored. The tags themselves are kept.",
         annotations(
             title = "Remove tags",
             read_only_hint = false,
@@ -695,6 +695,7 @@ impl ServerHandler for FolioMcp {
                 .enable_resources()
                 .build(),
         )
+        .with_server_info(Implementation::new("folio", env!("CARGO_PKG_VERSION")))
         .with_instructions(INSTRUCTIONS)
     }
 
@@ -801,19 +802,45 @@ fn parse_id(s: &str) -> Result<Id, String> {
     Id::parse_str(s.trim()).map_err(|_| format!("'{s}' is not a valid document id"))
 }
 
-/// Accepts RFC 3339 or a plain date; a plain date covers the whole day
-fn parse_date(s: &str, end_of_day: bool) -> Result<DateTime<Utc>, String> {
+/// Accepts RFC 3339 or a plain date. `last_day` makes a plain date the final
+/// day of an exclusive upper bound, i.e. midnight at the start of the next day.
+fn parse_date(s: &str, last_day: bool) -> Result<DateTime<Utc>, String> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s.trim()) {
         return Ok(dt.with_timezone(&Utc));
     }
     let date = NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
         .map_err(|_| format!("'{s}' is not a date; use YYYY-MM-DD or RFC 3339"))?;
-    let time = if end_of_day {
-        date.and_hms_opt(23, 59, 59)
+    let date = if last_day {
+        date.succ_opt()
+            .ok_or_else(|| format!("'{s}' is out of range"))?
     } else {
-        date.and_hms_opt(0, 0, 0)
+        date
     };
-    Ok(time.expect("valid time of day").and_utc())
+    Ok(date.and_time(NaiveTime::MIN).and_utc())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_day_covers_the_whole_day() {
+        let end = parse_date("2026-03-31", true).unwrap();
+        assert_eq!(end.to_rfc3339(), "2026-04-01T00:00:00+00:00");
+        let start = parse_date("2026-03-31", false).unwrap();
+        assert_eq!(start.to_rfc3339(), "2026-03-31T00:00:00+00:00");
+    }
+
+    #[test]
+    fn rfc3339_instants_are_used_as_given() {
+        let at = parse_date("2026-03-31T10:00:00+02:00", true).unwrap();
+        assert_eq!(at.to_rfc3339(), "2026-03-31T08:00:00+00:00");
+    }
+
+    #[test]
+    fn garbage_is_rejected() {
+        assert!(parse_date("yesterday", false).is_err());
+    }
 }
 
 /// Domain errors the caller can act on are shown as-is; the rest stay in the log

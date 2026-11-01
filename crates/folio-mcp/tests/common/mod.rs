@@ -6,13 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use folio_core::models::{CreateDocument, Document};
-use folio_core::ports::{DocumentRepository, EmbeddingService, SettingsRepository};
+use folio_core::ports::{DocumentRepository, EmbeddingService, SearchService, SettingsRepository};
 use folio_core::services::LibraryService;
-use folio_infra::{
-    create_pool, run_migrations, FileStorage, JobQueue, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
-    SqliteSettingsRepository, SqliteTagRepository,
-};
+use folio_infra::{Database, FileStorage};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RunningService, ServiceError};
 use rmcp::{RoleClient, ServiceExt};
@@ -36,40 +32,110 @@ impl EmbeddingService for NoEmbeddings {
     }
 }
 
+/// Embeddings that always succeed so the semantic path is taken
+pub struct FakeEmbeddings;
+
+#[async_trait]
+impl EmbeddingService for FakeEmbeddings {
+    async fn generate_embedding(&self, _text: &str) -> folio_core::Result<Vec<f32>> {
+        Ok(vec![1.0])
+    }
+
+    async fn generate_embeddings(&self, texts: &[&str]) -> folio_core::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![1.0]).collect())
+    }
+
+    fn embedding_dimension(&self) -> usize {
+        1
+    }
+}
+
+/// Vector search returning a ranking set by the test
+#[derive(Default)]
+pub struct FakeSearch(std::sync::Mutex<Vec<(folio_core::models::Id, f32)>>);
+
+impl FakeSearch {
+    pub fn rank(&self, hits: Vec<(folio_core::models::Id, f32)>) {
+        *self.0.lock().unwrap() = hits;
+    }
+}
+
+#[async_trait]
+impl SearchService for FakeSearch {
+    async fn store_embedding(
+        &self,
+        _id: folio_core::models::Id,
+        _e: &[f32],
+    ) -> folio_core::Result<()> {
+        Ok(())
+    }
+
+    async fn delete_embedding(&self, _id: folio_core::models::Id) -> folio_core::Result<()> {
+        Ok(())
+    }
+
+    async fn search(
+        &self,
+        _embedding: &[f32],
+        limit: usize,
+    ) -> folio_core::Result<Vec<folio_core::ports::SearchResult>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .take(limit)
+            .cloned()
+            .map(|(id, score)| folio_core::ports::SearchResult {
+                document_id: id,
+                score,
+                snippet: None,
+            })
+            .collect())
+    }
+}
+
 pub struct Fixture {
     pub library: Arc<LibraryService>,
-    pub documents: Arc<SqliteDocumentRepository>,
-    pub settings: Arc<SqliteSettingsRepository>,
+    pub documents: Arc<dyn DocumentRepository>,
+    pub settings: Arc<dyn SettingsRepository>,
     _dir: tempfile::TempDir,
 }
 
 impl Fixture {
     pub async fn new() -> Self {
+        Self::with_semantic(Arc::new(NoEmbeddings), None).await
+    }
+
+    /// Like [`Fixture::new`] with custom embedding and vector search ports
+    pub async fn with_semantic(
+        embeddings: Arc<dyn EmbeddingService>,
+        search: Option<Arc<dyn SearchService>>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let url = format!("sqlite:{}?mode=rwc", dir.path().join("folio.db").display());
-        let pool = create_pool(&url).await.unwrap();
-        run_migrations(&pool).await.unwrap();
+        let db = Database::connect(&url).await.unwrap();
+        db.migrate().await.unwrap();
+        let repos = db.repositories().await;
 
         let storage = FileStorage::new(dir.path().join("data"));
         storage.init().await.unwrap();
 
-        let documents = Arc::new(SqliteDocumentRepository::new(pool.clone()));
-        let settings = Arc::new(SqliteSettingsRepository::new(pool.clone()));
         let library = Arc::new(LibraryService::new(
-            documents.clone(),
-            Arc::new(SqliteTagRepository::new(pool.clone())),
-            Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-            Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-            Arc::new(NoEmbeddings),
-            Arc::new(SqliteSearchService::new(pool.clone())),
+            repos.documents.clone(),
+            repos.tags,
+            repos.correspondents,
+            repos.document_types,
+            embeddings,
+            search.unwrap_or(repos.search),
             Arc::new(storage),
-            Arc::new(JobQueue::new(pool)),
+            Arc::new(repos.jobs),
         ));
 
         Self {
             library,
-            documents,
-            settings,
+            documents: repos.documents,
+            settings: repos.settings,
             _dir: dir,
         }
     }

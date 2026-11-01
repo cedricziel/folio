@@ -3,7 +3,7 @@
 //! Names (tags, correspondents, document types) are the vocabulary
 //! assistants work with, so this service resolves them to IDs.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -32,7 +32,9 @@ pub struct DocumentQuery {
     pub tags: Vec<String>,
     pub correspondent: Option<String>,
     pub document_type: Option<String>,
+    /// Inclusive lower bound on the creation time
     pub created_after: Option<DateTime<Utc>>,
+    /// Exclusive upper bound on the creation time
     pub created_before: Option<DateTime<Utc>>,
     pub limit: usize,
 }
@@ -163,7 +165,6 @@ impl LibraryService {
         };
 
         let mut hits: Vec<(Document, Option<f32>)> = Vec::new();
-        let mut seen = HashSet::new();
 
         if let Some(text) = text {
             let allowed: HashSet<Id> = self
@@ -175,17 +176,19 @@ impl LibraryService {
                 .collect();
 
             // Semantic search is best effort: it needs a configured AI provider
-            let semantic = self
+            let semantic: Vec<_> = self
                 .semantic
                 .search_documents(text, limit * SEMANTIC_OVERFETCH)
                 .await
-                .unwrap_or_default();
-            for s in semantic {
-                if allowed.contains(&s.document.id) && seen.insert(s.document.id) {
-                    hits.push((s.document, Some(s.score)));
-                }
-            }
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|s| allowed.contains(&s.document.id))
+                .collect();
+            let scores: HashMap<Id, f32> =
+                semantic.iter().map(|s| (s.document.id, s.score)).collect();
 
+            // Exact matches come first so that semantic neighbours only fill
+            // the slots that are left
             let literal = self
                 .documents
                 .list(Some(DocumentFilter {
@@ -193,9 +196,15 @@ impl LibraryService {
                     ..metadata_filter
                 }))
                 .await?;
+            let mut seen = HashSet::new();
             for doc in literal {
-                if seen.insert(doc.id) {
-                    hits.push((doc, None));
+                seen.insert(doc.id);
+                let score = scores.get(&doc.id).copied();
+                hits.push((doc, score));
+            }
+            for s in semantic {
+                if seen.insert(s.document.id) {
+                    hits.push((s.document, Some(s.score)));
                 }
             }
         } else {
@@ -266,8 +275,18 @@ impl LibraryService {
     pub async fn update_metadata(&self, id: Id, update: MetadataUpdate) -> Result<DocumentDetail> {
         self.require_document(id).await?;
 
+        // Reject bad input before the first write so a failure changes nothing
         if update.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(Error::Validation("title must not be empty".into()));
+        }
+        if let Some(Some(name)) = &update.correspondent {
+            non_empty(name, "correspondent")?;
+        }
+        if let Some(Some(name)) = &update.document_type {
+            non_empty(name, "document type")?;
+        }
+        for name in update.tags.iter().flatten() {
+            non_empty(name, "tag")?;
         }
 
         let correspondent_id = match update.correspondent {
@@ -278,6 +297,16 @@ impl LibraryService {
         let document_type_id = match update.document_type {
             Some(Some(name)) => Some(Some(self.ensure_document_type(&name).await?.id)),
             Some(None) => Some(None),
+            None => None,
+        };
+        let tag_ids = match &update.tags {
+            Some(names) => {
+                let mut ids = Vec::with_capacity(names.len());
+                for name in names {
+                    ids.push(self.ensure_tag(name).await?.id);
+                }
+                Some(ids)
+            }
             None => None,
         };
 
@@ -294,12 +323,7 @@ impl LibraryService {
                 )
                 .await?;
         }
-
-        if let Some(names) = update.tags {
-            let mut ids = Vec::new();
-            for name in &names {
-                ids.push(self.ensure_tag(name).await?.id);
-            }
+        if let Some(ids) = tag_ids {
             self.documents.set_tags(id, &ids).await?;
         }
 
@@ -310,18 +334,22 @@ impl LibraryService {
     pub async fn add_tags(&self, id: Id, names: &[String]) -> Result<DocumentDetail> {
         self.require_document(id).await?;
         for name in names {
+            non_empty(name, "tag")?;
+        }
+        for name in names {
             let tag = self.ensure_tag(name).await?;
             self.documents.add_tag(id, tag.id).await?;
         }
         self.get_document(id).await
     }
 
-    /// Detach tags by name; tags the document does not carry are ignored
+    /// Detach tags by name; names that match no tag are ignored
     pub async fn remove_tags(&self, id: Id, names: &[String]) -> Result<DocumentDetail> {
         self.require_document(id).await?;
         for name in names {
-            let tag = self.find_tag(name).await?;
-            self.documents.remove_tag(id, tag.id).await?;
+            if let Some(tag) = self.lookup_tag(name).await? {
+                self.documents.remove_tag(id, tag.id).await?;
+            }
         }
         self.get_document(id).await
     }

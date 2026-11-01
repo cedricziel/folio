@@ -1,8 +1,9 @@
 mod common;
 
 use base64::Engine;
-use common::{call, call_ok, Fixture};
+use common::{call, call_ok, FakeEmbeddings, FakeSearch, Fixture};
 use serde_json::json;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn search_finds_inserted_document() {
@@ -227,4 +228,138 @@ async fn resources_expose_document_text_and_file() {
         file[0]["blob"],
         base64::engine::general_purpose::STANDARD.encode(b"hello world")
     );
+}
+
+#[tokio::test]
+async fn literal_matches_rank_before_semantic_hits() {
+    let search = Arc::new(FakeSearch::default());
+    let fx = Fixture::with_semantic(Arc::new(FakeEmbeddings), Some(search.clone())).await;
+    let literal = fx.insert("Invoice March", "pay by friday").await;
+    let semantic_a = fx.insert("Receipt", "unrelated a").await;
+    let semantic_b = fx.insert("Statement", "unrelated b").await;
+    search.rank(vec![
+        (semantic_a.id, 0.9),
+        (semantic_b.id, 0.8),
+        (literal.id, 0.1),
+    ]);
+    let client = fx.in_process_client().await;
+
+    let out = call_ok(
+        &client,
+        "search_documents",
+        json!({"query": "invoice", "limit": 1}),
+    )
+    .await;
+
+    let results = out["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["id"], literal.id.to_string());
+}
+
+#[tokio::test]
+async fn search_tag_filter_ignores_name_case_duplicates() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Invoice", "pay soon").await;
+    let client = fx.in_process_client().await;
+    call_ok(
+        &client,
+        "add_tags",
+        json!({"id": doc.id.to_string(), "tags": ["Invoice"]}),
+    )
+    .await;
+
+    let out = call_ok(
+        &client,
+        "search_documents",
+        json!({"tags": ["Invoice", "invoice"]}),
+    )
+    .await;
+
+    assert_eq!(out["count"], 1);
+}
+
+#[tokio::test]
+async fn search_date_to_includes_the_whole_day() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Today", "x").await;
+    let client = fx.in_process_client().await;
+    let today = doc.created_at.format("%Y-%m-%d").to_string();
+
+    let out = call_ok(
+        &client,
+        "search_documents",
+        json!({"date_from": today, "date_to": today}),
+    )
+    .await;
+
+    assert_eq!(out["count"], 1);
+}
+
+#[tokio::test]
+async fn add_tags_with_an_invalid_name_changes_nothing() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Doc", "x").await;
+    let client = fx.in_process_client().await;
+
+    let res = call(
+        &client,
+        "add_tags",
+        json!({"id": doc.id.to_string(), "tags": ["good", " "]}),
+    )
+    .await;
+
+    assert!(res.is_err() || res.unwrap().is_error == Some(true));
+    let tags = call_ok(&client, "list_tags", json!({})).await;
+    assert_eq!(tags["tags"], json!([]));
+}
+
+#[tokio::test]
+async fn update_document_with_an_invalid_tag_changes_nothing() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Doc", "x").await;
+    let client = fx.in_process_client().await;
+
+    let res = call(
+        &client,
+        "update_document",
+        json!({"id": doc.id.to_string(), "title": "New", "correspondent": "Acme", "tags": ["good", ""]}),
+    )
+    .await;
+
+    assert!(res.is_err() || res.unwrap().is_error == Some(true));
+    let out = call_ok(&client, "get_document", json!({"id": doc.id.to_string()})).await;
+    assert_eq!(out["title"], "Doc");
+    assert_eq!(out["correspondent"], json!(null));
+    let corrs = call_ok(&client, "list_correspondents", json!({})).await;
+    assert_eq!(corrs["correspondents"], json!([]));
+}
+
+#[tokio::test]
+async fn remove_tags_ignores_unknown_names() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Doc", "x").await;
+    let client = fx.in_process_client().await;
+    let id = doc.id.to_string();
+    call_ok(&client, "add_tags", json!({"id": id, "tags": ["keep"]})).await;
+
+    let out = call_ok(
+        &client,
+        "remove_tags",
+        json!({"id": id, "tags": ["never-existed"]}),
+    )
+    .await;
+
+    assert_eq!(out["tags"], json!(["keep"]));
+}
+
+#[tokio::test]
+async fn server_identifies_as_folio() {
+    let fx = Fixture::new().await;
+    let client = fx.in_process_client().await;
+
+    let info = client.peer_info().unwrap();
+
+    let server = info.server_info.as_ref().unwrap();
+    assert_eq!(server.name, "folio");
+    assert_eq!(server.version, env!("CARGO_PKG_VERSION"));
 }
