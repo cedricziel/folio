@@ -202,6 +202,7 @@ async fn obtain_code(app: &App, session: &str, client_id: &str) -> String {
     assert!(loc.as_str().starts_with(REDIRECT));
     let pairs: std::collections::HashMap<_, _> = loc.query_pairs().into_owned().collect();
     assert_eq!(pairs["state"], "xyz");
+    assert_eq!(pairs["iss"], BASE, "RFC 9207 issuer identification");
     pairs["code"].clone()
 }
 
@@ -235,6 +236,7 @@ async fn metadata_documents_have_expected_shape() {
         format!("{BASE}/oauth/register")
     );
     assert_eq!(meta["code_challenge_methods_supported"], json!(["S256"]));
+    assert_eq!(meta["authorization_response_iss_parameter_supported"], true);
     assert_eq!(
         meta["token_endpoint_auth_methods_supported"],
         json!(["none"])
@@ -740,6 +742,7 @@ async fn authorize_rejects_unregistered_redirect_and_missing_pkce() {
     .await;
     assert_eq!(res.status, StatusCode::SEE_OTHER);
     assert!(res.location().contains("error=invalid_request"));
+    assert!(res.location().contains(&format!("iss={}", enc(BASE))));
 }
 
 #[tokio::test]
@@ -992,6 +995,7 @@ async fn denying_consent_returns_access_denied() {
     .await;
     assert!(done.location().contains("error=access_denied"));
     assert!(done.location().contains("state=xyz"));
+    assert!(done.location().contains(&format!("iss={}", enc(BASE))));
 }
 
 mod enforcement {

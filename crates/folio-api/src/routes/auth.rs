@@ -789,17 +789,21 @@ fn error_page(message: &str) -> Response {
     )
 }
 
-fn redirect_with(redirect_uri: &str, params: &[(&str, &str)]) -> Response {
+/// Redirects to the client with `params`, adding the RFC 9207 `iss` so a client
+/// can tell which authorization server answered.
+fn redirect_with(redirect_uri: &str, issuer: &str, params: &[(&str, &str)]) -> Response {
     match Url::parse(redirect_uri) {
         Ok(mut url) => {
-            url.query_pairs_mut().extend_pairs(params);
+            url.query_pairs_mut()
+                .extend_pairs(params)
+                .append_pair("iss", issuer);
             Redirect::to(url.as_str()).into_response()
         }
         Err(_) => error_page("The redirect address is not valid."),
     }
 }
 
-fn failure_response(f: AuthorizeFailure) -> Response {
+fn failure_response(f: AuthorizeFailure, issuer: &str) -> Response {
     match f {
         AuthorizeFailure::Page(m) => error_page(&m),
         AuthorizeFailure::Redirect {
@@ -815,7 +819,7 @@ fn failure_response(f: AuthorizeFailure) -> Response {
             if let Some(s) = state.as_deref() {
                 params.push(("state", s));
             }
-            redirect_with(&redirect_uri, &params)
+            redirect_with(&redirect_uri, issuer, &params)
         }
     }
 }
@@ -858,7 +862,7 @@ async fn authorize_page(
     let base = auth.base();
     let validated = match auth.server.validate_authorize(&base, &params).await {
         Ok(v) => v,
-        Err(f) => return failure_response(f),
+        Err(f) => return failure_response(f, &base),
     };
     let Some(user) = auth.current_user(&headers).await else {
         let next = format!("/oauth/authorize?{}", raw.unwrap_or_default());
@@ -924,7 +928,7 @@ async fn authorize_submit(
     let base = auth.base();
     let validated: ValidatedAuthorize = match auth.server.validate_authorize(&base, &params).await {
         Ok(v) => v,
-        Err(f) => return failure_response(f),
+        Err(f) => return failure_response(f, &base),
     };
     let state = validated.state.as_deref();
     if form.decision != "allow" {
@@ -932,7 +936,7 @@ async fn authorize_submit(
         if let Some(s) = state {
             p.push(("state", s));
         }
-        return redirect_with(&validated.redirect_uri, &p);
+        return redirect_with(&validated.redirect_uri, &base, &p);
     }
     match auth.server.issue_code(&user.id, &validated).await {
         Ok(code) => {
@@ -940,7 +944,7 @@ async fn authorize_submit(
             if let Some(s) = state {
                 p.push(("state", s));
             }
-            redirect_with(&validated.redirect_uri, &p)
+            redirect_with(&validated.redirect_uri, &base, &p)
         }
         Err(e) => {
             tracing::error!("issue code failed: {e}");
