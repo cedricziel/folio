@@ -96,12 +96,15 @@ struct FolioCatalogTests {
         #expect(folders.map(\.name) == ["Invoice"])
     }
 
-    @Test func tagFoldersListTagsAndStayEmptyUntilTheAPIReportsTags() async throws {
-        let service = MockFolioService(documents: [document("A")])
-        await service.setTags([Tag(id: tagID, name: "Insurance")])
+    @Test func tagFoldersListTagsAndTheirDocuments() async throws {
+        let insurance = Tag(id: tagID, name: "Insurance")
+        let tagged = Document(title: "Policy", originalFilename: "policy.pdf", tags: [insurance])
+        let service = MockFolioService(documents: [document("A"), tagged])
+        await service.setTags([insurance])
         let catalog = FolioCatalog(service: service)
         #expect(try await catalog.children(of: .tags).map(\.name) == ["Insurance"])
-        #expect(try await catalog.children(of: .tag(tagID)).isEmpty)
+        #expect(try await catalog.children(of: .tag(tagID)).map(\.name) == ["policy.pdf"])
+        #expect(await service.filters.last == DocumentFilter(tagIDs: [tagID]))
     }
 
     @Test func documentsKeepTheirFilenameAndDisambiguateCollisions() async throws {

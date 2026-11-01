@@ -63,6 +63,8 @@ private let documentJSON = """
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
      "ocr_status": "done", "embed_status": "skipped",
+     "correspondent": null, "document_type": "Invoice",
+     "tags": [{"id": "99999999-8888-4777-8666-555555555555", "name": "Taxes", "color": "#ff5733"}],
      "created_at": "2025-03-14T10:15:30.123456789Z", "updated_at": "2025-03-14T10:15:30Z"}
     """
 
@@ -90,6 +92,26 @@ private let documentJSON = """
         #expect(document.correspondentID == nil)
         #expect(document.documentTypeID == UUID(uuidString: "11111111-2222-4333-8444-555555555555"))
         #expect(document.createdAt.timeIntervalSince1970 > 1_741_000_000)
+        #expect(document.tags.map(\.name) == ["Taxes"])
+        #expect(document.tags.first?.color == "#ff5733")
+    }
+
+    @Test func sendsEveryFilterAsAQueryParameter() async throws {
+        let tags = [UUID(), UUID()]
+        let after = Date(timeIntervalSince1970: 1_741_910_400)
+        StubURLProtocol.handler = { request, _ in
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            func values(_ name: String) -> [String] { items.filter { $0.name == name }.compactMap(\.value) }
+            #expect(request.url?.path == "/api/documents")
+            #expect(values("tag_id") == tags.map { $0.uuidString.lowercased() })
+            #expect(values("correspondent_id").count == 1)
+            #expect(values("created_after").first?.hasPrefix("2025-03-14") == true)
+            #expect(values("created_before").count == 1)
+            return .init(body: Data("{\"documents\": [], \"count\": 0}".utf8))
+        }
+        let filter = DocumentFilter(
+            tagIDs: tags, correspondentID: UUID(), createdAfter: after, createdBefore: after.addingTimeInterval(86400))
+        #expect(try await makeService().documents(filter: filter).isEmpty)
     }
 
     @Test func searchUsesTheSearchEndpointAndKeepsServerOrder() async throws {

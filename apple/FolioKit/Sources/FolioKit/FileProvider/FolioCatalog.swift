@@ -40,14 +40,13 @@ public struct FolioCatalog: Sendable {
         case .types:
             return try await service.documentTypes().map { folderNode(.type($0.id), $0.name, parent: .types) }
         case let .correspondent(id):
-            let documents = try await service.documents(correspondentID: id, documentTypeID: nil)
+            let documents = try await service.documents(filter: DocumentFilter(correspondentID: id))
             return documentNodes(documents, in: folder)
         case let .type(id):
-            let documents = try await service.documents(correspondentID: nil, documentTypeID: id)
+            let documents = try await service.documents(filter: DocumentFilter(documentTypeID: id))
             return documentNodes(documents, in: folder)
-        case .tag:
-            // Documents carry no tags in the API response yet.
-            return []
+        case let .tag(id):
+            return try documentNodes(await service.documents(filter: DocumentFilter(tagIDs: [id])), in: folder)
         }
     }
 

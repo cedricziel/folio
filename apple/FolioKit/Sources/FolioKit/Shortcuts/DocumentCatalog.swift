@@ -97,26 +97,14 @@ public struct DocumentCatalog: Sendable {
     }
 
     public func find(_ criteria: DocumentCriteria) async throws -> [DocumentSummary] {
-        var documents =
-            if criteria.correspondentID != nil || criteria.documentTypeID != nil {
-                try await service.documents(
-                    correspondentID: criteria.correspondentID, documentTypeID: criteria.documentTypeID)
-            } else {
-                try await service.documents(matching: "")
-            }
-        if let tagID = criteria.tagID {
-            documents = documents.filter { $0.tags.contains { $0.id == tagID } }
-        }
-        if let from = criteria.from {
-            let start = calendar.startOfDay(for: from)
-            documents = documents.filter { $0.createdAt >= start }
-        }
-        if let through = criteria.through,
-            let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: through))
-        {
-            documents = documents.filter { $0.createdAt < end }
-        }
-        return try await summaries(Self.newestFirst(documents))
+        let filter = DocumentFilter(
+            tagIDs: criteria.tagID.map { [$0] } ?? [], correspondentID: criteria.correspondentID,
+            documentTypeID: criteria.documentTypeID,
+            createdAfter: criteria.from.map { calendar.startOfDay(for: $0) },
+            createdBefore: criteria.through.flatMap {
+                calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0))
+            })
+        return try await summaries(Self.newestFirst(service.documents(filter: filter)))
     }
 
     public func tags(matching text: String = "") async throws -> [Tag] {

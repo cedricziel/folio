@@ -92,11 +92,17 @@ actor MockFolioService: FolioService {
         tagList
     }
 
-    func documents(correspondentID: UUID?, documentTypeID: UUID?) async throws -> [Document] {
+    private(set) var filters: [DocumentFilter] = []
+
+    func documents(filter: DocumentFilter) async throws -> [Document] {
+        filters.append(filter)
         if let failure { throw failure }
-        return documentList.filter {
-            (correspondentID == nil || $0.correspondentID == correspondentID)
-                && (documentTypeID == nil || $0.documentTypeID == documentTypeID)
+        return documentList.filter { document in
+            (filter.correspondentID == nil || document.correspondentID == filter.correspondentID)
+                && (filter.documentTypeID == nil || document.documentTypeID == filter.documentTypeID)
+                && filter.tagIDs.allSatisfy { id in document.tags.contains { $0.id == id } }
+                && (filter.createdAfter.map { document.createdAt >= $0 } ?? true)
+                && (filter.createdBefore.map { document.createdAt < $0 } ?? true)
         }
     }
 
