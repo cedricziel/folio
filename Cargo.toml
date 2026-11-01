@@ -5,6 +5,7 @@ members = [
     "crates/folio-infra",
     "crates/folio-api",
     "folio-app",
+    "xtask",
 ]
 
 [workspace.package]
@@ -22,7 +23,7 @@ futures = "0.3"
 # Web framework
 axum = { version = "0.8", features = ["macros", "multipart"] }
 tower = "0.5"
-tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
+tower-http = { version = "0.7", features = ["trace", "cors"] }
 tower-livereload = "0.10"
 
 # HTML templating (for HTMX responses)
@@ -59,6 +60,9 @@ reqwest = { version = "0.13", features = ["json"] }
 # OpenAPI
 utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
 utoipa-scalar = "0.4"
+
+# Embedded static assets
+rust-embed = { version = "8", features = ["mime-guess"] }
 
 # Image processing
 image = "0.25"

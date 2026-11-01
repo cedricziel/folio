@@ -22,8 +22,9 @@ migrations/sqlite/     001_initial.sql  002_jobs.sql  ...
 migrations/postgres/   001_initial.sql  002_jobs.sql  ...
 ```
 
-Numbering is shared: a schema change adds the same `NNN_name.sql` to both
-directories. PostgreSQL uses native types (`uuid`, `timestamptz`, `jsonb`,
+`001` to `004` keep their sequence numbers. New migrations use a timestamp
+prefix, `YYYYMMDDHHMMSS_name.sql`, so parallel branches do not collide on the
+next number. A schema change adds the same file name to both directories. PostgreSQL uses native types (`uuid`, `timestamptz`, `jsonb`,
 `text`); SQLite keeps text columns.
 
 Queries are plain `sqlx::query_as` calls with `FromRow` structs, not `query!`
