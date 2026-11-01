@@ -339,6 +339,7 @@ impl OAuthServer {
                 scopes: v.scopes.clone(),
                 audience: v.audience.clone(),
                 expires_at: now() + CODE_TTL_SECS,
+                grant_id: uuid::Uuid::new_v4().to_string(),
             })
             .await?;
         Ok(code)
@@ -399,8 +400,14 @@ impl OAuthServer {
             return Err(grant_err("PKCE verification failed"));
         }
         check_resource(base, req.resource.as_deref(), &record.audience)?;
-        self.issue_tokens(client_id, &record.user_id, record.scopes, record.audience)
-            .await
+        self.issue_tokens(
+            client_id,
+            &record.user_id,
+            record.scopes,
+            record.audience,
+            record.grant_id,
+        )
+        .await
     }
 
     async fn refresh_grant(
@@ -414,11 +421,15 @@ impl OAuthServer {
             .refresh_token
             .as_deref()
             .ok_or_else(|| OAuthError::new("invalid_request", "refresh_token is required"))?;
-        let record = self
-            .store
-            .take_refresh_token(&hash_token(token))
-            .await?
-            .ok_or_else(|| grant_err("invalid refresh token"))?;
+        let token_hash = hash_token(token);
+        let Some(record) = self.store.take_refresh_token(&token_hash).await? else {
+            // A rotated token coming back means it leaked: end the whole grant.
+            if let Some(grant_id) = self.store.used_refresh_grant(&token_hash).await? {
+                tracing::warn!("refresh token reuse detected; revoking its grant");
+                self.store.revoke_grant(&grant_id).await?;
+            }
+            return Err(grant_err("invalid refresh token"));
+        };
         if record.expires_at <= now() || !ct_eq(&record.client_id, client_id) {
             return Err(grant_err("invalid refresh token"));
         }
@@ -434,8 +445,14 @@ impl OAuthServer {
                 requested
             }
         };
-        self.issue_tokens(client_id, &record.user_id, scopes, record.audience)
-            .await
+        self.issue_tokens(
+            client_id,
+            &record.user_id,
+            scopes,
+            record.audience,
+            record.grant_id,
+        )
+        .await
     }
 
     async fn issue_tokens(
@@ -444,6 +461,7 @@ impl OAuthServer {
         user_id: &str,
         scopes: Vec<String>,
         audience: String,
+        grant_id: String,
     ) -> Result<Value, OAuthError> {
         let access = random_token();
         let refresh = random_token();
@@ -456,6 +474,7 @@ impl OAuthServer {
                 scopes: scopes.clone(),
                 audience: audience.clone(),
                 expires_at: issued + ACCESS_TTL_SECS,
+                grant_id: grant_id.clone(),
             })
             .await?;
         self.store
@@ -466,6 +485,7 @@ impl OAuthServer {
                 scopes: scopes.clone(),
                 audience,
                 expires_at: issued + REFRESH_TTL_SECS,
+                grant_id,
             })
             .await?;
         Ok(json!({
@@ -478,7 +498,7 @@ impl OAuthServer {
     }
 
     /// RFC 7009: unknown tokens are not an error.
-    pub async fn revoke(&self, token: &str) -> Result<(), AuthError> {
-        self.store.revoke_token(&hash_token(token)).await
+    pub async fn revoke(&self, token: &str, client_id: &str) -> Result<(), AuthError> {
+        self.store.revoke_token(&hash_token(token), client_id).await
     }
 }

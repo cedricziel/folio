@@ -82,6 +82,7 @@ async fn issue(server: &Server, token: &str, scopes: &[&str]) {
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             audience: server.url.clone(),
             expires_at: i64::MAX / 2,
+            grant_id: "g1".into(),
         })
         .await
         .unwrap();

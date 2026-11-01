@@ -486,7 +486,11 @@ async fn full_flow_yields_a_token_the_validator_accepts() {
     // Revocation invalidates the token.
     let revoked = send(
         &app,
-        form_req("/oauth/revoke", "", &format!("token={access}")),
+        form_req(
+            "/oauth/revoke",
+            "",
+            &format!("token={access}&client_id={client}"),
+        ),
     )
     .await;
     assert_eq!(revoked.status, StatusCode::OK);
@@ -578,19 +582,89 @@ async fn refresh_rotation_invalidates_the_old_refresh_token() {
     let second = second.json();
     assert_ne!(second["refresh_token"], first["refresh_token"]);
 
+    let new_access = second["access_token"].as_str().unwrap();
+    assert_eq!(mcp_status(&app, new_access).await, StatusCode::OK);
+
     let replay = exchange(&app, &refresh(old)).await;
     assert_eq!(replay.json()["error"], "invalid_grant");
+}
 
-    let new_access = second["access_token"].as_str().unwrap();
-    let ok = send(
-        &app,
+async fn mcp_status(app: &App, access: &str) -> StatusCode {
+    send(
+        app,
         Request::get("/mcp")
-            .header(header::AUTHORIZATION, format!("Bearer {new_access}"))
+            .header(header::AUTHORIZATION, format!("Bearer {access}"))
             .body(Body::empty())
             .unwrap(),
     )
+    .await
+    .status
+}
+
+#[tokio::test]
+async fn refresh_token_reuse_revokes_the_whole_grant() {
+    let app = app().await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let code = obtain_code(&app, &session, &client).await;
+    let first = exchange(&app, &code_body(&client, &code, VERIFIER))
+        .await
+        .json();
+    let refresh =
+        |t: &str| format!("grant_type=refresh_token&client_id={client}&refresh_token={t}");
+    let second = exchange(&app, &refresh(first["refresh_token"].as_str().unwrap()))
+        .await
+        .json();
+    let (access1, access2) = (
+        first["access_token"].as_str().unwrap(),
+        second["access_token"].as_str().unwrap(),
+    );
+    assert_eq!(mcp_status(&app, access2).await, StatusCode::OK);
+
+    // A stolen, already-rotated refresh token shows up again.
+    let replay = exchange(&app, &refresh(first["refresh_token"].as_str().unwrap())).await;
+    assert_eq!(replay.json()["error"], "invalid_grant");
+
+    assert_eq!(mcp_status(&app, access1).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(mcp_status(&app, access2).await, StatusCode::UNAUTHORIZED);
+    let live = exchange(&app, &refresh(second["refresh_token"].as_str().unwrap())).await;
+    assert_eq!(live.json()["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn revoke_checks_the_client_and_kills_the_whole_grant() {
+    let app = app().await;
+    let session = setup_and_login(&app).await;
+    let client = register(&app).await;
+    let other = register(&app).await;
+    let code = obtain_code(&app, &session, &client).await;
+    let tokens = exchange(&app, &code_body(&client, &code, VERIFIER))
+        .await
+        .json();
+    let (access, refresh) = (
+        tokens["access_token"].as_str().unwrap(),
+        tokens["refresh_token"].as_str().unwrap(),
+    );
+    let revoke = |client_id: &str| {
+        form_req(
+            "/oauth/revoke",
+            "",
+            &format!("token={refresh}&client_id={client_id}"),
+        )
+    };
+
+    // Another client cannot revoke it (and learns nothing).
+    assert_eq!(send(&app, revoke(&other)).await.status, StatusCode::OK);
+    assert_eq!(mcp_status(&app, access).await, StatusCode::OK);
+
+    assert_eq!(send(&app, revoke(&client)).await.status, StatusCode::OK);
+    assert_eq!(mcp_status(&app, access).await, StatusCode::UNAUTHORIZED);
+    let refreshed = exchange(
+        &app,
+        &format!("grant_type=refresh_token&client_id={client}&refresh_token={refresh}"),
+    )
     .await;
-    assert_eq!(ok.status, StatusCode::OK);
+    assert_eq!(refreshed.json()["error"], "invalid_grant");
 }
 
 #[tokio::test]

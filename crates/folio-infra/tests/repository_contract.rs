@@ -845,6 +845,7 @@ async fn auth_contract(r: &Repositories) {
         scopes: vec!["documents:read".into(), "documents:write".into()],
         audience: "https://folio.example/mcp".into(),
         expires_at,
+        grant_id: "grant".into(),
     };
     auth.insert_code(code("c1", far)).await.unwrap();
     let taken = auth.take_code("c1").await.unwrap().unwrap();
@@ -855,41 +856,77 @@ async fn auth_contract(r: &Repositories) {
         "codes are single-use"
     );
 
-    let access = |hash: &str, expires_at| AccessToken {
+    let access = |hash: &str, grant: &str, expires_at| AccessToken {
         token_hash: hash.into(),
         client_id: "client".into(),
         user_id: owner.id.clone(),
         scopes: vec!["documents:read".into()],
         audience: "aud".into(),
         expires_at,
+        grant_id: grant.into(),
     };
-    let refresh = |hash: &str, expires_at| RefreshToken {
+    let refresh = |hash: &str, grant: &str, expires_at| RefreshToken {
         token_hash: hash.into(),
         client_id: "client".into(),
         user_id: owner.id.clone(),
         scopes: vec!["documents:read".into()],
         audience: "aud".into(),
         expires_at,
+        grant_id: grant.into(),
     };
-    auth.insert_access_token(access("a1", far)).await.unwrap();
+    auth.insert_access_token(access("a1", "g1", far))
+        .await
+        .unwrap();
+    let found = auth.find_access_token("a1").await.unwrap().unwrap();
+    assert_eq!(found.scopes, ["documents:read"]);
+    assert_eq!(found.grant_id, "g1");
+    auth.insert_refresh_token(refresh("r1", "g1", far))
+        .await
+        .unwrap();
+    assert!(auth.used_refresh_grant("r1").await.unwrap().is_none());
     assert_eq!(
-        auth.find_access_token("a1").await.unwrap().unwrap().scopes,
-        ["documents:read"]
+        auth.take_refresh_token("r1")
+            .await
+            .unwrap()
+            .unwrap()
+            .grant_id,
+        "g1"
     );
-    auth.insert_refresh_token(refresh("r1", far)).await.unwrap();
-    assert!(auth.take_refresh_token("r1").await.unwrap().is_some());
     assert!(
         auth.take_refresh_token("r1").await.unwrap().is_none(),
         "rotation consumes"
     );
-    auth.insert_refresh_token(refresh("r2", far)).await.unwrap();
-    auth.revoke_token("a1").await.unwrap();
-    auth.revoke_token("r2").await.unwrap();
-    auth.revoke_token("unknown").await.unwrap();
+    assert_eq!(
+        auth.used_refresh_grant("r1").await.unwrap().as_deref(),
+        Some("g1"),
+        "a rotated token is remembered so reuse can be detected"
+    );
+    assert!(auth.used_refresh_grant("unknown").await.unwrap().is_none());
+
+    // Revoking any token of a grant takes the whole family, but only for its client.
+    auth.insert_refresh_token(refresh("r2", "g1", far))
+        .await
+        .unwrap();
+    auth.revoke_token("r2", "someone-else").await.unwrap();
+    assert!(auth.find_access_token("a1").await.unwrap().is_some());
+    auth.revoke_token("r2", "client").await.unwrap();
     assert!(auth.find_access_token("a1").await.unwrap().is_none());
     assert!(auth.take_refresh_token("r2").await.unwrap().is_none());
+    auth.revoke_token("unknown", "client").await.unwrap();
 
-    auth.insert_access_token(access("old", 5)).await.unwrap();
+    auth.insert_access_token(access("a2", "g2", far))
+        .await
+        .unwrap();
+    auth.insert_access_token(access("a3", "g3", far))
+        .await
+        .unwrap();
+    auth.revoke_grant("g2").await.unwrap();
+    assert!(auth.find_access_token("a2").await.unwrap().is_none());
+    assert!(auth.find_access_token("a3").await.unwrap().is_some());
+
+    auth.insert_access_token(access("old", "g9", 5))
+        .await
+        .unwrap();
     auth.insert_code(code("oldcode", 5)).await.unwrap();
     auth.purge_expired(10).await.unwrap();
     assert!(auth.find_access_token("old").await.unwrap().is_none());

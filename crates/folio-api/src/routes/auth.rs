@@ -781,10 +781,11 @@ async fn token(
 #[derive(Deserialize)]
 struct RevokeForm {
     token: String,
+    client_id: String,
 }
 
 async fn revoke(State(auth): State<AuthState>, Form(form): Form<RevokeForm>) -> Response {
-    match auth.server.revoke(&form.token).await {
+    match auth.server.revoke(&form.token, &form.client_id).await {
         Ok(()) => oauth_json(StatusCode::OK, serde_json::json!({})),
         Err(e) => oauth_error(e.into()),
     }
