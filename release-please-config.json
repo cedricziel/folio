@@ -30,6 +30,11 @@
           "type": "toml",
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name=='folio-app')].version"
+        },
+        {
+          "type": "yaml",
+          "path": "apple/Folio/project.yml",
+          "jsonpath": "$.settings.base.MARKETING_VERSION"
         }
       ],
       "release-as": "0.1.0",
