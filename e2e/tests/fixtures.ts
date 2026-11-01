@@ -19,9 +19,22 @@ export function uniqueTitle(prefix = "e2e"): string {
 // Extension point: other upload paths (drag and drop, API) can sit next to this one.
 export async function uploadViaUi(page: Page, title: string) {
   await page.goto("/");
-  await page.getByRole("button", { name: "Upload document" }).click();
+  await page.getByRole("button", { name: "Upload document", exact: true }).click();
   await page.getByLabel("Title (optional)").fill(title);
   await page.getByLabel("File", { exact: true }).setInputFiles(samplePdf);
   await page.getByRole("button", { name: "Upload", exact: true }).click();
   await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+
+  // The worker finishes asynchronously and an SSE event then swaps the list for
+  // a variant whose links open into a frame. Waiting for the worker and
+  // reloading gives later steps a stable page.
+  await expect
+    .poll(async () => {
+      const res = await page.request.get("/api/documents");
+      const { documents } = await res.json();
+      const doc = documents.find((d: { title: string }) => d.title === title);
+      return doc?.page_count ?? null;
+    })
+    .not.toBeNull();
+  await page.goto("/");
 }
