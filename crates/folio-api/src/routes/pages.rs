@@ -260,8 +260,8 @@ async fn document_detail(
             if count == 1 { "page" } else { "pages" }
         ));
     }
-    if let Some(mime) = &document.mime_type {
-        facts.push(mime.clone());
+    if let Some(kind) = document.mime_type.as_deref().and_then(kind_label) {
+        facts.push(kind.to_string());
     }
     facts.push(format!("added {}", document.created_at.format("%Y-%m-%d")));
 
@@ -284,6 +284,15 @@ async fn document_detail(
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering document view: {}", e)
     })))
+}
+
+/// What people call the file: "PDF" or "Photo", not the MIME type
+fn kind_label(mime: &str) -> Option<&'static str> {
+    match mime {
+        "application/pdf" => Some("PDF"),
+        m if m.starts_with("image/") => Some("Photo"),
+        _ => None,
+    }
 }
 
 /// The first of `candidates` that exists; later ones are keys from before the
