@@ -229,24 +229,26 @@ impl LibraryService {
         Ok(DocumentDetail { document, tags })
     }
 
-    /// Read a slice of the extracted text, `cursor` being a character offset
-    pub async fn read_text(
+    /// A document with a slice of its extracted text, `cursor` being a character offset
+    pub async fn read_document(
         &self,
         id: Id,
         cursor: Option<usize>,
         max_chars: usize,
-    ) -> Result<TextPage> {
+    ) -> Result<(DocumentDetail, TextPage)> {
         let document = self.require_document(id).await?;
-        let content = document.content.unwrap_or_default();
+        let tags = self.documents.get_tags(id).await?;
+
+        let content = document.content.as_deref().unwrap_or_default();
         let total_chars = content.chars().count();
         let start = cursor.unwrap_or(0).min(total_chars);
         let end = start.saturating_add(max_chars.max(1)).min(total_chars);
-        let text: String = content.chars().skip(start).take(end - start).collect();
-        Ok(TextPage {
-            text,
+        let page = TextPage {
+            text: content.chars().skip(start).take(end - start).collect(),
             next_cursor: (end < total_chars).then_some(end),
             total_chars,
-        })
+        };
+        Ok((DocumentDetail { document, tags }, page))
     }
 
     /// Original file bytes of a document, if one was stored
@@ -380,37 +382,47 @@ impl LibraryService {
             })
     }
 
+    async fn lookup_tag(&self, name: &str) -> Result<Option<Tag>> {
+        let name = name.trim();
+        let tags = self.tags.list().await?;
+        Ok(tags.into_iter().find(|t| t.name.eq_ignore_ascii_case(name)))
+    }
+
+    async fn lookup_correspondent(&self, name: &str) -> Result<Option<Correspondent>> {
+        let name = name.trim();
+        let all = self.correspondents.list().await?;
+        Ok(all.into_iter().find(|c| c.name.eq_ignore_ascii_case(name)))
+    }
+
+    async fn lookup_document_type(&self, name: &str) -> Result<Option<DocumentType>> {
+        let name = name.trim();
+        let all = self.document_types.list().await?;
+        Ok(all.into_iter().find(|t| t.name.eq_ignore_ascii_case(name)))
+    }
+
     async fn find_tag(&self, name: &str) -> Result<Tag> {
-        self.tags
-            .list()
+        self.lookup_tag(name)
             .await?
-            .into_iter()
-            .find(|t| t.name.eq_ignore_ascii_case(name.trim()))
             .ok_or_else(|| unknown("tag", name))
     }
 
     async fn find_correspondent(&self, name: &str) -> Result<Correspondent> {
-        self.correspondents
-            .list()
+        self.lookup_correspondent(name)
             .await?
-            .into_iter()
-            .find(|c| c.name.eq_ignore_ascii_case(name.trim()))
             .ok_or_else(|| unknown("correspondent", name))
     }
 
     async fn find_document_type(&self, name: &str) -> Result<DocumentType> {
-        self.document_types
-            .list()
+        self.lookup_document_type(name)
             .await?
-            .into_iter()
-            .find(|t| t.name.eq_ignore_ascii_case(name.trim()))
             .ok_or_else(|| unknown("document type", name))
     }
 
     async fn ensure_tag(&self, name: &str) -> Result<Tag> {
         let name = non_empty(name, "tag")?;
-        match self.find_tag(name).await {
-            Err(Error::Validation(_)) => {
+        match self.lookup_tag(name).await? {
+            Some(tag) => Ok(tag),
+            None => {
                 self.tags
                     .create(CreateTag {
                         name: name.to_string(),
@@ -418,35 +430,34 @@ impl LibraryService {
                     })
                     .await
             }
-            other => other,
         }
     }
 
     async fn ensure_correspondent(&self, name: &str) -> Result<Correspondent> {
         let name = non_empty(name, "correspondent")?;
-        match self.find_correspondent(name).await {
-            Err(Error::Validation(_)) => {
+        match self.lookup_correspondent(name).await? {
+            Some(found) => Ok(found),
+            None => {
                 self.correspondents
                     .create(CreateCorrespondent {
                         name: name.to_string(),
                     })
                     .await
             }
-            other => other,
         }
     }
 
     async fn ensure_document_type(&self, name: &str) -> Result<DocumentType> {
         let name = non_empty(name, "document type")?;
-        match self.find_document_type(name).await {
-            Err(Error::Validation(_)) => {
+        match self.lookup_document_type(name).await? {
+            Some(found) => Ok(found),
+            None => {
                 self.document_types
                     .create(CreateDocumentType {
                         name: name.to_string(),
                     })
                     .await
             }
-            other => other,
         }
     }
 }
