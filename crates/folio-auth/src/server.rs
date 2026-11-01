@@ -16,7 +16,7 @@ pub const CODE_TTL_SECS: i64 = 60;
 pub const ACCESS_TTL_SECS: i64 = 3600;
 pub const REFRESH_TTL_SECS: i64 = 30 * 24 * 3600;
 /// Paths of protected resources a token may be bound to.
-pub const RESOURCE_PATHS: [&str; 1] = ["/mcp"];
+pub const RESOURCE_PATHS: [&str; 2] = ["/mcp", "/api"];
 
 pub fn now() -> i64 {
     std::time::SystemTime::now()

@@ -130,7 +130,8 @@ async fn main() -> Result<()> {
     );
 
     let auth_store = Arc::new(SqliteAuthStore::new(pool.clone()));
-    let auth = AuthState::new(auth_store, config.server.public_url.clone());
+    let auth = AuthState::new(auth_store, config.server.public_url.clone())
+        .with_required(config.auth.required);
 
     // Create router
     let app = create_router(state, auth);

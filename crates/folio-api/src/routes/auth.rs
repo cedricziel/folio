@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::{
-    extract::{FromRef, FromRequestParts, Query, RawQuery, State},
+    extract::{FromRef, FromRequestParts, Query, RawQuery, Request, State},
     http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Json, Router,
@@ -37,6 +38,8 @@ pub struct AuthState {
     pub store: Arc<dyn AuthStore>,
     pub server: OAuthServer,
     pub public_url: Option<String>,
+    /// When false, [`enforce_auth`] lets every request through.
+    pub required: bool,
 }
 
 impl AuthState {
@@ -45,7 +48,13 @@ impl AuthState {
             server: OAuthServer::new(store.clone()),
             store,
             public_url,
+            required: true,
         }
+    }
+
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
     }
 
     /// Validator for a protected resource path such as `/mcp`.
@@ -96,6 +105,62 @@ where
 }
 
 /// Router with all login, setup and OAuth endpoints.
+const EXEMPT_EXACT: [&str; 8] = [
+    "/healthz",
+    "/readyz",
+    "/login",
+    "/logout",
+    "/auth/theme.css",
+    "/api/openapi.json",
+    "/api/docs",
+    "/mcp",
+];
+const EXEMPT_PREFIX: [&str; 4] = ["/static/", "/oauth/", "/.well-known/", "/mcp/"];
+
+fn is_exempt(path: &str) -> bool {
+    EXEMPT_EXACT.contains(&path) || EXEMPT_PREFIX.iter().any(|p| path.starts_with(p))
+}
+
+/// Requires a session (web UI) or an `/api`-scoped bearer token (API) on every
+/// route except the exemptions above. `/mcp` is guarded by its own bearer layer.
+/// Web requests are redirected to `/login`, API requests get a 401.
+pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next: Next) -> Response {
+    let path = request.uri().path().to_string();
+    if !auth.required || is_exempt(&path) {
+        return next.run(request).await;
+    }
+    if path == "/setup" && auth.store.count_users().await.unwrap_or(1) == 0 {
+        return next.run(request).await;
+    }
+    let is_api = path == "/api" || path.starts_with("/api/");
+    if auth.current_user(request.headers()).await.is_some() {
+        return next.run(request).await;
+    }
+    if is_api {
+        let validator = auth.validator("/api");
+        if validator.validate(request.headers()).await.is_some() {
+            return next.run(request).await;
+        }
+        let mut response = validator.unauthorized(request.headers());
+        *response.body_mut() = axum::body::Body::from(r#"{"error":"unauthorized"}"#);
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        return response;
+    }
+    let next_path = if request.method() == axum::http::Method::GET {
+        request
+            .uri()
+            .path_and_query()
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| "/".into())
+    } else {
+        "/".into()
+    };
+    login_redirect(&next_path).into_response()
+}
+
 pub fn router<S>(state: AuthState) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,

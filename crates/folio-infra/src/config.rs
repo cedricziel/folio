@@ -13,6 +13,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 /// Server configuration
@@ -56,6 +58,26 @@ pub struct StorageConfig {
 
 fn default_storage_path() -> String {
     "./data".to_string()
+}
+
+/// Authentication configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    /// Require a session or token for the web UI and API.
+    #[serde(default = "default_auth_required")]
+    pub required: bool,
+}
+
+fn default_auth_required() -> bool {
+    true
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            required: default_auth_required(),
+        }
+    }
 }
 
 /// AI provider configuration
@@ -125,6 +147,7 @@ impl Default for Config {
                 openai_api_key: None,
                 anthropic_api_key: None,
             },
+            auth: AuthConfig::default(),
         }
     }
 }
@@ -142,12 +165,14 @@ mod tests {
             jail.set_env("FOLIO_DATABASE_URL", "sqlite::memory:");
             jail.set_env("FOLIO_STORAGE_PATH", "./data");
             jail.set_env("FOLIO_AI_OPENAI_API_KEY", "sk-test");
+            jail.set_env("FOLIO_AUTH_REQUIRED", "false");
             let config = Config::load_from("missing.toml")?;
             assert_eq!(
                 config.server.public_url.as_deref(),
                 Some("https://folio.example.com")
             );
             assert_eq!(config.server.port, 4000);
+            assert!(!config.auth.required);
             assert_eq!(config.ai.openai_api_key.as_deref(), Some("sk-test"));
             Ok(())
         });

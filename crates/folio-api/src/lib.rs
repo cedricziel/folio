@@ -9,7 +9,7 @@ pub mod state;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use routes::{
-    auth::{router as auth_router, AuthState, RequireUser},
+    auth::{enforce_auth, router as auth_router, AuthState, RequireUser},
     create_router,
 };
 pub use state::AppState;

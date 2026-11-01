@@ -564,3 +564,184 @@ async fn denying_consent_returns_access_denied() {
     assert!(done.location().contains("error=access_denied"));
     assert!(done.location().contains("state=xyz"));
 }
+
+mod enforcement {
+    use super::*;
+    use folio_api::enforce_auth;
+
+    async fn guarded(required: bool) -> App {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("t.db").display());
+        let pool = create_pool(&url).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()))
+            .with_required(required);
+        let mut pages = Router::new();
+        for path in [
+            "/",
+            "/healthz",
+            "/readyz",
+            "/static/app.css",
+            "/api/documents",
+            "/api/openapi.json",
+            "/api/docs",
+            "/mcp",
+        ] {
+            pages = pages.route(path, get(|| async { "ok" }));
+        }
+        App {
+            router: auth_router(auth.clone())
+                .merge(pages)
+                .layer(middleware::from_fn_with_state(auth, enforce_auth)),
+            _dir: dir,
+        }
+    }
+
+    async fn status(app: &App, uri: &str) -> StatusCode {
+        send(app, Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .status
+    }
+
+    #[tokio::test]
+    async fn exempt_paths_are_open() {
+        let app = guarded(true).await;
+        for path in [
+            "/healthz",
+            "/readyz",
+            "/static/app.css",
+            "/api/openapi.json",
+            "/api/docs",
+            "/mcp",
+            "/auth/theme.css",
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-protected-resource",
+        ] {
+            assert_eq!(status(&app, path).await, StatusCode::OK, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn oauth_endpoints_and_login_are_open() {
+        let app = guarded(true).await;
+        setup_and_login(&app).await;
+        assert_eq!(status(&app, "/login").await, StatusCode::OK);
+        let token = send(
+            &app,
+            form_req("/oauth/token", "", "grant_type=bogus&client_id=x"),
+        )
+        .await;
+        assert_eq!(token.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(token.json()["error"], "invalid_client");
+    }
+
+    #[tokio::test]
+    async fn setup_is_open_only_while_no_user_exists() {
+        let app = guarded(true).await;
+        assert_eq!(status(&app, "/setup").await, StatusCode::OK);
+        setup_and_login(&app).await;
+        let after = send(&app, Request::get("/setup").body(Body::empty()).unwrap()).await;
+        assert_eq!(after.status, StatusCode::SEE_OTHER);
+        assert!(after.location().starts_with("/login"));
+    }
+
+    #[tokio::test]
+    async fn web_pages_redirect_to_login_with_next() {
+        let app = guarded(true).await;
+        let res = send(&app, Request::get("/?q=a").body(Body::empty()).unwrap()).await;
+        assert_eq!(res.status, StatusCode::SEE_OTHER);
+        assert_eq!(res.location(), format!("/login?next={}", enc("/?q=a")));
+    }
+
+    #[tokio::test]
+    async fn api_gets_401_json_with_challenge() {
+        let app = guarded(true).await;
+        let res = send(
+            &app,
+            Request::get("/api/documents").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(res.json()["error"], "unauthorized");
+        assert!(res.headers[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap()
+            .starts_with("Bearer resource_metadata="));
+    }
+
+    #[tokio::test]
+    async fn session_and_api_token_grant_access() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        assert_eq!(
+            send(&app, get_req("/", &session)).await.status,
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(&app, get_req("/api/documents", &session)).await.status,
+            StatusCode::OK
+        );
+
+        let client = register(&app).await;
+        let code = obtain_code(&app, &session, &client).await;
+        let body = code_body(&client, &code, VERIFIER);
+        let tokens = exchange(&app, &body).await.json();
+        let access = tokens["access_token"].as_str().unwrap();
+        // The token is bound to /mcp, so the REST API rejects it.
+        let res = send(
+            &app,
+            Request::get("/api/documents")
+                .header(header::AUTHORIZATION, format!("Bearer {access}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn api_scoped_token_grants_api_access() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let client = register(&app).await;
+        let api = enc(&format!("{BASE}/api"));
+        let q = authorize_query(&client).replace(&enc(&format!("{BASE}/mcp")), &api);
+        let page = send(&app, get_req(&format!("/oauth/authorize?{q}"), &session)).await;
+        let csrf = csrf_from(&page.body);
+        let done = send(
+            &app,
+            form_req(
+                "/oauth/authorize",
+                &session,
+                &format!("{q}&csrf={csrf}&decision=allow"),
+            ),
+        )
+        .await;
+        let loc = url::Url::parse(&done.location()).unwrap();
+        let code = loc
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .unwrap()
+            .1
+            .to_string();
+        let body = code_body(&client, &code, VERIFIER).replace(&enc(&format!("{BASE}/mcp")), &api);
+        let tokens = exchange(&app, &body).await.json();
+        let access = tokens["access_token"].as_str().unwrap();
+        let res = send(
+            &app,
+            Request::get("/api/documents")
+                .header(header::AUTHORIZATION, format!("Bearer {access}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_can_be_disabled() {
+        let app = guarded(false).await;
+        assert_eq!(status(&app, "/").await, StatusCode::OK);
+        assert_eq!(status(&app, "/api/documents").await, StatusCode::OK);
+    }
+}

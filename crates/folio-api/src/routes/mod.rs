@@ -17,6 +17,7 @@ use crate::state::AppState;
 
 /// Create the main application router
 pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
+    let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
     let auth_routes = auth::router(auth);
     let router = Router::new()
         // API routes
@@ -34,6 +35,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         // Static files
         .nest_service("/static", ServeDir::new("static"))
         // Middleware
+        .layer(enforcement)
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)
