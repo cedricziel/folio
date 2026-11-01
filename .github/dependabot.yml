@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: daily
+    assignees: [cedricziel]
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: daily
+    assignees: [cedricziel]
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: daily
+    assignees: [cedricziel]
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]

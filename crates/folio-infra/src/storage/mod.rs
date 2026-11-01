@@ -106,7 +106,7 @@ fn sanitize_filename(filename: &str) -> String {
     let filename = Path::new(filename)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("document");
+        .unwrap_or("");
 
     // Replace problematic characters
     let sanitized: String = filename

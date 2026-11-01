@@ -1,0 +1,13 @@
+target/
+.git/
+.github/
+.claude/
+data/
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+Dockerfile
+.dockerignore
+*.md
