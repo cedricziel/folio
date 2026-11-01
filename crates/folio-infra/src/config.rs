@@ -258,6 +258,7 @@ impl fmt::Debug for AuthConfig {
             .field("required", &self.required)
             .field("forward", &self.forward)
             .field("setup_token", &Redacted(&self.setup_token))
+            .field("secret_key", &Redacted(&self.secret_key))
             .finish()
     }
 }
@@ -975,6 +976,7 @@ mod tests {
             },
             auth: AuthConfig {
                 setup_token: Some("setup-secret".into()),
+                secret_key: Some("totp-key-secret".into()),
                 forward: ForwardAuthConfig {
                     shared_secret: Some("proxy-secret".into()),
                     ..Default::default()
@@ -996,6 +998,7 @@ mod tests {
             "key-id-secret",
             "access-secret",
             "setup-secret",
+            "totp-key-secret",
             "proxy-secret",
             "sk-openai-secret",
             "sk-anthropic-secret",
