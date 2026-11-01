@@ -37,6 +37,20 @@ startup by the first three layers.
 | `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | unset | Externally visible base URL, used in OAuth metadata, redirects and links in webhook payloads. Derived from the request when unset. |
 | `auth.required` | `FOLIO_AUTH__REQUIRED` | `true` | Require a login or token for the web UI and API. See [auth](auth.md). |
 | `auth.setup_token` | `FOLIO_AUTH__SETUP_TOKEN` | random per start | One-time secret that `/setup` requires while no user exists. When unset Folio generates one and logs the full setup URL at startup. Supports `FOLIO_AUTH__SETUP_TOKEN_FILE`. See [auth](auth.md). |
+| `auth.forward.enabled` | `FOLIO_AUTH__FORWARD__ENABLED` | `false` | Trust identity headers from a reverse proxy or SSO gateway. See [auth.md](auth.md#forward-auth). |
+| `auth.forward.trusted_proxies` | `FOLIO_AUTH__FORWARD__TRUSTED_PROXIES` | empty | Comma-separated CIDRs or addresses of the proxies whose headers are honoured. Headers from any other peer are ignored. |
+| `auth.forward.user_header` | `FOLIO_AUTH__FORWARD__USER_HEADER` | `Remote-User` | Header carrying the username. |
+| `auth.forward.user_id_header` | `FOLIO_AUTH__FORWARD__USER_ID_HEADER` | empty | Header carrying a stable account id (Pangolin: `Remote-User-Id`). When set, accounts are linked by it and `user_header` is only the display username; requests without it are unauthenticated. |
+| `auth.forward.email_header` | `FOLIO_AUTH__FORWARD__EMAIL_HEADER` | `Remote-Email` | Header carrying the email address. |
+| `auth.forward.name_header` | `FOLIO_AUTH__FORWARD__NAME_HEADER` | `Remote-Name` | Header carrying the display name. |
+| `auth.forward.groups_header` | `FOLIO_AUTH__FORWARD__GROUPS_HEADER` | empty | Header carrying group names. Empty means groups are ignored. |
+| `auth.forward.group_separator` | `FOLIO_AUTH__FORWARD__GROUP_SEPARATOR` | `,` | Separator between group names in `groups_header` (Authentik: `\|`). |
+| `auth.forward.role_header` | `FOLIO_AUTH__FORWARD__ROLE_HEADER` | empty | Header carrying a single role name (Pangolin: `Remote-Role`). Empty means roles are ignored. |
+| `auth.forward.admin_group` | `FOLIO_AUTH__FORWARD__ADMIN_GROUP` | unset | Members of this external group are admins. Needs `groups_header`. |
+| `auth.forward.shared_secret` | `FOLIO_AUTH__FORWARD__SHARED_SECRET` | unset | When set, the proxy must also send this value in `secret_header`; requests without it are treated as unauthenticated. |
+| `auth.forward.secret_header` | `FOLIO_AUTH__FORWARD__SECRET_HEADER` | `X-Folio-Proxy-Secret` | Header carrying the shared secret. |
+| `auth.forward.session_ttl_secs` | `FOLIO_AUTH__FORWARD__SESSION_TTL_SECS` | `43200` | Lifetime of sessions created by forward-auth logins (12 hours). Local logins last 14 days. |
+| `auth.forward.admin_role` | `FOLIO_AUTH__FORWARD__ADMIN_ROLE` | unset | Users with this role are admins. Needs `role_header`. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
 | `storage.backend` | `FOLIO_STORAGE__BACKEND` | `local` | `local` or `s3` (see [storage.md](storage.md)). |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Root directory for the `local` backend. |

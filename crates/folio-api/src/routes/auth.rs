@@ -24,20 +24,21 @@ use folio_auth::{
         ct_eq, hash_password, hash_token, hmac_token, random_secret, random_token, verify_password,
     },
     limit::{FailureLimiter, RateLimiter},
+    model::SOURCE_LOCAL,
     redirect::safe_next,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
         AuthorizeParams, OAuthError, OAuthServer, RegistrationRequest, TokenRequest,
         ValidatedAuthorize,
     },
-    AuthStore, Session, TokenValidator, User,
+    AuthStore, ForwardAuth, Group, Session, TokenValidator, User,
 };
 
 // `__Host-` pins a cookie to this exact host over HTTPS, so a sibling
 // subdomain cannot plant or overwrite it.
 const SESSION_COOKIE: &str = "folio_session";
 const CSRF_COOKIE: &str = "folio_csrf";
-const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
+pub(crate) const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
 const MIN_PASSWORD_LEN: usize = 12;
 /// Dynamic client registrations a peer may make in a burst; the allowance
 /// refills over an hour.
@@ -67,6 +68,8 @@ pub struct AuthState {
     pub public_url: Option<String>,
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
+    /// Trusted-header login, see [`crate::forward::forward_auth`].
+    pub forward: Option<Arc<ForwardAuth>>,
     setup_token: Arc<str>,
     csrf_secret: Arc<[u8; 32]>,
     register_limit: Arc<RateLimiter>,
@@ -83,6 +86,7 @@ impl AuthState {
             store,
             public_url,
             required: true,
+            forward: None,
             setup_token: random_token().into(),
             csrf_secret: Arc::new(random_secret()),
             login_by_ip: Arc::new(login_limiter(LOGIN_FAILURES_PER_IP)),
@@ -125,9 +129,23 @@ impl AuthState {
         given.is_some_and(|g| !g.is_empty() && ct_eq(g, &self.setup_token))
     }
 
+    pub fn with_forward(mut self, forward: ForwardAuth) -> Self {
+        self.forward = Some(Arc::new(forward));
+        self
+    }
+
     pub fn with_required(mut self, required: bool) -> Self {
         self.required = required;
         self
+    }
+
+    /// The user's groups in both namespaces, resolved on demand so callers
+    /// (session or token holders alike) always see current memberships.
+    pub async fn effective_groups(&self, user_id: &str) -> Vec<Group> {
+        self.store.user_groups(user_id).await.unwrap_or_else(|e| {
+            tracing::error!("group lookup failed: {e}");
+            Vec::new()
+        })
     }
 
     /// Validator for a protected resource path such as `/mcp`.
@@ -160,15 +178,15 @@ impl AuthState {
         }
     }
 
-    fn base(&self) -> String {
+    pub(crate) fn base(&self) -> String {
         base_url(self.public_url.as_deref())
     }
 
-    fn secure(&self) -> bool {
+    pub(crate) fn secure(&self) -> bool {
         self.base().starts_with("https://")
     }
 
-    fn session_cookie_name(&self) -> &'static str {
+    pub(crate) fn session_cookie_name(&self) -> &'static str {
         if self.secure() {
             "__Host-folio_session"
         } else {
@@ -195,7 +213,7 @@ impl AuthState {
         Some((id, user))
     }
 
-    async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
+    pub(crate) async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
         self.session(headers).await.map(|(_, user)| user)
     }
 
@@ -407,7 +425,7 @@ where
 
 // ---- cookies and CSRF -------------------------------------------------------
 
-fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -418,7 +436,7 @@ fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(|(_, v)| v.to_string())
 }
 
-fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
+pub(crate) fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
     let secure = if secure { "; Secure" } else { "" };
     format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")
 }
@@ -459,22 +477,28 @@ fn login_redirect(next: &str) -> Redirect {
 }
 
 async fn start_session(auth: &AuthState, user: &User) -> Option<String> {
-    let id = random_token();
-    auth.store
-        .create_session(Session {
-            id_hash: hash_token(&id),
-            user_id: user.id.clone(),
-            expires_at: now() + SESSION_TTL_SECS,
-        })
-        .await
-        .map_err(|e| tracing::error!("session create failed: {e}"))
-        .ok()?;
+    let id = create_session(auth, user, SESSION_TTL_SECS).await?;
     Some(set_cookie(
         auth.session_cookie_name(),
         &id,
         SESSION_TTL_SECS,
         auth.secure(),
     ))
+}
+
+/// Stores a new session for the user and returns its cookie value.
+pub(crate) async fn create_session(auth: &AuthState, user: &User, ttl: i64) -> Option<String> {
+    let id = random_token();
+    auth.store
+        .create_session(Session {
+            id_hash: hash_token(&id),
+            user_id: user.id.clone(),
+            expires_at: now() + ttl,
+        })
+        .await
+        .map_err(|e| tracing::error!("session create failed: {e}"))
+        .ok()?;
+    Some(id)
 }
 
 // ---- templates --------------------------------------------------------------
@@ -613,6 +637,12 @@ async fn setup_submit(
         username: username.to_string(),
         password_hash,
         created_at: now(),
+        email: None,
+        display_name: None,
+        is_admin: true,
+        is_owner: false,
+        auth_source: SOURCE_LOCAL.to_string(),
+        external_id: None,
     };
     match auth.store.create_first_user(user).await {
         Ok(Some(user)) => match start_session(&auth, &user).await {

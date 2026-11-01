@@ -283,6 +283,46 @@ async fn main() -> Result<()> {
     if let Some(token) = config.auth.setup_token.as_deref().filter(|t| !t.is_empty()) {
         auth = auth.with_setup_token(token);
     }
+    let forward = &config.auth.forward;
+    if forward.enabled {
+        let settings = folio_auth::ForwardAuth::new(folio_auth::ForwardConfig {
+            user_header: forward.user_header.clone(),
+            email_header: forward.email_header.clone(),
+            name_header: forward.name_header.clone(),
+            groups_header: forward.groups_header.clone(),
+            role_header: forward.role_header.clone(),
+            user_id_header: forward.user_id_header.clone(),
+            trusted_proxies: forward.trusted_proxies.clone(),
+            admin_group: forward.admin_group.clone(),
+            admin_role: forward.admin_role.clone(),
+            shared_secret: forward.shared_secret.clone(),
+            secret_header: forward.secret_header.clone(),
+            group_separator: forward.group_separator.clone(),
+            session_ttl_secs: i64::try_from(forward.session_ttl_secs).unwrap_or(i64::MAX / 4),
+        })
+        .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
+        if forward.admin_group.is_some() && forward.groups_header.is_empty() {
+            tracing::warn!(
+                "auth.forward.admin_group is ignored because auth.forward.groups_header is not set"
+            );
+        }
+        if forward.admin_role.is_some() && forward.role_header.is_empty() {
+            tracing::warn!(
+                "auth.forward.admin_role is ignored because auth.forward.role_header is not set"
+            );
+        }
+        if settings.trusts_everyone() {
+            tracing::warn!(
+                "auth.forward.trusted_proxies covers every address; any client can then impersonate any user. Trust only your proxy's address"
+            );
+        }
+        if !settings.has_trusted_proxies() {
+            tracing::warn!(
+                "auth.forward is enabled without trusted_proxies; every request will be treated as unauthenticated"
+            );
+        }
+        auth = auth.with_forward(settings);
+    }
     if config.auth.required && auth_store.count_users().await.unwrap_or(1) == 0 {
         let base = config.server.base_url();
         tracing::warn!(

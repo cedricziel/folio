@@ -2,7 +2,8 @@
 
 use async_trait::async_trait;
 use folio_auth::{
-    AccessToken, AuthCode, AuthError, AuthStore, OAuthClient, RefreshToken, Session, User,
+    AccessToken, AuthCode, AuthError, AuthStore, Group, GroupSource, OAuthClient, RefreshToken,
+    Session, User,
 };
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
@@ -30,6 +31,12 @@ fn user_from(row: SqliteRow) -> User {
         username: row.get("username"),
         password_hash: row.get("password_hash"),
         created_at: row.get("created_at"),
+        email: row.get("email"),
+        display_name: row.get("display_name"),
+        is_admin: row.get::<i64, _>("is_admin") != 0,
+        is_owner: row.get::<i64, _>("is_owner") != 0,
+        auth_source: row.get("auth_source"),
+        external_id: row.get("external_id"),
     }
 }
 
@@ -44,8 +51,9 @@ impl AuthStore for SqliteAuthStore {
 
     async fn create_first_user(&self, user: User) -> Result<Option<User>, AuthError> {
         let result = sqlx::query(
-            "INSERT INTO users (id, username, username_normalized, password_hash, created_at)
-             SELECT $1, $2, $3, $4, $5 WHERE NOT EXISTS (SELECT 1 FROM users)",
+            "INSERT INTO users
+             (id, username, username_normalized, password_hash, created_at, is_admin, is_owner, auth_source)
+             SELECT $1, $2, $3, $4, $5, 1, 1, 'local' WHERE NOT EXISTS (SELECT 1 FROM users)",
         )
         .bind(&user.id)
         .bind(&user.username)
@@ -56,6 +64,168 @@ impl AuthStore for SqliteAuthStore {
         .await
         .map_err(err)?;
         Ok((result.rows_affected() == 1).then_some(user))
+    }
+
+    async fn create_user(&self, user: User) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO users
+             (id, username, username_normalized, password_hash, created_at,
+              email, display_name, is_admin, auth_source, external_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(user.username.to_lowercase())
+        .bind(&user.password_hash)
+        .bind(user.created_at)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(i64::from(user.is_admin))
+        .bind(&user.auth_source)
+        .bind(&user.external_id)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
+            other => err(other),
+        })
+    }
+
+    async fn create_external_user(&self, user: User) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO users
+             (id, username, username_normalized, password_hash, created_at,
+              email, display_name, is_admin, is_owner, auth_source, external_id)
+             SELECT $1, $2, $3, $4, $5, $6, $7,
+                    CASE WHEN $8 = 1 OR NOT EXISTS (SELECT 1 FROM users) THEN 1 ELSE 0 END,
+                    CASE WHEN NOT EXISTS (SELECT 1 FROM users) THEN 1 ELSE 0 END,
+                    $9, $10",
+        )
+        .bind(&user.id)
+        .bind(&user.username)
+        .bind(user.username.to_lowercase())
+        .bind(&user.password_hash)
+        .bind(user.created_at)
+        .bind(&user.email)
+        .bind(&user.display_name)
+        .bind(i64::from(user.is_admin))
+        .bind(&user.auth_source)
+        .bind(&user.external_id)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(|e| match e {
+            sqlx::Error::Database(ref d) if d.is_unique_violation() => AuthError::Conflict,
+            other => err(other),
+        })
+    }
+
+    async fn find_user_by_external(
+        &self,
+        source: &str,
+        external_id: &str,
+    ) -> Result<Option<User>, AuthError> {
+        sqlx::query("SELECT * FROM users WHERE auth_source = $1 AND external_id = $2")
+            .bind(source)
+            .bind(external_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map(|r| r.map(user_from))
+            .map_err(err)
+    }
+
+    async fn update_user_profile(
+        &self,
+        id: &str,
+        email: Option<&str>,
+        display_name: Option<&str>,
+        is_admin: bool,
+    ) -> Result<(), AuthError> {
+        sqlx::query("UPDATE users SET email = $1, display_name = $2, is_admin = CASE WHEN is_owner = 1 THEN 1 ELSE $3 END WHERE id = $4")
+            .bind(email)
+            .bind(display_name)
+            .bind(i64::from(is_admin))
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(err)
+    }
+
+    async fn set_external_groups(&self, user_id: &str, groups: &[String]) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
+        let mut current: Vec<String> = sqlx::query_scalar(
+            "SELECT g.name FROM auth_group_members m
+             JOIN auth_groups g ON g.id = m.group_id
+             WHERE m.user_id = $1 AND g.source = 'external'",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(err)?;
+        let mut wanted = groups.to_vec();
+        current.sort();
+        wanted.sort();
+        wanted.dedup();
+        if current == wanted {
+            return Ok(());
+        }
+
+        sqlx::query(
+            "DELETE FROM auth_group_members
+             WHERE user_id = $1
+               AND group_id IN (SELECT id FROM auth_groups WHERE source = 'external')",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(err)?;
+        for name in &wanted {
+            sqlx::query(
+                "INSERT INTO auth_groups (id, source, name, created_at)
+                 VALUES ($1, 'external', $2, $3) ON CONFLICT (source, name) DO NOTHING",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(name)
+            .bind(folio_auth::server::now())
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?;
+            sqlx::query(
+                "INSERT INTO auth_group_members (group_id, user_id)
+                 SELECT id, $1 FROM auth_groups WHERE source = 'external' AND name = $2
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(name)
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?;
+        }
+        tx.commit().await.map_err(err)
+    }
+
+    async fn user_groups(&self, user_id: &str) -> Result<Vec<Group>, AuthError> {
+        let rows = sqlx::query(
+            "SELECT g.source, g.name FROM auth_group_members m
+             JOIN auth_groups g ON g.id = m.group_id
+             WHERE m.user_id = $1 ORDER BY g.source, g.name",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                let source: String = r.get("source");
+                Some(Group {
+                    source: GroupSource::parse(&source)?,
+                    name: r.get("name"),
+                })
+            })
+            .collect())
     }
 
     async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
