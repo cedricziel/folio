@@ -44,6 +44,20 @@ The system SHALL read nested keys from environment variables prefixed `FOLIO_` w
 - **WHEN** the server starts with `FOLIO_AI_OPENAI_API_KEY` set and no `FOLIO_AI__OPENAI_API_KEY`
 - **THEN** the value is applied and a deprecation warning is logged
 
+### Requirement: Database backend
+
+The system SHALL select the database backend from the scheme of `database.url`: `sqlite:` uses SQLite and `postgres://` or `postgresql://` uses PostgreSQL. Each backend SHALL apply its own migrations from `migrations/sqlite` or `migrations/postgres` at startup, and any other scheme SHALL stop startup with an error. On PostgreSQL, semantic search SHALL rank in the database when the pgvector extension is available and fall back to cosine similarity in the application otherwise, and the job queue SHALL claim jobs with `FOR UPDATE SKIP LOCKED`.
+
+#### Scenario: PostgreSQL URL
+
+- **WHEN** Folio starts with `FOLIO_DATABASE__URL=postgres://folio:secret@db/folio`
+- **THEN** it applies the PostgreSQL migrations and serves requests from that database
+
+#### Scenario: Unsupported scheme
+
+- **WHEN** Folio starts with `FOLIO_DATABASE__URL=mysql://db/folio`
+- **THEN** startup fails with an unsupported database URL error
+
 ### Requirement: Database settings
 
 The system SHALL store runtime settings as key-value rows in the `settings` table. A migration SHALL seed `ai.provider` (`local`), `ai.openai_api_key`, `ai.anthropic_api_key`, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_ocr`, `processing.auto_thumbnail` and `processing.auto_embedding` flags. Of these, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_*` flags are stored but not yet applied.

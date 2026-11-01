@@ -3,9 +3,9 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="f-workflows">
-    <header class="f-workflows-header">
-        <h2>{% if workflow_id.is_some() %}Edit workflow{% else %}New workflow{% endif %}</h2>
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">{% if workflow_id.is_some() %}Edit workflow{% else %}New workflow{% endif %}</h1>
         <a href="/workflows" class="f-btn f-btn-quiet">Back to workflows</a>
     </header>
 
@@ -19,110 +19,110 @@
 
     <form method="post" data-turbo="false"
           action="{% match workflow_id %}{% when Some with (id) %}/workflows/{{ id }}{% when None %}/workflows{% endmatch %}">
-        <div class="f-field">
-            <label class="f-label" for="name">Name</label>
-            <input class="f-input" type="text" id="name" name="name" value="{{ values.name }}" required>
+        <div class="field">
+            <label for="name">Name</label>
+            <input class="input" type="text" id="name" name="name" value="{{ values.name }}" required>
         </div>
 
-        <div class="f-field">
-            <label class="f-label" for="trigger">When</label>
-            <select class="f-input" id="trigger" name="trigger">
+        <div class="field">
+            <label for="trigger">When</label>
+            <select class="select" id="trigger" name="trigger">
                 {% for t in triggers %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
             </select>
         </div>
 
-        <fieldset class="f-field">
+        <fieldset class="field">
             <legend class="f-label">Only if the document matches</legend>
             <p class="f-meta">Leave a field empty to match any document.</p>
-            <label class="f-label" for="mime_type">File type</label>
-            <input class="f-input" type="text" id="mime_type" name="mime_type" value="{{ values.mime_type }}" placeholder="application/pdf or image/*">
-            <label class="f-label" for="filename_glob">File name</label>
-            <input class="f-input" type="text" id="filename_glob" name="filename_glob" value="{{ values.filename_glob }}" placeholder="invoice-*.pdf">
-            <label class="f-label" for="tag_id">Has tag</label>
-            <select class="f-input" id="tag_id" name="tag_id">
+            <label for="mime_type">File type</label>
+            <input class="input" type="text" id="mime_type" name="mime_type" value="{{ values.mime_type }}" placeholder="application/pdf or image/*">
+            <label for="filename_glob">File name</label>
+            <input class="input" type="text" id="filename_glob" name="filename_glob" value="{{ values.filename_glob }}" placeholder="invoice-*.pdf">
+            <label for="tag_id">Has tag</label>
+            <select class="select" id="tag_id" name="tag_id">
                 <option value="">Any</option>
                 {% for t in tags %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
             </select>
-            <label class="f-label" for="correspondent_id">From</label>
-            <select class="f-input" id="correspondent_id" name="correspondent_id">
+            <label for="correspondent_id">From</label>
+            <select class="select" id="correspondent_id" name="correspondent_id">
                 <option value="">Anyone</option>
                 {% for c in correspondents %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}
             </select>
-            <label class="f-label" for="document_type_id">Type</label>
-            <select class="f-input" id="document_type_id" name="document_type_id">
+            <label for="document_type_id">Type</label>
+            <select class="select" id="document_type_id" name="document_type_id">
                 <option value="">Any</option>
                 {% for d in document_types %}<option value="{{ d.value }}"{% if d.selected %} selected{% endif %}>{{ d.label }}</option>{% endfor %}
             </select>
         </fieldset>
 
-        <fieldset class="f-field">
+        <fieldset class="field">
             <legend class="f-label">Only if it came from</legend>
             <p class="f-meta">For folders and mailboxes. Leave a field empty to ignore it.</p>
-            <label class="f-label" for="source_kind">Source</label>
-            <select class="f-input" id="source_kind" name="source_kind">
+            <label for="source_kind">Source</label>
+            <select class="select" id="source_kind" name="source_kind">
                 <option value="">Any</option>
                 <option value="upload"{% if values.source_kind == "upload" %} selected{% endif %}>upload</option>
                 <option value="api"{% if values.source_kind == "api" %} selected{% endif %}>api</option>
                 <option value="folder"{% if values.source_kind == "folder" %} selected{% endif %}>folder</option>
                 <option value="email"{% if values.source_kind == "email" %} selected{% endif %}>email</option>
             </select>
-            <label class="f-label" for="folder_path_glob">Folder path</label>
-            <input class="f-input" type="text" id="folder_path_glob" name="folder_path_glob" value="{{ values.folder_path_glob }}" placeholder="Insurance/*">
-            <label class="f-label">Email sender</label>
-            <select class="f-input" name="email_from_mode">
+            <label for="folder_path_glob">Folder path</label>
+            <input class="input" type="text" id="folder_path_glob" name="folder_path_glob" value="{{ values.folder_path_glob }}" placeholder="Insurance/*">
+            <label>Email sender</label>
+            <select class="select" name="email_from_mode">
                 <option value="glob"{% if values.email_from_mode == "glob" %} selected{% endif %}>matches wildcard</option>
                 <option value="contains"{% if values.email_from_mode == "contains" %} selected{% endif %}>contains</option>
                 <option value="regex"{% if values.email_from_mode == "regex" %} selected{% endif %}>matches regex</option>
             </select>
-            <input class="f-input" type="text" name="email_from" value="{{ values.email_from }}" placeholder="*@newsletter.example">
-            <label class="f-label">Email recipient</label>
-            <select class="f-input" name="email_to_mode">
+            <input class="input" type="text" name="email_from" value="{{ values.email_from }}" placeholder="*@newsletter.example">
+            <label>Email recipient</label>
+            <select class="select" name="email_to_mode">
                 <option value="glob"{% if values.email_to_mode == "glob" %} selected{% endif %}>matches wildcard</option>
                 <option value="contains"{% if values.email_to_mode == "contains" %} selected{% endif %}>contains</option>
                 <option value="regex"{% if values.email_to_mode == "regex" %} selected{% endif %}>matches regex</option>
             </select>
-            <input class="f-input" type="text" name="email_to" value="{{ values.email_to }}">
-            <label class="f-label">Email subject</label>
-            <select class="f-input" name="email_subject_mode">
+            <input class="input" type="text" name="email_to" value="{{ values.email_to }}">
+            <label>Email subject</label>
+            <select class="select" name="email_subject_mode">
                 <option value="glob"{% if values.email_subject_mode == "glob" %} selected{% endif %}>matches wildcard</option>
                 <option value="contains"{% if values.email_subject_mode == "contains" %} selected{% endif %}>contains</option>
                 <option value="regex"{% if values.email_subject_mode == "regex" %} selected{% endif %}>matches regex</option>
             </select>
-            <input class="f-input" type="text" name="email_subject" value="{{ values.email_subject }}" placeholder="invoice">
-            <label class="f-label" for="email_attachment_glob">Attachment name</label>
-            <input class="f-input" type="text" id="email_attachment_glob" name="email_attachment_glob" value="{{ values.email_attachment_glob }}" placeholder="*.pdf">
-            <label class="f-label" for="email_mailbox_glob">Mailbox</label>
-            <input class="f-input" type="text" id="email_mailbox_glob" name="email_mailbox_glob" value="{{ values.email_mailbox_glob }}" placeholder="INBOX/Invoices">
+            <input class="input" type="text" name="email_subject" value="{{ values.email_subject }}" placeholder="invoice">
+            <label for="email_attachment_glob">Attachment name</label>
+            <input class="input" type="text" id="email_attachment_glob" name="email_attachment_glob" value="{{ values.email_attachment_glob }}" placeholder="*.pdf">
+            <label for="email_mailbox_glob">Mailbox</label>
+            <input class="input" type="text" id="email_mailbox_glob" name="email_mailbox_glob" value="{{ values.email_mailbox_glob }}" placeholder="INBOX/Invoices">
         </fieldset>
 
-        <fieldset class="f-field">
+        <fieldset class="field">
             <legend class="f-label">Send a webhook</legend>
             <p class="f-meta">Not used for ingest.received: those workflows only discard files that match.</p>
             <p class="f-meta">Folio posts the event as JSON. Addresses on your own network are allowed; only http and https are accepted.</p>
-            <label class="f-label" for="webhook_url">URL</label>
-            <input class="f-input" type="url" id="webhook_url" name="webhook_url" value="{{ values.webhook_url }}" placeholder="http://homeassistant.local:8123/api/webhook/folio">
-            <label class="f-label" for="webhook_secret">Secret</label>
-            <input class="f-input" type="password" id="webhook_secret" name="webhook_secret" autocomplete="off"
+            <label for="webhook_url">URL</label>
+            <input class="input" type="url" id="webhook_url" name="webhook_url" value="{{ values.webhook_url }}" placeholder="http://homeassistant.local:8123/api/webhook/folio">
+            <label for="webhook_secret">Secret</label>
+            <input class="input" type="password" id="webhook_secret" name="webhook_secret" autocomplete="off"
                    placeholder="{% if has_secret %}{{ secret_mask }} (leave empty to keep){% else %}Optional, signs each delivery{% endif %}">
             {% if has_secret %}
             <label><input type="checkbox" name="clear_secret"> Remove the secret</label>
             {% endif %}
-            <label class="f-label" for="webhook_headers">Extra headers</label>
-            <textarea class="f-input" id="webhook_headers" name="webhook_headers" rows="3" placeholder="Authorization: Bearer ...">{{ values.webhook_headers }}</textarea>
+            <label for="webhook_headers">Extra headers</label>
+            <textarea class="input" id="webhook_headers" name="webhook_headers" rows="3" placeholder="Authorization: Bearer ...">{{ values.webhook_headers }}</textarea>
         </fieldset>
 
-        <div class="f-field">
+        <div class="field">
             <label><input type="checkbox" name="enabled"{% if values.enabled.is_some() %} checked{% endif %}> Enabled</label>
         </div>
 
-        <div class="f-actions">
+        <div class="form-actions">
             <button type="submit" class="f-btn f-btn-primary">Save workflow</button>
         </div>
     </form>
 
     {% match workflow_id %}
     {% when Some with (id) %}
-    <div class="f-actions">
+    <div class="form-actions">
         <form action="/workflows/{{ id }}/test" method="post" data-turbo="false">
             <button type="submit" class="f-btn">Send test</button>
         </form>

@@ -58,6 +58,6 @@ tokio-native-tls = "0.3"
 futures = { workspace = true }
 
 [dev-dependencies]
-testcontainers = "0.28"
 axum = { workspace = true }
 tempfile = "3"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

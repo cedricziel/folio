@@ -1,90 +1,23 @@
 //! Ingestion source API and pages, driven through the real router.
 
-use std::sync::Arc;
+mod common;
 
 use axum::{
     body::Body,
     http::{Request, StatusCode},
-    Router,
 };
-use folio_api::{create_router, AppState, IngestionState};
-use folio_core::{
-    models::{FolderConfig, IngestionSourceDef, SourceConfig, SourceOrigin},
-    EventBroadcaster,
-};
-use folio_infra::{
-    create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    SourceFactory, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteSearchService,
-    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
-    SqliteWorkflowRepository, ThumbnailService, WebhookClient,
-};
+use folio_core::models::{FolderConfig, IngestionSourceDef, SourceConfig, SourceOrigin};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-struct TestApp {
-    router: Router,
-    state: AppState,
-    dir: std::path::PathBuf,
+use common::{harness_with_sources, Harness};
+
+async fn test_app(configured: Vec<IngestionSourceDef>) -> Harness {
+    harness_with_sources(configured).await
 }
 
-impl Drop for TestApp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-async fn test_app(configured: Vec<IngestionSourceDef>) -> TestApp {
-    let dir = std::env::temp_dir().join(format!("folio-sources-api-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let storage_path = dir.to_str().unwrap().to_string();
-
-    let pool = create_pool(&format!("sqlite://{}/test.db", storage_path))
-        .await
-        .unwrap();
-    run_migrations(&pool).await.unwrap();
-
-    let ai = Config::default().ai;
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
-    let ingestion = IngestionState {
-        managed: Arc::new(SqliteSourceRepository::new(pool.clone())),
-        configured: Arc::new(configured),
-        factory: Arc::new(SourceFactory::new(Arc::new(SqliteIngestLedger::new(
-            pool.clone(),
-        )))),
-    };
-    let state = AppState::new(
-        Arc::new(SqliteDocumentRepository::new(pool.clone())),
-        Arc::new(SqliteTagRepository::new(pool.clone())),
-        Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-        Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-        settings_repo.clone(),
-        Arc::new(DynamicOcrService::new(
-            settings_repo.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
-        Arc::new(DynamicEmbeddingService::new(settings_repo, ai)),
-        Arc::new(SqliteSearchService::new(pool.clone())),
-        Arc::new(ThumbnailService::new(&storage_path)),
-        JobQueue::new(pool.clone()),
-        storage_path,
-        EventBroadcaster::default(),
-        Arc::new(SqliteWorkflowRepository::new(pool)),
-        WebhookClient::new(),
-        "http://folio.test".to_string(),
-        ingestion,
-    );
-
-    TestApp {
-        router: create_router(state.clone()),
-        state,
-        dir,
-    }
-}
-
-async fn send(app: &TestApp, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, String) {
+async fn send(app: &Harness, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, String) {
     let mut builder = Request::builder().method(method).uri(uri);
     let body = match body {
         Some(json) => {
@@ -94,7 +27,7 @@ async fn send(app: &TestApp, method: &str, uri: &str, body: Option<Value>) -> (S
         None => Body::empty(),
     };
     let response = app
-        .router
+        .app
         .clone()
         .oneshot(builder.body(body).unwrap())
         .await
@@ -107,7 +40,7 @@ async fn send(app: &TestApp, method: &str, uri: &str, body: Option<Value>) -> (S
 }
 
 async fn json_request(
-    app: &TestApp,
+    app: &Harness,
     method: &str,
     uri: &str,
     body: Option<Value>,
@@ -271,7 +204,7 @@ async fn the_sources_pages_render_and_save() {
     }
 
     let response = app
-        .router
+        .app
         .clone()
         .oneshot(
             Request::builder()

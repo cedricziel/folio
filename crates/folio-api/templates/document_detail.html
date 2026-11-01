@@ -1,56 +1,28 @@
 <turbo-frame id="document-detail">
-    <div class="document-detail-panel">
-        <header>
-            <h3>{{ document.title }}</h3>
-            <a href="/" class="close-btn" data-turbo-frame="_top">×</a>
-        </header>
-
-        <div class="document-info">
-            <dl>
-                <dt>ID</dt>
-                <dd>{{ document.id }}</dd>
-
-                <dt>Created</dt>
-                <dd>{{ document.created_at }}</dd>
-
-                <dt>Updated</dt>
-                <dd>{{ document.updated_at }}</dd>
-
-                {% match document.original_filename %}
-                {% when Some with (filename) %}
-                <dt>Original File</dt>
-                <dd>{{ filename }}</dd>
-                {% when None %}
-                {% endmatch %}
-
-                {% match document.mime_type %}
-                {% when Some with (mime) %}
-                <dt>Type</dt>
-                <dd>{{ mime }}</dd>
-                {% when None %}
-                {% endmatch %}
-
-                <dt>Source</dt>
-                <dd>{{ document.source.describe() }}</dd>
-            </dl>
-        </div>
-
+    <div class="panel">
+        <h2 class="heading">{{ document.title }}</h2>
+        <dl class="f-meta-list">
+            <dt>Added</dt>
+            <dd><span class="f-meta">{{ document.created_at }}</span></dd>
+            {% match document.original_filename %}
+            {% when Some with (filename) %}
+            <dt>File</dt>
+            <dd><span class="f-meta">{{ filename }}</span></dd>
+            {% when None %}
+            {% endmatch %}
+            <dt>Source</dt>
+            <dd><span class="f-meta">{{ document.source.describe() }}</span></dd>
+        </dl>
         {% match document.content %}
         {% when Some with (content) %}
-        <div class="document-content">
-            <h4>Content</h4>
-            <pre>{{ content }}</pre>
-        </div>
+        <pre class="ocr">{{ content }}</pre>
         {% when None %}
         {% endmatch %}
-
-        <div class="document-actions">
-            <form action="/documents/{{ document.id }}/delete" method="post"
-                  data-controller="confirm"
-                  data-confirm-message-value="Are you sure you want to delete this document?"
-                  data-action="submit->confirm#confirm">
-                <button type="submit" class="btn-danger">Delete</button>
-            </form>
-        </div>
+        <form action="/documents/{{ document.id }}/delete" method="post"
+              data-controller="confirm"
+              data-confirm-message-value="Delete this document?"
+              data-action="submit->confirm#confirm">
+            <button type="submit" class="f-btn f-btn-quiet f-btn-danger">Delete</button>
+        </form>
     </div>
 </turbo-frame>

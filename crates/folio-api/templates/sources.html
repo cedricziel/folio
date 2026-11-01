@@ -3,16 +3,16 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="f-workflows">
-    <header class="f-workflows-header">
-        <h2>Sources</h2>
-        <div class="f-actions">
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">Sources</h1>
+        <div class="form-actions">
             <a href="/settings/sources/new?kind=folder" class="f-btn f-btn-primary">Add folder</a>
             <a href="/settings/sources/new?kind=email" class="f-btn f-btn-primary">Add mail account</a>
             <a href="/settings" class="f-btn f-btn-quiet">Back to settings</a>
         </div>
     </header>
-    <p class="f-meta">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="/workflows">Workflows</a>.</p>
+    <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="/workflows">Workflows</a>.</p>
 
     {% match notice %}
     {% when Some with (n) %}
@@ -55,7 +55,7 @@
                 {% when None %}
                 {% endmatch %}
             </div>
-            <div class="f-actions">
+            <div class="form-actions">
                 <form action="/settings/sources/{{ row.id }}/test" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">Test</button>
                 </form>

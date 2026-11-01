@@ -3,9 +3,9 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="f-workflows">
-    <header class="f-workflows-header">
-        <h2>{% if source_id.is_some() %}Edit source{% else %}New source{% endif %}</h2>
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">{% if source_id.is_some() %}Edit source{% else %}New source{% endif %}</h1>
         <a href="/settings/sources" class="f-btn f-btn-quiet">Back to sources</a>
     </header>
 
@@ -19,79 +19,79 @@
           action="{% match source_id %}{% when Some with (id) %}/settings/sources/{{ id }}{% when None %}/settings/sources{% endmatch %}">
         <input type="hidden" name="kind" value="{{ values.kind }}">
 
-        <div class="f-field">
-            <label class="f-label" for="name">Name</label>
-            <input class="f-input" type="text" id="name" name="name" value="{{ values.name }}" required>
+        <div class="field">
+            <label for="name">Name</label>
+            <input class="input" type="text" id="name" name="name" value="{{ values.name }}" required>
         </div>
 
         {% if values.kind == "folder" %}
-        <fieldset class="f-field">
+        <fieldset class="field">
             <legend class="f-label">Consume folder</legend>
-            <label class="f-label" for="path">Path on the server</label>
-            <input class="f-input" type="text" id="path" name="path" value="{{ values.path }}" placeholder="/consume" required>
+            <label for="path">Path on the server</label>
+            <input class="input" type="text" id="path" name="path" value="{{ values.path }}" placeholder="/consume" required>
             <label><input type="checkbox" name="recursive"{% if values.recursive.is_some() %} checked{% endif %}> Include sub-folders</label>
             <label><input type="checkbox" name="subfolders_as_tags"{% if values.subfolders_as_tags.is_some() %} checked{% endif %}> Turn sub-folder names into tags</label>
-            <label class="f-label" for="folder_after_import">After import</label>
-            <select class="f-input" id="folder_after_import" name="folder_after_import">
+            <label for="folder_after_import">After import</label>
+            <select class="select" id="folder_after_import" name="folder_after_import">
                 <option value="move"{% if values.folder_after_import == "move" %} selected{% endif %}>Move to processed/</option>
                 <option value="delete"{% if values.folder_after_import == "delete" %} selected{% endif %}>Delete the file</option>
             </select>
-            <label class="f-label" for="settle_secs">Wait until the file size is stable for (seconds)</label>
-            <input class="f-input" type="number" min="0" id="settle_secs" name="settle_secs" value="{{ values.settle_secs }}">
-            <label class="f-label" for="rescan_secs">Rescan every (seconds)</label>
-            <input class="f-input" type="number" min="1" id="rescan_secs" name="rescan_secs" value="{{ values.rescan_secs }}">
+            <label for="settle_secs">Wait until the file size is stable for (seconds)</label>
+            <input class="input" type="number" min="0" id="settle_secs" name="settle_secs" value="{{ values.settle_secs }}">
+            <label for="rescan_secs">Rescan every (seconds)</label>
+            <input class="input" type="number" min="1" id="rescan_secs" name="rescan_secs" value="{{ values.rescan_secs }}">
         </fieldset>
         {% else %}
-        <fieldset class="f-field">
+        <fieldset class="field">
             <legend class="f-label">Mail server (IMAP)</legend>
-            <label class="f-label" for="host">Host</label>
-            <input class="f-input" type="text" id="host" name="host" value="{{ values.host }}" placeholder="imap.example.com" required>
-            <label class="f-label" for="port">Port</label>
-            <input class="f-input" type="number" id="port" name="port" value="{{ values.port }}">
-            <label class="f-label" for="security">Connection</label>
-            <select class="f-input" id="security" name="security">
+            <label for="host">Host</label>
+            <input class="input" type="text" id="host" name="host" value="{{ values.host }}" placeholder="imap.example.com" required>
+            <label for="port">Port</label>
+            <input class="input" type="number" id="port" name="port" value="{{ values.port }}">
+            <label for="security">Connection</label>
+            <select class="select" id="security" name="security">
                 <option value="tls"{% if values.security == "tls" %} selected{% endif %}>TLS</option>
                 <option value="plain"{% if values.security == "plain" %} selected{% endif %}>Unencrypted (trusted networks only)</option>
             </select>
             <label><input type="checkbox" name="accept_invalid_certs"{% if values.accept_invalid_certs.is_some() %} checked{% endif %}> Accept self-signed certificates</label>
-            <label class="f-label" for="username">User name</label>
-            <input class="f-input" type="text" id="username" name="username" value="{{ values.username }}" autocomplete="off" required>
-            <label class="f-label" for="password">Password</label>
-            <input class="f-input" type="password" id="password" name="password" value="{{ values.password }}" autocomplete="new-password">
+            <label for="username">User name</label>
+            <input class="input" type="text" id="username" name="username" value="{{ values.username }}" autocomplete="off" required>
+            <label for="password">Password</label>
+            <input class="input" type="password" id="password" name="password" value="{{ values.password }}" autocomplete="new-password">
             <p class="f-meta">The password is stored unencrypted in the database. To keep it out of the database, define the account in the server configuration with a password file.</p>
         </fieldset>
 
-        <fieldset class="f-field">
+        <fieldset class="field">
             <legend class="f-label">What to import</legend>
-            <label class="f-label" for="mailboxes">Mailboxes (one per line)</label>
-            <textarea class="f-input" id="mailboxes" name="mailboxes" rows="2">{{ values.mailboxes }}</textarea>
-            <label class="f-label" for="criteria">IMAP search</label>
-            <input class="f-input" type="text" id="criteria" name="criteria" value="{{ values.criteria }}">
-            <label class="f-label" for="allowed_content_types">Attachment types (one per line)</label>
-            <textarea class="f-input" id="allowed_content_types" name="allowed_content_types" rows="3">{{ values.allowed_content_types }}</textarea>
-            <label class="f-label" for="mail_body">Message itself</label>
-            <select class="f-input" id="mail_body" name="mail_body">
+            <label for="mailboxes">Mailboxes (one per line)</label>
+            <textarea class="input" id="mailboxes" name="mailboxes" rows="2">{{ values.mailboxes }}</textarea>
+            <label for="criteria">IMAP search</label>
+            <input class="input" type="text" id="criteria" name="criteria" value="{{ values.criteria }}">
+            <label for="allowed_content_types">Attachment types (one per line)</label>
+            <textarea class="input" id="allowed_content_types" name="allowed_content_types" rows="3">{{ values.allowed_content_types }}</textarea>
+            <label for="mail_body">Message itself</label>
+            <select class="select" id="mail_body" name="mail_body">
                 <option value="none"{% if values.mail_body == "none" %} selected{% endif %}>Attachments only</option>
                 <option value="eml"{% if values.mail_body == "eml" %} selected{% endif %}>Also store the message as .eml</option>
             </select>
-            <label class="f-label" for="poll_interval_secs">Check every (seconds)</label>
-            <input class="f-input" type="number" min="10" id="poll_interval_secs" name="poll_interval_secs" value="{{ values.poll_interval_secs }}">
-            <label class="f-label" for="mail_after_import">After import</label>
-            <select class="f-input" id="mail_after_import" name="mail_after_import">
+            <label for="poll_interval_secs">Check every (seconds)</label>
+            <input class="input" type="number" min="10" id="poll_interval_secs" name="poll_interval_secs" value="{{ values.poll_interval_secs }}">
+            <label for="mail_after_import">After import</label>
+            <select class="select" id="mail_after_import" name="mail_after_import">
                 <option value="mark_read"{% if values.mail_after_import == "mark_read" %} selected{% endif %}>Mark as read</option>
                 <option value="move"{% if values.mail_after_import == "move" %} selected{% endif %}>Move to another mailbox</option>
                 <option value="delete"{% if values.mail_after_import == "delete" %} selected{% endif %}>Delete the message</option>
             </select>
-            <label class="f-label" for="move_to">Move to</label>
-            <input class="f-input" type="text" id="move_to" name="move_to" value="{{ values.move_to }}" placeholder="Folio/Imported">
+            <label for="move_to">Move to</label>
+            <input class="input" type="text" id="move_to" name="move_to" value="{{ values.move_to }}" placeholder="Folio/Imported">
         </fieldset>
         {% endif %}
 
-        <div class="f-field">
+        <div class="field">
             <label><input type="checkbox" name="enabled"{% if values.enabled.is_some() %} checked{% endif %}> Enabled</label>
         </div>
 
-        <div class="f-actions">
+        <div class="form-actions">
             <button type="submit" class="f-btn f-btn-primary">Save source</button>
             <button type="submit" name="test" value="1" class="f-btn">Test connection</button>
         </div>
@@ -99,7 +99,7 @@
 
     {% match source_id %}
     {% when Some with (id) %}
-    <div class="f-actions">
+    <div class="form-actions">
         <form action="/settings/sources/{{ id }}/delete" method="post" data-turbo="false">
             <button type="submit" class="f-btn f-btn-danger">Delete source</button>
         </form>

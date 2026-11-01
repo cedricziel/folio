@@ -3,91 +3,16 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="settings-section">
-    <div class="settings-header">
-        <h2>Settings</h2>
-        <div>
-            <a href="/settings/sources" class="btn-secondary">Sources</a>
-            <a href="/" class="btn-secondary">Back to Documents</a>
-        </div>
-    </div>
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">Settings</h1>
+        <p class="lede">Choose how Folio reads your files and finds them again.</p>
+    </header>
+    <p class="lede"><a href="/settings/sources">Sources</a>: folders and mailboxes Folio imports from automatically.</p>
 
     <turbo-frame id="ai-settings">
-        <div class="settings-card">
-            <h3>AI Configuration</h3>
-            <p class="settings-description">Configure AI providers for OCR and semantic search.</p>
-
-            <form action="/settings/ai" method="post"
-                  data-controller="settings-form"
-                  data-action="turbo:submit-start->settings-form#submit turbo:submit-end->settings-form#complete">
-
-                <div class="form-group">
-                    <label for="provider">AI Provider</label>
-                    <select id="provider" name="provider" data-settings-form-target="provider"
-                            data-action="change->settings-form#providerChanged">
-                        <option value="local" {% if ai_settings.provider == "local" %}selected{% endif %}>Local (No AI)</option>
-                        <option value="openai" {% if ai_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
-                        <option value="anthropic" {% if ai_settings.provider == "anthropic" %}selected{% endif %}>Anthropic</option>
-                    </select>
-                    <span class="form-hint">Select the AI provider for OCR and embeddings</span>
-                </div>
-
-                <div class="form-group" data-settings-form-target="openaiFields"
-                     {% if ai_settings.provider != "openai" %}style="display: none;"{% endif %}>
-                    <label for="openai_api_key">OpenAI API Key</label>
-                    <div class="password-input-wrapper" data-controller="password-toggle">
-                        <input type="password" id="openai_api_key" name="openai_api_key"
-                               value="{{ ai_settings.openai_api_key }}"
-                               placeholder="sk-..."
-                               data-password-toggle-target="input">
-                        <button type="button" class="password-toggle" data-action="click->password-toggle#toggle" aria-label="Toggle password visibility">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-password-toggle-target="icon">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <span class="form-hint">Your OpenAI API key for GPT-4 Vision and embeddings</span>
-                </div>
-
-                <div class="form-group" data-settings-form-target="anthropicFields"
-                     {% if ai_settings.provider != "anthropic" %}style="display: none;"{% endif %}>
-                    <label for="anthropic_api_key">Anthropic API Key</label>
-                    <div class="password-input-wrapper" data-controller="password-toggle">
-                        <input type="password" id="anthropic_api_key" name="anthropic_api_key"
-                               value="{{ ai_settings.anthropic_api_key }}"
-                               placeholder="sk-ant-..."
-                               data-password-toggle-target="input">
-                        <button type="button" class="password-toggle" data-action="click->password-toggle#toggle" aria-label="Toggle password visibility">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-password-toggle-target="icon">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <span class="form-hint">Your Anthropic API key for Claude Vision</span>
-                </div>
-
-                <div class="form-group">
-                    <label for="ocr_model">OCR Model</label>
-                    <input type="text" id="ocr_model" name="ocr_model"
-                           value="{{ ai_settings.ocr_model }}"
-                           placeholder="gpt-4o-mini">
-                    <span class="form-hint">Model to use for text extraction from images/PDFs</span>
-                </div>
-
-                <div class="form-group">
-                    <label for="embedding_model">Embedding Model</label>
-                    <input type="text" id="embedding_model" name="embedding_model"
-                           value="{{ ai_settings.embedding_model }}"
-                           placeholder="text-embedding-3-small">
-                    <span class="form-hint">Model to use for generating search embeddings</span>
-                </div>
-
-                <div class="form-actions">
-                    <button type="submit" data-settings-form-target="button">Save Settings</button>
-                    <span class="save-status" data-settings-form-target="status"></span>
-                </div>
-            </form>
-        </div>
+        {% let saved = false %}
+        {% include "partials/ai_settings_card.html" %}
     </turbo-frame>
 </section>
 {% endblock %}

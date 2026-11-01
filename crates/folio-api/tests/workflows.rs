@@ -15,11 +15,7 @@ use folio_core::{
     EventBroadcaster,
 };
 use folio_infra::{
-    create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    SourceFactory, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteSearchService,
-    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
-    SqliteWorkflowRepository, ThumbnailService, WebhookClient,
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, WebhookClient,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -42,38 +38,32 @@ async fn test_app() -> TestApp {
     std::fs::create_dir_all(&dir).unwrap();
     let storage_path = dir.to_str().unwrap().to_string();
 
-    let pool = create_pool(&format!("sqlite://{}/test.db", storage_path))
+    let database = Database::connect(&format!("sqlite:{storage_path}/test.db?mode=rwc"))
         .await
         .unwrap();
-    run_migrations(&pool).await.unwrap();
+    database.migrate().await.unwrap();
+    let repos = database.repositories().await;
 
     let ai = Config::default().ai;
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
-    let ingestion = IngestionState {
-        managed: Arc::new(SqliteSourceRepository::new(pool.clone())),
-        configured: Arc::new(Vec::new()),
-        factory: Arc::new(SourceFactory::new(Arc::new(SqliteIngestLedger::new(
-            pool.clone(),
-        )))),
-    };
+    let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
     let state = AppState::new(
-        Arc::new(SqliteDocumentRepository::new(pool.clone())),
-        Arc::new(SqliteTagRepository::new(pool.clone())),
-        Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-        Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-        settings_repo.clone(),
+        repos.documents,
+        repos.tags,
+        repos.correspondents,
+        repos.document_types,
+        repos.settings.clone(),
         Arc::new(DynamicOcrService::new(
-            settings_repo.clone(),
+            repos.settings.clone(),
             ai.clone(),
             &storage_path,
         )),
-        Arc::new(DynamicEmbeddingService::new(settings_repo, ai)),
-        Arc::new(SqliteSearchService::new(pool.clone())),
+        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        repos.search,
         Arc::new(ThumbnailService::new(&storage_path)),
-        JobQueue::new(pool.clone()),
+        repos.jobs,
         storage_path,
         EventBroadcaster::default(),
-        Arc::new(SqliteWorkflowRepository::new(pool)),
+        repos.workflows,
         WebhookClient::new(),
         "http://folio.test".to_string(),
         ingestion,

@@ -16,6 +16,7 @@ use folio_core::models::{
 };
 
 use super::sources::{all_sources, find, prepare_input, require_managed, run_test};
+use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -49,6 +50,7 @@ struct Row {
 #[derive(Template)]
 #[template(path = "sources.html")]
 struct ListTemplate {
+    sidebar: Sidebar,
     title: String,
     rows: Vec<Row>,
     notice: Option<Notice>,
@@ -96,6 +98,7 @@ async fn rows(state: &AppState) -> ApiResult<Vec<Row>> {
 
 async fn list_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
     render(ListTemplate {
+        sidebar: Sidebar::load(&state, Nav::Settings).await?,
         title: "Sources - Folio".into(),
         rows: rows(&state).await?,
         notice: None,
@@ -109,6 +112,7 @@ async fn test_saved(
     let def = find(&state, id).await?;
     let result = run_test(&state, &def).await;
     render(ListTemplate {
+        sidebar: Sidebar::load(&state, Nav::Settings).await?,
         title: "Sources - Folio".into(),
         rows: rows(&state).await?,
         notice: Some(Notice {
@@ -291,18 +295,21 @@ impl FormValues {
 #[derive(Template)]
 #[template(path = "source_form.html")]
 struct FormTemplate {
+    sidebar: Sidebar,
     title: String,
     source_id: Option<String>,
     values: FormValues,
     notice: Option<Notice>,
 }
 
-fn form(
+async fn form(
+    state: &AppState,
     source_id: Option<String>,
     values: FormValues,
     notice: Option<Notice>,
 ) -> ApiResult<Html<String>> {
     render(FormTemplate {
+        sidebar: Sidebar::load(state, Nav::Settings).await?,
         title: format!(
             "{} - Folio",
             if source_id.is_some() {
@@ -330,23 +337,28 @@ struct NewQuery {
 }
 
 async fn new_page(
+    State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<NewQuery>,
 ) -> ApiResult<Html<String>> {
     form(
+        &state,
         None,
         FormValues::blank(q.kind.as_deref().unwrap_or("folder")),
         None,
     )
+    .await
 }
 
 async fn edit_page(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Html<String>> {
     let def = find(&state, id).await?;
     require_managed(&def)?;
     form(
+        &state,
         Some(id.to_string()),
         FormValues::from_config(&def.config, &def.name, def.enabled),
         None,
     )
+    .await
 }
 
 /// Run the connection check for what is in the form, without saving
@@ -382,7 +394,7 @@ async fn create(
 ) -> ApiResult<Response> {
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), None).await;
-        return Ok(form(None, values, notice)?.into_response());
+        return Ok(form(&state, None, values, notice).await?.into_response());
     }
     let saved = match values.clone().into_input() {
         Ok(mut input) => match prepare_input(&mut input, None) {
@@ -398,7 +410,9 @@ async fn create(
     };
     match saved {
         Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(form(None, values, danger(message))?.into_response()),
+        Err(message) => Ok(form(&state, None, values, danger(message))
+            .await?
+            .into_response()),
     }
 }
 
@@ -411,7 +425,9 @@ async fn update(
     require_managed(&existing)?;
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), Some(&existing)).await;
-        return Ok(form(Some(id.to_string()), values, notice)?.into_response());
+        return Ok(form(&state, Some(id.to_string()), values, notice)
+            .await?
+            .into_response());
     }
     let saved = match values.clone().into_input() {
         Ok(mut input) => match prepare_input(&mut input, Some(&existing)) {
@@ -427,7 +443,9 @@ async fn update(
     };
     match saved {
         Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(form(Some(id.to_string()), values, danger(message))?.into_response()),
+        Err(message) => Ok(form(&state, Some(id.to_string()), values, danger(message))
+            .await?
+            .into_response()),
     }
 }
 

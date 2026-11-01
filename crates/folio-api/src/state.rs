@@ -5,11 +5,11 @@ use std::sync::Arc;
 use folio_core::models::IngestionSourceDef;
 use folio_core::ports::{
     CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentTypeRepository,
-    EmbeddingService, HealthCheck, IngestionSourceFactory, OcrService, SearchService,
+    EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory, OcrService, SearchService,
     SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
 use folio_infra::{
-    FileStorage, JobQueue, StorageDocumentImporter, ThumbnailService, WebhookClient,
+    FileStorage, JobQueue, SourceFactory, StorageDocumentImporter, ThumbnailService, WebhookClient,
 };
 
 use folio_core::EventBroadcaster;
@@ -49,6 +49,20 @@ pub struct AppState {
     /// The one path that stores a new document
     pub importer: Arc<dyn DocumentImporter>,
     pub ingestion: IngestionState,
+}
+
+impl IngestionState {
+    pub fn new(
+        managed: Arc<dyn SourceRepository>,
+        ledger: Arc<dyn IngestLedger>,
+        configured: Vec<IngestionSourceDef>,
+    ) -> Self {
+        Self {
+            managed,
+            configured: Arc::new(configured),
+            factory: Arc::new(SourceFactory::new(ledger)),
+        }
+    }
 }
 
 impl AppState {

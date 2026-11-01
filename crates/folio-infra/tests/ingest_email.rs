@@ -1,6 +1,6 @@
 //! IMAP ingestion against a GreenMail container.
 //!
-//! Needs Docker. Without it the tests are skipped locally and fail on CI.
+//! Needs Docker. Without it the tests are skipped unless `FOLIO_REQUIRE_DOCKER` is set.
 
 mod common;
 
@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 
 use async_imap::Session;
 use async_trait::async_trait;
-use common::Harness;
+use common::{container_or_skip, ingest::Harness};
 use folio_core::error::Result;
 use folio_core::models::{
     Document, EmailConfig, Id, IngestItem, IngestOutcome, MailAfterImport, MailBody, MailSecurity,
     SourceConditions, SourceKind, TextMatch,
 };
-use folio_core::ports::{DocumentRepository, IngestSink, IngestionSource};
+use folio_core::ports::{IngestSink, IngestionSource};
 use folio_infra::EmailSource;
 use futures::TryStreamExt;
-use testcontainers::{
+use testcontainers_modules::testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
@@ -42,19 +42,13 @@ impl GreenMail {
             .with_env_var("JAVA_OPTS", "-Djava.net.preferIPv4Stack=true -Xmx256m")
             .start()
             .await;
-        match started {
-            Ok(container) => Some(Self {
-                host: container.get_host().await.unwrap().to_string(),
-                imap_port: container.get_host_port_ipv4(3143.tcp()).await.unwrap(),
-                imaps_port: container.get_host_port_ipv4(3993.tcp()).await.unwrap(),
-                _container: container,
-            }),
-            Err(e) if std::env::var_os("CI").is_none() => {
-                eprintln!("skipping: Docker is not available ({e})");
-                None
-            }
-            Err(e) => panic!("Docker is required for the IMAP tests: {e}"),
-        }
+        let container = container_or_skip("GreenMail", started)?;
+        Some(Self {
+            host: container.get_host().await.unwrap().to_string(),
+            imap_port: container.get_host_port_ipv4(3143.tcp()).await.unwrap(),
+            imaps_port: container.get_host_port_ipv4(3993.tcp()).await.unwrap(),
+            _container: container,
+        })
     }
 
     async fn login(&self, user: &str) -> Imap {

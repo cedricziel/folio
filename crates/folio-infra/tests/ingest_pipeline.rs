@@ -2,12 +2,11 @@
 
 mod common;
 
-use common::{file_item, mail_item, Harness};
+use common::ingest::{file_item, mail_item, Harness};
 use folio_core::models::{
     IngestOutcome, SourceConditions, SourceKind, TextMatch, WorkflowAction, WorkflowConditions,
     WorkflowInput, WorkflowTrigger,
 };
-use folio_core::ports::{DocumentRepository, WorkflowRepository};
 use folio_core::DocumentEvent;
 
 #[tokio::test]
