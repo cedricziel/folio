@@ -254,13 +254,15 @@ slash if the provider has one.
   The username comes from `preferred_username`, then `email`, then `sub`. A
   name that already belongs to a local or forward-auth account is refused with
   `403`. With `auto_create_users = false` only users who already signed in
-  once can sign in.
+  once can sign in, except that the very first sign-in on an empty install
+  still creates the owner.
 - **Admins and groups.** The first user of a fresh install is the owner. With
   `admin_group` set, admin status follows membership of that group on every
   login. The groups claim replaces the user's external groups on every login.
 - **Local login.** With `allow_local_login = false` the password form is gone
-  and refused, and `/setup` is not used: the first person to sign in through
-  the provider becomes owner and admin. Keep it `true` until SSO works, so you
+  and refused, and `/setup` (and its token) is not used: the first person to sign in
+  through the provider becomes owner and admin. With local login on, an empty
+  install still starts at `/setup`, which also offers the SSO button. Keep it `true` until SSO works, so you
   cannot lock yourself out.
 - **Logout.** If the provider advertises an `end_session_endpoint`, signing out
   of Folio also ends the session at the provider (RP-initiated logout). Folio
