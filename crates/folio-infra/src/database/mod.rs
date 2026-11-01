@@ -34,7 +34,6 @@ pub use sqlite::{
     SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
     SqliteTagRepository,
 };
-mod health;
 
 /// Supported database backends
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,8 +1,8 @@
 //! Database health check
 
+use super::Database;
 use async_trait::async_trait;
 use folio_core::ports::HealthCheck;
-use super::Database;
 
 /// Verifies the database answers a trivial query.
 pub struct DatabaseHealthCheck {

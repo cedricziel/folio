@@ -13,8 +13,7 @@ use folio_api::{create_router, AppState};
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
     Config, Database, DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, FileStorage,
-    ThumbnailService,
-    Worker, WorkerConfig,
+    ThumbnailService, Worker, WorkerConfig,
 };
 
 #[tokio::main]
