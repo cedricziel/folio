@@ -2,7 +2,11 @@
 
 Folio ships its own OAuth 2.1 authorization server. It protects the MCP
 endpoint today and is meant to serve the REST API and the native apps later.
-The existing web UI and REST routes do not require a login yet.
+The web UI and `/api` require a login (session cookie) or an API-scoped bearer
+token. Set `auth.required = false` (`FOLIO_AUTH__REQUIRED=false`) to turn that
+off. Exempt either way: `/healthz`, `/readyz`, `/static`, `/login`, `/oauth/*`,
+`/.well-known/*`, `/api/openapi.json`, `/api/docs`, `/setup` (while no user
+exists) and `/mcp` (guarded by its own bearer layer).
 
 ## First run
 
@@ -20,7 +24,7 @@ behind a reverse proxy:
 public_url = "https://folio.example.com"
 ```
 
-or `FOLIO_SERVER_PUBLIC_URL=https://folio.example.com`. Without it Folio uses
+or `FOLIO_SERVER__PUBLIC_URL=https://folio.example.com`. Without it Folio uses
 `X-Forwarded-Proto` and the `Host` header, which is fine for `localhost`.
 Session cookies get the `Secure` flag when the base URL is https.
 

@@ -1,162 +1,303 @@
 //! Configuration management
+//!
+//! Precedence, lowest to highest: built-in defaults, `config.toml`, environment
+//! variables. Settings that the database manages (see `/settings`) override all
+//! of these at runtime.
+//!
+//! Nested keys are addressed in the environment with a double underscore:
+//! `FOLIO_AI__OPENAI_API_KEY` sets `ai.openai_api_key`. Any variable can also be
+//! supplied through a file with the `_FILE` suffix
+//! (`FOLIO_AI__OPENAI_API_KEY_FILE=/run/secrets/openai`), which suits Docker and
+//! Kubernetes secrets.
+
+use std::collections::HashMap;
 
 use figment::{
-    providers::{Env, Format, Toml},
+    providers::{Format, Serialized, Toml},
     Figment,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use tracing::warn;
+
+const ENV_PREFIX: &str = "FOLIO_";
+const FILE_SUFFIX: &str = "_FILE";
+const CONFIG_PATH_ENV: &str = "FOLIO_CONFIG";
+const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
 /// Application configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
-    #[serde(default)]
     pub auth: AuthConfig,
 }
 
 /// Server configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ServerConfig {
-    #[serde(default = "default_host")]
     pub host: String,
-    #[serde(default = "default_port")]
     pub port: u16,
     /// Externally visible base URL (for example `https://folio.example.com`).
     /// Used in OAuth metadata and redirects; derived from the request when unset.
-    #[serde(default)]
     pub public_url: Option<String>,
 }
 
-fn default_host() -> String {
-    "127.0.0.1".to_string()
-}
-
-fn default_port() -> u16 {
-    3000
-}
-
-/// Database configuration
-#[derive(Debug, Clone, Deserialize)]
-pub struct DatabaseConfig {
-    #[serde(default = "default_database_url")]
-    pub url: String,
-}
-
-fn default_database_url() -> String {
-    "sqlite:folio.db?mode=rwc".to_string()
-}
-
-/// Storage configuration
-#[derive(Debug, Clone, Deserialize)]
-pub struct StorageConfig {
-    #[serde(default = "default_storage_path")]
-    pub path: String,
-}
-
-fn default_storage_path() -> String {
-    "./data".to_string()
-}
-
-/// Authentication configuration
-#[derive(Debug, Clone, Deserialize)]
-pub struct AuthConfig {
-    /// Require a session or token for the web UI and API.
-    #[serde(default = "default_auth_required")]
-    pub required: bool,
-}
-
-fn default_auth_required() -> bool {
-    true
-}
-
-impl Default for AuthConfig {
+impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            required: default_auth_required(),
+            host: "127.0.0.1".to_string(),
+            port: 3000,
+            public_url: None,
         }
     }
 }
 
+/// Database configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DatabaseConfig {
+    pub url: String,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: "sqlite:folio.db?mode=rwc".to_string(),
+        }
+    }
+}
+
+/// Storage configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StorageConfig {
+    pub path: String,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            path: "./data".to_string(),
+        }
+    }
+}
+
+/// Authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Require a session or token for the web UI and API.
+    pub required: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { required: true }
+    }
+}
+
 /// AI provider configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AiConfig {
-    #[serde(default = "default_ai_provider")]
     pub provider: String,
-
-    #[serde(default)]
     pub openai_api_key: Option<String>,
-
-    #[serde(default)]
     pub anthropic_api_key: Option<String>,
 }
 
-fn default_ai_provider() -> String {
-    "openai".to_string()
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            provider: "openai".to_string(),
+            openai_api_key: None,
+            anthropic_api_key: None,
+        }
+    }
 }
 
-/// Maps `FOLIO_SERVER_PUBLIC_URL` to `server.public_url`: only the first
-/// underscore separates section from key, since keys contain underscores.
-/// A double underscore (`FOLIO_AUTH__REQUIRED`) is accepted as the separator too.
-fn env_provider() -> Env {
-    Env::prefixed("FOLIO_").map(|key| {
-        let key = key.as_str();
-        if key.contains("__") {
-            key.replacen("__", ".", 1).into()
-        } else {
-            key.replacen('_', ".", 1).into()
-        }
-    })
+/// How an environment value is converted before it reaches the config tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    Str,
+    Port,
+    Bool,
 }
+
+/// One configurable setting. This table drives env parsing and keeps
+/// `docs/configuration.md` honest (a test fails when they drift).
+#[derive(Debug)]
+pub struct Setting {
+    /// Dotted path in `config.toml`.
+    pub key: &'static str,
+    /// Canonical environment variable.
+    pub env: &'static str,
+    /// Deprecated environment variables that still work.
+    pub legacy_env: &'static [&'static str],
+    pub kind: ValueKind,
+}
+
+pub const SETTINGS: &[Setting] = &[
+    Setting {
+        key: "server.host",
+        env: "FOLIO_SERVER__HOST",
+        legacy_env: &["FOLIO_SERVER_HOST"],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "server.port",
+        env: "FOLIO_SERVER__PORT",
+        legacy_env: &["FOLIO_SERVER_PORT"],
+        kind: ValueKind::Port,
+    },
+    Setting {
+        key: "server.public_url",
+        env: "FOLIO_SERVER__PUBLIC_URL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.required",
+        env: "FOLIO_AUTH__REQUIRED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "database.url",
+        env: "FOLIO_DATABASE__URL",
+        legacy_env: &["FOLIO_DATABASE_URL"],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "storage.path",
+        env: "FOLIO_STORAGE__PATH",
+        legacy_env: &["FOLIO_STORAGE_PATH"],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ai.provider",
+        env: "FOLIO_AI__PROVIDER",
+        legacy_env: &["FOLIO_AI_PROVIDER"],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ai.openai_api_key",
+        env: "FOLIO_AI__OPENAI_API_KEY",
+        legacy_env: &["FOLIO_AI_OPENAI_API_KEY"],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ai.anthropic_api_key",
+        env: "FOLIO_AI__ANTHROPIC_API_KEY",
+        legacy_env: &["FOLIO_AI_ANTHROPIC_API_KEY"],
+        kind: ValueKind::Str,
+    },
+];
 
 impl Config {
-    /// Load configuration from file and environment
+    /// Load configuration from `config.toml` (or the file named by
+    /// `FOLIO_CONFIG`) and the process environment.
     #[allow(clippy::result_large_err)]
     pub fn load() -> Result<Self, figment::Error> {
         // Load .env file if present (for development)
         let _ = dotenvy::dotenv();
 
-        Figment::new()
-            .merge(Toml::file("config.toml"))
-            .merge(env_provider())
-            .extract()
+        let path =
+            std::env::var(CONFIG_PATH_ENV).unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+        Self::load_with(&path, std::env::vars())
     }
 
-    /// Load configuration from a specific file path
+    /// Load configuration from a specific file path and the process environment.
     #[allow(clippy::result_large_err)]
     pub fn load_from(path: &str) -> Result<Self, figment::Error> {
         let _ = dotenvy::dotenv();
+        Self::load_with(path, std::env::vars())
+    }
 
-        Figment::new()
-            .merge(Toml::file(path))
-            .merge(env_provider())
-            .extract()
+    /// Load configuration from a file and an explicit set of environment
+    /// variables. A missing file is not an error.
+    #[allow(clippy::result_large_err)]
+    pub fn load_with(
+        path: &str,
+        vars: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, figment::Error> {
+        let vars: HashMap<String, String> = vars.into_iter().collect();
+        let mut figment =
+            Figment::from(Serialized::defaults(Config::default())).merge(Toml::file(path));
+
+        for setting in SETTINGS {
+            if let Some(value) = resolve_env(setting, &vars)? {
+                figment =
+                    figment.merge(Serialized::default(setting.key, to_value(setting, value)?));
+            }
+        }
+        figment.extract()
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig {
-                host: default_host(),
-                port: default_port(),
-                public_url: None,
-            },
-            database: DatabaseConfig {
-                url: default_database_url(),
-            },
-            storage: StorageConfig {
-                path: default_storage_path(),
-            },
-            ai: AiConfig {
-                provider: default_ai_provider(),
-                openai_api_key: None,
-                anthropic_api_key: None,
-            },
-            auth: AuthConfig::default(),
+/// Find the value for a setting: canonical name first, then deprecated
+/// aliases, each also accepted with a `_FILE` suffix.
+#[allow(clippy::result_large_err)]
+fn resolve_env(
+    setting: &Setting,
+    vars: &HashMap<String, String>,
+) -> Result<Option<String>, figment::Error> {
+    let names = std::iter::once(setting.env).chain(setting.legacy_env.iter().copied());
+    for name in names {
+        let Some(value) = read_var(name, vars)? else {
+            continue;
+        };
+        if name != setting.env {
+            warn!(
+                "{name} is deprecated and will be removed in a future release; use {} instead",
+                setting.env
+            );
         }
+        return Ok(Some(value));
+    }
+    Ok(None)
+}
+
+#[allow(clippy::result_large_err)]
+fn read_var(name: &str, vars: &HashMap<String, String>) -> Result<Option<String>, figment::Error> {
+    debug_assert!(name.starts_with(ENV_PREFIX));
+    let direct = vars.get(name);
+    let file = vars.get(&format!("{name}{FILE_SUFFIX}"));
+    match (direct, file) {
+        (Some(_), Some(_)) => Err(figment::Error::from(format!(
+            "{name} and {name}{FILE_SUFFIX} are both set; use only one"
+        ))),
+        (Some(value), None) => Ok(Some(value.clone())),
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .map(|s| Some(s.trim_end_matches(['\r', '\n']).to_string()))
+            .map_err(|e| {
+                figment::Error::from(format!("failed to read {name}{FILE_SUFFIX} ({path}): {e}"))
+            }),
+        (None, None) => Ok(None),
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn to_value(setting: &Setting, raw: String) -> Result<figment::value::Value, figment::Error> {
+    use figment::value::Value;
+    let invalid = |expected: &str| {
+        figment::Error::from(format!("{}: expected {expected}, got {raw:?}", setting.env))
+    };
+    match setting.kind {
+        ValueKind::Str => Ok(Value::from(raw)),
+        ValueKind::Port => raw
+            .trim()
+            .parse::<u16>()
+            .map(Value::from)
+            .map_err(|_| invalid("a port number")),
+        ValueKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(Value::from(true)),
+            "false" | "0" | "no" | "off" => Ok(Value::from(false)),
+            _ => Err(invalid("a boolean")),
+        },
     }
 }
 
@@ -164,25 +305,179 @@ impl Default for Config {
 mod tests {
     use super::*;
 
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn load(pairs: &[(&str, &str)]) -> Config {
+        Config::load_with("/nonexistent/config.toml", env(pairs)).unwrap()
+    }
+
+    fn lookup(config: &Config, key: &str) -> Option<String> {
+        let json = serde_json::to_value(config).unwrap();
+        let mut node = &json;
+        for part in key.split('.') {
+            node = node.get(part)?;
+        }
+        match node {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) => Some(s.clone()),
+            other => Some(other.to_string()),
+        }
+    }
+
     #[test]
-    #[allow(clippy::result_large_err)]
-    fn env_maps_to_nested_keys_with_underscores() {
-        figment::Jail::expect_with(|jail| {
-            jail.set_env("FOLIO_SERVER_PUBLIC_URL", "https://folio.example.com");
-            jail.set_env("FOLIO_SERVER_PORT", "4000");
-            jail.set_env("FOLIO_DATABASE_URL", "sqlite::memory:");
-            jail.set_env("FOLIO_STORAGE_PATH", "./data");
-            jail.set_env("FOLIO_AI_OPENAI_API_KEY", "sk-test");
-            jail.set_env("FOLIO_AUTH__REQUIRED", "false");
-            let config = Config::load_from("missing.toml")?;
+    fn defaults_apply_without_file_or_env() {
+        let config = load(&[]);
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.port, 3000);
+        assert_eq!(config.storage.path, "./data");
+        assert!(config.ai.openai_api_key.is_none());
+    }
+
+    #[test]
+    fn every_setting_is_set_by_its_env_var() {
+        for setting in SETTINGS {
+            let sample = match setting.kind {
+                ValueKind::Str => "sample-value",
+                ValueKind::Port => "4242",
+                ValueKind::Bool => "true",
+            };
+            let config = load(&[(setting.env, sample)]);
             assert_eq!(
-                config.server.public_url.as_deref(),
-                Some("https://folio.example.com")
+                lookup(&config, setting.key).as_deref(),
+                Some(sample),
+                "{} did not land in {}",
+                setting.env,
+                setting.key
             );
-            assert_eq!(config.server.port, 4000);
-            assert!(!config.auth.required);
-            assert_eq!(config.ai.openai_api_key.as_deref(), Some("sk-test"));
-            Ok(())
-        });
+        }
+    }
+
+    #[test]
+    fn legacy_names_still_work() {
+        for setting in SETTINGS {
+            for legacy in setting.legacy_env {
+                let sample = match setting.kind {
+                    ValueKind::Str => "legacy-value",
+                    ValueKind::Port => "4343",
+                    ValueKind::Bool => "true",
+                };
+                let config = load(&[(legacy, sample)]);
+                assert_eq!(lookup(&config, setting.key).as_deref(), Some(sample));
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_name_beats_legacy_alias() {
+        let config = load(&[
+            ("FOLIO_AI_OPENAI_API_KEY", "old"),
+            ("FOLIO_AI__OPENAI_API_KEY", "new"),
+        ]);
+        assert_eq!(config.ai.openai_api_key.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn env_beats_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[server]\nhost = \"10.0.0.1\"\nport = 8080\n").unwrap();
+        let config = Config::load_with(
+            path.to_str().unwrap(),
+            env(&[("FOLIO_SERVER__PORT", "9090")]),
+        )
+        .unwrap();
+        assert_eq!(config.server.host, "10.0.0.1");
+        assert_eq!(config.server.port, 9090);
+    }
+
+    #[test]
+    fn file_suffix_reads_secret_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("openai");
+        std::fs::write(&secret, "sk-from-file\n").unwrap();
+        let config = load(&[("FOLIO_AI__OPENAI_API_KEY_FILE", secret.to_str().unwrap())]);
+        assert_eq!(config.ai.openai_api_key.as_deref(), Some("sk-from-file"));
+    }
+
+    #[test]
+    fn value_and_file_together_is_an_error() {
+        let result = Config::load_with(
+            "/nonexistent/config.toml",
+            env(&[
+                ("FOLIO_AI__OPENAI_API_KEY", "a"),
+                ("FOLIO_AI__OPENAI_API_KEY_FILE", "/dev/null"),
+            ]),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_secret_file_is_an_error() {
+        let result = Config::load_with(
+            "/nonexistent/config.toml",
+            env(&[("FOLIO_AI__OPENAI_API_KEY_FILE", "/nonexistent/secret")]),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_port_is_an_error() {
+        let result = Config::load_with(
+            "/nonexistent/config.toml",
+            env(&[("FOLIO_SERVER__PORT", "http")]),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn registry_covers_every_config_key() {
+        fn leaves(prefix: &str, value: &serde_json::Value, out: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (k, v) in map {
+                        let key = if prefix.is_empty() {
+                            k.clone()
+                        } else {
+                            format!("{prefix}.{k}")
+                        };
+                        leaves(&key, v, out);
+                    }
+                }
+                _ => out.push(prefix.to_string()),
+            }
+        }
+        let mut keys = Vec::new();
+        leaves(
+            "",
+            &serde_json::to_value(Config::default()).unwrap(),
+            &mut keys,
+        );
+        for key in keys {
+            assert!(
+                SETTINGS.iter().any(|s| s.key == key),
+                "{key} is missing from SETTINGS"
+            );
+        }
+    }
+
+    #[test]
+    fn docs_list_every_env_var() {
+        let docs = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/configuration.md"
+        ))
+        .unwrap();
+        for setting in SETTINGS {
+            assert!(
+                docs.contains(setting.env),
+                "{} is not documented in docs/configuration.md",
+                setting.env
+            );
+        }
     }
 }

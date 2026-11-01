@@ -44,4 +44,4 @@ reqwest = { workspace = true }
 image = { workspace = true }
 
 [dev-dependencies]
-figment = { workspace = true, features = ["test"] }
+tempfile = "3"
