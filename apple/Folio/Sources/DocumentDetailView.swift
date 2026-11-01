@@ -1,0 +1,82 @@
+import FolioKit
+import SwiftUI
+
+struct DocumentDetailView: View {
+    @State var model: DocumentDetailViewModel
+
+    init(model: DocumentDetailViewModel) {
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            preview
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.paperSunken)
+            metadataPanel
+        }
+        .background(Color.paper)
+        .navigationTitle(model.document.title)
+        #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .task { await model.loadPreview() }
+    }
+
+    @ViewBuilder
+    private var preview: some View {
+        switch model.preview {
+        case .loading:
+            Text("Fetching the file…")
+                .font(FolioTheme.Typography.body)
+                .foregroundStyle(Color.inkMuted)
+        case let .ready(url):
+            QuickLookPreview(url: url)
+        case let .failed(message):
+            ContentUnavailableView {
+                Label("Couldn't open this file", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(Color.danger)
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Try again") { Task { await model.loadPreview() } }
+            }
+        }
+    }
+
+    private var metadataPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: FolioTheme.Spacing.space4) {
+                Text(model.document.title)
+                    .font(FolioTheme.Typography.title)
+                    .foregroundStyle(Color.ink)
+                Grid(
+                    alignment: .leading, horizontalSpacing: FolioTheme.Spacing.space4,
+                    verticalSpacing: FolioTheme.Spacing.space2
+                ) {
+                    ForEach(model.metadata) { field in
+                        GridRow {
+                            Text(field.label.uppercased())
+                                .font(FolioTheme.Typography.label)
+                                .foregroundStyle(Color.inkMuted)
+                            Text(field.value)
+                                .font(field.isRecord ? FolioTheme.Typography.meta : FolioTheme.Typography.body)
+                                .foregroundStyle(Color.ink)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                if !model.document.tags.isEmpty {
+                    HStack(spacing: FolioTheme.Spacing.space2) {
+                        ForEach(model.document.tags) { TagCapsule(tag: $0) }
+                    }
+                }
+            }
+            .padding(FolioTheme.Spacing.space4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 220)
+        .background(Color.paperRaised)
+        .overlay(alignment: .top) { Rectangle().fill(Color.rule).frame(height: 1) }
+    }
+}
