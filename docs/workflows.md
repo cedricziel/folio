@@ -12,6 +12,7 @@ A workflow has a trigger, optional conditions (all must match), and ordered acti
 | `document.processed` | Background processing (thumbnails, OCR, embedding) finished. Once per document and workflow. |
 | `document.updated`   | Title, correspondent, document type, or tags changed.                      |
 | `document.deleted`   | A document was deleted. Only webhook actions can run for it.               |
+| `ingest.received`    | A file or email attachment was found by an ingestion source, before it is imported. Only `skip_import` runs. See [ingestion](ingestion.md). |
 
 `uploaded` and `processed` never repeat for the same document, even if it is reprocessed. Changes made by a workflow's own actions do not trigger `document.updated` workflows.
 
@@ -23,6 +24,7 @@ Every condition you set has to match. Leave the rest empty.
 - `tag_id`: the document has this tag
 - `correspondent_id`, `document_type_id`
 - `filename_glob`: `*` and `?`, case-insensitive, against the original file name
+- `source`: where the document came from (folder path, email sender, subject, and so on). See [ingestion](ingestion.md#source-conditions)
 
 ## Actions
 
@@ -30,6 +32,7 @@ Every condition you set has to match. Leave the rest empty.
 - `add_tags`: `tag_ids`
 - `set_correspondent`: `correspondent_id`
 - `set_document_type`: `document_type_id`
+- `skip_import`: discard a file before import; only for `ingest.received`
 
 Actions run in order. Each action is delivered at least once: if a later action fails and the run is retried, it resumes at the failed action and does not repeat finished ones.
 
@@ -52,6 +55,7 @@ Every webhook body is JSON with this shape (`version` is the schema version; the
     "document_type": { "id": "…", "name": "Invoice" },
     "tags": [{ "id": "…", "name": "finance" }],
     "asn": null,
+    "source": { "kind": "upload" },
     "created_at": "2025-03-14T09:26:50Z",
     "urls": {
       "api": "https://folio.example.com/api/documents/0b9c0c3e-…",
@@ -62,7 +66,7 @@ Every webhook body is JSON with this shape (`version` is the schema version; the
 }
 ```
 
-Adding optional fields keeps `version` at 1. Removing or re-typing a field means a new version. `asn` is reserved and always `null` for now. For `document.deleted` the document is described as it was before deletion, and the links no longer resolve.
+Adding optional fields keeps `version` at 1. Removing or re-typing a field means a new version. `asn` is reserved and always `null` for now. `source` says how the document arrived (`upload`, `api`, `folder`, `email`, ...); for folders and mail it carries the details described in [ingestion](ingestion.md). For `document.deleted` the document is described as it was before deletion, and the links no longer resolve.
 
 The links use `server.public_url` from `config.toml` (default `http://<host>:<port>`). Set it if receivers reach Folio under another address.
 
