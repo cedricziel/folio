@@ -11,11 +11,7 @@ use http_body_util::BodyExt;
 use uuid::Uuid;
 
 use folio_api::{create_router, AppState, EventBroadcaster};
-use folio_infra::{
-    create_pool, run_migrations, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, ThumbnailService,
-};
+use folio_infra::{Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService};
 
 pub struct Harness {
     pub app: Router,
@@ -27,12 +23,12 @@ pub async fn harness() -> Harness {
     std::fs::create_dir_all(&dir).unwrap();
     let storage = dir.to_string_lossy().to_string();
 
-    let pool = create_pool(&format!("sqlite:{}/folio.db", storage))
+    let database = Database::connect(&format!("sqlite:{}/folio.db", storage))
         .await
         .unwrap();
-    run_migrations(&pool).await.unwrap();
+    database.migrate().await.unwrap();
+    let repos = database.repositories().await;
 
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
     let ai = folio_infra::config::AiConfig {
         provider: "local".into(),
         openai_api_key: None,
@@ -42,20 +38,20 @@ pub async fn harness() -> Harness {
     thumbnails.init().await.unwrap();
 
     let state = AppState::new(
-        Arc::new(SqliteDocumentRepository::new(pool.clone())),
-        Arc::new(SqliteTagRepository::new(pool.clone())),
-        Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-        Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-        settings_repo.clone(),
+        repos.documents,
+        repos.tags,
+        repos.correspondents,
+        repos.document_types,
+        repos.settings.clone(),
         Arc::new(DynamicOcrService::new(
-            settings_repo.clone(),
+            repos.settings.clone(),
             ai.clone(),
             &storage,
         )),
-        Arc::new(DynamicEmbeddingService::new(settings_repo, ai)),
-        Arc::new(SqliteSearchService::new(pool.clone())),
+        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        repos.search,
         thumbnails,
-        JobQueue::new(pool),
+        repos.jobs,
         storage,
         EventBroadcaster::new(16),
     );
