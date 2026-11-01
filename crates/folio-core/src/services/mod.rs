@@ -19,7 +19,9 @@ use serde::Serialize;
 
 use crate::error::Result;
 use crate::models::{CreateDocument, Document, DocumentFilter, Id};
-use crate::ports::{DocumentRepository, EmbeddingService, OcrService, SearchResult, SearchService};
+use crate::ports::{
+    DocumentRepository, EmbeddedChunk, EmbeddingService, OcrService, SearchResult, SearchService,
+};
 
 /// Service for managing documents
 pub struct DocumentService {
@@ -107,13 +109,7 @@ impl IngestService {
             })
             .await?;
 
-        // Generate and store embedding for search
-        if !content.is_empty() {
-            let embedding = self.embedding_service.generate_embedding(&content).await?;
-            self.search_service
-                .store_embedding(doc.id, &embedding)
-                .await?;
-        }
+        self.embed(doc.id, &content).await?;
 
         Ok(doc)
     }
@@ -143,13 +139,30 @@ impl IngestService {
             )
             .await?;
 
-        // Regenerate embedding
-        if !content.is_empty() {
-            let embedding = self.embedding_service.generate_embedding(&content).await?;
-            self.search_service.store_embedding(id, &embedding).await?;
-        }
+        self.embed(id, &content).await?;
 
         Ok(doc)
+    }
+
+    /// Embed the whole text as a single chunk and store it for search
+    async fn embed(&self, id: Id, content: &str) -> Result<()> {
+        if content.is_empty() {
+            return Ok(());
+        }
+        let batch = self.embedding_service.embed(&[content]).await?;
+        let chunks: Vec<EmbeddedChunk> = batch
+            .vectors
+            .into_iter()
+            .enumerate()
+            .map(|(i, embedding)| EmbeddedChunk {
+                index: i as u32,
+                text: content.to_string(),
+                embedding,
+            })
+            .collect();
+        self.search_service
+            .store_chunks(id, &batch.model, &chunks)
+            .await
     }
 }
 
@@ -183,8 +196,43 @@ impl SearchServiceFacade {
 
     /// Search for documents using natural language query
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        let query_embedding = self.embedding_service.generate_embedding(query).await?;
-        self.search_service.search(&query_embedding, limit).await
+        let batch = self.embedding_service.embed(&[query]).await?;
+        let vector = batch.vectors.first().map(Vec::as_slice).unwrap_or_default();
+        self.search_service
+            .search(&batch.model, vector, limit)
+            .await
+    }
+
+    /// Literal matches on title and text first, then semantic neighbours
+    ///
+    /// Semantic search is best effort: with embeddings disabled or failing, or
+    /// before any document is embedded, literal matching still answers.
+    pub async fn hybrid_search(&self, query: &str, limit: usize) -> Result<Vec<ScoredDocument>> {
+        let semantic = self
+            .search_documents(query, limit)
+            .await
+            .unwrap_or_default();
+        let scores: std::collections::HashMap<Id, f32> =
+            semantic.iter().map(|s| (s.document.id, s.score)).collect();
+
+        let literal = self
+            .document_repo
+            .list(Some(DocumentFilter {
+                search_query: Some(query.to_string()),
+                ..Default::default()
+            }))
+            .await?;
+
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for document in literal {
+            seen.insert(document.id);
+            let score = scores.get(&document.id).copied().unwrap_or(1.0);
+            out.push(ScoredDocument { document, score });
+        }
+        out.extend(semantic.into_iter().filter(|s| seen.insert(s.document.id)));
+        out.truncate(limit);
+        Ok(out)
     }
 
     /// Search by natural language query and resolve hits to full documents,

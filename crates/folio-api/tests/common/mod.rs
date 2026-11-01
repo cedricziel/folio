@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use folio_api::{create_router, AppState, AuthState, EventBroadcaster};
 use folio_infra::{
-    Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, WebhookClient,
+    Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
+    WebhookClient,
 };
 
 pub struct Harness {
@@ -40,19 +41,17 @@ pub async fn harness() -> Harness {
     let thumbnails = Arc::new(ThumbnailService::new(&storage));
     thumbnails.init().await.unwrap();
 
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let state = AppState::new(
         repos.documents,
         repos.tags,
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage,
-        )),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         thumbnails,
         repos.jobs,
         storage,

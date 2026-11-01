@@ -13,7 +13,7 @@ use folio_core::models::{
     UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, WebhookMethod,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
-use folio_core::ports::SearchService;
+use folio_core::ports::{EmbeddedChunk, SearchService};
 use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
@@ -557,8 +557,9 @@ async fn document_filter_contract(r: &Repositories) {
 }
 
 async fn settings_contract(r: &Repositories) {
-    let seeded = r.settings.get("ai.provider").await.unwrap().unwrap();
-    assert_eq!(seeded.value, "local");
+    let seeded = r.settings.get("ocr.provider").await.unwrap().unwrap();
+    assert_eq!(seeded.value, "tesseract");
+    assert!(r.settings.get("ai.provider").await.unwrap().is_none());
     assert!(r.settings.get("nope.nope").await.unwrap().is_none());
 
     let set = r.settings.set("test.key", "one").await.unwrap();
@@ -590,46 +591,87 @@ async fn settings_contract(r: &Repositories) {
     r.settings.delete("test.a").await.unwrap();
 }
 
+fn chunk(index: u32, text: &str, embedding: &[f32]) -> EmbeddedChunk {
+    EmbeddedChunk {
+        index,
+        text: text.to_string(),
+        embedding: embedding.to_vec(),
+    }
+}
+
 async fn search_contract(
     documents: &dyn folio_core::ports::DocumentRepository,
     search: &dyn SearchService,
 ) {
+    const M: &str = "test:model";
     let near = documents.create(new_document("near")).await.unwrap();
     let mid = documents.create(new_document("mid")).await.unwrap();
     let far = documents.create(new_document("far")).await.unwrap();
 
+    // Several chunks per document: the best chunk decides the document's score
     search
-        .store_embedding(near.id, &[1.0, 0.0, 0.0])
+        .store_chunks(
+            near.id,
+            M,
+            &[
+                chunk(0, "off topic", &[0.0, 0.0, 1.0]),
+                chunk(1, "the hit", &[1.0, 0.0, 0.0]),
+            ],
+        )
         .await
         .unwrap();
     search
-        .store_embedding(mid.id, &[1.0, 1.0, 0.0])
+        .store_chunks(mid.id, M, &[chunk(0, "middle", &[1.0, 1.0, 0.0])])
         .await
         .unwrap();
     search
-        .store_embedding(far.id, &[0.0, 0.0, 1.0])
+        .store_chunks(far.id, M, &[chunk(0, "far away", &[0.0, 0.0, 1.0])])
         .await
         .unwrap();
 
-    let results = search.search(&[1.0, 0.1, 0.0], 10).await.unwrap();
+    let results = search.search(M, &[1.0, 0.1, 0.0], 10).await.unwrap();
     let ids: Vec<_> = results.iter().map(|r| r.document_id).collect();
     assert_eq!(ids, [near.id, mid.id, far.id]);
+    assert_eq!(results[0].snippet.as_deref(), Some("the hit"));
     assert!(results[0].score > results[1].score && results[1].score > results[2].score);
     assert!(results[0].score > 0.9);
 
-    assert_eq!(search.search(&[1.0, 0.1, 0.0], 2).await.unwrap().len(), 2);
+    assert_eq!(
+        search.search(M, &[1.0, 0.1, 0.0], 2).await.unwrap().len(),
+        2
+    );
 
-    // Storing again replaces the vector
+    // Vectors of another model are never compared
+    assert!(search
+        .search("other:model", &[1.0, 0.1, 0.0], 10)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Switching the active model flags the old vectors stale; switching back restores them
+    assert_eq!(search.mark_stale_except("other:model").await.unwrap(), 3);
+    assert!(search
+        .search(M, &[1.0, 0.1, 0.0], 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(search.mark_stale_except(M).await.unwrap(), 0);
+    assert_eq!(
+        search.search(M, &[1.0, 0.1, 0.0], 10).await.unwrap().len(),
+        3
+    );
+
+    // Storing again replaces the document's chunks
     search
-        .store_embedding(far.id, &[1.0, 0.1, 0.0])
+        .store_chunks(far.id, M, &[chunk(0, "now close", &[1.0, 0.1, 0.0])])
         .await
         .unwrap();
-    let top = search.search(&[1.0, 0.1, 0.0], 1).await.unwrap();
+    let top = search.search(M, &[1.0, 0.1, 0.0], 1).await.unwrap();
     assert_eq!(top[0].document_id, far.id);
 
     search.delete_embedding(far.id).await.unwrap();
     let ids: Vec<_> = search
-        .search(&[1.0, 0.1, 0.0], 10)
+        .search(M, &[1.0, 0.1, 0.0], 10)
         .await
         .unwrap()
         .into_iter()
@@ -637,10 +679,10 @@ async fn search_contract(
         .collect();
     assert_eq!(ids, [near.id, mid.id]);
 
-    // Deleting the document removes its embedding
+    // Deleting the document removes its chunks
     documents.delete(near.id).await.unwrap();
     let ids: Vec<_> = search
-        .search(&[1.0, 0.1, 0.0], 10)
+        .search(M, &[1.0, 0.1, 0.0], 10)
         .await
         .unwrap()
         .into_iter()

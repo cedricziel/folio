@@ -8,7 +8,10 @@ mod repository;
 mod storage;
 mod workflow;
 
-pub use ai::{EmbeddingService, OcrService, SearchResult, SearchService};
+pub use ai::{
+    EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
+    SearchService,
+};
 pub use health::HealthCheck;
 pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,

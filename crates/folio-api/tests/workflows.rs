@@ -15,7 +15,8 @@ use folio_core::{
     EventBroadcaster,
 };
 use folio_infra::{
-    Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, WebhookClient,
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
+    ThumbnailService, WebhookClient,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -50,19 +51,17 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
 
     let auth = AuthState::new(repos.auth.clone(), None).with_required(auth_required);
     let ai = Config::default().ai;
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let state = AppState::new(
         repos.documents,
         repos.tags,
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
-        Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         repos.search,
+        pipeline,
         Arc::new(ThumbnailService::new(&storage_path)),
         repos.jobs,
         storage_path,

@@ -6,7 +6,10 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::events::{DeletedDocument, DocumentEvent, EventBroadcaster};
-use crate::models::{CreateDocument, Document, DocumentFilter, Id, Tag, UpdateDocument};
+use crate::models::{
+    CreateDocument, Document, DocumentFilter, Id, ProcessingStage, ProcessingStatus, Tag,
+    UpdateDocument,
+};
 use crate::ports::DocumentRepository;
 
 /// A [`DocumentRepository`] that announces creates, updates, and deletes
@@ -73,6 +76,27 @@ impl DocumentRepository for EventingDocumentRepository {
 
     async fn set_page_count(&self, id: Id, page_count: u32) -> Result<()> {
         self.inner.set_page_count(id, page_count).await
+    }
+
+    async fn set_stage_status(
+        &self,
+        id: Id,
+        stage: ProcessingStage,
+        status: ProcessingStatus,
+    ) -> Result<()> {
+        self.inner.set_stage_status(id, stage, status).await
+    }
+
+    async fn complete_ocr(&self, id: Id, content: &str) -> Result<()> {
+        self.inner.complete_ocr(id, content).await
+    }
+
+    async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
+        self.inner.list_pending(stage).await
+    }
+
+    async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
+        self.inner.reset_embedding_status().await
     }
 
     async fn get_tags(&self, document_id: Id) -> Result<Vec<Tag>> {

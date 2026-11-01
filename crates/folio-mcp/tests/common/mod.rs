@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use folio_core::models::{CreateDocument, Document};
-use folio_core::ports::{DocumentRepository, EmbeddingService, SearchService, SettingsRepository};
+use folio_core::ports::{
+    DocumentRepository, EmbeddingBatch, EmbeddingService, SearchService, SettingsRepository,
+};
 use folio_core::services::LibraryService;
 use folio_infra::{Database, FileStorage};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
@@ -19,16 +21,16 @@ struct NoEmbeddings;
 
 #[async_trait]
 impl EmbeddingService for NoEmbeddings {
-    async fn generate_embedding(&self, _text: &str) -> folio_core::Result<Vec<f32>> {
+    async fn embed(&self, _texts: &[&str]) -> folio_core::Result<EmbeddingBatch> {
         Err(folio_core::Error::AiService("no provider".into()))
     }
 
-    async fn generate_embeddings(&self, _texts: &[&str]) -> folio_core::Result<Vec<Vec<f32>>> {
-        Err(folio_core::Error::AiService("no provider".into()))
+    async fn model_id(&self) -> folio_core::Result<String> {
+        Ok("none".into())
     }
 
-    fn embedding_dimension(&self) -> usize {
-        0
+    async fn health(&self) -> folio_core::Result<()> {
+        Ok(())
     }
 }
 
@@ -37,16 +39,20 @@ pub struct FakeEmbeddings;
 
 #[async_trait]
 impl EmbeddingService for FakeEmbeddings {
-    async fn generate_embedding(&self, _text: &str) -> folio_core::Result<Vec<f32>> {
-        Ok(vec![1.0])
+    async fn embed(&self, texts: &[&str]) -> folio_core::Result<EmbeddingBatch> {
+        Ok(EmbeddingBatch {
+            vectors: texts.iter().map(|_| vec![1.0]).collect(),
+            model: "fake".into(),
+            dimensions: 1,
+        })
     }
 
-    async fn generate_embeddings(&self, texts: &[&str]) -> folio_core::Result<Vec<Vec<f32>>> {
-        Ok(texts.iter().map(|_| vec![1.0]).collect())
+    async fn model_id(&self) -> folio_core::Result<String> {
+        Ok("fake".into())
     }
 
-    fn embedding_dimension(&self) -> usize {
-        1
+    async fn health(&self) -> folio_core::Result<()> {
+        Ok(())
     }
 }
 
@@ -62,12 +68,17 @@ impl FakeSearch {
 
 #[async_trait]
 impl SearchService for FakeSearch {
-    async fn store_embedding(
+    async fn store_chunks(
         &self,
         _id: folio_core::models::Id,
-        _e: &[f32],
+        _model: &str,
+        _chunks: &[folio_core::ports::EmbeddedChunk],
     ) -> folio_core::Result<()> {
         Ok(())
+    }
+
+    async fn mark_stale_except(&self, _model: &str) -> folio_core::Result<u64> {
+        Ok(0)
     }
 
     async fn delete_embedding(&self, _id: folio_core::models::Id) -> folio_core::Result<()> {
@@ -76,6 +87,7 @@ impl SearchService for FakeSearch {
 
     async fn search(
         &self,
+        _model: &str,
         _embedding: &[f32],
         limit: usize,
     ) -> folio_core::Result<Vec<folio_core::ports::SearchResult>> {
