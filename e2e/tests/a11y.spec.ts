@@ -18,11 +18,6 @@ const known: { rule: string; target: string; issue: string }[] = [
     issue: "https://github.com/cedricziel/folio/issues/64",
   },
   {
-    rule: "target-size",
-    target: ".f-row-title",
-    issue: "https://github.com/cedricziel/folio/issues/59",
-  },
-  {
     rule: "aria-required-children",
     target: ".palette-results",
     issue: "https://github.com/cedricziel/folio/issues/62",
