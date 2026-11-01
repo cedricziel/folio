@@ -22,6 +22,10 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Externally visible base URL (for example `https://folio.example.com`).
+    /// Used in OAuth metadata and redirects; derived from the request when unset.
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 fn default_host() -> String {
@@ -71,6 +75,12 @@ fn default_ai_provider() -> String {
     "openai".to_string()
 }
 
+/// Maps `FOLIO_SERVER_PUBLIC_URL` to `server.public_url`: only the first
+/// underscore separates section from key, since keys contain underscores.
+fn env_provider() -> Env {
+    Env::prefixed("FOLIO_").map(|key| key.as_str().replacen('_', ".", 1).into())
+}
+
 impl Config {
     /// Load configuration from file and environment
     #[allow(clippy::result_large_err)]
@@ -80,7 +90,7 @@ impl Config {
 
         Figment::new()
             .merge(Toml::file("config.toml"))
-            .merge(Env::prefixed("FOLIO_").split("_"))
+            .merge(env_provider())
             .extract()
     }
 
@@ -91,7 +101,7 @@ impl Config {
 
         Figment::new()
             .merge(Toml::file(path))
-            .merge(Env::prefixed("FOLIO_").split("_"))
+            .merge(env_provider())
             .extract()
     }
 }
@@ -102,6 +112,7 @@ impl Default for Config {
             server: ServerConfig {
                 host: default_host(),
                 port: default_port(),
+                public_url: None,
             },
             database: DatabaseConfig {
                 url: default_database_url(),
@@ -115,5 +126,30 @@ impl Default for Config {
                 anthropic_api_key: None,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn env_maps_to_nested_keys_with_underscores() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("FOLIO_SERVER_PUBLIC_URL", "https://folio.example.com");
+            jail.set_env("FOLIO_SERVER_PORT", "4000");
+            jail.set_env("FOLIO_DATABASE_URL", "sqlite::memory:");
+            jail.set_env("FOLIO_STORAGE_PATH", "./data");
+            jail.set_env("FOLIO_AI_OPENAI_API_KEY", "sk-test");
+            let config = Config::load_from("missing.toml")?;
+            assert_eq!(
+                config.server.public_url.as_deref(),
+                Some("https://folio.example.com")
+            );
+            assert_eq!(config.server.port, 4000);
+            assert_eq!(config.ai.openai_api_key.as_deref(), Some("sk-test"));
+            Ok(())
+        });
     }
 }
