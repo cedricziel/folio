@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup
+.PHONY: build run test lint format clean dev setup e2e
 
 # Default target
 all: build
@@ -60,3 +60,7 @@ migrate-new:
 # Check project (lint + test + format-check)
 check: lint format-check test
 	@echo "All checks passed!"
+
+# End-to-end tests (Playwright) against an ephemeral instance; rebuilds folio-app first
+e2e: build
+	cd e2e && npm ci && npx playwright install chromium && npx playwright test
