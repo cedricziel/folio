@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use folio_auth::{
-    AccessToken, AuthCode, AuthError, AuthStore, Group, GroupSource, OAuthClient, RefreshToken,
-    Session, User,
+    AccessToken, AuthCode, AuthError, AuthStore, Group, GroupSource, OAuthClient, OidcFlow,
+    RefreshToken, Session, User,
 };
 use sqlx::{postgres::PgRow, PgPool, Row};
 
@@ -401,12 +401,44 @@ impl AuthStore for PostgresAuthStore {
         Ok(())
     }
 
+    async fn insert_oidc_flow(&self, flow: OidcFlow) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO oidc_flows (state_hash, nonce, code_verifier, next, expires_at)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(flow.state_hash)
+        .bind(flow.nonce)
+        .bind(flow.code_verifier)
+        .bind(flow.next)
+        .bind(flow.expires_at)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(err)
+    }
+
+    async fn take_oidc_flow(&self, state_hash: &str) -> Result<Option<OidcFlow>, AuthError> {
+        let row = sqlx::query("DELETE FROM oidc_flows WHERE state_hash = $1 RETURNING *")
+            .bind(state_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(err)?;
+        Ok(row.map(|r| OidcFlow {
+            state_hash: r.get("state_hash"),
+            nonce: r.get("nonce"),
+            code_verifier: r.get("code_verifier"),
+            next: r.get("next"),
+            expires_at: r.get("expires_at"),
+        }))
+    }
+
     async fn purge_expired(&self, now: i64) -> Result<(), AuthError> {
         let statements = [
             "DELETE FROM oauth_codes WHERE expires_at <= $1",
             "DELETE FROM oauth_access_tokens WHERE expires_at <= $1",
             "DELETE FROM oauth_refresh_tokens WHERE expires_at <= $1",
             "DELETE FROM sessions WHERE expires_at <= $1",
+            "DELETE FROM oidc_flows WHERE expires_at <= $1",
         ];
         for sql in statements {
             sqlx::query(sql)

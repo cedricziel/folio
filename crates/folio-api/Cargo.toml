@@ -50,6 +50,8 @@ url = "2"
 async-trait = { workspace = true }
 
 [dev-dependencies]
+jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+reqwest = { workspace = true }
 sqlx = { workspace = true }
 base64 = "0.22"
 sha2 = "0.10"

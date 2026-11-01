@@ -202,6 +202,25 @@ async fn main() -> Result<()> {
 
     let mut auth = AuthState::new(auth_store, config.server.public_url.clone())
         .with_required(config.auth.required);
+    let oidc = &config.auth.oidc;
+    if let (Some(issuer), Some(client_id)) = (&oidc.issuer, &oidc.client_id) {
+        let client = folio_auth::OidcClient::new(folio_auth::OidcConfig {
+            issuer: issuer.clone(),
+            client_id: client_id.clone(),
+            client_secret: oidc.client_secret.clone(),
+            scopes: oidc.scopes.clone(),
+            display_name: oidc.display_name.clone(),
+            allow_local_login: oidc.allow_local_login,
+            admin_group: oidc.admin_group.clone(),
+            groups_claim: oidc.groups_claim.clone(),
+            auto_create_users: oidc.auto_create_users,
+        })
+        .map_err(|e| anyhow::anyhow!("invalid auth.oidc configuration: {e}"))?;
+        auth = auth.with_oidc(client);
+        info!("OpenID Connect login enabled for {issuer}");
+    } else if oidc.issuer.is_some() != oidc.client_id.is_some() {
+        tracing::warn!("auth.oidc needs both issuer and client_id; OpenID Connect login is off");
+    }
     let forward = &config.auth.forward;
     if forward.enabled {
         let settings = folio_auth::ForwardAuth::new(

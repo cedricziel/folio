@@ -40,3 +40,4 @@
 }
 .f-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+.auth-sso { justify-content: center; text-decoration: none; }

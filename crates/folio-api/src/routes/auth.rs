@@ -25,7 +25,7 @@ use folio_auth::{
         AuthorizeParams, OAuthError, OAuthServer, RegistrationRequest, TokenRequest,
         ValidatedAuthorize,
     },
-    AuthStore, ForwardAuth, Group, Session, TokenValidator, User,
+    AuthStore, ForwardAuth, Group, OidcClient, Session, TokenValidator, User,
 };
 
 pub(crate) const SESSION_COOKIE: &str = "folio_session";
@@ -41,6 +41,8 @@ pub struct AuthState {
     pub public_url: Option<String>,
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
+    /// OpenID Connect login through an external provider.
+    pub oidc: Option<Arc<OidcClient>>,
     /// Trusted-header login, see [`crate::forward::forward_auth`].
     pub forward: Option<Arc<ForwardAuth>>,
 }
@@ -53,7 +55,13 @@ impl AuthState {
             public_url,
             required: true,
             forward: None,
+            oidc: None,
         }
+    }
+
+    pub fn with_oidc(mut self, oidc: OidcClient) -> Self {
+        self.oidc = Some(Arc::new(oidc));
+        self
     }
 
     pub fn with_forward(mut self, forward: ForwardAuth) -> Self {
@@ -132,7 +140,13 @@ const EXEMPT_EXACT: [&str; 8] = [
     "/api/docs",
     "/mcp",
 ];
-const EXEMPT_PREFIX: [&str; 4] = ["/static/", "/oauth/", "/.well-known/", "/mcp/"];
+const EXEMPT_PREFIX: [&str; 5] = [
+    "/static/",
+    "/oauth/",
+    "/.well-known/",
+    "/mcp/",
+    "/auth/oidc/",
+];
 
 fn is_exempt(path: &str) -> bool {
     EXEMPT_EXACT.contains(&path) || EXEMPT_PREFIX.iter().any(|p| path.starts_with(p))
@@ -203,7 +217,8 @@ where
         )
         .route("/oauth/token", post(token))
         .route("/oauth/revoke", post(revoke))
-        .with_state(state)
+        .with_state(state.clone())
+        .merge(super::oidc::router(state))
 }
 
 // ---- cookies and CSRF -------------------------------------------------------
@@ -250,7 +265,7 @@ fn with_cookies(mut response: Response, cookies: impl IntoIterator<Item = String
     response
 }
 
-fn render<T: Template>(template: T, status: StatusCode) -> Response {
+pub(crate) fn render<T: Template>(template: T, status: StatusCode) -> Response {
     match template.render() {
         Ok(body) => (status, Html(body)).into_response(),
         Err(e) => {
@@ -260,7 +275,7 @@ fn render<T: Template>(template: T, status: StatusCode) -> Response {
     }
 }
 
-fn login_redirect(next: &str) -> Redirect {
+pub(crate) fn login_redirect(next: &str) -> Redirect {
     let encoded: String = form_urlencoded::byte_serialize(next.as_bytes()).collect();
     Redirect::to(&format!("/login?next={encoded}"))
 }
@@ -304,6 +319,38 @@ struct LoginTemplate {
     csrf: String,
     next: String,
     error: Option<String>,
+    sso: Option<SsoButton>,
+    local_login: bool,
+}
+
+struct SsoButton {
+    label: String,
+    href: String,
+}
+
+impl AuthState {
+    fn login_template(&self, csrf: String, next: String, error: Option<String>) -> LoginTemplate {
+        let sso = self.oidc.as_ref().map(|oidc| {
+            let encoded: String = form_urlencoded::byte_serialize(next.as_bytes()).collect();
+            SsoButton {
+                label: oidc.config.display_name.clone(),
+                href: format!("/auth/oidc/login?next={encoded}"),
+            }
+        });
+        LoginTemplate {
+            csrf,
+            next,
+            error,
+            sso,
+            local_login: self.local_login_allowed(),
+        }
+    }
+
+    pub(crate) fn local_login_allowed(&self) -> bool {
+        self.oidc
+            .as_ref()
+            .is_none_or(|o| o.config.allow_local_login)
+    }
 }
 
 #[derive(Template)]
@@ -335,7 +382,7 @@ async fn theme() -> impl IntoResponse {
 // ---- setup / login / logout -------------------------------------------------
 
 async fn setup_page(State(auth): State<AuthState>, headers: HeaderMap) -> Response {
-    if auth.store.count_users().await.unwrap_or(1) > 0 {
+    if auth.store.count_users().await.unwrap_or(1) > 0 || !auth.local_login_allowed() {
         return Redirect::to("/login").into_response();
     }
     let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
@@ -414,7 +461,7 @@ async fn login_page(
     headers: HeaderMap,
     Query(q): Query<NextQuery>,
 ) -> Response {
-    if auth.store.count_users().await.unwrap_or(1) == 0 {
+    if auth.store.count_users().await.unwrap_or(1) == 0 && auth.local_login_allowed() {
         return Redirect::to("/setup").into_response();
     }
     let next = safe_next(q.next.as_deref());
@@ -423,14 +470,7 @@ async fn login_page(
     }
     let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
     with_cookies(
-        render(
-            LoginTemplate {
-                csrf,
-                next,
-                error: None,
-            },
-            StatusCode::OK,
-        ),
+        render(auth.login_template(csrf, next, None), StatusCode::OK),
         cookie,
     )
 }
@@ -449,7 +489,7 @@ async fn login_submit(
     Form(form): Form<LoginForm>,
 ) -> Response {
     let secure = is_secure(&auth.base(&headers));
-    if !csrf_ok(&headers, &form.csrf) {
+    if !csrf_ok(&headers, &form.csrf) || !auth.local_login_allowed() {
         return StatusCode::FORBIDDEN.into_response();
     }
     let next = safe_next(form.next.as_deref());
@@ -474,11 +514,11 @@ async fn login_submit(
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         },
         None => render(
-            LoginTemplate {
-                csrf: form.csrf,
+            auth.login_template(
+                form.csrf,
                 next,
-                error: Some("That username and password don't match.".into()),
-            },
+                Some("That username and password don't match.".into()),
+            ),
             StatusCode::UNAUTHORIZED,
         ),
     }
@@ -497,11 +537,22 @@ async fn logout(
     if !csrf_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let signed_in_via_oidc = match (auth.current_user(&headers).await, &auth.oidc) {
+        (Some(user), Some(_)) => user.auth_source.starts_with("oidc:"),
+        _ => false,
+    };
     if let Some(id) = cookie(&headers, SESSION_COOKIE) {
         let _ = auth.store.delete_session(&hash_token(&id)).await;
     }
-    let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&auth.base(&headers)));
-    with_cookies(Redirect::to("/login").into_response(), [clear])
+    let base = auth.base(&headers);
+    let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&base));
+    // End the provider session too when it supports RP-initiated logout.
+    let end_session = match (&auth.oidc, signed_in_via_oidc) {
+        (Some(oidc), true) => oidc.end_session_url(&format!("{base}/login")).await,
+        _ => None,
+    };
+    let target = end_session.as_deref().unwrap_or("/login");
+    with_cookies(Redirect::to(target).into_response(), [clear])
 }
 
 // ---- metadata and registration ----------------------------------------------
@@ -543,12 +594,16 @@ async fn register(State(auth): State<AuthState>, Json(req): Json<RegistrationReq
 
 // ---- authorize --------------------------------------------------------------
 
-fn error_page(message: &str) -> Response {
+pub(crate) fn error_page(message: &str) -> Response {
+    error_page_with(message, StatusCode::BAD_REQUEST)
+}
+
+pub(crate) fn error_page_with(message: &str, status: StatusCode) -> Response {
     render(
         ErrorTemplate {
             message: message.to_string(),
         },
-        StatusCode::BAD_REQUEST,
+        status,
     )
 }
 

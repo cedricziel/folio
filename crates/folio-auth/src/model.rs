@@ -122,3 +122,13 @@ impl AuthContext {
         self.scopes.iter().any(|s| s == scope)
     }
 }
+
+/// Pending OpenID Connect login, consumed by the callback.
+#[derive(Debug, Clone)]
+pub struct OidcFlow {
+    pub state_hash: String,
+    pub nonce: String,
+    pub code_verifier: String,
+    pub next: String,
+    pub expires_at: i64,
+}
