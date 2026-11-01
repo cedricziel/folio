@@ -12,10 +12,10 @@ use std::{
 };
 
 use openidconnect::{
-    core::{CoreAuthenticationFlow, CoreClient, CoreJsonWebKeySet},
+    core::{CoreAuthenticationFlow, CoreClient, CoreJsonWebKeySet, CoreJwsSigningAlgorithm},
     reqwest::Client as HttpClient,
     AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, OAuth2TokenResponse,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, TokenResponse,
 };
 use openidconnect::{
     ClaimsVerificationError, ProviderMetadataWithLogout, SignatureVerificationError,
@@ -33,7 +33,7 @@ const KID_MISS_COOLDOWN: Duration = Duration::from_secs(10);
 const CLOCK_LEEWAY_SECS: i64 = 60;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OidcSettings {
     pub issuer: String,
     pub client_id: String,
@@ -44,6 +44,61 @@ pub struct OidcSettings {
     pub admin_group: Option<String>,
     pub allow_local_login: bool,
     pub auto_create_users: bool,
+}
+
+impl std::fmt::Debug for OidcSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcSettings")
+            .field("issuer", &self.issuer)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret.as_ref().map(|_| "***"))
+            .finish_non_exhaustive()
+    }
+}
+
+/// The result of a verified login.
+#[derive(Debug, Clone)]
+pub struct OidcLoginResult {
+    pub identity: ExternalIdentity,
+    /// The raw ID token, kept to hint the provider at logout.
+    pub id_token: String,
+    /// False when groups were needed from userinfo but the call failed, so the
+    /// identity's (empty) groups must not overwrite what is stored.
+    pub groups_known: bool,
+}
+
+/// Signature algorithms accepted for ID tokens. Symmetric ones are left out:
+/// they would let anyone who knows the client secret mint tokens.
+const ALLOWED_ALGS: [CoreJwsSigningAlgorithm; 10] = [
+    CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+    CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+    CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+    CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+    CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+    CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+    CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+    CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+    CoreJwsSigningAlgorithm::EcdsaP521Sha512,
+    CoreJwsSigningAlgorithm::EdDsa,
+];
+
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d == "localhost",
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// Endpoints from the discovery document carry secrets and tokens, so they
+/// must not be plain http (except for local development).
+fn require_secure_endpoint(name: &str, url: &Url) -> Result<(), OidcError> {
+    if url.scheme() == "https" || (url.scheme() == "http" && is_loopback(url)) {
+        Ok(())
+    } else {
+        Err(OidcError::Provider(format!("{name} must be an https URL")))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,13 +136,7 @@ pub struct OidcProvider {
 impl OidcProvider {
     pub fn new(settings: OidcSettings) -> Result<Self, String> {
         let issuer = Url::parse(&settings.issuer).map_err(|e| format!("invalid issuer: {e}"))?;
-        let loopback = match issuer.host() {
-            Some(url::Host::Domain(d)) => d == "localhost",
-            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-            None => false,
-        };
-        if issuer.scheme() != "https" && !(issuer.scheme() == "http" && loopback) {
+        if require_secure_endpoint("the issuer", &issuer).is_err() {
             return Err("the issuer must be an https URL".into());
         }
         if settings.client_id.trim().is_empty() {
@@ -143,6 +192,23 @@ impl OidcProvider {
         let metadata = ProviderMetadataWithLogout::discover_async(issuer, &self.http)
             .await
             .map_err(|e| OidcError::Provider(format!("discovery failed: {e}")))?;
+        let endpoints = [
+            (
+                "authorization_endpoint",
+                Some(metadata.authorization_endpoint().url()),
+            ),
+            ("token_endpoint", metadata.token_endpoint().map(|e| e.url())),
+            (
+                "userinfo_endpoint",
+                metadata.userinfo_endpoint().map(|e| e.url()),
+            ),
+            ("jwks_uri", Some(metadata.jwks_uri().url())),
+        ];
+        for (name, url) in endpoints {
+            if let Some(url) = url {
+                require_secure_endpoint(name, url)?;
+            }
+        }
         Ok(Loaded {
             metadata,
             fetched: Instant::now(),
@@ -150,27 +216,22 @@ impl OidcProvider {
     }
 
     async fn metadata(&self) -> Result<Arc<Loaded>, OidcError> {
-        if let Some(l) = self.loaded.read().await.as_ref() {
-            if l.fetched.elapsed() < DISCOVERY_TTL {
-                return Ok(l.clone());
-            }
-        }
-        let mut slot = self.loaded.write().await;
-        if let Some(l) = slot.as_ref() {
-            if l.fetched.elapsed() < DISCOVERY_TTL {
-                return Ok(l.clone());
-            }
-        }
+        let stale = match self.loaded.read().await.as_ref() {
+            Some(l) if l.fetched.elapsed() < DISCOVERY_TTL => return Ok(l.clone()),
+            other => other.cloned(),
+        };
+        // Fetch without holding the lock so logins keep using the cached
+        // document while a slow provider answers.
         match self.fetch_metadata().await {
             Ok(fresh) => {
                 let fresh = Arc::new(fresh);
-                *slot = Some(fresh.clone());
+                *self.loaded.write().await = Some(fresh.clone());
                 Ok(fresh)
             }
-            Err(e) => match slot.as_ref() {
+            Err(e) => match stale {
                 Some(stale) => {
                     tracing::warn!("{e}; using the cached discovery document");
-                    Ok(stale.clone())
+                    Ok(stale)
                 }
                 None => Err(e),
             },
@@ -235,7 +296,8 @@ impl OidcProvider {
                 Nonce::new_random,
             )
             .set_pkce_challenge(challenge);
-        for scope in &self.settings.scopes {
+        // The flow already requests `openid`.
+        for scope in self.settings.scopes.iter().filter(|s| *s != "openid") {
             request = request.add_scope(Scope::new(scope.clone()));
         }
         let (url, state, nonce) = request.url();
@@ -255,7 +317,7 @@ impl OidcProvider {
         code: &str,
         nonce: &str,
         pkce_verifier: &str,
-    ) -> Result<ExternalIdentity, OidcError> {
+    ) -> Result<OidcLoginResult, OidcError> {
         let loaded = self.metadata().await?;
         let client = self.client(&loaded, redirect_uri)?;
         let tokens = client
@@ -264,7 +326,12 @@ impl OidcProvider {
             .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_string()))
             .request_async(&self.http)
             .await
-            .map_err(|e| OidcError::Rejected(format!("token exchange failed: {e}")))?;
+            .map_err(|e| match e {
+                RequestTokenError::ServerResponse(_) => {
+                    OidcError::Rejected(format!("token exchange failed: {e}"))
+                }
+                _ => OidcError::Provider(format!("token exchange failed: {e}")),
+            })?;
         let id_token = tokens
             .id_token()
             .ok_or_else(|| OidcError::Rejected("the provider returned no ID token".into()))?;
@@ -276,6 +343,7 @@ impl OidcProvider {
                 .map_err(|e| ClaimsVerificationError::Other(e.to_string()))?;
             let verifier = client
                 .id_token_verifier()
+                .set_allowed_algs(ALLOWED_ALGS)
                 .set_time_fn(|| chrono::Utc::now() - chrono::Duration::seconds(CLOCK_LEEWAY_SECS))
                 .set_issue_time_verifier_fn(|iat| {
                     let latest = chrono::Utc::now() + chrono::Duration::seconds(CLOCK_LEEWAY_SECS);
@@ -305,7 +373,8 @@ impl OidcProvider {
             Err(e) => return Err(OidcError::Rejected(format!("invalid ID token: {e}"))),
         };
 
-        let mut claims = id_token_payload(id_token)?;
+        let (raw_id_token, mut claims) = id_token_payload(id_token)?;
+        let mut groups_known = true;
         let wanted = |claims: &Value| {
             claim_str(claims, "preferred_username").is_some()
                 && claims.get(&self.settings.groups_claim).is_some()
@@ -324,11 +393,18 @@ impl OidcProvider {
                         }
                     }
                     Ok(_) => {}
-                    Err(e) => tracing::warn!("userinfo request failed: {e}"),
+                    Err(e) => {
+                        tracing::warn!("userinfo request failed: {e}");
+                        groups_known = claims.get(&self.settings.groups_claim).is_some();
+                    }
                 }
             }
         }
-        self.identity(&subject, &claims)
+        Ok(OidcLoginResult {
+            identity: self.identity(&subject, &claims),
+            id_token: raw_id_token,
+            groups_known,
+        })
     }
 
     async fn userinfo(&self, endpoint: &Url, token: &str, subject: &str) -> Result<Value, String> {
@@ -350,7 +426,7 @@ impl OidcProvider {
         Ok(info)
     }
 
-    fn identity(&self, subject: &str, claims: &Value) -> Result<ExternalIdentity, OidcError> {
+    fn identity(&self, subject: &str, claims: &Value) -> ExternalIdentity {
         let email = claim_str(claims, "email");
         let username = claim_str(claims, "preferred_username")
             .or_else(|| email.clone())
@@ -362,24 +438,29 @@ impl OidcProvider {
                 .map(str::to_string)
                 .collect(),
             Some(Value::String(s)) => s
-                .split([',', ' '])
+                .split(',')
+                .map(str::trim)
                 .filter(|g| !g.is_empty())
                 .map(str::to_string)
                 .collect(),
             _ => Vec::new(),
         };
-        Ok(ExternalIdentity {
+        ExternalIdentity {
             source: self.source.clone(),
             external_id: subject.to_string(),
             username,
             email,
             display_name: claim_str(claims, "name"),
             groups,
-        })
+        }
     }
 
     /// The provider's RP-initiated logout URL, when it advertises one.
-    pub async fn logout_url(&self, post_logout_redirect: &str) -> Option<Url> {
+    pub async fn logout_url(
+        &self,
+        post_logout_redirect: &str,
+        id_token_hint: Option<&str>,
+    ) -> Option<Url> {
         let loaded = self.metadata().await.ok()?;
         let endpoint = loaded
             .metadata
@@ -390,6 +471,9 @@ impl OidcProvider {
         url.query_pairs_mut()
             .append_pair("client_id", &self.settings.client_id)
             .append_pair("post_logout_redirect_uri", post_logout_redirect);
+        if let Some(hint) = id_token_hint {
+            url.query_pairs_mut().append_pair("id_token_hint", hint);
+        }
         Some(url)
     }
 }
@@ -405,17 +489,51 @@ fn claim_str(claims: &Value, name: &str) -> Option<String> {
 
 /// The claims of an ID token whose signature has already been verified, kept
 /// as JSON so provider-specific claims such as groups stay reachable.
-fn id_token_payload(id_token: &impl serde::Serialize) -> Result<Value, OidcError> {
+fn id_token_payload(id_token: &impl serde::Serialize) -> Result<(String, Value), OidcError> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     let jwt = serde_json::to_value(id_token)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
         .ok_or_else(|| OidcError::Rejected("unreadable ID token".into()))?;
-    let payload = jwt
+    let payload: Value = jwt
         .split('.')
         .nth(1)
         .and_then(|p| URL_SAFE_NO_PAD.decode(p).ok())
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(|| OidcError::Rejected("unreadable ID token".into()))?;
-    Ok(payload)
+    Ok((jwt, payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings() -> OidcSettings {
+        OidcSettings {
+            issuer: "https://auth.example.com".into(),
+            client_id: "folio".into(),
+            client_secret: Some("hunter2".into()),
+            scopes: vec!["openid".into()],
+            display_name: "SSO".into(),
+            groups_claim: "groups".into(),
+            admin_group: None,
+            allow_local_login: true,
+            auto_create_users: true,
+        }
+    }
+
+    #[test]
+    fn debug_output_hides_the_client_secret() {
+        assert!(!format!("{:?}", settings()).contains("hunter2"));
+    }
+
+    #[test]
+    fn endpoints_must_be_https_unless_loopback() {
+        let ok = |u: &str| require_secure_endpoint("token_endpoint", &Url::parse(u).unwrap());
+        assert!(ok("https://auth.example.com/token").is_ok());
+        assert!(ok("http://127.0.0.1:9000/token").is_ok());
+        assert!(ok("http://localhost/token").is_ok());
+        assert!(ok("http://auth.example.com/token").is_err());
+        assert!(ok("http://10.0.0.5/token").is_err());
+    }
 }
