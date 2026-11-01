@@ -1,0 +1,3 @@
+{% macro inbox_badge(n) %}<span class="count count-manila" id="inbox-count" {% if n == 0 %}hidden{% endif %}>{{ n }}</span>{% endmacro %}
+{% macro all_badge(n) %}<span class="count" id="all-count">{{ n }}</span>{% endmacro %}
+{% macro review_notice(n, first) %}<div id="inbox-notice">{% if n > 0 %}<div class="f-notice" role="status"><p>{{ n }} {% if n == 1 %}document needs{% else %}documents need{% endif %} a look. Folio read {% if n == 1 %}it{% else %}them{% endif %} but could not tell where to file {% if n == 1 %}it{% else %}them{% endif %}. <a href="/documents/{{ first }}">Review now</a></p></div>{% endif %}</div>{% endmacro %}

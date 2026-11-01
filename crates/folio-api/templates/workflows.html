@@ -3,12 +3,12 @@
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
-<section class="f-workflows">
-    <header class="f-workflows-header">
-        <h2>Workflows</h2>
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">Workflows</h1>
         <a href="/workflows/new" class="f-btn f-btn-primary">New workflow</a>
     </header>
-    <p class="f-meta">When something happens to a document, Folio can notify another service.</p>
+    <p class="lede">When something happens to a document, Folio can notify another service.</p>
 
     {% if rows.is_empty() %}
     <div class="f-notice">

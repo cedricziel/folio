@@ -21,6 +21,8 @@ use super::workflows::{find, send_test, SECRET_MASK};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
+use super::view::{Nav, Sidebar};
+
 const RUN_HISTORY: u32 = 20;
 
 pub fn router() -> Router<AppState> {
@@ -90,6 +92,7 @@ struct WorkflowRow {
 #[derive(Template)]
 #[template(path = "workflows.html")]
 struct ListTemplate {
+    sidebar: Sidebar,
     title: String,
     rows: Vec<WorkflowRow>,
 }
@@ -112,6 +115,7 @@ async fn list_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
         });
     }
     render(ListTemplate {
+        sidebar: Sidebar::load(&state, Nav::Workflows).await?,
         title: "Workflows - Folio".into(),
         rows,
     })
@@ -276,6 +280,7 @@ fn first_webhook(actions: &[WorkflowAction]) -> Option<(usize, &WorkflowAction)>
 #[derive(Template)]
 #[template(path = "workflow_form.html")]
 struct FormTemplate {
+    sidebar: Sidebar,
     title: String,
     workflow_id: Option<String>,
     values: FormValues,
@@ -325,6 +330,7 @@ async fn build_form(
         );
 
     Ok(FormTemplate {
+        sidebar: Sidebar::load(state, Nav::Workflows).await?,
         title: format!(
             "{} - Folio",
             if workflow.is_some() {
