@@ -21,21 +21,39 @@ pub struct ForwardAuth {
     trusted: Vec<IpNet>,
 }
 
+/// Settings for [`ForwardAuth`]; header names are validated by [`ForwardAuth::new`].
+#[derive(Debug, Clone)]
+pub struct ForwardConfig {
+    pub user_header: String,
+    pub email_header: String,
+    pub name_header: String,
+    pub groups_header: String,
+    /// CIDRs (`10.0.0.0/8`) and bare addresses of the trusted proxies.
+    pub trusted_proxies: Vec<String>,
+    pub admin_group: Option<String>,
+}
+
+impl Default for ForwardConfig {
+    fn default() -> Self {
+        Self {
+            user_header: "Remote-User".into(),
+            email_header: "Remote-Email".into(),
+            name_header: "Remote-Name".into(),
+            groups_header: "Remote-Groups".into(),
+            trusted_proxies: Vec::new(),
+            admin_group: None,
+        }
+    }
+}
+
 impl ForwardAuth {
-    /// `trusted_proxies` accepts CIDRs (`10.0.0.0/8`) and bare addresses.
-    pub fn new(
-        user_header: &str,
-        email_header: &str,
-        name_header: &str,
-        groups_header: &str,
-        trusted_proxies: &[String],
-        admin_group: Option<String>,
-    ) -> Result<Self, String> {
+    pub fn new(config: ForwardConfig) -> Result<Self, String> {
         let header = |h: &str| {
             HeaderName::from_bytes(h.trim().as_bytes())
                 .map_err(|_| format!("invalid header name: {h}"))
         };
-        let trusted = trusted_proxies
+        let trusted = config
+            .trusted_proxies
             .iter()
             .map(|p| {
                 let p = p.trim();
@@ -45,11 +63,11 @@ impl ForwardAuth {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            user_header: header(user_header)?,
-            email_header: header(email_header)?,
-            name_header: header(name_header)?,
-            groups_header: header(groups_header)?,
-            admin_group: admin_group.filter(|g| !g.is_empty()),
+            user_header: header(&config.user_header)?,
+            email_header: header(&config.email_header)?,
+            name_header: header(&config.name_header)?,
+            groups_header: header(&config.groups_header)?,
+            admin_group: config.admin_group.filter(|g| !g.is_empty()),
             trusted,
         })
     }
@@ -115,15 +133,10 @@ mod tests {
     use super::*;
 
     fn fwd(proxies: &[&str]) -> ForwardAuth {
-        let proxies: Vec<String> = proxies.iter().map(|s| s.to_string()).collect();
-        ForwardAuth::new(
-            "Remote-User",
-            "Remote-Email",
-            "Remote-Name",
-            "Remote-Groups",
-            &proxies,
-            None,
-        )
+        ForwardAuth::new(ForwardConfig {
+            trusted_proxies: proxies.iter().map(|s| s.to_string()).collect(),
+            ..ForwardConfig::default()
+        })
         .unwrap()
     }
 
@@ -141,8 +154,15 @@ mod tests {
 
     #[test]
     fn rejects_bad_config() {
-        assert!(ForwardAuth::new("Remote-User", "e", "n", "g", &["nope".into()], None).is_err());
-        assert!(ForwardAuth::new("bad header", "e", "n", "g", &[], None).is_err());
+        let bad = |c: ForwardConfig| ForwardAuth::new(c).is_err();
+        assert!(bad(ForwardConfig {
+            trusted_proxies: vec!["nope".into()],
+            ..ForwardConfig::default()
+        }));
+        assert!(bad(ForwardConfig {
+            user_header: "bad header".into(),
+            ..ForwardConfig::default()
+        }));
     }
 
     #[test]

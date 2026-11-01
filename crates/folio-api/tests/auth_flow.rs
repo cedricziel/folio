@@ -750,7 +750,7 @@ mod forward {
     use super::*;
     use axum::extract::ConnectInfo;
     use folio_api::{enforce_auth, forward_auth};
-    use folio_auth::{AuthStore, ForwardAuth, GroupSource};
+    use folio_auth::{AuthStore, ForwardAuth, ForwardConfig, GroupSource};
     use folio_infra::Database;
     use std::net::SocketAddr;
 
@@ -763,7 +763,7 @@ mod forward {
         pool: sqlx::SqlitePool,
     }
 
-    async fn fwd_app(admin_group: Option<&str>, user_header: &str) -> Fwd {
+    async fn fwd_app(configure: impl FnOnce(&mut ForwardConfig)) -> Fwd {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::connect(&format!("sqlite:{}/t.db?mode=rwc", dir.path().display()))
             .await
@@ -773,15 +773,12 @@ mod forward {
             unreachable!()
         };
         let store = db.repositories().await.auth;
-        let forward = ForwardAuth::new(
-            user_header,
-            "Remote-Email",
-            "Remote-Name",
-            "Remote-Groups",
-            &["10.0.0.0/8".to_string()],
-            admin_group.map(String::from),
-        )
-        .unwrap();
+        let mut config = ForwardConfig {
+            trusted_proxies: vec!["10.0.0.0/8".to_string()],
+            ..ForwardConfig::default()
+        };
+        configure(&mut config);
+        let forward = ForwardAuth::new(config).unwrap();
         let auth = AuthState::new(store.clone(), Some(BASE.into())).with_forward(forward);
         let router = auth_router(auth.clone())
             .merge(Router::new().route("/", get(|| async { "home" })))
@@ -810,7 +807,7 @@ mod forward {
 
     #[tokio::test]
     async fn headers_from_an_untrusted_peer_are_ignored() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let res = send_from(&f.app, UNTRUSTED, with_identity("/", "alice", &[])).await;
         assert_eq!(res.status, StatusCode::SEE_OTHER);
         assert!(res.location().starts_with("/login"));
@@ -820,7 +817,7 @@ mod forward {
 
     #[tokio::test]
     async fn requests_without_a_peer_address_are_not_trusted() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let res = send(&f.app, with_identity("/", "alice", &[])).await;
         assert_eq!(res.status, StatusCode::SEE_OTHER);
         assert_eq!(f.store.count_users().await.unwrap(), 0);
@@ -828,7 +825,7 @@ mod forward {
 
     #[tokio::test]
     async fn trusted_peer_without_header_is_not_logged_in() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let res = send_from(
             &f.app,
             TRUSTED,
@@ -840,7 +837,7 @@ mod forward {
 
     #[tokio::test]
     async fn trusted_peer_gets_a_session_and_the_first_user_is_admin() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let req = with_identity(
             "/",
             "Alice",
@@ -885,7 +882,7 @@ mod forward {
 
     #[tokio::test]
     async fn admin_group_maps_to_admin_and_follows_the_idp() {
-        let f = fwd_app(Some("admins"), "Remote-User").await;
+        let f = fwd_app(|c| c.admin_group = Some("admins".into())).await;
         send_from(
             &f.app,
             TRUSTED,
@@ -931,7 +928,7 @@ mod forward {
 
     #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         send_from(
             &f.app,
             TRUSTED,
@@ -972,7 +969,7 @@ mod forward {
 
     #[tokio::test]
     async fn a_forwarded_name_cannot_take_over_a_local_account() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let _owner_session = setup_and_login_with(&f.app).await;
         let res = send_from(&f.app, TRUSTED, with_identity("/", "OWNER", &[])).await;
         assert_eq!(res.status, StatusCode::FORBIDDEN);
@@ -981,7 +978,7 @@ mod forward {
 
     #[tokio::test]
     async fn header_names_are_configurable() {
-        let f = fwd_app(None, "X-Authentik-Username").await;
+        let f = fwd_app(|c| c.user_header = "X-Authentik-Username".into()).await;
         let ignored = send_from(&f.app, TRUSTED, with_identity("/", "dave", &[])).await;
         assert_eq!(ignored.status, StatusCode::SEE_OTHER);
         let req = Request::get("/")
@@ -993,7 +990,7 @@ mod forward {
 
     #[tokio::test]
     async fn oauth_authorize_works_through_forward_auth() {
-        let f = fwd_app(None, "Remote-User").await;
+        let f = fwd_app(|_| {}).await;
         let client = register(&f.app).await;
         let uri = format!("/oauth/authorize?{}", authorize_query(&client));
         let res = send_from(&f.app, TRUSTED, with_identity(&uri, "erin", &[])).await;

@@ -236,14 +236,14 @@ async fn main() -> Result<()> {
         .with_required(config.auth.required);
     let forward = &config.auth.forward;
     if forward.enabled {
-        let settings = folio_auth::ForwardAuth::new(
-            &forward.user_header,
-            &forward.email_header,
-            &forward.name_header,
-            &forward.groups_header,
-            &forward.trusted_proxies,
-            forward.admin_group.clone(),
-        )
+        let settings = folio_auth::ForwardAuth::new(folio_auth::ForwardConfig {
+            user_header: forward.user_header.clone(),
+            email_header: forward.email_header.clone(),
+            name_header: forward.name_header.clone(),
+            groups_header: forward.groups_header.clone(),
+            trusted_proxies: forward.trusted_proxies.clone(),
+            admin_group: forward.admin_group.clone(),
+        })
         .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
         if !settings.has_trusted_proxies() {
             tracing::warn!(
