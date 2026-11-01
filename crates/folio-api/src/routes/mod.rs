@@ -9,6 +9,7 @@ pub(crate) mod events;
 mod file_response;
 mod health;
 mod manage;
+mod oidc;
 mod pages;
 mod pwa;
 mod settings;
