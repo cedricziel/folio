@@ -7,6 +7,7 @@
 //! [`TokenValidator`] and [`require_bearer`].
 
 pub mod crypto;
+pub mod limit;
 pub mod model;
 pub mod redirect;
 pub mod server;

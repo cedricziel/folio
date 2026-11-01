@@ -836,6 +836,23 @@ async fn auth_contract(r: &Repositories) {
     assert_eq!(client.redirect_uris, ["https://a.example/cb", "app:/cb"]);
     assert!(auth.find_client("other").await.unwrap().is_none());
 
+    for (id, created_at) in [("stale", 100), ("used", 100), ("fresh", 5_000)] {
+        auth.insert_client(OAuthClient {
+            client_id: id.into(),
+            client_name: id.into(),
+            redirect_uris: vec!["app:/cb".into()],
+            created_at,
+        })
+        .await
+        .unwrap();
+    }
+    auth.mark_client_used("used", 200).await.unwrap();
+    auth.mark_client_used("client", 200).await.unwrap();
+    assert_eq!(auth.purge_unused_clients(1_000).await.unwrap(), 1);
+    assert!(auth.find_client("stale").await.unwrap().is_none());
+    assert!(auth.find_client("used").await.unwrap().is_some());
+    assert!(auth.find_client("fresh").await.unwrap().is_some());
+
     let code = |hash: &str, expires_at| AuthCode {
         code_hash: hash.into(),
         client_id: "client".into(),

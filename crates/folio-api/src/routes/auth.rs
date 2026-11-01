@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::{
-    extract::{FromRef, FromRequestParts, Query, RawQuery, Request, State},
+    extract::{
+        ConnectInfo, DefaultBodyLimit, FromRef, FromRequestParts, Query, RawQuery, Request, State,
+    },
     http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
@@ -18,6 +20,7 @@ use url::{form_urlencoded, Url};
 use folio_auth::{
     base_url,
     crypto::{ct_eq, hash_password, hash_token, random_token, verify_password},
+    limit::RateLimiter,
     redirect::safe_next,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
@@ -31,6 +34,10 @@ const SESSION_COOKIE: &str = "folio_session";
 const CSRF_COOKIE: &str = "folio_csrf";
 const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
 const MIN_PASSWORD_LEN: usize = 12;
+/// Dynamic client registrations a peer may make in a burst; the allowance
+/// refills over an hour.
+const REGISTER_BURST: u32 = 20;
+const REGISTER_BODY_LIMIT: usize = 16 * 1024;
 
 /// State for the auth routes and the [`RequireUser`] extractor.
 #[derive(Clone)]
@@ -41,6 +48,7 @@ pub struct AuthState {
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
     setup_token: Arc<str>,
+    register_limit: Arc<RateLimiter>,
 }
 
 impl AuthState {
@@ -51,6 +59,10 @@ impl AuthState {
             public_url,
             required: true,
             setup_token: random_token().into(),
+            register_limit: Arc::new(RateLimiter::new(
+                REGISTER_BURST,
+                REGISTER_BURST as f64 / 3600.0,
+            )),
         }
     }
 
@@ -59,6 +71,20 @@ impl AuthState {
     pub fn with_setup_token(mut self, token: impl Into<Arc<str>>) -> Self {
         self.setup_token = token.into();
         self
+    }
+
+    /// Starts the periodic cleanup of expired tokens and unused clients.
+    pub fn spawn_maintenance(&self) -> tokio::task::JoinHandle<()> {
+        let server = self.server.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(600));
+            loop {
+                tick.tick().await;
+                if let Err(e) = server.purge().await {
+                    tracing::warn!("auth cleanup failed: {e}");
+                }
+            }
+        })
     }
 
     /// Secret that must accompany `/setup` while no user exists.
@@ -228,7 +254,10 @@ where
             "/.well-known/oauth-protected-resource/mcp",
             get(resource_metadata),
         )
-        .route("/oauth/register", post(register))
+        .route(
+            "/oauth/register",
+            post(register).layer(DefaultBodyLimit::max(REGISTER_BODY_LIMIT)),
+        )
         .route(
             "/oauth/authorize",
             get(authorize_page).post(authorize_submit),
@@ -587,7 +616,42 @@ fn oauth_error(e: OAuthError) -> Response {
     oauth_json(status, e.to_json())
 }
 
-async fn register(State(auth): State<AuthState>, Json(req): Json<RegistrationRequest>) -> Response {
+/// Peer address of the TCP connection. Proxy headers are deliberately ignored:
+/// they are client-controlled unless a trusted proxy sets them.
+struct ClientIp(String);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let ip = parts
+            .extensions
+            .get::<ConnectInfo<std::net::SocketAddr>>()
+            .map(|c| c.0.ip().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        Ok(Self(ip))
+    }
+}
+
+fn too_many_requests(retry_after: u64) -> Response {
+    let mut response = oauth_json(
+        StatusCode::TOO_MANY_REQUESTS,
+        serde_json::json!({"error": "too_many_requests", "error_description": "slow down"}),
+    );
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from(retry_after));
+    response
+}
+
+async fn register(
+    State(auth): State<AuthState>,
+    ClientIp(ip): ClientIp,
+    Json(req): Json<RegistrationRequest>,
+) -> Response {
+    if let Err(retry_after) = auth.register_limit.check(&ip) {
+        return too_many_requests(retry_after);
+    }
     match auth.server.register_client(req).await {
         Ok(body) => oauth_json(StatusCode::CREATED, body),
         Err(e) => oauth_error(e),

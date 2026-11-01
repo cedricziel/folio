@@ -147,6 +147,28 @@ impl AuthStore for SqliteAuthStore {
         .transpose()
     }
 
+    async fn mark_client_used(&self, client_id: &str, at: i64) -> Result<(), AuthError> {
+        sqlx::query(
+            "UPDATE oauth_clients SET token_issued_at = $2
+             WHERE client_id = $1 AND token_issued_at IS NULL",
+        )
+        .bind(client_id)
+        .bind(at)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(err)
+    }
+
+    async fn purge_unused_clients(&self, registered_before: i64) -> Result<u64, AuthError> {
+        sqlx::query("DELETE FROM oauth_clients WHERE token_issued_at IS NULL AND created_at < $1")
+            .bind(registered_before)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected())
+            .map_err(err)
+    }
+
     async fn insert_code(&self, c: AuthCode) -> Result<(), AuthError> {
         sqlx::query(
             "INSERT INTO oauth_codes

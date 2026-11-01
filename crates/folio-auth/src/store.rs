@@ -25,6 +25,11 @@ pub trait AuthStore: Send + Sync {
 
     async fn insert_client(&self, client: OAuthClient) -> Result<(), AuthError>;
     async fn find_client(&self, client_id: &str) -> Result<Option<OAuthClient>, AuthError>;
+    /// Records that the client has been issued a token (keeps it from being purged).
+    async fn mark_client_used(&self, client_id: &str, at: i64) -> Result<(), AuthError>;
+    /// Deletes clients registered before `registered_before` that never received
+    /// a token. Returns how many were removed.
+    async fn purge_unused_clients(&self, registered_before: i64) -> Result<u64, AuthError>;
 
     async fn insert_code(&self, code: AuthCode) -> Result<(), AuthError>;
     /// Atomically removes and returns the code, making it single-use.

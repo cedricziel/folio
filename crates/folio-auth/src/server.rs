@@ -15,6 +15,11 @@ use crate::{
 pub const CODE_TTL_SECS: i64 = 60;
 pub const ACCESS_TTL_SECS: i64 = 3600;
 pub const REFRESH_TTL_SECS: i64 = 30 * 24 * 3600;
+pub const MAX_REDIRECT_URIS: usize = 10;
+pub const MAX_REDIRECT_URI_BYTES: usize = 2048;
+pub const MAX_CLIENT_NAME_CHARS: usize = 200;
+/// Clients that never obtained a token are dropped after this long.
+pub const UNUSED_CLIENT_TTL_SECS: i64 = 24 * 3600;
 /// Paths of protected resources a token may be bound to.
 pub const RESOURCE_PATHS: [&str; 2] = ["/mcp", "/api"];
 
@@ -198,13 +203,24 @@ impl OAuthServer {
     /// RFC 7591 registration of a public client.
     pub async fn register_client(&self, req: RegistrationRequest) -> Result<Value, OAuthError> {
         let invalid = |m: &str| OAuthError::new("invalid_client_metadata", m);
-        if req.redirect_uris.is_empty() || req.redirect_uris.len() > 10 {
+        if req.redirect_uris.is_empty() || req.redirect_uris.len() > MAX_REDIRECT_URIS {
             return Err(OAuthError::new(
                 "invalid_redirect_uri",
-                "provide between 1 and 10 redirect_uris",
+                format!("provide between 1 and {MAX_REDIRECT_URIS} redirect_uris"),
             ));
         }
+        if req.client_name.as_deref().map_or(0, |n| n.chars().count()) > MAX_CLIENT_NAME_CHARS {
+            return Err(invalid(&format!(
+                "client_name is limited to {MAX_CLIENT_NAME_CHARS} characters"
+            )));
+        }
         for uri in &req.redirect_uris {
+            if uri.len() > MAX_REDIRECT_URI_BYTES {
+                return Err(OAuthError::new(
+                    "invalid_redirect_uri",
+                    format!("redirect_uris are limited to {MAX_REDIRECT_URI_BYTES} bytes"),
+                ));
+            }
             validate_redirect_uri(uri).map_err(|m| OAuthError::new("invalid_redirect_uri", m))?;
         }
         if req
@@ -229,7 +245,7 @@ impl OAuthServer {
         }
         let name: String = req
             .client_name
-            .map(|n| n.trim().chars().take(100).collect())
+            .map(|n| n.trim().to_string())
             .filter(|n: &String| !n.is_empty())
             .unwrap_or_else(|| "Unnamed application".to_string());
 
@@ -346,7 +362,6 @@ impl OAuthServer {
     }
 
     pub async fn token(&self, base: &str, req: TokenRequest) -> Result<Value, OAuthError> {
-        let _ = self.store.purge_expired(now()).await;
         let client_id = req
             .client_id
             .as_deref()
@@ -466,6 +481,7 @@ impl OAuthServer {
         let access = random_token();
         let refresh = random_token();
         let issued = now();
+        self.store.mark_client_used(client_id, issued).await?;
         self.store
             .insert_access_token(AccessToken {
                 token_hash: hash_token(&access),
@@ -495,6 +511,21 @@ impl OAuthServer {
             "refresh_token": refresh,
             "scope": scopes.join(" "),
         }))
+    }
+
+    /// Housekeeping for a periodic task: expired codes, tokens and sessions,
+    /// and clients that registered but never got a token.
+    pub async fn purge(&self) -> Result<(), AuthError> {
+        let now = now();
+        self.store.purge_expired(now).await?;
+        let removed = self
+            .store
+            .purge_unused_clients(now - UNUSED_CLIENT_TTL_SECS)
+            .await?;
+        if removed > 0 {
+            tracing::info!("purged {removed} unused OAuth clients");
+        }
+        Ok(())
     }
 
     /// RFC 7009: unknown tokens are not an error.

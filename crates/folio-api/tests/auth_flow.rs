@@ -278,6 +278,78 @@ async fn registration_accepts_valid_and_rejects_bad_redirects() {
     assert_eq!(r.json()["error"], "invalid_client_metadata");
 }
 
+fn register_req(body: String) -> Request<Body> {
+    Request::post("/oauth/register")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn registration_bounds_the_size_of_its_input() {
+    let app = app().await;
+    let uri = |n: usize| format!("https://a.example/{}", "x".repeat(n));
+
+    let too_big =
+        json!({"redirect_uris": ["https://a.example/cb"], "client_name": "x".repeat(20_000)});
+    let r = send(&app, register_req(too_big.to_string())).await;
+    assert_eq!(r.status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    let many: Vec<_> = (0..11).map(|i| format!("https://a.example/{i}")).collect();
+    let r = send(
+        &app,
+        register_req(json!({"redirect_uris": many}).to_string()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    let r = send(
+        &app,
+        register_req(json!({"redirect_uris": [uri(2100)]}).to_string()),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json()["error"], "invalid_redirect_uri");
+
+    let long_name = json!({"redirect_uris": [uri(5)], "client_name": "n".repeat(201)});
+    let r = send(&app, register_req(long_name.to_string())).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    assert_eq!(r.json()["error"], "invalid_client_metadata");
+
+    let at_limits = json!({"redirect_uris": [uri(2048 - "https://a.example/".len())], "client_name": "n".repeat(200)});
+    let r = send(&app, register_req(at_limits.to_string())).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+}
+
+#[tokio::test]
+async fn registration_is_rate_limited_per_peer_ip() {
+    use axum::extract::ConnectInfo;
+    let app = app().await;
+    let from = |ip: &str| {
+        let mut req = register_req(json!({"redirect_uris": ["https://a.example/cb"]}).to_string());
+        let addr: std::net::SocketAddr = format!("{ip}:4000").parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        req
+    };
+
+    let mut limited = None;
+    for _ in 0..60 {
+        let r = send(&app, from("10.0.0.1")).await;
+        if r.status == StatusCode::TOO_MANY_REQUESTS {
+            limited = Some(r);
+            break;
+        }
+        assert_eq!(r.status, StatusCode::CREATED);
+    }
+    let limited = limited.expect("a burst of registrations must hit the limit");
+    assert!(limited.headers.contains_key(header::RETRY_AFTER));
+    assert_eq!(
+        send(&app, from("10.0.0.2")).await.status,
+        StatusCode::CREATED,
+        "other peers are unaffected"
+    );
+}
+
 #[tokio::test]
 async fn setup_is_only_available_while_no_user_exists() {
     let app = app().await;

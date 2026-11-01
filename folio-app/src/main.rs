@@ -236,7 +236,7 @@ async fn main() -> Result<()> {
     } else {
         mcp
     };
-    let app = create_router(state, auth).merge(mcp);
+    let app = create_router(state, auth.clone()).merge(mcp);
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -247,12 +247,18 @@ async fn main() -> Result<()> {
     info!("🚀 Folio is running at http://{}", addr);
 
     // Run server with graceful shutdown
-    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
+    let maintenance = auth.spawn_maintenance();
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal());
 
     if let Err(e) = server.await {
         tracing::error!("Server error: {}", e);
     }
 
+    maintenance.abort();
     stop_worker(shutdown_tx, worker_handle).await;
 
     info!("Folio shutdown complete");
