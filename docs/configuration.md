@@ -34,6 +34,7 @@ startup by the first three layers.
 | --- | --- | --- | --- |
 | `server.host` | `FOLIO_SERVER__HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` in containers. |
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
+| `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | `http://<host>:<port>` | Base URL used for links in webhook payloads. Set it when receivers reach Folio under another address. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | SQLite connection URL. |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Directory for stored documents and thumbnails. |
 | `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |
