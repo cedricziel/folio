@@ -11,6 +11,7 @@
 pub mod ai;
 pub mod config;
 pub mod database;
+pub mod ingest;
 pub mod queue;
 pub mod storage;
 pub mod thumbnail;
@@ -20,9 +21,11 @@ pub use ai::{AiServiceFactory, DynamicEmbeddingService, DynamicOcrService, Sqlit
 pub use config::Config;
 pub use database::{
     create_pool, run_migrations, DatabaseHealthCheck, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSettingsRepository,
-    SqliteTagRepository, SqliteWorkflowRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger,
+    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
+    SqliteWorkflowRepository,
 };
+pub use ingest::{EmailSource, FolderSource, SourceFactory, StorageDocumentImporter};
 pub use queue::{Job, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
 pub use storage::FileStorage;
 pub use thumbnail::ThumbnailService;

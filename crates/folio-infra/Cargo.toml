@@ -47,6 +47,17 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
+# Consume folder watching
+notify = "8"
+
+# Mailbox access
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "1"
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+futures = { workspace = true }
+
 [dev-dependencies]
+testcontainers = "0.28"
 axum = { workspace = true }
 tempfile = "3"
