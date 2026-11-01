@@ -1,6 +1,5 @@
 import FolioAPI
 import Foundation
-import HTTPTypes
 import OpenAPIRuntime
 import OpenAPIURLSession
 
@@ -25,7 +24,7 @@ public struct LiveFolioService: FolioService {
             serverURL: baseURL,
             configuration: .init(dateTranscoder: LenientDateTranscoder()),
             transport: URLSessionTransport(configuration: .init(session: session)),
-            middlewares: [BearerAuthMiddleware(provider: tokenProvider)]
+            middlewares: [BearerAuthMiddleware(provider: tokenProvider), ErrorMappingMiddleware()]
         )
     }
 
@@ -37,50 +36,39 @@ public struct LiveFolioService: FolioService {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await call {
             if trimmed.isEmpty {
-                switch try await client.listDocuments() {
-                case let .ok(ok): return try ok.body.json.documents.map { try Document($0) }
-                case let .default(status, failure): throw try failure.error(status)
-                }
+                return try await client.listDocuments().ok.body.json.documents.map { try Document($0) }
             }
-            switch try await client.searchDocuments(query: .init(q: trimmed, limit: 50)) {
-            case let .ok(ok): return try ok.body.json.results.map { try Document($0.document) }
-            case let .default(status, failure): throw try failure.error(status)
-            }
+            let results = try await client.searchDocuments(query: .init(q: trimmed, limit: 50))
+            return try results.ok.body.json.results.map { try Document($0.document) }
         }
     }
 
     public func deleteDocument(id: Document.ID) async throws {
         try await call {
-            switch try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())) {
-            case .ok: return
-            case let .default(status, failure): throw try failure.error(status)
-            }
+            _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).ok
         }
     }
 
     public func tags() async throws -> [Tag] {
         try await call {
-            switch try await client.listTags() {
-            case let .ok(ok): return try ok.body.json.map { try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color) }
-            case let .default(status, failure): throw try failure.error(status)
+            try await client.listTags().ok.body.json.map {
+                try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color)
             }
         }
     }
 
     public func correspondents() async throws -> [Correspondent] {
         try await call {
-            switch try await client.listCorrespondents() {
-            case let .ok(ok): return try ok.body.json.map { try Correspondent(id: Self.uuid($0.id), name: $0.name) }
-            case let .default(status, failure): throw try failure.error(status)
+            try await client.listCorrespondents().ok.body.json.map {
+                try Correspondent(id: Self.uuid($0.id), name: $0.name)
             }
         }
     }
 
     public func documentTypes() async throws -> [DocumentType] {
         try await call {
-            switch try await client.listDocumentTypes() {
-            case let .ok(ok): return try ok.body.json.map { try DocumentType(id: Self.uuid($0.id), name: $0.name) }
-            case let .default(status, failure): throw try failure.error(status)
+            try await client.listDocumentTypes().ok.body.json.map {
+                try DocumentType(id: Self.uuid($0.id), name: $0.name)
             }
         }
     }
@@ -147,12 +135,8 @@ public struct LiveFolioService: FolioService {
     private func check(_ response: URLResponse, body: Data?) throws {
         guard let http = response as? HTTPURLResponse else { throw FolioError.unreadableResponse }
         guard (200 ..< 300).contains(http.statusCode) else {
-            throw FolioError.server(status: http.statusCode, message: body.flatMap(Self.errorMessage))
+            throw FolioError.server(status: http.statusCode, message: body.flatMap(ErrorMappingMiddleware.message))
         }
-    }
-
-    private static func errorMessage(in data: Data) -> String? {
-        (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
     }
 
     private func call<T>(_ work: () async throws -> T) async throws -> T {
@@ -161,7 +145,11 @@ public struct LiveFolioService: FolioService {
         } catch let error as FolioError {
             throw error
         } catch let error as ClientError {
-            throw error.underlyingError is URLError ? FolioError.unreachable : FolioError.unreadableResponse
+            switch error.underlyingError {
+            case let folio as FolioError: throw folio
+            case is URLError: throw FolioError.unreachable
+            default: throw FolioError.unreadableResponse
+            }
         }
     }
 }
@@ -173,31 +161,7 @@ extension Document {
             originalFilename: raw.originalFilename, mimeType: raw.mimeType,
             correspondentID: raw.correspondentId.map(LiveFolioService.uuid),
             documentTypeID: raw.documentTypeId.map(LiveFolioService.uuid),
-            pageCount: raw.pageCount, createdAt: raw.createdAt, updatedAt: raw.updatedAt
+            pageCount: raw.pageCount.map(Int.init), createdAt: raw.createdAt, updatedAt: raw.updatedAt
         )
-    }
-}
-
-extension Components.Responses.Failure {
-    func error(_ status: Int) throws -> FolioError {
-        try .server(status: status, message: body.json.error)
-    }
-}
-
-struct BearerAuthMiddleware: ClientMiddleware {
-    let provider: any BearerTokenProvider
-
-    func intercept(
-        _ request: HTTPRequest,
-        body: HTTPBody?,
-        baseURL: URL,
-        operationID _: String,
-        next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
-    ) async throws -> (HTTPResponse, HTTPBody?) {
-        var request = request
-        if let token = await provider.token() {
-            request.headerFields[.authorization] = "Bearer \(token)"
-        }
-        return try await next(request, body, baseURL)
     }
 }
