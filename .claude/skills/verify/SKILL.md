@@ -16,13 +16,13 @@ S=.claude/skills/verify/scripts
 $S/with-instance.sh bash -c "$S/smoke.sh \$FOLIO_VERIFY_ENV"
 ```
 
-`with-instance.sh <cmd>` builds if needed, starts the instance, exports `FOLIO_VERIFY_ENV` (path of the env file) and `BASE_URL`, runs the command, and always tears down (trap), even on failure.
+`with-instance.sh <cmd>` builds if needed, starts the instance, exports `FOLIO_VERIFY_ENV` (path of the env file), `BASE_URL` and `VERIFY_DIR`, runs the command, and always tears down (trap), even on failure.
 
 ## 2. Or step by step
 
 1. `scripts/build.sh` builds `folio-app` once (uses `~/.local/bin/cargo-slot` when present, `CARGO_INCREMENTAL=0`). Set `CARGO_TARGET_DIR` inside the worktree when sharing a machine with other agents. `up.sh` builds on demand if the binary is missing; set `FOLIO_BIN` to use another binary (for example a release build in CI).
 2. `env_file=$(scripts/up.sh)` picks a free port, creates `${TMPDIR:-/tmp}/folio-verify.XXXXXX` (DB, storage, log in `server.log`), starts the app, waits for readiness and prints the env file path. The env file defines `BASE_URL`, `PID`, `VERIFY_DIR`. `source` it in later steps.
-3. `scripts/smoke.sh "$env_file"` runs the API checks: upload the fixture PDF through the UI route (so the worker handles it), poll until processed, list and get via `/api`, download and compare bytes, assert an SSE event arrived on `/events`, delete and expect 404.
+3. `scripts/smoke.sh "$env_file"` runs the API checks: upload the fixture PDF through the UI route (so the worker handles it), poll until the worker has set `page_count` (with provider `local` OCR yields no text, so `content` stays null), list and get via `/api`, download and compare bytes, assert an SSE event arrived on `/events`, delete and expect 404.
 4. Drive the UI (next section).
 5. `scripts/down.sh "$env_file"` kills the PID and removes the temp dir. Idempotent. When using `up.sh` directly, install `trap '$S/down.sh "$env_file"' EXIT` first.
 
@@ -35,6 +35,8 @@ Config names today are `FOLIO_SERVER_HOST`, `FOLIO_SERVER_PORT`, `FOLIO_DATABASE
 - With Playwright MCP browser tools available: navigate to `BASE_URL`, snapshot, click through the flow, and save screenshots under `$VERIFY_DIR/shots/`. Prefer accessible roles and labels (`Upload document` button, `Title (optional)` and `File` fields, `Search documents...` trigger).
 - Otherwise run the committed suite, which starts its own instance through the same scripts: `make e2e`, or `cd e2e && npx playwright test` (set `E2E_BASE_URL` to reuse an instance you already started). Failure screenshots and traces land in `e2e/test-results/`, the HTML report in `e2e/playwright-report/`.
 - Screenshots of a passing flow: `cd e2e && npx playwright screenshot --browser chromium "$BASE_URL" "$VERIFY_DIR/inbox.png"`.
+
+Known quirk: after the worker finishes, an SSE event swaps the list for a variant whose links target the `document-detail` frame, so clicking a document right then shows "Content missing". Wait for processing, then reload, before clicking through.
 
 The Turbo/Stimulus UI updates the DOM after fetches; wait on visible text (`expect(...).toBeVisible()`), not on `networkidle` (debug builds hold a livereload connection open).
 

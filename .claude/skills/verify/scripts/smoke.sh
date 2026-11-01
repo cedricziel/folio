@@ -36,14 +36,15 @@ id=$(curl -fsS "$BASE_URL/api/documents" |
   fail "uploaded document not listed"
 echo "id=$id"
 
-step "wait for processing (content set by the worker)"
-# Extension point: once a status/processing field exists, poll that instead.
+step "wait for processing (worker sets page_count after thumbnails)"
+# With AI provider "local" OCR yields no text, so content stays null; page_count is the
+# completion signal. Extension point: poll a status field once one exists.
 for _ in $(seq 1 60); do
-  content=$(curl -fsS "$BASE_URL/api/documents/$id" | jqpy "d.get('content') is not None")
-  [ "$content" = True ] && break
+  done_=$(curl -fsS "$BASE_URL/api/documents/$id" | jqpy "d.get('page_count') is not None")
+  [ "$done_" = True ] && break
   sleep 0.5
 done
-[ "$content" = True ] || fail "document not processed within 30s"
+[ "$done_" = True ] || fail "document not processed within 30s"
 
 step "GET /api/documents/$id"
 curl -fsS "$BASE_URL/api/documents/$id" |
