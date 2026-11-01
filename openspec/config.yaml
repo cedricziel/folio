@@ -1,0 +1,47 @@
+schema: spec-driven
+
+context: |
+  Folio is a self-hosted, AI-native document management system (AGPL-3.0, github.com/cedricziel/folio).
+  Rust 2021 Cargo workspace, hexagonal: domain models and ports in crates/folio-core, adapters
+  (SQLite via sqlx, file storage, job queue, AI providers, thumbnails) in crates/folio-infra, axum 0.7
+  HTTP with Askama templates and Hotwire (Turbo + Stimulus) in crates/folio-api, binary in folio-app.
+  Settings live in two places: config.toml (FOLIO_* env vars override keys without underscores) and the settings table,
+  edited at /settings. Database values win; config.toml is the fallback.
+  Document processing (thumbnails, OCR, embeddings) runs in a background worker fed by the jobs table;
+  the worker announces progress on the SSE stream at /events.
+  Commands: make format, make lint (clippy -D warnings), make test (cargo test --workspace).
+  Commits are semantic (feat, fix, docs, chore, build); one change per commit.
+  Planned work that new artifacts should fit: a JSON API documented with OpenAPI (utoipa, spec at
+  openapi/openapi.json); a native SwiftUI Apple app built on a Swift client generated from that spec;
+  an installable PWA for other platforms; a design system whose tokens are shared between the web CSS
+  and SwiftUI; container images published to ghcr.io/cedricziel/folio.
+
+rules:
+  proposal:
+    - State which hexagonal layers the change touches (folio-core ports/models, folio-infra adapters, folio-api routes/templates).
+    - When the change adds or changes an HTTP endpoint, say whether it is an HTML (Turbo) route, a JSON API route, or both.
+    - When the change adds a setting, say whether it lives in config.toml, the settings table, or both, and which value wins.
+    - When the change alters the database schema, name the new migration and how existing rows are handled.
+  specs:
+    - Name capabilities after user-facing behavior (document-upload, document-search), not after crates or modules.
+    - Each JSON API requirement names the method, path, and status codes of its scenarios.
+    - Each requirement that depends on an AI provider has a scenario for the provider being "local" or unconfigured.
+  design:
+    - Place new traits in folio-core ports and their implementations in folio-infra; folio-core must not depend on folio-infra or folio-api.
+    - When the JSON API changes, describe the change to openapi/openapi.json and to the generated Swift client.
+    - When a UI change introduces a color, spacing, or type value, take it from the shared design-system tokens rather than a literal.
+  tasks:
+    - Each task that changes behavior names the failing test that proves it, written before the code.
+    - Each task is small enough to land as one semantic commit.
+    - The last task group runs make format, make lint, and make test.
+
+operations:
+  apply:
+    guidance:
+      - "Work test-first: write the failing test, make it pass, then refactor. Keep only tests that would catch a real regression; no tests that restate the implementation."
+      - "Commit after each task with a semantic message (feat, fix, refactor, test, docs, chore), using a scope such as api, core, infra, ui, or spec where it helps."
+      - Run make format, make lint, and make test before reporting a task done.
+      - Add schema changes as a new sqlx migration in migrations/; do not edit existing migration files.
+  archive:
+    guidance:
+      - Archive the change as the last commit on its branch, so one merge carries the code and the updated specs.
