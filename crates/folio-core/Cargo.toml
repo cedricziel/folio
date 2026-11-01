@@ -19,11 +19,17 @@ serde_json = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+# Logging
+tracing = { workspace = true }
+
 # Async traits
 async-trait = { workspace = true }
 
 # Async runtime (for broadcast channel)
 tokio = { workspace = true }
+
+# Webhook URL validation
+url = "2"
 
 # Utilities
 uuid = { workspace = true }

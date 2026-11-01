@@ -5,6 +5,7 @@
 mod ai;
 mod health;
 mod repository;
+mod workflow;
 
 pub use ai::{EmbeddingService, OcrService, SearchResult, SearchService};
 pub use health::HealthCheck;
@@ -12,3 +13,4 @@ pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,
 };
+pub use workflow::{FileMetadata, WorkflowJobQueue, WorkflowRepository};
