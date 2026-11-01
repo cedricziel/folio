@@ -376,9 +376,11 @@ impl DocumentRepository for SqliteDocumentRepository {
         stage: ProcessingStage,
         status: ProcessingStatus,
     ) -> Result<()> {
-        // The column name comes from a closed enum, never from user input.
-        let sql = format!("UPDATE documents SET {} = ? WHERE id = ?", stage.column());
-        sqlx::query(&sql)
+        let sql = match stage {
+            ProcessingStage::Ocr => "UPDATE documents SET ocr_status = ? WHERE id = ?",
+            ProcessingStage::Embed => "UPDATE documents SET embed_status = ? WHERE id = ?",
+        };
+        sqlx::query(sql)
             .bind(status.as_str())
             .bind(id.to_string())
             .execute(&self.pool)
@@ -408,14 +410,21 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
-        let sql = format!(
-            "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, ocr_status, embed_status,
-                    created_at, updated_at
-             FROM documents WHERE {} = 'pending' ORDER BY created_at",
-            stage.column()
-        );
-        let rows: Vec<DocumentRow> = sqlx::query_as(&sql)
+        let sql = match stage {
+            ProcessingStage::Ocr => {
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                        created_at, updated_at
+                 FROM documents WHERE ocr_status = 'pending' ORDER BY created_at"
+            }
+            ProcessingStage::Embed => {
+                "SELECT id, title, content, original_filename, file_path, mime_type,
+                        correspondent_id, document_type_id, page_count, ocr_status, embed_status,
+                        created_at, updated_at
+                 FROM documents WHERE embed_status = 'pending' ORDER BY created_at"
+            }
+        };
+        let rows: Vec<DocumentRow> = sqlx::query_as(sql)
             .fetch_all(&self.pool)
             .await
             .map_err(map_sqlx_error)?;

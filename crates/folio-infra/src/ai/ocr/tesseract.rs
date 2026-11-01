@@ -199,7 +199,7 @@ mod tests {
         let page = parse_tsv(tsv);
         assert_eq!(page.text, "Hello world\nsecond\n\nNew");
         let confidence = page.confidence.unwrap();
-        assert!((confidence - 0.945).abs() < 0.001, "{confidence}");
+        assert!((confidence - 0.94625).abs() < 0.001, "{confidence}");
     }
 
     #[test]

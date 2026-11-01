@@ -210,7 +210,30 @@ async fn save_processing_settings(
 #[derive(Template)]
 #[template(path = "partials/processing_test.html")]
 struct ProcessingTestTemplate {
-    results: Vec<(String, Result<(), String>)>,
+    results: Vec<TestOutcome>,
+}
+
+struct TestOutcome {
+    label: String,
+    ok: bool,
+    message: String,
+}
+
+impl TestOutcome {
+    fn new(label: String, result: folio_core::error::Result<()>) -> Self {
+        match result {
+            Ok(()) => Self {
+                label,
+                ok: true,
+                message: String::new(),
+            },
+            Err(e) => Self {
+                label,
+                ok: false,
+                message: e.to_string(),
+            },
+        }
+    }
 }
 
 /// Check the providers selected in the form, without saving them
@@ -234,13 +257,10 @@ async fn test_processing_settings(
     };
 
     let results = vec![
-        (
-            format!("OCR ({})", candidate.ocr.provider),
-            ocr.map_err(|e| e.to_string()),
-        ),
-        (
+        TestOutcome::new(format!("OCR ({})", candidate.ocr.provider), ocr),
+        TestOutcome::new(
             format!("Embeddings ({})", candidate.embeddings.provider),
-            embeddings.map_err(|e| e.to_string()),
+            embeddings,
         ),
     ];
 

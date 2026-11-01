@@ -13,16 +13,6 @@ pub enum ProcessingStage {
     Embed,
 }
 
-impl ProcessingStage {
-    /// Name of the `documents` column that stores this stage's status
-    pub fn column(self) -> &'static str {
-        match self {
-            Self::Ocr => "ocr_status",
-            Self::Embed => "embed_status",
-        }
-    }
-}
-
 /// State of one pipeline stage for one document
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
