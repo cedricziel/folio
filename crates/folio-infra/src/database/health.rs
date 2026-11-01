@@ -2,16 +2,18 @@
 
 use async_trait::async_trait;
 use folio_core::ports::HealthCheck;
-use sqlx::SqlitePool;
+use super::Database;
 
 /// Verifies the database answers a trivial query.
 pub struct DatabaseHealthCheck {
-    pool: SqlitePool,
+    database: Database,
 }
 
 impl DatabaseHealthCheck {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(database: impl Into<Database>) -> Self {
+        Self {
+            database: database.into(),
+        }
     }
 }
 
@@ -22,11 +24,11 @@ impl HealthCheck for DatabaseHealthCheck {
     }
 
     async fn check(&self) -> Result<(), String> {
-        sqlx::query("SELECT 1")
-            .execute(&self.pool)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        let result = match &self.database {
+            Database::Sqlite(pool) => sqlx::query("SELECT 1").execute(pool).await.map(|_| ()),
+            Database::Postgres(pool) => sqlx::query("SELECT 1").execute(pool).await.map(|_| ()),
+        };
+        result.map_err(|e| e.to_string())
     }
 }
 
