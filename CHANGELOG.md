@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.0](https://github.com/cedricziel/folio/compare/v0.1.1...v0.2.0) (2026-11-01)
+
+
+### Features
+
+* **apple:** link the deployment guide from onboarding ([6b1e5f9](https://github.com/cedricziel/folio/commit/6b1e5f96686af3e97266ca82364ff2c34262fdc3))
+
+
+### Bug Fixes
+
+* **api:** resolve API and worker backlog issues ([#94](https://github.com/cedricziel/folio/issues/94)) ([f0fc77e](https://github.com/cedricziel/folio/commit/f0fc77e1c1104861ab652cf7020d2cd40213c5af))
+* **config:** let the shipped config follow auth for MCP ([70c2337](https://github.com/cedricziel/folio/commit/70c2337d3b6c587532fc24f5b724355fc1e98826))
+* **config:** let the shipped config follow auth for MCP ([#96](https://github.com/cedricziel/folio/issues/96)) ([3f90966](https://github.com/cedricziel/folio/commit/3f909660584a87d1f4c51948d0bbf891f369e778))
+* **docker:** install ghostscript and allow the PDF coder for the ImageMagick fallback ([18ace36](https://github.com/cedricziel/folio/commit/18ace3657e8fb4f51fc14e9eb4888dee982b2cf2))
+* **docker:** make the PDF fallback work in the image ([#98](https://github.com/cedricziel/folio/issues/98)) ([0f5fe7a](https://github.com/cedricziel/folio/commit/0f5fe7a55e2787adbe5581efee523aa58d75b45f))
+
+## [0.1.1](https://github.com/cedricziel/folio/compare/v0.1.0...v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **apple:** take app and build versions from the build settings ([#87](https://github.com/cedricziel/folio/issues/87)) ([42d4819](https://github.com/cedricziel/folio/commit/42d481982e6bc28f2ded0eb525a39c5957864359))
+
 ## [0.1.0](https://github.com/cedricziel/folio/compare/v0.1.0-alpha.2...v0.1.0) (2026-11-01)
 
 

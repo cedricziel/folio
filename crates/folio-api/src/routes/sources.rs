@@ -1,7 +1,7 @@
 //! Ingestion source API routes
 
 use axum::{
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -17,6 +17,7 @@ use folio_core::models::{
 };
 
 use crate::error::{ApiError, ApiResult};
+use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
 
@@ -143,7 +144,7 @@ pub(crate) async fn list_sources(
 )]
 pub(crate) async fn get_source(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceView>> {
     let def = find(&state, id).await?;
     Ok(Json(view(&state, def).await?))
@@ -166,7 +167,7 @@ pub(crate) async fn get_source(
 )]
 pub(crate) async fn create_source(
     State(state): State<AppState>,
-    Json(mut input): Json<IngestionSourceInput>,
+    ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<(StatusCode, Json<SourceView>)> {
     prepare_input(&mut input, None)?;
     let def = state.ingestion.managed.create(input).await?;
@@ -192,8 +193,8 @@ pub(crate) async fn create_source(
 )]
 pub(crate) async fn update_source(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(mut input): Json<IngestionSourceInput>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<Json<SourceView>> {
     let existing = find(&state, id).await?;
     require_managed(&existing)?;
@@ -218,7 +219,7 @@ pub(crate) async fn update_source(
 )]
 pub(crate) async fn delete_source(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
     let existing = find(&state, id).await?;
     require_managed(&existing)?;
@@ -266,7 +267,7 @@ pub(crate) async fn run_test(state: &AppState, def: &IngestionSourceDef) -> Sour
 )]
 pub(crate) async fn test_source(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceTestResult>> {
     let def = find(&state, id).await?;
     Ok(Json(run_test(&state, &def).await))

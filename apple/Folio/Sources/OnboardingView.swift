@@ -39,10 +39,10 @@ struct OnboardingView: View {
                     )
                     .autocorrectionDisabled()
                     .onSubmit { Task { await onboarding.connect() } }
-                    #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                    #endif
+                #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                #endif
             }
 
             if case let .failed(message) = onboarding.state {
@@ -63,6 +63,14 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(onboarding.state == .checking || onboarding.address.isEmpty)
+
+            Link(
+                "Don't have a server? Deploy your own",
+                destination: URL(string: "https://github.com/cedricziel/folio/blob/main/docs/deployment.md")!
+            )
+            .font(FolioTheme.Typography.bodySm)
+            .foregroundStyle(Color.inkMuted)
+            .frame(maxWidth: .infinity)
         }
         .padding(FolioTheme.Spacing.space6)
         .frame(maxWidth: 440)

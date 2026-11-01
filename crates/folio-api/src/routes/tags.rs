@@ -1,10 +1,6 @@
 //! Tag API routes
 
-use axum::{
-    extract::{Path, State},
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -12,6 +8,7 @@ use uuid::Uuid;
 use folio_core::models::{CreateTag, Tag, UpdateTag};
 
 use crate::error::{ApiError, ApiResult};
+use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
 
@@ -52,7 +49,7 @@ pub(crate) async fn list_tags(State(state): State<AppState>) -> ApiResult<Json<V
 )]
 pub(crate) async fn get_tag(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<Tag>> {
     let tag = state
         .tag_repo
@@ -86,7 +83,7 @@ pub struct CreateTagRequest {
 )]
 pub(crate) async fn create_tag(
     State(state): State<AppState>,
-    Json(req): Json<CreateTagRequest>,
+    ApiJson(req): ApiJson<CreateTagRequest>,
 ) -> ApiResult<Json<Tag>> {
     let tag = state
         .tag_repo
@@ -135,8 +132,8 @@ where
 )]
 pub(crate) async fn update_tag(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<UpdateTagRequest>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(req): ApiJson<UpdateTagRequest>,
 ) -> ApiResult<Json<Tag>> {
     let tag = state
         .tag_repo
@@ -160,15 +157,15 @@ pub(crate) async fn update_tag(
     tag = "tags",
     params(("id" = Uuid, Path, description = "Tag ID")),
     responses(
-        (status = 200, description = "The tag was deleted"),
+        (status = 204, description = "The tag was deleted"),
         NotFound,
         InternalError,
     )
 )]
 pub(crate) async fn delete_tag(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<()>> {
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<StatusCode> {
     state.tag_repo.delete(id).await?;
-    Ok(Json(()))
+    Ok(StatusCode::NO_CONTENT)
 }

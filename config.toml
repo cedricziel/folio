@@ -4,7 +4,8 @@
 [server]
 host = "127.0.0.1"
 port = 3000
-# Base URL used in webhook payload links; defaults to http://host:port
+# Public base URL. Drives OAuth and OIDC redirects, the token issuer, secure cookies
+# and webhook links; defaults to http://host:port
 # public_url = "https://folio.example.com"
 
 [database]
@@ -22,8 +23,8 @@ provider = "openai"
 # - FOLIO_AI__ANTHROPIC_API_KEY
 
 [mcp]
-# Serve the MCP endpoint at /mcp. Off by default: the endpoint is not authenticated yet
-# (the "mcp.enabled" setting in the database overrides this)
-enabled = false
+# Serve the MCP endpoint at /mcp. Unset, it follows auth.required: on when sign-in is
+# enforced, off otherwise. The "mcp.enabled" setting in the database overrides this.
+# enabled = true
 # Extra Host headers to accept besides loopback, e.g. ["folio.example.com"]
 allowed_hosts = []
