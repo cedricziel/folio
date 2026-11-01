@@ -1093,6 +1093,7 @@ if ("serviceWorker" in navigator) {
 
     <div
       class="overlay overlay-top"
+      data-testid="command-palette"
       data-command-palette-target="modal"
       data-action="click->command-palette#backdropClick"
     >
@@ -1242,6 +1243,7 @@ if ("serviceWorker" in navigator) {
           <button
             type="button"
             class="f-btn f-btn-primary"
+            aria-label="Upload document"
             data-action="click->upload-modal#open"
           >
             {{ icons::upload() }}

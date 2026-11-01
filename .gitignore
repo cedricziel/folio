@@ -46,3 +46,7 @@
 DerivedData/
 *.xcodeproj/
 *.xcworkspace/xcuserdata/
+
+# Ruby / fastlane local state
+apple/.bundle/
+apple/vendor/
