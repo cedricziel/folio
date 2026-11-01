@@ -34,8 +34,7 @@
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name=='folio-app')].version"
         }
-      ],
-      "release-as": "0.1.0-alpha.1"
+      ]
     }
   }
 }
