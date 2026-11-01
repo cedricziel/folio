@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
-use folio_api::{create_router, AppState};
+use folio_api::{create_router, AppState, AuthState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
 use folio_core::services::LibraryService;
 use folio_core::EventBroadcaster;
@@ -110,6 +110,7 @@ async fn main() -> Result<()> {
     let correspondent_repo = repos.correspondents;
     let document_type_repo = repos.document_types;
     let settings_repo = repos.settings;
+    let auth_store = repos.auth;
 
     // Create AI services (dynamic - reads from database settings with config.toml fallback)
     let ocr_service = Arc::new(DynamicOcrService::new(
@@ -171,10 +172,11 @@ async fn main() -> Result<()> {
     }
 
     let mcp_settings: Arc<dyn SettingsRepository> = settings_repo.clone();
-    if folio_mcp::is_enabled(mcp_settings.as_ref(), config.mcp.enabled).await {
+    let mcp_default = config.mcp.enabled.unwrap_or(config.auth.required);
+    if !config.auth.required && folio_mcp::is_enabled(mcp_settings.as_ref(), mcp_default).await {
         tracing::warn!(
-            "MCP endpoint /mcp is enabled without authentication; \
-             do not expose this server beyond localhost until an auth layer is configured"
+            "MCP endpoint /mcp is enabled without authentication (auth.required is false); \
+             do not expose this server beyond localhost"
         );
     }
 
@@ -198,17 +200,28 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks);
 
+    let auth = AuthState::new(auth_store, config.server.public_url.clone())
+        .with_required(config.auth.required);
+
     // Create router
-    // The MCP endpoint is unauthenticated until an auth layer is applied here
     let mcp = folio_mcp::router(
         library,
         mcp_settings,
         McpOptions {
-            enabled_by_default: config.mcp.enabled,
+            enabled_by_default: mcp_default,
             allowed_hosts: config.mcp.allowed_hosts.clone(),
         },
     );
-    let app = create_router(state).merge(mcp);
+    let mcp = if config.auth.required {
+        mcp.layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))
+            .layer(axum::middleware::from_fn_with_state(
+                auth.validator("/mcp"),
+                folio_auth::require_bearer,
+            ))
+    } else {
+        mcp
+    };
+    let app = create_router(state, auth).merge(mcp);
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);

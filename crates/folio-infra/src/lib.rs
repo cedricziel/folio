@@ -19,10 +19,11 @@ pub use ai::{AiServiceFactory, DynamicEmbeddingService, DynamicOcrService};
 pub use config::Config;
 pub use database::{
     create_pool, run_migrations, Database, DatabaseBackend, DatabaseError, DatabaseHealthCheck,
-    PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
-    PostgresSearchService, PostgresSettingsRepository, PostgresTagRepository, Repositories,
-    SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository,
+    PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
+    PostgresDocumentTypeRepository, PostgresSearchService, PostgresSettingsRepository,
+    PostgresTagRepository, Repositories, SqliteAuthStore, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
+    SqliteSettingsRepository, SqliteTagRepository,
 };
 pub use queue::{Job, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
 pub use storage::FileStorage;

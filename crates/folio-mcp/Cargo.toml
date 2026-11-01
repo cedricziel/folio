@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 folio-core = { workspace = true }
+folio-auth = { workspace = true }
 
 rmcp = { workspace = true, features = ["server", "macros", "base64", "transport-io", "transport-streamable-http-server"] }
 http = "1"

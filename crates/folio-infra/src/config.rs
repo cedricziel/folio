@@ -32,6 +32,7 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    pub auth: AuthConfig,
     pub mcp: McpConfig,
 }
 
@@ -41,6 +42,9 @@ pub struct Config {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Externally visible base URL (for example `https://folio.example.com`).
+    /// Used in OAuth metadata and redirects; derived from the request when unset.
+    pub public_url: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -48,6 +52,7 @@ impl Default for ServerConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3000,
+            public_url: None,
         }
     }
 }
@@ -82,6 +87,20 @@ impl Default for StorageConfig {
     }
 }
 
+/// Authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Require a session or token for the web UI and API.
+    pub required: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { required: true }
+    }
+}
+
 /// AI provider configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -105,9 +124,10 @@ impl Default for AiConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpConfig {
-    /// Serve the MCP endpoint at `/mcp`; off by default because it is not authenticated yet.
+    /// Serve the MCP endpoint at `/mcp`. Unset means on when `auth.required` is
+    /// true and off otherwise, since the endpoint is only protected by auth.
     /// The `mcp.enabled` DB setting overrides this.
-    pub enabled: bool,
+    pub enabled: Option<bool>,
     /// Extra `Host` header values to accept besides loopback
     pub allowed_hosts: Vec<String>,
 }
@@ -147,6 +167,18 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_SERVER__PORT",
         legacy_env: &["FOLIO_SERVER_PORT"],
         kind: ValueKind::Port,
+    },
+    Setting {
+        key: "server.public_url",
+        env: "FOLIO_SERVER__PUBLIC_URL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.required",
+        env: "FOLIO_AUTH__REQUIRED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
     },
     Setting {
         key: "database.url",
@@ -342,9 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn mcp_is_disabled_by_default() {
-        assert!(!load(&[]).mcp.enabled);
-        assert!(load(&[("FOLIO_MCP__ENABLED", "true")]).mcp.enabled);
+    fn mcp_follows_the_auth_requirement_unless_set() {
+        assert_eq!(load(&[]).mcp.enabled, None);
+        assert_eq!(
+            load(&[("FOLIO_MCP__ENABLED", "true")]).mcp.enabled,
+            Some(true)
+        );
     }
 
     #[test]

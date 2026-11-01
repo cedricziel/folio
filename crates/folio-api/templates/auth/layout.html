@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <title>{% block title %}Folio{% endblock %}</title>
+    <link rel="stylesheet" href="/auth/theme.css">
+</head>
+<body>
+    <main class="auth-page">
+        <p class="auth-brand">Folio</p>
+        <section class="f-sheet auth-card">
+            {% block content %}{% endblock %}
+        </section>
+    </main>
+</body>
+</html>
