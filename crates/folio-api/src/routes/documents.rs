@@ -21,12 +21,12 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_documents).post(create_document))
-        .route("/:id", get(get_document).delete(delete_document))
-        .route("/:id/download", get(download_document))
-        .route("/:id/correspondent", post(set_correspondent))
-        .route("/:id/document_type", post(set_document_type))
-        .route("/:id/tags", post(add_tag))
-        .route("/:id/tags/:tag_id", post(remove_tag))
+        .route("/{id}", get(get_document).delete(delete_document))
+        .route("/{id}/download", get(download_document))
+        .route("/{id}/correspondent", post(set_correspondent))
+        .route("/{id}/document_type", post(set_document_type))
+        .route("/{id}/tags", post(add_tag))
+        .route("/{id}/tags/{tag_id}", post(remove_tag))
         .route("/upload", post(upload_document))
         .route("/search", get(search_documents_get).post(search_documents))
 }

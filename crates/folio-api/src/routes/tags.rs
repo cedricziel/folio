@@ -18,7 +18,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_tags).post(create_tag))
-        .route("/:id", get(get_tag).put(update_tag).delete(delete_tag))
+        .route("/{id}", get(get_tag).put(update_tag).delete(delete_tag))
 }
 
 /// List all tags
