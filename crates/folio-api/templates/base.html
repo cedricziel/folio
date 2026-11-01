@@ -1094,6 +1094,212 @@ Stimulus.register(
   },
 );
 
+// Hotkeys Controller (keyboard shortcuts, listed once in docs/shortcuts.md)
+Stimulus.register(
+  "hotkeys",
+  class extends Controller {
+    static targets = ["help", "confirm", "confirmForm", "confirmText"];
+
+    static destinations = {
+      i: "/",
+      a: "/?view=all",
+      s: "/settings",
+      w: "/workflows",
+    };
+
+    connect() {
+      this.chord = null;
+      this.onKeydown = this.handleKeydown.bind(this);
+      document.addEventListener("keydown", this.onKeydown);
+    }
+
+    disconnect() {
+      document.removeEventListener("keydown", this.onKeydown);
+      clearTimeout(this.chord);
+    }
+
+    typing(event) {
+      const target = event.target;
+      return (
+        target instanceof Element &&
+        target.closest(
+          "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+        ) !== null
+      );
+    }
+
+    modalOpen() {
+      return document.querySelector(".overlay.active, dialog[open]") !== null;
+    }
+
+    handleKeydown(event) {
+      if (event.defaultPrevented || event.isComposing) return;
+      if (this.typing(event) || this.modalOpen()) return;
+
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && event.key === "Backspace") {
+        if (this.deletable()) {
+          event.preventDefault();
+          this.askDelete();
+        }
+        return;
+      }
+      if (mod || event.altKey) return;
+
+      if (this.chord !== null) {
+        clearTimeout(this.chord);
+        this.chord = null;
+        const destination = this.constructor.destinations[event.key];
+        if (destination) {
+          event.preventDefault();
+          Turbo.visit(destination);
+        }
+        return;
+      }
+
+      switch (event.key) {
+        case "/":
+          event.preventDefault();
+          this.controller("command-palette").open();
+          break;
+        case "u":
+          event.preventDefault();
+          this.controller("upload-modal").open();
+          break;
+        case "g":
+          this.chord = setTimeout(() => (this.chord = null), 1000);
+          break;
+        case "j":
+          this.move(1);
+          break;
+        case "k":
+          this.move(-1);
+          break;
+        case "Enter":
+          this.openSelected(event);
+          break;
+        case "e":
+          this.edit(event);
+          break;
+        case "t":
+          this.tag(event);
+          break;
+        case "#":
+          if (this.deletable()) {
+            event.preventDefault();
+            this.askDelete();
+          }
+          break;
+        case "?":
+          event.preventDefault();
+          this.showHelp();
+          break;
+      }
+    }
+
+    controller(identifier) {
+      return this.application.getControllerForElementAndIdentifier(
+        this.element,
+        identifier,
+      );
+    }
+
+    rows() {
+      return Array.from(document.querySelectorAll("#documents-rows .f-row"));
+    }
+
+    selectedRow() {
+      return this.rows().find((row) => row.getAttribute("aria-selected") === "true");
+    }
+
+    move(step) {
+      const rows = this.rows();
+      if (rows.length === 0) return;
+      const current = rows.indexOf(this.selectedRow());
+      const next =
+        current === -1
+          ? step > 0
+            ? 0
+            : rows.length - 1
+          : Math.min(rows.length - 1, Math.max(0, current + step));
+      rows.forEach((row) => row.removeAttribute("aria-selected"));
+      rows[next].setAttribute("aria-selected", "true");
+      rows[next].focus();
+      rows[next].scrollIntoView({ block: "nearest" });
+    }
+
+    openSelected(event) {
+      if (event.target.closest("a, button, summary")) return;
+      this.openRow(event);
+    }
+
+    openRow(event) {
+      const row = this.selectedRow();
+      if (!row) return;
+      event.preventDefault();
+      row.click();
+    }
+
+    // A document page has the editors; from a list the keys take you to the page.
+    edit(event) {
+      const field = document.querySelector("[data-hotkey='edit']");
+      if (field) {
+        event.preventDefault();
+        field.focus();
+      } else {
+        this.openRow(event);
+      }
+    }
+
+    tag(event) {
+      const button = document.querySelector("[data-hotkey='tag']");
+      if (button) {
+        event.preventDefault();
+        button.click();
+      } else {
+        this.openRow(event);
+      }
+    }
+
+    // The document being shown, or else the selected row in a list.
+    deletable() {
+      const page = document.querySelector("[data-hotkey-document]");
+      if (page) {
+        return { id: page.dataset.hotkeyDocument, title: page.dataset.hotkeyTitle };
+      }
+      const row = this.selectedRow();
+      if (!row) return null;
+      return {
+        id: row.id.replace(/^document-/, ""),
+        title: row.querySelector(".f-row-title")?.textContent.trim() ?? "",
+      };
+    }
+
+    askDelete() {
+      const doc = this.deletable();
+      if (!doc) return;
+      this.confirmFormTarget.action = `/documents/${doc.id}/delete`;
+      this.confirmTextTarget.textContent = doc.title
+        ? `${doc.title} will be removed from your archive. This cannot be undone.`
+        : "It will be removed from your archive. This cannot be undone.";
+      this.confirmTarget.showModal();
+    }
+
+    showHelp() {
+      this.controller("command-palette").close();
+      if (!this.helpTarget.open) this.helpTarget.showModal();
+    }
+
+    closeDialog(event) {
+      event.currentTarget.closest("dialog").close();
+    }
+
+    backdropClick(event) {
+      if (event.target === event.currentTarget) event.currentTarget.close();
+    }
+  },
+);
+
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
@@ -1103,7 +1309,7 @@ if ("serviceWorker" in navigator) {
     </script>
   </head>
   <body
-    data-controller="dropzone sse toast upload-modal command-palette nav theme"
+    data-controller="dropzone sse toast upload-modal command-palette nav theme hotkeys"
     data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop"
   >
     <a class="skip-link" href="#main">Skip to content</a>
@@ -1292,8 +1498,86 @@ if ("serviceWorker" in navigator) {
             <kbd class="f-kbd">&darr;</kbd> Move</span
           >
           <span><kbd class="f-kbd">&crarr;</kbd> Open</span>
+          <button
+            type="button"
+            class="f-btn f-btn-quiet palette-help"
+            data-action="click->hotkeys#showHelp"
+          >
+            All shortcuts <kbd class="f-kbd">?</kbd>
+          </button>
         </div>
       </div>
+    </dialog>
+
+    <dialog
+      class="f-palette dialog shortcuts-dialog"
+      aria-labelledby="shortcuts-title"
+      data-hotkeys-target="help"
+      data-action="click->hotkeys#backdropClick"
+    >
+      <div class="dialog-header">
+        <h2 class="heading" id="shortcuts-title">Keyboard shortcuts</h2>
+        <button
+          type="button"
+          class="f-btn f-btn-quiet icon-btn"
+          aria-label="Close"
+          data-action="click->hotkeys#closeDialog"
+        >
+          {{ icons::close() }}
+        </button>
+      </div>
+      <p class="f-label">Anywhere</p>
+      <dl class="shortcut-list">
+        <div><dt>Search documents</dt><dd><kbd class="f-kbd">&#8984;K</kbd> <kbd class="f-kbd">/</kbd></dd></div>
+        <div><dt>Upload a document</dt><dd><kbd class="f-kbd">u</kbd></dd></div>
+        <div><dt>Go to inbox</dt><dd><kbd class="f-kbd">g</kbd> then <kbd class="f-kbd">i</kbd></dd></div>
+        <div><dt>Go to all documents</dt><dd><kbd class="f-kbd">g</kbd> then <kbd class="f-kbd">a</kbd></dd></div>
+        <div><dt>Go to workflows</dt><dd><kbd class="f-kbd">g</kbd> then <kbd class="f-kbd">w</kbd></dd></div>
+        <div><dt>Go to settings</dt><dd><kbd class="f-kbd">g</kbd> then <kbd class="f-kbd">s</kbd></dd></div>
+        <div><dt>Show this list</dt><dd><kbd class="f-kbd">?</kbd></dd></div>
+      </dl>
+      <p class="f-label">In a list</p>
+      <dl class="shortcut-list">
+        <div><dt>Next document</dt><dd><kbd class="f-kbd">j</kbd></dd></div>
+        <div><dt>Previous document</dt><dd><kbd class="f-kbd">k</kbd></dd></div>
+        <div><dt>Open the selected document</dt><dd><kbd class="f-kbd">&crarr;</kbd></dd></div>
+      </dl>
+      <p class="f-label">On a document</p>
+      <dl class="shortcut-list">
+        <div><dt>Edit details</dt><dd><kbd class="f-kbd">e</kbd></dd></div>
+        <div><dt>Edit tags</dt><dd><kbd class="f-kbd">t</kbd></dd></div>
+        <div><dt>Delete</dt><dd><kbd class="f-kbd">#</kbd> <kbd class="f-kbd">&#8984;&#9003;</kbd></dd></div>
+      </dl>
+      <p class="hint">
+        Shortcuts pause while you type. On Windows and Linux, use Ctrl in
+        place of &#8984;.
+      </p>
+    </dialog>
+
+    <dialog
+      class="f-palette dialog"
+      role="alertdialog"
+      aria-labelledby="delete-title"
+      aria-describedby="delete-text"
+      data-hotkeys-target="confirm"
+      data-action="click->hotkeys#backdropClick"
+    >
+      <h2 class="heading" id="delete-title">Delete this document?</h2>
+      <p id="delete-text" data-hotkeys-target="confirmText"></p>
+      <form method="post" data-hotkeys-target="confirmForm" data-turbo="false">
+        <div class="dialog-actions">
+          <span class="spacer"></span>
+          <button
+            type="button"
+            class="f-btn f-btn-quiet"
+            autofocus
+            data-action="click->hotkeys#closeDialog"
+          >
+            Keep
+          </button>
+          <button type="submit" class="f-btn f-btn-danger">Delete</button>
+        </div>
+      </form>
     </dialog>
 
     <div class="app">
@@ -1312,6 +1596,7 @@ if ("serviceWorker" in navigator) {
           <a
             class="side-link"
             href="/"
+            title="Inbox (g then i)"
             {% if sidebar.active == "inbox" %}aria-current="page"{% endif %}
           >
             {{ icons::inbox() }}
@@ -1321,6 +1606,7 @@ if ("serviceWorker" in navigator) {
           <a
             class="side-link"
             href="/?view=all"
+            title="All documents (g then a)"
             {% if sidebar.active == "all" %}aria-current="page"{% endif %}
           >
             {{ icons::files() }}
@@ -1377,6 +1663,7 @@ if ("serviceWorker" in navigator) {
           <a
             class="side-link"
             href="/workflows"
+            title="Workflows (g then w)"
             {% if sidebar.active == "workflows" %}aria-current="page"{% endif %}
           >
             {{ icons::refresh() }}
@@ -1385,11 +1672,20 @@ if ("serviceWorker" in navigator) {
           <a
             class="side-link"
             href="/settings"
+            title="Settings (g then s)"
             {% if sidebar.active == "settings" %}aria-current="page"{% endif %}
           >
             {{ icons::settings() }}
             <span class="side-label">Settings</span>
           </a>
+          <button
+            type="button"
+            class="side-link side-theme"
+            title="Keyboard shortcuts (?)"
+            data-action="click->hotkeys#showHelp"
+          >
+            <span class="side-label">Keyboard shortcuts</span>
+          </button>
           <button
             type="button"
             class="side-link side-theme"
@@ -1419,6 +1715,8 @@ if ("serviceWorker" in navigator) {
           <button
             type="button"
             class="f-search search-trigger"
+            title="Search documents (&#8984;K or /)"
+            aria-keyshortcuts="Control+K Meta+K /"
             data-action="click->command-palette#open"
           >
             {{ icons::search() }}
@@ -1429,6 +1727,8 @@ if ("serviceWorker" in navigator) {
             type="button"
             class="f-btn f-btn-primary"
             aria-label="Upload document"
+            title="Upload document (u)"
+            aria-keyshortcuts="u"
             data-action="click->upload-modal#open"
           >
             {{ icons::upload() }}

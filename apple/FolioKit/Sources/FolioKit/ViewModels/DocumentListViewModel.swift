@@ -33,11 +33,20 @@ public final class DocumentListViewModel {
         case failed(String)
     }
 
+    /// Which documents the list shows: everything, or only those still waiting for a look.
+    public enum Scope: Equatable, Sendable {
+        case inbox
+        case all
+    }
+
     public private(set) var phase = Phase.idle
     public private(set) var rows: [DocumentRow] = []
     public private(set) var correspondents: [Correspondent.ID: String] = [:]
     public private(set) var documentTypes: [DocumentType.ID: String] = [:]
     public var searchText = ""
+    public var scope = Scope.all {
+        didSet { rebuildRows() }
+    }
     /// A failed action such as delete; shown transiently, the list stays as it was.
     public private(set) var actionError: String?
 
@@ -129,7 +138,8 @@ public final class DocumentListViewModel {
     }
 
     private func rebuildRows() {
-        rows = documents.map { document in
+        let shown = scope == .inbox ? documents.filter { $0.status != .filed } : documents
+        rows = shown.map { document in
             DocumentRow(
                 document: document,
                 subtitle: [correspondentName(for: document), typeName(for: document)]

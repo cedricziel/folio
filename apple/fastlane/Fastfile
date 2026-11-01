@@ -106,30 +106,48 @@ def sign(platform:, force: false)
   match(**match_params)
 end
 
+def mac_installer_identity
+  identities = sh("security find-identity -v", log: false)
+  name = identities[/"((?:3rd Party Mac Developer Installer|Mac Installer Distribution): [^"]*\(#{TEAM_ID}\))"/, 1]
+  UI.user_error!("No Mac installer certificate for team #{TEAM_ID} in the keychain; run `fastlane bootstrap`.") unless name
+  name
+end
+
 def beta_build(platform:, destination:)
   register_bundle_ids unless ENV["CI"]
   key = load_app_store_connect_api_key
   sign(platform: platform)
 
+  mac = platform == "macos"
+  testflight_platform = mac ? "osx" : "ios"
   build_number = latest_testflight_build_number(
-    api_key: key, app_identifier: APP_IDENTIFIER, platform: platform == "macos" ? "osx" : "ios"
+    api_key: key, app_identifier: APP_IDENTIFIER, platform: testflight_platform
   ) + 1
-  build_app(
+  build_params = {
     project: PROJECT,
     scheme: "Folio",
     configuration: "Release",
     destination: destination,
+    # Folio is a multiplatform target; without the SDK gym cannot tell a Mac build from an iOS one and looks for an .ipa.
+    sdk: mac ? "macosx" : "iphoneos",
     export_method: "app-store",
     export_team_id: TEAM_ID,
     xcargs: "#{XCODEBUILD_FLAGS} CURRENT_PROJECT_VERSION=#{build_number}",
     output_directory: File.join(APPLE_DIR, "build", platform),
     clean: true
-  )
+  }
+  # The Mac App Store takes a signed installer package, not an .ipa.
+  build_params.merge!(installer_cert_name: mac_installer_identity) if mac
+  build_app(**build_params)
+
+  artifact = mac ? { pkg: lane_context[SharedValues::PKG_OUTPUT_PATH] } : { ipa: lane_context[SharedValues::IPA_OUTPUT_PATH] }
   upload_to_testflight(
     api_key: key,
     app_identifier: APP_IDENTIFIER,
+    app_platform: testflight_platform,
     changelog: changelog_since_last_tag,
-    skip_waiting_for_build_processing: true
+    skip_waiting_for_build_processing: true,
+    **artifact
   )
 end
 
