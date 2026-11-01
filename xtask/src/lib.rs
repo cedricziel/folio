@@ -5,6 +5,8 @@ use serde_json::Value;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+pub mod pwa;
+
 const HEADER: &str = "/* Generated from design/tokens.json by `make tokens`. Do not edit. */\n";
 
 /// Token groups whose entries are `{ name, value }`, where value is a string
@@ -30,19 +32,34 @@ pub fn run(root: &Path, check: bool) -> Result<()> {
         .context("reading design/tokens.json")?;
     let components = std::fs::read_to_string(root.join("design/components.css"))
         .context("reading design/components.css")?;
-    let targets = [
-        ("static/tokens.css", render_tokens_css(&tokens)?),
-        ("static/components.css", components),
+    let tokens_json: Value = serde_json::from_str(&tokens).context("parsing tokens.json")?;
+
+    let mut targets: Vec<(String, Vec<u8>)> = vec![
+        (
+            "static/tokens.css".into(),
+            render_tokens_css(&tokens)?.into_bytes(),
+        ),
+        ("static/components.css".into(), components.into_bytes()),
+        (
+            "static/manifest.webmanifest".into(),
+            pwa::manifest(&tokens_json)?.into_bytes(),
+        ),
     ];
+    for (rel, bytes) in pwa::icons(&tokens_json)? {
+        targets.push((format!("static/{rel}"), bytes));
+    }
 
     let mut drifted = Vec::new();
     for (rel, content) in targets {
-        let path = root.join(rel);
+        let path = root.join(&rel);
         if check {
-            if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
+            if std::fs::read(&path).ok().as_deref() != Some(content.as_slice()) {
                 drifted.push(rel);
             }
         } else {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
             std::fs::write(&path, content).with_context(|| format!("writing {rel}"))?;
         }
     }

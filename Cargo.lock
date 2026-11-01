@@ -866,6 +866,7 @@ dependencies = [
  "folio-core",
  "folio-infra",
  "futures",
+ "http-body-util",
  "serde",
  "serde_json",
  "thiserror",
@@ -3697,6 +3698,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "image",
  "serde_json",
 ]
 

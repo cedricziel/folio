@@ -1,0 +1,54 @@
+{
+  "background_color": "#f6f6f2",
+  "description": "Keep letters, invoices and contracts filed and findable.",
+  "display": "standalone",
+  "icons": [
+    {
+      "purpose": "any",
+      "sizes": "192x192",
+      "src": "/static/icons/icon-192.png",
+      "type": "image/png"
+    },
+    {
+      "purpose": "any",
+      "sizes": "512x512",
+      "src": "/static/icons/icon-512.png",
+      "type": "image/png"
+    },
+    {
+      "purpose": "maskable",
+      "sizes": "512x512",
+      "src": "/static/icons/icon-maskable-512.png",
+      "type": "image/png"
+    },
+    {
+      "purpose": "any",
+      "sizes": "any",
+      "src": "/static/icons/icon.svg",
+      "type": "image/svg+xml"
+    }
+  ],
+  "id": "/",
+  "name": "Folio",
+  "scope": "/",
+  "share_target": {
+    "action": "/share",
+    "enctype": "multipart/form-data",
+    "method": "POST",
+    "params": {
+      "files": [
+        {
+          "accept": [
+            "image/*",
+            "application/pdf"
+          ],
+          "name": "file"
+        }
+      ],
+      "title": "title"
+    }
+  },
+  "short_name": "Folio",
+  "start_url": "/",
+  "theme_color": "#f6f6f2"
+}
