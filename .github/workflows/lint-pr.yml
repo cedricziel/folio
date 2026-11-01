@@ -7,6 +7,10 @@ on:
 permissions:
   pull-requests: read
 
+concurrency:
+  group: lint-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   lint-pr:
     runs-on: ubuntu-latest

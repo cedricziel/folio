@@ -22,6 +22,9 @@ permissions:
 jobs:
   test:
     if: github.event_name == 'pull_request'
+    concurrency:
+      group: apple-test-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: macos-26
     timeout-minutes: 60
     defaults:
