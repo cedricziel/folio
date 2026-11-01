@@ -9,6 +9,7 @@ mod manage;
 mod pages;
 mod settings;
 pub(crate) mod tags;
+mod workflow_pages;
 pub(crate) mod workflows;
 
 use axum::{extract::DefaultBodyLimit, Router};
@@ -33,6 +34,8 @@ pub fn create_router(state: AppState) -> Router {
         .merge(manage::router())
         // Settings routes
         .merge(settings::router())
+        // Workflow pages
+        .merge(workflow_pages::router())
         // SSE events
         .merge(events::router())
         // Static files

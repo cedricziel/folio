@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="f-workflows">
+    <header class="f-workflows-header">
+        <h2>Workflows</h2>
+        <a href="/workflows/new" class="f-btn f-btn-primary">New workflow</a>
+    </header>
+    <p class="f-meta">When something happens to a document, Folio can notify another service.</p>
+
+    {% if rows.is_empty() %}
+    <div class="f-notice">
+        <p>No workflows yet. Create one to send a webhook when a document is uploaded or finished processing.</p>
+    </div>
+    {% else %}
+    <div class="f-list">
+        {% for row in rows %}
+        <div class="f-row">
+            <div>
+                <a href="/workflows/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
+                <div class="f-row-sub">
+                    <span class="f-meta">{{ row.trigger }}</span>
+                    {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
+                    {% match row.last_run %}
+                    {% when Some with (run) %}
+                    <span class="f-status {{ run.status_class }}">{{ run.status_label }}</span>
+                    <span class="f-meta">{{ run.created }}</span>
+                    {% when None %}
+                    <span class="f-meta">No runs yet</span>
+                    {% endmatch %}
+                </div>
+            </div>
+            <form action="/workflows/{{ row.id }}/toggle" method="post" data-turbo="false">
+                <button type="submit" class="f-btn f-btn-quiet">{% if row.enabled %}Turn off{% else %}Turn on{% endif %}</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
