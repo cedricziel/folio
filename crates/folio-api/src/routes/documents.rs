@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use axum::response::{IntoResponse, Redirect, Response};
 
+use folio_core::events::DocumentEvent;
 use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
 
 use crate::error::{ApiError, ApiResult};
@@ -283,6 +284,11 @@ pub(crate) async fn upload_document(
             }
         }
     }
+
+    // OCR and embedding ran inline above, so processing is already done.
+    state.event_broadcaster.send(DocumentEvent::Processed {
+        document_id: document.id,
+    });
 
     // Re-fetch to get updated document with file_path
     let document = state

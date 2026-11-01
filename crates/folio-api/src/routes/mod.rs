@@ -9,6 +9,7 @@ mod manage;
 mod pages;
 mod settings;
 pub(crate) mod tags;
+pub(crate) mod workflows;
 
 use axum::{extract::DefaultBodyLimit, Router};
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
@@ -60,4 +61,5 @@ fn api_router() -> Router<AppState> {
         .nest("/tags", tags::router())
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())
+        .nest("/workflows", workflows::router())
 }

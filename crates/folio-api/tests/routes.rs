@@ -15,7 +15,8 @@ use folio_core::{
 use folio_infra::{
     create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, ThumbnailService,
+    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
+    ThumbnailService, WebhookClient,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -59,9 +60,12 @@ async fn test_app() -> TestApp {
         Arc::new(DynamicEmbeddingService::new(settings_repo, ai)),
         Arc::new(SqliteSearchService::new(pool.clone())),
         Arc::new(ThumbnailService::new(&storage_path)),
-        JobQueue::new(pool),
+        JobQueue::new(pool.clone()),
         storage_path,
         EventBroadcaster::default(),
+        Arc::new(SqliteWorkflowRepository::new(pool.clone())),
+        WebhookClient::new(),
+        "http://folio.test".to_string(),
     );
 
     TestApp {
