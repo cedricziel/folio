@@ -121,6 +121,14 @@ fn csrf_from(body: &str) -> String {
     body[start..start + body[start..].find('"').unwrap()].to_string()
 }
 
+/// The `name=value` pair of the CSRF cookie a page just set.
+fn csrf_cookie(page: &Resp) -> String {
+    page.cookies()
+        .into_iter()
+        .find(|c| c.contains("folio_csrf="))
+        .expect("page sets a csrf cookie")
+}
+
 async fn setup_and_login(app: &App) -> String {
     let page = send(
         app,
@@ -131,7 +139,7 @@ async fn setup_and_login(app: &App) -> String {
     .await;
     assert_eq!(page.status, StatusCode::OK);
     let csrf = csrf_from(&page.body);
-    let cookie = format!("folio_csrf={csrf}");
+    let cookie = csrf_cookie(&page);
     let done = send(
         app,
         form_req(
@@ -454,14 +462,21 @@ async fn setup_requires_the_one_time_token() {
         assert!(!page.body.contains("name=\"password\""));
     }
 
-    // A forged POST with a valid CSRF pair but no or a wrong token creates nothing.
-    let csrf = "c".repeat(43);
-    for token in ["", "&token=wrong"] {
+    // A valid CSRF pair without the right setup token creates nothing.
+    let page = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let csrf = csrf_from(&page.body);
+    for token in ["&token=", "&token=wrong"] {
         let post = send(
             &app,
             form_req(
                 "/setup",
-                &format!("folio_csrf={csrf}"),
+                &csrf_cookie(&page),
                 &format!("csrf={csrf}{token}&username=evil&password=attacker-password-1"),
             ),
         )
@@ -489,7 +504,7 @@ async fn login_rejects_bad_password_and_bad_csrf_and_open_redirects() {
     setup_and_login(&app).await;
     let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
     let csrf = csrf_from(&page.body);
-    let cookie = format!("folio_csrf={csrf}");
+    let cookie = csrf_cookie(&page);
 
     let bad = send(
         &app,
@@ -544,7 +559,7 @@ async fn login_attempt(app: &App, username: &str, password: &str, ip: Option<&st
     let csrf = csrf_from(&page.body);
     let mut req = form_req(
         "/login",
-        &format!("folio_csrf={csrf}"),
+        &csrf_cookie(&page),
         &format!(
             "csrf={csrf}&username={}&password={}",
             enc(username),
@@ -622,7 +637,7 @@ async fn overlong_passwords_are_rejected_without_hashing() {
         &fresh,
         form_req(
             "/setup",
-            &format!("folio_csrf={csrf}"),
+            &csrf_cookie(&page),
             &format!("csrf={csrf}&token={SETUP_TOKEN}&username=owner&password={huge}"),
         ),
     )
@@ -680,7 +695,7 @@ async fn logging_in_ends_the_previous_session() {
         &app,
         form_req(
             "/login",
-            &format!("folio_csrf={csrf}; {old_session}"),
+            &format!("{}; {old_session}", csrf_cookie(&page)),
             &format!("csrf={csrf}&username=owner&password=correct-horse-battery"),
         ),
     )
@@ -698,6 +713,101 @@ async fn logging_in_ends_the_previous_session() {
         .unwrap();
     assert_eq!(
         send(&app, get_req("/login", &fresh)).await.status,
+        StatusCode::SEE_OTHER
+    );
+}
+
+#[tokio::test]
+async fn csrf_tokens_are_bound_to_the_server_secret_and_the_session() {
+    let app = app().await;
+    let session_a = setup_and_login(&app).await;
+
+    // The token is not the cookie value, so planting both cookies is not enough.
+    let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+    let token = csrf_from(&page.body);
+    let planted = csrf_cookie(&page);
+    assert_ne!(planted, format!("folio_csrf={token}"));
+    let body = |csrf: &str| format!("csrf={csrf}&username=owner&password=correct-horse-battery");
+    let forged_cookie = format!("folio_csrf={}", "z".repeat(43));
+    let r = send(
+        &app,
+        form_req("/login", &forged_cookie, &body(&"z".repeat(43))),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::FORBIDDEN,
+        "self-made cookie+field pair"
+    );
+    let r = send(&app, form_req("/login", &planted, &body(&token))).await;
+    assert_eq!(r.status, StatusCode::SEE_OTHER);
+
+    // A consent token minted for one session is useless in another.
+    let client = register(&app).await;
+    let q = authorize_query(&client);
+    let consent_a = send(&app, get_req(&format!("/oauth/authorize?{q}"), &session_a)).await;
+    let token_a = csrf_from(&consent_a.body);
+    let session_b = r
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with("folio_session="))
+        .unwrap();
+    let post = |session: &str, csrf: &str| {
+        form_req(
+            "/oauth/authorize",
+            session,
+            &format!("{q}&csrf={csrf}&decision=allow"),
+        )
+    };
+    let crossed = send(&app, post(&session_b, &token_a)).await;
+    assert_eq!(crossed.status, StatusCode::FORBIDDEN);
+    let own = send(&app, post(&session_a, &token_a)).await;
+    assert_eq!(own.status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn https_public_url_uses_host_prefixed_cookies() {
+    let app = app_at(Some("https://folio.example.com")).await;
+    let page = send(
+        &app,
+        Request::get(format!("/setup?token={SETUP_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let set_cookie: Vec<String> = page
+        .headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    let csrf = set_cookie
+        .iter()
+        .find(|c| c.starts_with("__Host-folio_csrf="))
+        .expect("csrf cookie is __Host- prefixed");
+    assert!(csrf.contains("Secure") && csrf.contains("Path=/") && !csrf.contains("Domain"));
+
+    let done = send(
+        &app,
+        form_req(
+            "/setup",
+            &csrf_cookie(&page),
+            &format!(
+                "csrf={}&token={SETUP_TOKEN}&username=owner&password=correct-horse-battery",
+                csrf_from(&page.body)
+            ),
+        ),
+    )
+    .await;
+    assert_eq!(done.status, StatusCode::SEE_OTHER);
+    let session = done
+        .cookies()
+        .into_iter()
+        .find(|c| c.starts_with("__Host-folio_session="))
+        .expect("session cookie is __Host- prefixed");
+    // The prefixed session is honoured on the next request.
+    assert_eq!(
+        send(&app, get_req("/login", &session)).await.status,
         StatusCode::SEE_OTHER
     );
 }

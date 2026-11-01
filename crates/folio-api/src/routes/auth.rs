@@ -20,7 +20,9 @@ use url::{form_urlencoded, Url};
 
 use folio_auth::{
     base_url,
-    crypto::{ct_eq, hash_password, hash_token, random_token, verify_password},
+    crypto::{
+        ct_eq, hash_password, hash_token, hmac_token, random_secret, random_token, verify_password,
+    },
     limit::{FailureLimiter, RateLimiter},
     redirect::safe_next,
     server::{
@@ -31,6 +33,8 @@ use folio_auth::{
     AuthStore, Session, TokenValidator, User,
 };
 
+// `__Host-` pins a cookie to this exact host over HTTPS, so a sibling
+// subdomain cannot plant or overwrite it.
 const SESSION_COOKIE: &str = "folio_session";
 const CSRF_COOKIE: &str = "folio_csrf";
 const SESSION_TTL_SECS: i64 = 14 * 24 * 3600;
@@ -65,6 +69,7 @@ pub struct AuthState {
     /// When false, [`enforce_auth`] lets every request through.
     pub required: bool,
     setup_token: Arc<str>,
+    csrf_secret: Arc<[u8; 32]>,
     register_limit: Arc<RateLimiter>,
     login_by_ip: Arc<FailureLimiter>,
     login_by_user: Arc<FailureLimiter>,
@@ -80,6 +85,7 @@ impl AuthState {
             public_url,
             required: true,
             setup_token: random_token().into(),
+            csrf_secret: Arc::new(random_secret()),
             login_by_ip: Arc::new(login_limiter(LOGIN_FAILURES_PER_IP)),
             login_by_user: Arc::new(login_limiter(LOGIN_FAILURES_PER_USER)),
             hash_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_HASHES)),
@@ -159,13 +165,83 @@ impl AuthState {
         base_url(self.public_url.as_deref())
     }
 
-    async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
-        let id = cookie(headers, SESSION_COOKIE)?;
+    fn secure(&self) -> bool {
+        is_secure(&self.base())
+    }
+
+    fn session_cookie_name(&self) -> &'static str {
+        if self.secure() {
+            "__Host-folio_session"
+        } else {
+            SESSION_COOKIE
+        }
+    }
+
+    fn csrf_cookie_name(&self) -> &'static str {
+        if self.secure() {
+            "__Host-folio_csrf"
+        } else {
+            CSRF_COOKIE
+        }
+    }
+
+    /// The raw session cookie value and its user, when the session is live.
+    async fn session(&self, headers: &HeaderMap) -> Option<(String, User)> {
+        let id = cookie(headers, self.session_cookie_name())?;
         let session = self.store.find_session(&hash_token(&id)).await.ok()??;
         if session.expires_at <= now() {
             return None;
         }
-        self.store.find_user_by_id(&session.user_id).await.ok()?
+        let user = self.store.find_user_by_id(&session.user_id).await.ok()??;
+        Some((id, user))
+    }
+
+    async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
+        self.session(headers).await.map(|(_, user)| user)
+    }
+
+    fn csrf_mac(&self, subject: &str) -> String {
+        hmac_token(&*self.csrf_secret, subject)
+    }
+
+    /// CSRF token for a form shown before login (login, setup), plus a cookie
+    /// to set when needed. It is an HMAC, under a server secret, of a random
+    /// pre-session cookie, so it cannot be computed without asking the server.
+    fn csrf_pre_token(&self, headers: &HeaderMap) -> (String, Option<String>) {
+        let (value, set) = match cookie(headers, self.csrf_cookie_name()).filter(|c| c.len() >= 32)
+        {
+            Some(existing) => (existing, None),
+            None => {
+                let value = random_token();
+                let set = set_cookie(
+                    self.csrf_cookie_name(),
+                    &value,
+                    SESSION_TTL_SECS,
+                    self.secure(),
+                );
+                (value, Some(set))
+            }
+        };
+        (self.csrf_mac(&format!("pre:{value}")), set)
+    }
+
+    fn csrf_pre_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
+        cookie(headers, self.csrf_cookie_name())
+            .filter(|c| c.len() >= 32)
+            .is_some_and(|c| ct_eq(&self.csrf_mac(&format!("pre:{c}")), submitted))
+    }
+
+    /// CSRF token for a form shown to a logged-in user: an HMAC of the session
+    /// id, so a token from one session is worthless in another.
+    fn csrf_session_token(&self, session_id: &str) -> String {
+        self.csrf_mac(&format!("session:{session_id}"))
+    }
+
+    async fn csrf_session_ok(&self, headers: &HeaderMap, submitted: &str) -> bool {
+        match self.session(headers).await {
+            Some((id, _)) => ct_eq(&self.csrf_session_token(&id), submitted),
+            None => false,
+        }
     }
 }
 
@@ -348,23 +424,6 @@ fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) -> String {
     format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")
 }
 
-/// Double-submit CSRF: the form field must equal the cookie. Returns the
-/// token to embed plus a cookie to set when none exists yet.
-fn csrf_token(headers: &HeaderMap, secure: bool) -> (String, Option<String>) {
-    match cookie(headers, CSRF_COOKIE).filter(|c| c.len() >= 32) {
-        Some(existing) => (existing, None),
-        None => {
-            let token = random_token();
-            let set = set_cookie(CSRF_COOKIE, &token, SESSION_TTL_SECS, secure);
-            (token, Some(set))
-        }
-    }
-}
-
-fn csrf_ok(headers: &HeaderMap, submitted: &str) -> bool {
-    cookie(headers, CSRF_COOKIE).is_some_and(|c| c.len() >= 32 && ct_eq(&c, submitted))
-}
-
 fn with_cookies(mut response: Response, cookies: impl IntoIterator<Item = String>) -> Response {
     for c in cookies {
         if let Ok(v) = HeaderValue::from_str(&c) {
@@ -400,7 +459,7 @@ fn login_redirect(next: &str) -> Redirect {
     Redirect::to(&format!("/login?next={encoded}"))
 }
 
-async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<String> {
+async fn start_session(auth: &AuthState, user: &User) -> Option<String> {
     let id = random_token();
     auth.store
         .create_session(Session {
@@ -411,7 +470,12 @@ async fn start_session(auth: &AuthState, user: &User, secure: bool) -> Option<St
         .await
         .map_err(|e| tracing::error!("session create failed: {e}"))
         .ok()?;
-    Some(set_cookie(SESSION_COOKIE, &id, SESSION_TTL_SECS, secure))
+    Some(set_cookie(
+        auth.session_cookie_name(),
+        &id,
+        SESSION_TTL_SECS,
+        auth.secure(),
+    ))
 }
 
 fn is_secure(base: &str) -> bool {
@@ -488,7 +552,7 @@ async fn setup_page(
     let Some(token) = q.token.filter(|t| auth.setup_token_ok(Some(t))) else {
         return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
     };
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base()));
+    let (csrf, cookie) = auth.csrf_pre_token(&headers);
     with_cookies(
         render(
             SetupTemplate {
@@ -515,12 +579,11 @@ async fn setup_submit(
     headers: HeaderMap,
     Form(form): Form<SetupForm>,
 ) -> Response {
-    let secure = is_secure(&auth.base());
-    if !csrf_ok(&headers, &form.csrf) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
     if auth.store.count_users().await.unwrap_or(1) > 0 {
         return Redirect::to("/login").into_response();
+    }
+    if !auth.csrf_pre_ok(&headers, &form.csrf) {
+        return StatusCode::FORBIDDEN.into_response();
     }
     if !auth.setup_token_ok(form.token.as_deref()) {
         return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
@@ -557,7 +620,7 @@ async fn setup_submit(
         created_at: now(),
     };
     match auth.store.create_first_user(user).await {
-        Ok(Some(user)) => match start_session(&auth, &user, secure).await {
+        Ok(Some(user)) => match start_session(&auth, &user).await {
             Some(session) => with_cookies(Redirect::to("/").into_response(), [session]),
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         },
@@ -586,7 +649,7 @@ async fn login_page(
     if auth.current_user(&headers).await.is_some() {
         return Redirect::to(&next).into_response();
     }
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base()));
+    let (csrf, cookie) = auth.csrf_pre_token(&headers);
     with_cookies(
         render(
             LoginTemplate {
@@ -614,8 +677,7 @@ async fn login_submit(
     ClientIp(ip): ClientIp,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let secure = is_secure(&auth.base());
-    if !csrf_ok(&headers, &form.csrf) {
+    if !auth.csrf_pre_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let next = safe_next(form.next.as_deref());
@@ -670,10 +732,10 @@ async fn login_submit(
         Some(user) => {
             auth.login_by_user.record_success(&username);
             // Fresh session id on login, so one planted beforehand is worthless.
-            if let Some(id) = cookie(&headers, SESSION_COOKIE) {
+            if let Some(id) = cookie(&headers, auth.session_cookie_name()) {
                 let _ = auth.store.delete_session(&hash_token(&id)).await;
             }
-            match start_session(&auth, &user, secure).await {
+            match start_session(&auth, &user).await {
                 Some(session) => with_cookies(Redirect::to(&next).into_response(), [session]),
                 None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             }
@@ -710,13 +772,16 @@ async fn logout(
     headers: HeaderMap,
     Form(form): Form<CsrfForm>,
 ) -> Response {
-    if !csrf_ok(&headers, &form.csrf) {
-        return StatusCode::FORBIDDEN.into_response();
+    // Without a live session there is nothing to protect; just clear the cookie.
+    if auth.session(&headers).await.is_some() {
+        if !auth.csrf_session_ok(&headers, &form.csrf).await {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if let Some(id) = cookie(&headers, auth.session_cookie_name()) {
+            let _ = auth.store.delete_session(&hash_token(&id)).await;
+        }
     }
-    if let Some(id) = cookie(&headers, SESSION_COOKIE) {
-        let _ = auth.store.delete_session(&hash_token(&id)).await;
-    }
-    let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&auth.base()));
+    let clear = set_cookie(auth.session_cookie_name(), "", 0, auth.secure());
     with_cookies(Redirect::to("/login").into_response(), [clear])
 }
 
@@ -882,11 +947,11 @@ async fn authorize_page(
         Ok(v) => v,
         Err(f) => return failure_response(f, &base),
     };
-    let Some(user) = auth.current_user(&headers).await else {
+    let Some((session_id, user)) = auth.session(&headers).await else {
         let next = format!("/oauth/authorize?{}", raw.unwrap_or_default());
         return login_redirect(&next).into_response();
     };
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&base));
+    let csrf = auth.csrf_session_token(&session_id);
     let fields = vec![
         ("response_type", "code".to_string()),
         ("client_id", validated.client.client_id.clone()),
@@ -905,7 +970,7 @@ async fn authorize_page(
         scopes: validated.scopes.iter().map(|s| describe_scope(s)).collect(),
         fields,
     };
-    with_cookies(render(page, StatusCode::OK), cookie)
+    render(page, StatusCode::OK)
 }
 
 #[derive(Deserialize)]
@@ -927,7 +992,7 @@ async fn authorize_submit(
     headers: HeaderMap,
     Form(form): Form<ConsentForm>,
 ) -> Response {
-    if !csrf_ok(&headers, &form.csrf) {
+    if !auth.csrf_session_ok(&headers, &form.csrf).await {
         return StatusCode::FORBIDDEN.into_response();
     }
     let Some(user) = auth.current_user(&headers).await else {
