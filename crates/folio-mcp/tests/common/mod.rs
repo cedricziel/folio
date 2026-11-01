@@ -156,10 +156,7 @@ impl Fixture {
             .create(CreateDocument {
                 title: title.to_string(),
                 content: Some(content.to_string()),
-                original_filename: None,
-                mime_type: None,
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await
             .unwrap()

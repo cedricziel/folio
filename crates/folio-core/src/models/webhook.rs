@@ -6,7 +6,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Correspondent, Document, DocumentType, Id, Tag, WorkflowTrigger};
+use super::{Correspondent, Document, DocumentSource, DocumentType, Id, Tag, WorkflowTrigger};
 
 /// Current payload version
 pub const PAYLOAD_VERSION: u32 = 1;
@@ -55,6 +55,8 @@ pub struct WebhookDocument {
     pub tags: Vec<NamedRef>,
     /// Archive serial number; always null until Folio supports serial numbers
     pub asn: Option<i64>,
+    /// How the document entered Folio, with folder or email details when known
+    pub source: DocumentSource,
     pub created_at: DateTime<Utc>,
     pub urls: WebhookUrls,
 }
@@ -140,6 +142,7 @@ impl WebhookDocument {
                 })
                 .collect(),
             asn: None,
+            source: document.source.clone(),
             created_at: document.created_at,
             urls: WebhookUrls {
                 api: format!("{base}/api/documents/{id}"),
@@ -176,6 +179,7 @@ mod tests {
             "document_type",
             "tags",
             "asn",
+            "source",
             "created_at",
             "urls",
         ] {

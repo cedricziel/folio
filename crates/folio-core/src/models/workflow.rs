@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Document, Id};
+use super::{Document, DocumentSource, Id, SourceConditions};
 use crate::error::{Error, Result};
 
 /// Events a workflow can listen for
@@ -24,14 +24,19 @@ pub enum WorkflowTrigger {
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
+    /// A file or email attachment was found by an ingestion source and is about
+    /// to be imported; rules here can discard it
+    #[serde(rename = "ingest.received")]
+    IngestReceived,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 4] = [
+    pub const ALL: [WorkflowTrigger; 5] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
         Self::DocumentDeleted,
+        Self::IngestReceived,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -41,6 +46,7 @@ impl WorkflowTrigger {
             Self::DocumentProcessed => "document.processed",
             Self::DocumentUpdated => "document.updated",
             Self::DocumentDeleted => "document.deleted",
+            Self::IngestReceived => "ingest.received",
         }
     }
 
@@ -84,18 +90,21 @@ pub struct WorkflowConditions {
     /// Glob (`*` and `?`) matched case-insensitively against the original filename
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename_glob: Option<String>,
+
+    /// Where the document came from: folder path, email sender, subject, and so on
+    #[serde(default, skip_serializing_if = "SourceConditions::is_empty")]
+    pub source: SourceConditions,
 }
 
 impl WorkflowConditions {
     /// Whether the document satisfies every set condition
     pub fn matches(&self, document: &Document, tag_ids: &[Id]) -> bool {
-        if let Some(pattern) = &self.mime_type {
-            let Some(mime) = document.mime_type.as_deref() else {
-                return false;
-            };
-            if !glob_match(pattern, mime) {
-                return false;
-            }
+        if !self.matches_file(
+            document.mime_type.as_deref(),
+            document.original_filename.as_deref(),
+            &document.source,
+        ) {
+            return false;
         }
         if let Some(tag_id) = self.tag_id {
             if !tag_ids.contains(&tag_id) {
@@ -112,15 +121,42 @@ impl WorkflowConditions {
                 return false;
             }
         }
-        if let Some(pattern) = &self.filename_glob {
-            let Some(name) = document.original_filename.as_deref() else {
-                return false;
-            };
-            if !glob_match(pattern, name) {
+        true
+    }
+
+    /// Whether a file that is not imported yet satisfies the conditions
+    ///
+    /// Conditions about stored metadata (tag, correspondent, type) cannot be
+    /// met by a file that has none, so setting one makes a match impossible.
+    pub fn matches_candidate(
+        &self,
+        mime_type: &str,
+        filename: &str,
+        source: &DocumentSource,
+    ) -> bool {
+        self.tag_id.is_none()
+            && self.correspondent_id.is_none()
+            && self.document_type_id.is_none()
+            && self.matches_file(Some(mime_type), Some(filename), source)
+    }
+
+    fn matches_file(
+        &self,
+        mime_type: Option<&str>,
+        filename: Option<&str>,
+        source: &DocumentSource,
+    ) -> bool {
+        if let Some(pattern) = &self.mime_type {
+            if !mime_type.is_some_and(|mime| glob_match(pattern, mime)) {
                 return false;
             }
         }
-        true
+        if let Some(pattern) = &self.filename_glob {
+            if !filename.is_some_and(|name| glob_match(pattern, name)) {
+                return false;
+            }
+        }
+        self.source.matches(source)
     }
 }
 
@@ -191,6 +227,8 @@ pub enum WorkflowAction {
         #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
         document_type_id: Id,
     },
+    /// Discard the file instead of importing it; only valid for `ingest.received`
+    SkipImport,
 }
 
 impl WorkflowAction {
@@ -263,7 +301,14 @@ impl WorkflowInput {
             if self.trigger == WorkflowTrigger::DocumentDeleted && !action.is_webhook() {
                 return invalid("Only webhook actions can run when a document is deleted");
             }
+            let skips = matches!(action, WorkflowAction::SkipImport);
+            if skips != (self.trigger == WorkflowTrigger::IngestReceived) {
+                return invalid(
+                    "ingest.received workflows take only skip_import, and skip_import needs that trigger",
+                );
+            }
         }
+        self.conditions.source.validate()?;
         Ok(())
     }
 }
@@ -422,6 +467,7 @@ mod tests {
             correspondent_id: Some(sender),
             document_type_id: None,
             filename_glob: Some("*.pdf".into()),
+            source: Default::default(),
         };
         assert!(all.matches(&document, &[tag]));
         assert!(!all.matches(&document, &[]), "missing tag");

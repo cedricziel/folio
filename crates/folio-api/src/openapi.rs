@@ -11,7 +11,7 @@ use utoipa_scalar::Scalar;
 use folio_core::models::WebhookPayload;
 
 use crate::error::ErrorResponse;
-use crate::routes::{correspondents, document_types, documents, events, tags, workflows};
+use crate::routes::{correspondents, document_types, documents, events, sources, tags, workflows};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -52,6 +52,12 @@ use crate::routes::{correspondents, document_types, documents, events, tags, wor
         workflows::delete_workflow,
         workflows::test_workflow,
         workflows::list_runs,
+        sources::list_sources,
+        sources::get_source,
+        sources::create_source,
+        sources::update_source,
+        sources::delete_source,
+        sources::test_source,
     ),
     components(schemas(ErrorResponse, WebhookPayload)),
     tags(
@@ -61,6 +67,7 @@ use crate::routes::{correspondents, document_types, documents, events, tags, wor
         (name = "document_types", description = "Document classifications"),
         (name = "events", description = "Real-time updates"),
         (name = "workflows", description = "Automations that react to document events, such as webhooks"),
+        (name = "sources", description = "Consume folders and mailboxes that import documents automatically"),
     )
 )]
 struct ApiDoc;

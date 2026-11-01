@@ -9,14 +9,18 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use folio_api::{create_router, AppState, AuthState};
+use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
-use folio_core::services::{EventingDocumentRepository, LibraryService, WorkflowEngine};
+use folio_core::services::{
+    EventingDocumentRepository, Importer, IngestPipeline, IngestScheduler, LibraryService,
+    WorkflowEngine,
+};
 use folio_core::EventBroadcaster;
 use folio_infra::{
     build_store, cleanup_legacy_layout, migrate_legacy_layout, telemetry, Config, Database,
     DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
-    StorageFileMetadata, ThumbnailService, WebhookClient, Worker, WorkerConfig, WorkflowRunner,
+    SourceFactory, StorageFileMetadata, ThumbnailService, WebhookClient, Worker, WorkerConfig,
+    WorkflowRunner,
 };
 use folio_mcp::McpOptions;
 
@@ -106,6 +110,8 @@ async fn main() -> Result<()> {
     let document_type_repo = repos.document_types;
     let settings_repo = repos.settings;
     let workflow_repo = repos.workflows;
+    let source_repo = repos.sources;
+    let ledger = repos.ledger;
     let auth_store = repos.auth;
 
     if matches!(mode, Mode::CleanupLegacyStorage) {
@@ -164,6 +170,26 @@ async fn main() -> Result<()> {
         public_url.clone(),
     ));
 
+    let source_factory = Arc::new(SourceFactory::new(ledger.clone()));
+    let configured_sources = config.ingest.definitions();
+    let ingest_pipeline = Arc::new(IngestPipeline::new(
+        document_repo.clone(),
+        tag_repo.clone(),
+        workflow_repo.clone(),
+        ledger.clone(),
+        Arc::new(Importer::new(
+            api_document_repo.clone(),
+            store.clone(),
+            Arc::new(job_queue.clone()),
+        )),
+    ));
+    let ingest_scheduler = IngestScheduler::new(
+        source_repo.clone(),
+        configured_sources.clone(),
+        source_factory.clone(),
+        ingest_pipeline,
+    );
+
     info!("Services initialized");
 
     // Create shutdown channel for worker
@@ -186,6 +212,9 @@ async fn main() -> Result<()> {
 
     // Stops on its own when the shutdown signal flips
     tokio::spawn(workflow_engine.run(event_broadcaster.subscribe(), shutdown_tx.subscribe()));
+
+    // Stops on its own when the shutdown signal flips
+    tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 
     let worker_handle = tokio::spawn(async move {
         worker.run(shutdown_rx).await;
@@ -241,6 +270,7 @@ async fn main() -> Result<()> {
         workflow_repo,
         webhook_client,
         public_url,
+        IngestionState::new(source_repo, ledger, configured_sources),
     )
     .with_health_checks(health_checks);
 

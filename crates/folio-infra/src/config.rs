@@ -10,13 +10,17 @@
 //! (`FOLIO_AI__OPENAI_API_KEY_FILE=/run/secrets/openai`), which suits Docker and
 //! Kubernetes secrets.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use figment::{
     providers::{Format, Serialized, Toml},
     Figment,
 };
+use folio_core::models::{
+    EmailConfig, FolderConfig, Id, IngestionSourceDef, SourceConfig, SourceOrigin,
+};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 const ENV_PREFIX: &str = "FOLIO_";
@@ -32,8 +36,72 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    pub ingest: IngestConfig,
     pub auth: AuthConfig,
     pub mcp: McpConfig,
+}
+
+/// Automatic ingestion, configured per named source
+///
+/// ```toml
+/// [ingest.folders.inbox]
+/// path = "/consume"
+///
+/// [ingest.email.work]
+/// host = "imap.example.com"
+/// username = "me"
+/// password_file = "/run/secrets/imap_work"
+/// ```
+///
+/// The same keys work as environment variables, for example
+/// `FOLIO_INGEST__FOLDERS__INBOX__PATH=/consume`. See `docs/ingestion.md`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IngestConfig {
+    pub folders: BTreeMap<String, Configured<FolderConfig>>,
+    pub email: BTreeMap<String, Configured<EmailConfig>>,
+}
+
+/// A configured source with an on/off switch next to its settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Configured<T> {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    #[serde(flatten)]
+    pub settings: T,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+/// A stable id, so a source keeps its status across restarts
+fn config_source_id(kind: &str, name: &str) -> Id {
+    let digest = Sha256::digest(format!("folio-config-source:{kind}:{name}"));
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Id::from_bytes(bytes)
+}
+
+impl IngestConfig {
+    /// The configured sources as read-only definitions
+    pub fn definitions(&self) -> Vec<IngestionSourceDef> {
+        let folders = self.folders.iter().map(|(name, c)| IngestionSourceDef {
+            id: config_source_id("folder", name),
+            name: name.clone(),
+            enabled: c.enabled,
+            origin: SourceOrigin::Config,
+            config: SourceConfig::Folder(c.settings.clone()),
+        });
+        let mailboxes = self.email.iter().map(|(name, c)| IngestionSourceDef {
+            id: config_source_id("email", name),
+            name: name.clone(),
+            enabled: c.enabled,
+            origin: SourceOrigin::Config,
+            config: SourceConfig::Email(c.settings.clone()),
+        });
+        folders.chain(mailboxes).collect()
+    }
 }
 
 /// Server configuration
@@ -500,8 +568,83 @@ impl Config {
                     figment.merge(Serialized::default(setting.key, to_value(setting, value)?));
             }
         }
+        if let Some(ingest) = ingest_from_env(&vars)? {
+            figment = figment.merge(Serialized::default("ingest", ingest));
+        }
         figment.extract()
     }
+}
+
+const INGEST_ENV_PREFIX: &str = "FOLIO_INGEST__";
+
+/// Collect `FOLIO_INGEST__<FOLDERS|EMAIL>__<NAME>__<KEY>` variables into a tree
+///
+/// Sources have arbitrary names, so they cannot be listed in [`SETTINGS`].
+/// Values are read as bool, integer, `[a, b]` list, or text. A `_FILE` suffix
+/// reads the value from a file, like everywhere else.
+#[allow(clippy::result_large_err)]
+fn ingest_from_env(
+    vars: &HashMap<String, String>,
+) -> Result<Option<serde_json::Value>, figment::Error> {
+    let mut names: Vec<_> = vars
+        .keys()
+        .filter(|n| n.starts_with(INGEST_ENV_PREFIX))
+        .collect();
+    names.sort();
+
+    let mut root = serde_json::Map::new();
+    for name in names {
+        let (base, from_file) = match name.strip_suffix(FILE_SUFFIX) {
+            Some(base) => (base, true),
+            None => (name.as_str(), false),
+        };
+        if from_file && vars.contains_key(base) {
+            return Err(figment::Error::from(format!(
+                "{base} and {name} are both set; use only one"
+            )));
+        }
+        let raw = read_var(base, vars)?.unwrap_or_default();
+
+        let path: Vec<String> = base[INGEST_ENV_PREFIX.len()..]
+            .split("__")
+            .map(str::to_ascii_lowercase)
+            .collect();
+        let [kind, source, key] = path.as_slice() else {
+            return Err(figment::Error::from(format!(
+                "{base}: expected FOLIO_INGEST__<FOLDERS|EMAIL>__<NAME>__<KEY>"
+            )));
+        };
+        root.entry(kind.clone())
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .expect("created as an object")
+            .entry(source.clone())
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .expect("created as an object")
+            .insert(key.clone(), parse_loose(&raw));
+    }
+    Ok((!root.is_empty()).then_some(serde_json::Value::Object(root)))
+}
+
+fn parse_loose(raw: &str) -> serde_json::Value {
+    let raw = raw.trim();
+    if let Some(inner) = raw.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+        return inner
+            .split(',')
+            .map(|item| item.trim().trim_matches(['"', '\'']))
+            .filter(|item| !item.is_empty())
+            .map(serde_json::Value::from)
+            .collect();
+    }
+    match raw.to_ascii_lowercase().as_str() {
+        "true" => return serde_json::Value::Bool(true),
+        "false" => return serde_json::Value::Bool(false),
+        _ => {}
+    }
+    raw.parse::<i64>()
+        .map(serde_json::Value::from)
+        .unwrap_or_else(|_| serde_json::Value::from(raw))
 }
 
 /// Find the value for a setting: canonical name first, then deprecated
@@ -606,6 +749,57 @@ mod tests {
             serde_json::Value::String(s) => Some(s.clone()),
             other => Some(other.to_string()),
         }
+    }
+
+    #[test]
+    fn ingest_sources_load_from_nested_environment_variables() {
+        let secret = tempfile::tempdir().unwrap();
+        let pw = secret.path().join("pw");
+        std::fs::write(&pw, "from-file\n").unwrap();
+        let config = load(&[
+            ("FOLIO_INGEST__FOLDERS__INBOX__PATH", "/consume"),
+            ("FOLIO_INGEST__FOLDERS__INBOX__SETTLE_SECS", "2"),
+            ("FOLIO_INGEST__EMAIL__WORK__HOST", "imap.test"),
+            ("FOLIO_INGEST__EMAIL__WORK__USERNAME", "me"),
+            (
+                "FOLIO_INGEST__EMAIL__WORK__PASSWORD_FILE",
+                pw.to_str().unwrap(),
+            ),
+            (
+                "FOLIO_INGEST__EMAIL__WORK__MAILBOXES",
+                "[INBOX, \"Invoices\"]",
+            ),
+            ("FOLIO_INGEST__EMAIL__OLD__HOST", "x"),
+            ("FOLIO_INGEST__EMAIL__OLD__USERNAME", "x"),
+            ("FOLIO_INGEST__EMAIL__OLD__PASSWORD", "x"),
+            ("FOLIO_INGEST__EMAIL__OLD__ENABLED", "false"),
+        ]);
+        let defs = config.ingest.definitions();
+        assert_eq!(defs.len(), 3);
+        let SourceConfig::Folder(f) = &defs.iter().find(|d| d.name == "inbox").unwrap().config
+        else {
+            panic!("folder")
+        };
+        assert_eq!(
+            (f.path.as_str(), f.settle_secs, f.recursive),
+            ("/consume", 2, true)
+        );
+        let SourceConfig::Email(e) = &defs.iter().find(|d| d.name == "work").unwrap().config else {
+            panic!("email")
+        };
+        assert_eq!(e.mailboxes, ["INBOX", "Invoices"]);
+        assert_eq!(e.password.as_deref(), Some("from-file"));
+        assert!(!defs.iter().find(|d| d.name == "old").unwrap().enabled);
+        assert_eq!(defs[0].id, config.ingest.definitions()[0].id);
+    }
+
+    #[test]
+    fn malformed_ingest_variables_are_errors() {
+        let result = Config::load_with(
+            "/nonexistent/config.toml",
+            env(&[("FOLIO_INGEST__FOLDERS__PATH", "/x")]),
+        );
+        assert!(result.is_err());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 mod ai;
 mod health;
+mod ingest;
 mod repository;
 mod storage;
 mod workflow;
@@ -13,6 +14,10 @@ pub use ai::{
     SearchService,
 };
 pub use health::HealthCheck;
+pub use ingest::{
+    DocumentImporter, IngestLedger, IngestSink, IngestionSource, IngestionSourceFactory,
+    SourceRepository,
+};
 pub use repository::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SettingsRepository,
     TagRepository,

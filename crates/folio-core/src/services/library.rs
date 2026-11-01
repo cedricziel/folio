@@ -9,15 +9,16 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use super::SearchServiceFacade;
+use super::{Importer, SearchServiceFacade};
 use crate::error::{Error, Result};
 use crate::models::{
-    Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, Tag, UpdateDocument,
+    Correspondent, CreateCorrespondent, CreateDocumentType, CreateTag, Document, DocumentFilter,
+    DocumentSource, DocumentType, Id, Tag, UpdateDocument,
 };
 use crate::ports::{
-    keys, CorrespondentRepository, DocumentRepository, DocumentStore, DocumentTypeRepository,
-    EmbeddingService, ProcessingQueue, ProcessingStatus, SearchService, TagRepository,
+    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
+    DocumentTypeRepository, EmbeddingService, ProcessingQueue, ProcessingStatus, SearchService,
+    TagRepository,
 };
 
 const SNIPPET_RADIUS: usize = 80;
@@ -78,12 +79,16 @@ pub struct MetadataUpdate {
 }
 
 /// A file to add to the archive
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewUpload {
     pub filename: String,
     pub data: Vec<u8>,
     pub title: Option<String>,
     pub mime_type: Option<String>,
+    /// How the file arrived; defaults to a web upload
+    pub source: DocumentSource,
+    /// Tags attached together with the record
+    pub tag_ids: Vec<Id>,
 }
 
 /// Archive operations shared by non-REST adapters
@@ -94,6 +99,7 @@ pub struct LibraryService {
     document_types: Arc<dyn DocumentTypeRepository>,
     semantic: SearchServiceFacade,
     files: Arc<dyn DocumentStore>,
+    importer: Importer,
     queue: Arc<dyn ProcessingQueue>,
 }
 
@@ -111,12 +117,13 @@ impl LibraryService {
     ) -> Self {
         let semantic = SearchServiceFacade::new(documents.clone(), embeddings, search);
         Self {
+            importer: Importer::new(documents.clone(), files.clone(), queue.clone()),
+            files,
             documents,
             tags,
             correspondents,
             document_types,
             semantic,
-            files,
             queue,
         }
     }
@@ -372,23 +379,13 @@ impl LibraryService {
             .unwrap_or_else(|| upload.filename.clone());
 
         let document = self
-            .documents
-            .create(CreateDocument {
-                title,
-                content: None,
-                original_filename: Some(upload.filename.clone()),
+            .importer
+            .import(NewUpload {
+                title: Some(title),
                 mime_type: Some(mime_type),
-                correspondent_id: None,
-                document_type_id: None,
+                ..upload
             })
             .await?;
-
-        let key = keys::original(document.id);
-        self.files.put(&key, upload.data.into()).await?;
-        self.documents.set_file_path(document.id, &key).await?;
-        self.queue.enqueue_processing(document.id).await?;
-
-        let document = self.require_document(document.id).await?;
         let status = self.queue.processing_status(document.id).await?;
         Ok((document, status))
     }

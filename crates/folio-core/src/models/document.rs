@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::Id;
+use super::{DocumentSource, Id};
 
 /// A stage of the document processing pipeline that is tracked per document
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +103,10 @@ pub struct Document {
     /// Number of pages in the document (for PDFs and multi-page images)
     pub page_count: Option<u32>,
 
+    /// How the document entered Folio
+    #[serde(default)]
+    pub source: DocumentSource,
+
     /// State of the OCR stage
     pub ocr_status: ProcessingStatus,
 
@@ -130,6 +134,7 @@ impl Document {
             correspondent_id: None,
             document_type_id: None,
             page_count: None,
+            source: DocumentSource::default(),
             ocr_status: ProcessingStatus::Pending,
             embed_status: ProcessingStatus::Pending,
             created_at: now,
@@ -201,7 +206,7 @@ impl Document {
 }
 
 /// Parameters for creating a new document
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CreateDocument {
     pub title: String,
     pub content: Option<String>,
@@ -209,6 +214,9 @@ pub struct CreateDocument {
     pub mime_type: Option<String>,
     pub correspondent_id: Option<Id>,
     pub document_type_id: Option<Id>,
+    pub source: DocumentSource,
+    /// Tags attached together with the record, so `document.uploaded` already sees them
+    pub tag_ids: Vec<Id>,
 }
 
 /// Parameters for updating a document

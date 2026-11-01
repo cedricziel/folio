@@ -40,8 +40,7 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
             content: Some("read".into()),
             original_filename: None,
             mime_type: None,
-            correspondent_id: None,
-            document_type_id: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -60,8 +59,8 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
             content: Some("read".into()),
             original_filename: None,
             mime_type: None,
-            correspondent_id: None,
             document_type_id: Some(dt.id),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -80,7 +79,13 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
 #[tokio::test]
 async fn every_page_renders() {
     let h = harness().await;
-    for uri in ["/", "/?view=all", "/manage", "/settings"] {
+    for uri in [
+        "/",
+        "/?view=all",
+        "/manage",
+        "/settings",
+        "/settings/sources",
+    ] {
         let response = h.app.clone().oneshot(get(uri)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{uri}");
         let body = text(response).await;

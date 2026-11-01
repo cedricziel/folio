@@ -11,6 +11,8 @@ mod manage;
 mod pages;
 mod pwa;
 mod settings;
+mod source_pages;
+pub(crate) mod sources;
 pub(crate) mod tags;
 mod view;
 mod workflow_pages;
@@ -47,6 +49,8 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(settings::router())
         // Workflow pages
         .merge(workflow_pages::router())
+        // Source pages
+        .merge(source_pages::router())
         // SSE events
         .merge(events::router())
         // Login, setup and OAuth authorization server
@@ -81,4 +85,5 @@ fn api_router() -> Router<AppState> {
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())
         .nest("/workflows", workflows::router())
+        .nest("/sources", sources::router())
 }

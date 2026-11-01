@@ -4,10 +4,14 @@
 //! domain operations using the port traits.
 
 mod eventing;
+mod importer;
+mod ingest;
 mod library;
 mod workflow_engine;
 
 pub use eventing::EventingDocumentRepository;
+pub use importer::Importer;
+pub use ingest::{content_key, IngestPipeline, IngestScheduler};
 pub use library::{
     DocumentDetail, DocumentHit, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, TextPage,
 };
@@ -104,8 +108,7 @@ impl IngestService {
                 content: Some(content.clone()),
                 original_filename: filename,
                 mime_type: Some(mime_type),
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await?;
 

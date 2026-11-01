@@ -947,6 +947,323 @@
         }
       }
     },
+    "/api/sources": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "List ingestion sources",
+        "operationId": "listSources",
+        "responses": {
+          "200": {
+            "description": "Configured and managed sources with their latest run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourceView"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Create an ingestion source",
+        "description": "Passwords are stored unencrypted in the database until Folio has a secret key.",
+        "operationId": "createSource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestionSourceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sources/{id}": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Get an ingestion source",
+        "operationId": "getSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Replace an ingestion source",
+        "description": "A password of `********` keeps the stored one.",
+        "operationId": "updateSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestionSourceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Delete an ingestion source",
+        "operationId": "deleteSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The source was deleted"
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sources/{id}/test": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Check that a source can be reached",
+        "description": "Folders must be readable; mail accounts must accept the login and have the\nconfigured mailboxes. Nothing is imported.",
+        "operationId": "testSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The check ran; `ok` tells whether it passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceTestResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tags": {
       "get": {
         "tags": [
@@ -1810,6 +2127,10 @@
             "description": "Number of pages in the document (for PDFs and multi-page images)",
             "minimum": 0
           },
+          "source": {
+            "$ref": "#/components/schemas/DocumentSource",
+            "description": "How the document entered Folio"
+          },
           "title": {
             "type": "string",
             "description": "Document title"
@@ -1967,6 +2288,45 @@
           }
         }
       },
+      "DocumentSource": {
+        "type": "object",
+        "description": "The source of a document, with kind-specific metadata",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EmailOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FolderOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          },
+          "source_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the ingestion source that produced the document, if any"
+          }
+        }
+      },
       "DocumentType": {
         "type": "object",
         "description": "A document type for classification (e.g., Invoice, Receipt, Contract)",
@@ -1989,6 +2349,138 @@
           "name": {
             "type": "string",
             "description": "Type name (unique)"
+          }
+        }
+      },
+      "EmailConfig": {
+        "type": "object",
+        "description": "An IMAP account",
+        "required": [
+          "host",
+          "username"
+        ],
+        "properties": {
+          "accept_invalid_certs": {
+            "type": "boolean",
+            "description": "Accept self-signed certificates"
+          },
+          "after_import": {
+            "$ref": "#/components/schemas/MailAfterImport"
+          },
+          "allowed_content_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attachment content types to import; `image/*` style wildcards are allowed"
+          },
+          "criteria": {
+            "type": "string",
+            "description": "IMAP SEARCH criteria"
+          },
+          "host": {
+            "type": "string"
+          },
+          "mail_body": {
+            "$ref": "#/components/schemas/MailBody"
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "move_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Target mailbox for `after_import = move`"
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown as `********` by the API; send it back unchanged to keep the stored one"
+          },
+          "password_file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Read the password from this file (for Docker secrets); wins over `password`"
+          },
+          "poll_interval_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "security": {
+            "$ref": "#/components/schemas/MailSecurity"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "EmailOrigin": {
+        "type": "object",
+        "description": "The email an attachment (or the message itself) came from",
+        "required": [
+          "account",
+          "mailbox",
+          "message_id",
+          "from",
+          "to",
+          "subject"
+        ],
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "Name of the configured mail account"
+          },
+          "attachment_content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attachment_filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "from": {
+            "type": "string"
+          },
+          "mailbox": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -2015,6 +2507,109 @@
         "type": "string",
         "format": "binary",
         "description": "Binary payload of a stored file"
+      },
+      "FolderAfterImport": {
+        "type": "string",
+        "description": "What to do with a consume-folder file once it was imported",
+        "enum": [
+          "delete",
+          "move"
+        ]
+      },
+      "FolderConfig": {
+        "type": "object",
+        "description": "A watched consume folder",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "after_import": {
+            "$ref": "#/components/schemas/FolderAfterImport"
+          },
+          "path": {
+            "type": "string"
+          },
+          "recursive": {
+            "type": "boolean"
+          },
+          "rescan_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Full scan interval; the file watcher usually reacts sooner",
+            "minimum": 0
+          },
+          "settle_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How long a file's size has to stay unchanged before it is imported",
+            "minimum": 0
+          },
+          "subfolders_as_tags": {
+            "type": "boolean",
+            "description": "Turn sub-folder names into tags: `Insurance/2025/x.pdf` gets `Insurance` and `2025`"
+          }
+        }
+      },
+      "FolderOrigin": {
+        "type": "object",
+        "description": "Where in a consume folder a file was found",
+        "required": [
+          "relative_path",
+          "original_filename"
+        ],
+        "properties": {
+          "original_filename": {
+            "type": "string"
+          },
+          "relative_path": {
+            "type": "string",
+            "description": "Path relative to the consume folder, using `/` separators"
+          }
+        }
+      },
+      "IngestionSourceInput": {
+        "type": "object",
+        "description": "Fields for creating or replacing a managed source",
+        "required": [
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MailAfterImport": {
+        "type": "string",
+        "description": "What to do with a mail once its attachments were imported",
+        "enum": [
+          "mark_read",
+          "move",
+          "delete"
+        ]
+      },
+      "MailBody": {
+        "type": "string",
+        "description": "Whether the mail itself becomes a document",
+        "enum": [
+          "none",
+          "eml"
+        ]
+      },
+      "MailSecurity": {
+        "type": "string",
+        "description": "How to reach the mail server",
+        "enum": [
+          "tls",
+          "plain"
+        ]
       },
       "NamedRef": {
         "type": "object",
@@ -2101,6 +2696,240 @@
             "type": "number",
             "format": "float",
             "description": "Similarity score; higher is closer"
+          }
+        }
+      },
+      "SourceConditions": {
+        "type": "object",
+        "description": "Conditions on where a document came from; every set condition has to match",
+        "properties": {
+          "email_attachment_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob against the attachment file name"
+          },
+          "email_from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email_mailbox_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob against the mailbox name, for example `INBOX/Invoices`"
+          },
+          "email_subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMatch",
+                "description": "Matches when any recipient matches"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder_path_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob against the folder-relative path, for example `Insurance/*`"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceKind",
+                "description": "How the document arrived"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SourceConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FolderConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "folder"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EmailConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "email"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Kind-specific settings of a source"
+      },
+      "SourceKind": {
+        "type": "string",
+        "description": "How a document entered Folio",
+        "enum": [
+          "upload",
+          "api",
+          "folder",
+          "email",
+          "mcp",
+          "share"
+        ]
+      },
+      "SourceOrigin": {
+        "type": "string",
+        "description": "Where a source definition came from",
+        "enum": [
+          "config",
+          "managed"
+        ]
+      },
+      "SourceStatus": {
+        "type": "object",
+        "description": "How the latest run of a source went",
+        "required": [
+          "last_imported",
+          "last_skipped",
+          "last_failed"
+        ],
+        "properties": {
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the latest run failed; cleared by the next success"
+          },
+          "last_failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_imported": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_skipped": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SourceTestResult": {
+        "type": "object",
+        "description": "Outcome of checking a source",
+        "required": [
+          "ok",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "What was found, or why the check failed"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SourceView": {
+        "type": "object",
+        "description": "A source with its latest run",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "origin",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/SourceConfig",
+            "description": "Passwords are masked"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/SourceOrigin",
+            "description": "Sources from the server configuration are read-only"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -2195,6 +3024,50 @@
           }
         }
       },
+      "TextMatch": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`*` and `?` wildcards, case-insensitive, against the whole text",
+            "required": [
+              "glob"
+            ],
+            "properties": {
+              "glob": {
+                "type": "string",
+                "description": "`*` and `?` wildcards, case-insensitive, against the whole text"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Case-insensitive substring",
+            "required": [
+              "contains"
+            ],
+            "properties": {
+              "contains": {
+                "type": "string",
+                "description": "Case-insensitive substring"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Regular expression, searched anywhere in the text",
+            "required": [
+              "regex"
+            ],
+            "properties": {
+              "regex": {
+                "type": "string",
+                "description": "Regular expression, searched anywhere in the text"
+              }
+            }
+          }
+        ],
+        "description": "How to compare a piece of text"
+      },
       "UpdateCorrespondentRequest": {
         "type": "object",
         "description": "Request body for updating a correspondent",
@@ -2266,6 +3139,7 @@
           "id",
           "title",
           "tags",
+          "source",
           "created_at",
           "urls"
         ],
@@ -2327,6 +3201,10 @@
             "format": "int64",
             "description": "File size in bytes; null when no file is stored",
             "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/DocumentSource",
+            "description": "How the document entered Folio, with folder or email details when known"
           },
           "tags": {
             "type": "array",
@@ -2553,6 +3431,21 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Discard the file instead of importing it; only valid for `ingest.received`",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "skip_import"
+                ]
+              }
+            }
           }
         ],
         "description": "A step a workflow performs, in order"
@@ -2590,6 +3483,10 @@
               "null"
             ],
             "description": "MIME type, exact or with a wildcard subtype such as `image/*`"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConditions",
+            "description": "Where the document came from: folder path, email sender, subject, and so on"
           },
           "tag_id": {
             "type": [
@@ -2712,7 +3609,8 @@
           "document.uploaded",
           "document.processed",
           "document.updated",
-          "document.deleted"
+          "document.deleted",
+          "ingest.received"
         ]
       }
     }
@@ -2741,6 +3639,10 @@
     {
       "name": "workflows",
       "description": "Automations that react to document events, such as webhooks"
+    },
+    {
+      "name": "sources",
+      "description": "Consume folders and mailboxes that import documents automatically"
     }
   ]
 }

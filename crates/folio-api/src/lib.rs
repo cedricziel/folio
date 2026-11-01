@@ -16,4 +16,4 @@ pub use routes::{
     auth::{enforce_auth, router as auth_router, AuthState, RequireUser},
     create_router,
 };
-pub use state::AppState;
+pub use state::{AppState, IngestionState};

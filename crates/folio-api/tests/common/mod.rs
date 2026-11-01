@@ -10,7 +10,8 @@ use axum::Router;
 use http_body_util::BodyExt;
 use uuid::Uuid;
 
-use folio_api::{create_router, AppState, AuthState, EventBroadcaster};
+use folio_api::{create_router, AppState, AuthState, EventBroadcaster, IngestionState};
+use folio_core::models::IngestionSourceDef;
 use folio_core::ports::DocumentStore;
 use folio_infra::{
     Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
@@ -23,6 +24,11 @@ pub struct Harness {
 }
 
 pub async fn harness() -> Harness {
+    harness_with_sources(Vec::new()).await
+}
+
+/// A harness whose configuration defines `configured` ingestion sources
+pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harness {
     let dir = std::env::temp_dir().join(format!("folio-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let storage = dir.to_string_lossy().to_string();
@@ -43,6 +49,7 @@ pub async fn harness() -> Harness {
     let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
+    let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
     let state = AppState::new(
         repos.documents,
         repos.tags,
@@ -60,6 +67,7 @@ pub async fn harness() -> Harness {
         repos.workflows,
         WebhookClient::new(),
         "http://folio.test".to_string(),
+        ingestion,
     );
     Harness {
         app: create_router(state.clone(), auth),
