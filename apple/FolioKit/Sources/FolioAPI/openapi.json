@@ -42,6 +42,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       },
@@ -71,15 +74,8 @@
               }
             }
           },
-          "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -112,15 +108,8 @@
               }
             }
           },
-          "404": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       },
@@ -144,15 +133,8 @@
           "200": {
             "description": "Deleted"
           },
-          "404": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -186,15 +168,8 @@
               }
             }
           },
-          "404": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -226,15 +201,8 @@
               }
             }
           },
-          "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -276,15 +244,8 @@
               }
             }
           },
-          "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -308,6 +269,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       },
@@ -338,14 +302,10 @@
             }
           },
           "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Failure"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -369,6 +329,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       },
@@ -399,14 +362,10 @@
             }
           },
           "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Failure"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -430,6 +389,9 @@
                 }
               }
             }
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       },
@@ -460,14 +422,10 @@
             }
           },
           "400": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Failure"
+          },
+          "default": {
+            "$ref": "#/components/responses/Failure"
           }
         }
       }
@@ -763,6 +721,18 @@
         "required": [
           "name"
         ]
+      }
+    },
+    "responses": {
+      "Failure": {
+        "description": "Error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       }
     }
   }
