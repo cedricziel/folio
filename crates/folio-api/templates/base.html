@@ -1202,6 +1202,14 @@ if ("serviceWorker" in navigator) {
           </a>
           <a
             class="side-link"
+            href="/workflows"
+            {% if sidebar.active == "workflows" %}aria-current="page"{% endif %}
+          >
+            {{ icons::refresh() }}
+            <span class="side-label">Workflows</span>
+          </a>
+          <a
+            class="side-link"
             href="/settings"
             {% if sidebar.active == "settings" %}aria-current="page"{% endif %}
           >

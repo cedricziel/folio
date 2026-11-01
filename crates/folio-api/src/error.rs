@@ -41,6 +41,10 @@ impl ApiError {
         self
     }
 
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, message)
     }

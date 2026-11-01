@@ -23,7 +23,7 @@ pub fn router() -> Router<AppState> {
 /// Turbo Streams that bring open pages up to date after `event`.
 pub async fn turbo_streams_for(state: &AppState, event: &DocumentEvent) -> ApiResult<String> {
     let streams = match event {
-        DocumentEvent::Deleted { document_id } => {
+        DocumentEvent::Deleted { document_id, .. } => {
             DocumentStreams::removed(state, *document_id).await?
         }
         _ => {

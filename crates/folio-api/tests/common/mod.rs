@@ -13,6 +13,7 @@ use uuid::Uuid;
 use folio_api::{create_router, AppState, AuthState, EventBroadcaster};
 use folio_infra::{
     Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
+    WebhookClient,
 };
 
 pub struct Harness {
@@ -55,6 +56,9 @@ pub async fn harness() -> Harness {
         repos.jobs,
         storage,
         EventBroadcaster::new(16),
+        repos.workflows,
+        WebhookClient::new(),
+        "http://folio.test".to_string(),
     );
     Harness {
         app: create_router(state.clone(), auth),

@@ -6,10 +6,10 @@ use folio_core::error::Result;
 use folio_core::ports::SearchResult;
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository,
+    HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository, WorkflowRepository,
 };
 use folio_core::services::SearchServiceFacade;
-use folio_infra::{JobQueue, PipelineContext, ThumbnailService};
+use folio_infra::{JobQueue, PipelineContext, ThumbnailService, WebhookClient};
 
 use folio_core::EventBroadcaster;
 
@@ -32,6 +32,10 @@ pub struct AppState {
     pub storage_path: String,
     pub event_broadcaster: EventBroadcaster,
     pub health_checks: HealthChecks,
+    pub workflow_repo: Arc<dyn WorkflowRepository>,
+    pub webhook_client: WebhookClient,
+    /// Externally reachable base URL, used for links in webhook payloads
+    pub public_url: String,
 }
 
 impl AppState {
@@ -50,6 +54,9 @@ impl AppState {
         job_queue: JobQueue,
         storage_path: String,
         event_broadcaster: EventBroadcaster,
+        workflow_repo: Arc<dyn WorkflowRepository>,
+        webhook_client: WebhookClient,
+        public_url: String,
     ) -> Self {
         Self {
             document_repo,
@@ -66,6 +73,9 @@ impl AppState {
             storage_path,
             event_broadcaster,
             health_checks: Arc::from(Vec::new()),
+            workflow_repo,
+            webhook_client,
+            public_url,
         }
     }
 

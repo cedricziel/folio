@@ -11,7 +11,6 @@ use axum::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use folio_core::events::DocumentEvent;
 use folio_core::models::{Correspondent, CreateDocument, Document, DocumentType, UpdateDocument};
 use folio_infra::JobType;
 
@@ -521,10 +520,6 @@ pub(super) async fn store_upload(
         .await?
         .unwrap_or(document);
 
-    state.event_broadcaster.send(DocumentEvent::Created {
-        document_id: document.id,
-    });
-
     Ok(document)
 }
 
@@ -552,9 +547,6 @@ async fn delete_document(
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
     state.document_repo.delete(id).await?;
-    state
-        .event_broadcaster
-        .send(DocumentEvent::Deleted { document_id: id });
 
     Ok(Redirect::to("/").into_response())
 }

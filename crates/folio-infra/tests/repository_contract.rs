@@ -10,7 +10,8 @@ use chrono::{Duration, Utc};
 use folio_core::error::Error;
 use folio_core::models::{
     CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, DocumentFilter, Id,
-    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, WebhookMethod,
+    WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 use folio_core::ports::{EmbeddedChunk, SearchService};
 use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
@@ -797,6 +798,147 @@ async fn concurrent_dequeue_contract(r: &Repositories) {
     assert_eq!(ids.len(), 8, "no job is handed out twice");
 }
 
+fn workflow_input(name: &str, trigger: WorkflowTrigger) -> WorkflowInput {
+    WorkflowInput {
+        name: name.to_string(),
+        enabled: true,
+        trigger,
+        conditions: WorkflowConditions {
+            mime_type: Some("application/pdf".into()),
+            ..Default::default()
+        },
+        actions: vec![WorkflowAction::Webhook {
+            url: "http://192.168.1.10:5678/hook".into(),
+            method: WebhookMethod::Post,
+            headers: Default::default(),
+            secret: Some("s3cret".into()),
+        }],
+    }
+}
+
+async fn workflows_contract(r: &Repositories) {
+    let uploaded = WorkflowTrigger::DocumentUploaded;
+    let wf = r
+        .workflows
+        .create(workflow_input("Notify", uploaded))
+        .await
+        .unwrap();
+    let fetched = r.workflows.find_by_id(wf.id).await.unwrap().unwrap();
+    assert_eq!(fetched.name, "Notify");
+    assert_eq!(fetched.conditions, wf.conditions);
+    assert_eq!(fetched.actions, wf.actions);
+    assert!(r
+        .workflows
+        .find_by_id(Id::new_v4())
+        .await
+        .unwrap()
+        .is_none());
+
+    // Invalid workflows never reach the table
+    let mut bad = workflow_input("Bad", uploaded);
+    bad.actions = vec![];
+    assert!(matches!(
+        r.workflows.create(bad).await,
+        Err(Error::Validation(_))
+    ));
+
+    let mut off = workflow_input("Off", uploaded);
+    off.enabled = false;
+    let off = r.workflows.create(off).await.unwrap();
+    r.workflows
+        .create(workflow_input(
+            "Other trigger",
+            WorkflowTrigger::DocumentDeleted,
+        ))
+        .await
+        .unwrap();
+    let enabled: Vec<_> = r
+        .workflows
+        .list_enabled(uploaded)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|w| w.id)
+        .collect();
+    assert_eq!(enabled, vec![wf.id]);
+    assert_eq!(r.workflows.list().await.unwrap().len(), 3);
+
+    let mut changed = workflow_input("Renamed", uploaded);
+    changed.enabled = false;
+    let updated = r.workflows.update(wf.id, changed).await.unwrap();
+    assert_eq!(updated.name, "Renamed");
+    assert!(!updated.enabled);
+    assert!(is_not_found(
+        r.workflows
+            .update(Id::new_v4(), workflow_input("x", uploaded))
+            .await
+    ));
+
+    // Runs: round trip, ordering, update
+    let doc = Id::new_v4();
+    let run = WorkflowRun::new(off.id, uploaded, Some(doc), r#"{"a":  1}"#.into());
+    assert!(r.workflows.create_run(&run).await.unwrap());
+    let mut stored = r.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.payload, r#"{"a":  1}"#,
+        "payload is kept byte for byte"
+    );
+    assert_eq!(stored.document_id, Some(doc));
+    stored.attempts = 2;
+    stored.completed_actions = 1;
+    stored.last_error = Some("HTTP 500".into());
+    stored.response_status = Some(500);
+    r.workflows.update_run(&stored).await.unwrap();
+    let reread = r.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(
+        (
+            reread.attempts,
+            reread.completed_actions,
+            reread.response_status
+        ),
+        (2, 1, Some(500))
+    );
+    assert_eq!(reread.last_error.as_deref(), Some("HTTP 500"));
+
+    // Once-per-document events collapse to a single run, even concurrently
+    let once = WorkflowRun::new(off.id, uploaded, Some(doc), "{}".into());
+    assert!(!r.workflows.create_run(&once).await.unwrap());
+    let race_doc = Id::new_v4();
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let workflows = r.workflows.clone();
+        let run = WorkflowRun::new(off.id, uploaded, Some(race_doc), "{}".into());
+        handles.push(tokio::spawn(async move {
+            workflows.create_run(&run).await.unwrap()
+        }));
+    }
+    let mut inserted = 0;
+    for handle in handles {
+        inserted += usize::from(handle.await.unwrap());
+    }
+    assert_eq!(inserted, 1);
+
+    // Other events may repeat
+    for _ in 0..2 {
+        let again = WorkflowRun::new(
+            off.id,
+            WorkflowTrigger::DocumentUpdated,
+            Some(doc),
+            "{}".into(),
+        );
+        assert!(r.workflows.create_run(&again).await.unwrap());
+    }
+    let runs = r.workflows.list_runs(off.id, 100).await.unwrap();
+    assert_eq!(runs.len(), 4);
+    assert_eq!(r.workflows.list_runs(off.id, 2).await.unwrap().len(), 2);
+    assert!(runs.windows(2).all(|w| w[0].created_at >= w[1].created_at));
+
+    // Deleting a workflow removes its runs
+    r.workflows.delete(off.id).await.unwrap();
+    assert!(r.workflows.find_run(run.id).await.unwrap().is_none());
+    assert!(is_not_found(r.workflows.delete(off.id).await));
+}
+
 async fn auth_contract(r: &Repositories) {
     use folio_auth::{AccessToken, AuthCode, OAuthClient, RefreshToken, Session, User};
     let auth = &r.auth;
@@ -936,6 +1078,7 @@ async fn run_contract(db: &Database) {
     document_filter_contract(&repos).await;
     settings_contract(&repos).await;
     search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
+    workflows_contract(&repos).await;
     jobs_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
     auth_contract(&repos).await;

@@ -3,11 +3,15 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod eventing;
 mod library;
+mod workflow_engine;
 
+pub use eventing::EventingDocumentRepository;
 pub use library::{
     DocumentDetail, DocumentHit, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, TextPage,
 };
+pub use workflow_engine::WorkflowEngine;
 
 use std::sync::Arc;
 
