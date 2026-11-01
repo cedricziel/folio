@@ -30,12 +30,19 @@ struct App {
 }
 
 async fn app() -> App {
+    app_at(Some(BASE)).await
+}
+
+async fn app_at(public_url: Option<&str>) -> App {
     let dir = tempfile::tempdir().unwrap();
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("t.db").display());
     let pool = create_pool(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
-    let auth = AuthState::new(Arc::new(SqliteAuthStore::new(pool)), Some(BASE.into()))
-        .with_setup_token(SETUP_TOKEN);
+    let auth = AuthState::new(
+        Arc::new(SqliteAuthStore::new(pool)),
+        public_url.map(String::from),
+    )
+    .with_setup_token(SETUP_TOKEN);
     let protected =
         Router::new()
             .route("/mcp", get(|| async { "ok" }))
@@ -242,6 +249,70 @@ async fn metadata_documents_have_expected_shape() {
         assert_eq!(prm["resource"], format!("{BASE}/mcp"));
         assert_eq!(prm["authorization_servers"], json!([BASE]));
     }
+}
+
+/// Requests as sent by a client that forges the headers a proxy would set.
+fn spoofed(uri: &str) -> Request<Body> {
+    Request::get(uri)
+        .header(header::HOST, "evil.example")
+        .header("x-forwarded-proto", "https")
+        .header("x-forwarded-host", "evil.example")
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn urls_come_from_public_url_never_from_request_headers() {
+    let app = app().await;
+    let meta = send(&app, spoofed("/.well-known/oauth-authorization-server"))
+        .await
+        .json();
+    assert_eq!(meta["issuer"], BASE);
+    let prm = send(&app, spoofed("/.well-known/oauth-protected-resource"))
+        .await
+        .json();
+    assert_eq!(prm["resource"], format!("{BASE}/mcp"));
+    let challenge = send(&app, spoofed("/mcp")).await;
+    let challenge = challenge.headers[header::WWW_AUTHENTICATE]
+        .to_str()
+        .unwrap();
+    assert!(challenge.contains(BASE) && !challenge.contains("evil.example"));
+
+    // Without a configured URL the fallback is fixed too, not taken from Host.
+    let bare = app_at(None).await;
+    let meta = send(&bare, spoofed("/.well-known/oauth-authorization-server"))
+        .await
+        .json();
+    assert!(!meta["issuer"].as_str().unwrap().contains("evil.example"));
+    assert!(meta["issuer"].as_str().unwrap().starts_with("http://"));
+}
+
+#[tokio::test]
+async fn cookies_are_secure_only_when_public_url_is_https() {
+    let session_cookie = |headers: &axum::http::HeaderMap| {
+        headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .find(|c| c.contains("folio_csrf"))
+            .unwrap()
+    };
+    let plain = app().await;
+    let login = send(&plain, spoofed("/setup?token=test-setup-token")).await;
+    assert!(
+        !session_cookie(&login.headers).contains("Secure"),
+        "X-Forwarded-Proto must not turn Secure on"
+    );
+
+    let tls = app_at(Some("https://folio.example.com")).await;
+    let setup = send(
+        &tls,
+        Request::get("/setup?token=test-setup-token")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(session_cookie(&setup.headers).contains("Secure"));
 }
 
 #[tokio::test]

@@ -106,8 +106,8 @@ impl AuthState {
         TokenValidator::new(self.store.clone(), self.public_url.clone(), resource_path)
     }
 
-    fn base(&self, headers: &HeaderMap) -> String {
-        base_url(self.public_url.as_deref(), headers)
+    fn base(&self) -> String {
+        base_url(self.public_url.as_deref())
     }
 
     async fn current_user(&self, headers: &HeaderMap) -> Option<User> {
@@ -410,7 +410,7 @@ async fn setup_page(
     let Some(token) = q.token.filter(|t| auth.setup_token_ok(Some(t))) else {
         return render(SetupLockedTemplate, StatusCode::FORBIDDEN);
     };
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
+    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base()));
     with_cookies(
         render(
             SetupTemplate {
@@ -437,7 +437,7 @@ async fn setup_submit(
     headers: HeaderMap,
     Form(form): Form<SetupForm>,
 ) -> Response {
-    let secure = is_secure(&auth.base(&headers));
+    let secure = is_secure(&auth.base());
     if !csrf_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -503,7 +503,7 @@ async fn login_page(
     if auth.current_user(&headers).await.is_some() {
         return Redirect::to(&next).into_response();
     }
-    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base(&headers)));
+    let (csrf, cookie) = csrf_token(&headers, is_secure(&auth.base()));
     with_cookies(
         render(
             LoginTemplate {
@@ -530,7 +530,7 @@ async fn login_submit(
     headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let secure = is_secure(&auth.base(&headers));
+    let secure = is_secure(&auth.base());
     if !csrf_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -582,18 +582,18 @@ async fn logout(
     if let Some(id) = cookie(&headers, SESSION_COOKIE) {
         let _ = auth.store.delete_session(&hash_token(&id)).await;
     }
-    let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&auth.base(&headers)));
+    let clear = set_cookie(SESSION_COOKIE, "", 0, is_secure(&auth.base()));
     with_cookies(Redirect::to("/login").into_response(), [clear])
 }
 
 // ---- metadata and registration ----------------------------------------------
 
 async fn as_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<Value> {
-    Json(authorization_server_metadata(&auth.base(&headers)))
+    Json(authorization_server_metadata(&auth.base()))
 }
 
 async fn resource_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<Value> {
-    Json(protected_resource_metadata(&auth.base(&headers)))
+    Json(protected_resource_metadata(&auth.base()))
 }
 
 fn oauth_json(status: StatusCode, body: Value) -> Response {
@@ -735,7 +735,7 @@ async fn authorize_page(
     RawQuery(raw): RawQuery,
     Query(params): Query<AuthorizeParams>,
 ) -> Response {
-    let base = auth.base(&headers);
+    let base = auth.base();
     let validated = match auth.server.validate_authorize(&base, &params).await {
         Ok(v) => v,
         Err(f) => return failure_response(f),
@@ -801,7 +801,7 @@ async fn authorize_submit(
         scope: form.scope,
         resource: form.resource,
     };
-    let base = auth.base(&headers);
+    let base = auth.base();
     let validated: ValidatedAuthorize = match auth.server.validate_authorize(&base, &params).await {
         Ok(v) => v,
         Err(f) => return failure_response(f),
@@ -836,7 +836,7 @@ async fn token(
     headers: HeaderMap,
     Form(req): Form<TokenRequest>,
 ) -> Response {
-    match auth.server.token(&auth.base(&headers), req).await {
+    match auth.server.token(&auth.base(), req).await {
         Ok(body) => oauth_json(StatusCode::OK, body),
         Err(e) => oauth_error(e),
     }
