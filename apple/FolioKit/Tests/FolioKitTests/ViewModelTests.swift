@@ -218,6 +218,7 @@ struct DocumentStatusTests {
 
     @Test func aSecondBatchWhileOneIsRunningIsIgnored() async {
         let service = MockFolioService()
+        await service.setUploadDelay(.milliseconds(50))
         let model = UploadViewModel(service: service) {}
         let first = Task { await model.upload([file("a.pdf"), file("b.pdf")]) }
         while model.state == .idle { await Task.yield() }

@@ -26,7 +26,9 @@ Use `xcrun swift …` and `xcrun xcodebuild …` rather than bare `swift`, so th
 - **API client.** `FolioKit/Sources/FolioAPI/openapi.json` plus `openapi-generator-config.yaml` feed the swift-openapi-generator build plugin. The spec is a symlink to the server's `openapi/openapi.json`. `LiveFolioService` wraps the client behind the `FolioService` protocol, which the view models and tests use. Uploads and downloads go through `URLSession` directly because the generated client cannot set per-part content types.
 - **Auth.** The API has none yet. `BearerTokenProvider` is wired into both the generated client and the raw requests, so a Keychain-backed provider can be added without touching callers.
 - **Design tokens.** `design/tokens.json` is the source. `make apple-tokens` regenerates `FolioTheme.swift` and the `Colors.xcassets` asset catalog; a test fails when the committed output drifts from the tokens.
-- **Share extension.** Reads the server address from the `group.com.cedricziel.folio` App Group, so both targets need a signing team with that group before it works on a device.
+- **Share extension** (iOS and macOS). Takes PDFs, images and files from any app, shows title and tag pickers, and uploads through FolioKit. Untagged uploads go through a background `URLSession`, so they finish after the sheet closes; tagged uploads run in the foreground because tags can only be attached once the document exists. A vault picker is missing until the server has vaults.
+- **File Provider extension** (iOS and macOS). Folio appears in Files and Finder with Inbox, All documents, Tags, Correspondents and Types. Documents download on demand; creating a file in Inbox uploads it; rename, move and delete are refused. The working set polls the document list and compares a change token. No thumbnails: the API has no thumbnail endpoint.
+- **Shared state.** The app and extensions share the server address through the `group.com.cedricziel.folio` App Group and the bearer token through a keychain access group. Both need a signing team with that group registered before they work on a device.
 
 ## Tests
 
