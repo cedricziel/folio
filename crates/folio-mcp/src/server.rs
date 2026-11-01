@@ -819,30 +819,6 @@ fn parse_date(s: &str, last_day: bool) -> Result<DateTime<Utc>, String> {
     Ok(date.and_time(NaiveTime::MIN).and_utc())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn last_day_covers_the_whole_day() {
-        let end = parse_date("2026-03-31", true).unwrap();
-        assert_eq!(end.to_rfc3339(), "2026-04-01T00:00:00+00:00");
-        let start = parse_date("2026-03-31", false).unwrap();
-        assert_eq!(start.to_rfc3339(), "2026-03-31T00:00:00+00:00");
-    }
-
-    #[test]
-    fn rfc3339_instants_are_used_as_given() {
-        let at = parse_date("2026-03-31T10:00:00+02:00", true).unwrap();
-        assert_eq!(at.to_rfc3339(), "2026-03-31T08:00:00+00:00");
-    }
-
-    #[test]
-    fn garbage_is_rejected() {
-        assert!(parse_date("yesterday", false).is_err());
-    }
-}
-
 /// Domain errors the caller can act on are shown as-is; the rest stay in the log
 fn tool_error(err: Error) -> String {
     match err {
@@ -867,4 +843,28 @@ fn resource_error(err: Error) -> ErrorData {
 
 fn forbidden(message: String) -> ErrorData {
     ErrorData::invalid_request(message, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_day_covers_the_whole_day() {
+        let end = parse_date("2026-03-31", true).unwrap();
+        assert_eq!(end.to_rfc3339(), "2026-04-01T00:00:00+00:00");
+        let start = parse_date("2026-03-31", false).unwrap();
+        assert_eq!(start.to_rfc3339(), "2026-03-31T00:00:00+00:00");
+    }
+
+    #[test]
+    fn rfc3339_instants_are_used_as_given() {
+        let at = parse_date("2026-03-31T10:00:00+02:00", true).unwrap();
+        assert_eq!(at.to_rfc3339(), "2026-03-31T08:00:00+00:00");
+    }
+
+    #[test]
+    fn garbage_is_rejected() {
+        assert!(parse_date("yesterday", false).is_err());
+    }
 }

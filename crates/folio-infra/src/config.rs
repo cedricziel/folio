@@ -102,7 +102,7 @@ impl Default for AiConfig {
 }
 
 /// MCP server configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpConfig {
     /// Serve the MCP endpoint at `/mcp`; off by default because it is not authenticated yet.
@@ -110,15 +110,6 @@ pub struct McpConfig {
     pub enabled: bool,
     /// Extra `Host` header values to accept besides loopback
     pub allowed_hosts: Vec<String>,
-}
-
-impl Default for McpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            allowed_hosts: Vec::new(),
-        }
-    }
 }
 
 /// How an environment value is converted before it reaches the config tree.
