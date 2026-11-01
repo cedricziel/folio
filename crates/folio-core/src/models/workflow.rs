@@ -50,6 +50,17 @@ impl WorkflowTrigger {
         }
     }
 
+    /// How a person would say it: "When a document has been read"
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::DocumentUploaded => "When a document is added",
+            Self::DocumentProcessed => "When a document has been read",
+            Self::DocumentUpdated => "When a document's details change",
+            Self::DocumentDeleted => "When a document is deleted",
+            Self::IngestReceived => "When a file arrives, before import",
+        }
+    }
+
     /// Parse the wire name
     pub fn parse(value: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.as_str() == value)

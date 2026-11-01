@@ -21,6 +21,9 @@ pub const THUMBNAIL_HEIGHT: u32 = 300;
 pub const PAGE_WIDTH: u32 = 800;
 pub const PAGE_HEIGHT: u32 = 1100;
 
+/// A muted grey for the icon on placeholder thumbnails: files Folio could not render are not alarms
+const PLACEHOLDER_ICON: (u8, u8, u8) = (170, 174, 168);
+
 /// Thumbnail service for generating document previews
 pub struct ThumbnailService {
     store: Arc<dyn DocumentStore>,
@@ -85,7 +88,7 @@ impl ThumbnailService {
         write_file(&pdf, data).await?;
         match render_pdf_page(&pdf, 1, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT).await {
             Some(jpeg) => Ok(jpeg),
-            None => self.generate_placeholder_thumbnail("PDF", (239, 68, 68)), // Red color
+            None => self.generate_placeholder_thumbnail("PDF", PLACEHOLDER_ICON),
         }
     }
 
@@ -170,16 +173,16 @@ impl ThumbnailService {
 
         let mut img = RgbaImage::new(width, height);
 
-        // Fill with light background
+        // Fill with the quiet paper-sunken ground
         for pixel in img.pixels_mut() {
-            *pixel = Rgba([241, 245, 249, 255]);
+            *pixel = Rgba([236, 237, 231, 255]);
         }
 
         // Draw colored rectangle in center (file icon)
-        let icon_width = 80u32;
-        let icon_height = 100u32;
+        let icon_width = 36u32;
+        let icon_height = 46u32;
         let icon_x = (width - icon_width) / 2;
-        let icon_y = (height - icon_height) / 2 - 10;
+        let icon_y = (height - icon_height) / 2;
 
         let file_color = Rgba([color.0, color.1, color.2, 255]);
 
@@ -192,11 +195,11 @@ impl ThumbnailService {
         }
 
         // Draw folded corner
-        let corner_size = 20u32;
+        let corner_size = 10u32;
         let corner_color = Rgba([
-            color.0.saturating_sub(30),
-            color.1.saturating_sub(30),
-            color.2.saturating_sub(30),
+            color.0.saturating_sub(24),
+            color.1.saturating_sub(24),
+            color.2.saturating_sub(24),
             255,
         ]);
         for i in 0..corner_size {
@@ -243,7 +246,7 @@ impl ThumbnailService {
         let thumbnail_data = match render_pdf_page(pdf, page, PAGE_WIDTH, PAGE_HEIGHT).await {
             Some(jpeg) => jpeg,
             None => {
-                self.generate_placeholder_thumbnail(&format!("Page {}", page), (239, 68, 68))?
+                self.generate_placeholder_thumbnail(&format!("Page {}", page), PLACEHOLDER_ICON)?
             }
         };
 

@@ -327,6 +327,32 @@ async fn main() -> Result<()> {
         }
         auth = auth.with_forward(settings);
     }
+
+    let oidc = &config.auth.oidc;
+    if oidc.enabled {
+        let required = |value: &Option<String>, name: &str| {
+            value
+                .clone()
+                .filter(|v| !v.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("auth.oidc.enabled needs auth.oidc.{name}"))
+        };
+        let provider = folio_auth::oidc::OidcProvider::new(folio_auth::oidc::OidcSettings {
+            issuer: required(&oidc.issuer, "issuer")?,
+            client_id: required(&oidc.client_id, "client_id")?,
+            client_secret: oidc.client_secret.clone().filter(|s| !s.is_empty()),
+            scopes: oidc.scopes.split_whitespace().map(String::from).collect(),
+            display_name: oidc.display_name.clone(),
+            groups_claim: oidc.groups_claim.clone(),
+            admin_group: oidc.admin_group.clone().filter(|g| !g.is_empty()),
+            allow_local_login: oidc.allow_local_login,
+            auto_create_users: oidc.auto_create_users,
+        })
+        .map_err(|e| anyhow::anyhow!("invalid auth.oidc configuration: {e}"))?;
+        if let Err(e) = provider.warm_up().await {
+            tracing::warn!("OpenID Connect discovery failed, will retry on first login: {e}");
+        }
+        auth = auth.with_oidc(provider);
+    }
     if config.auth.required && auth_store.count_users().await.unwrap_or(1) == 0 {
         let base = config.server.base_url();
         tracing::warn!(

@@ -10,7 +10,7 @@ use axum::{
 use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{keys, DocumentStore};
 use folio_core::{
-    models::{CreateDocument, CreateTag},
+    models::{CreateCorrespondent, CreateDocument, CreateTag},
     EventBroadcaster,
 };
 use folio_infra::{
@@ -137,6 +137,134 @@ async fn get_document_by_id_returns_the_document() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["title"], "Invoice");
+}
+
+async fn tagged_document(
+    app: &TestApp,
+    title: &str,
+    tags: &[Uuid],
+) -> folio_core::models::Document {
+    let doc = app
+        .state
+        .document_repo
+        .create(CreateDocument {
+            title: title.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for tag in tags {
+        app.state.document_repo.add_tag(doc.id, *tag).await.unwrap();
+    }
+    doc
+}
+
+#[tokio::test]
+async fn documents_carry_their_tags_and_names() {
+    let app = test_app().await;
+    let tag = app
+        .state
+        .tag_repo
+        .create(CreateTag {
+            name: "Taxes".into(),
+            color: Some("#ff5733".into()),
+        })
+        .await
+        .unwrap();
+    let sender = app
+        .state
+        .correspondent_repo
+        .create(CreateCorrespondent {
+            name: "Finanzamt".into(),
+        })
+        .await
+        .unwrap();
+    let doc = tagged_document(&app, "Bescheid", &[tag.id]).await;
+    app.state
+        .document_repo
+        .update(
+            doc.id,
+            folio_core::models::UpdateDocument {
+                correspondent_id: Some(Some(sender.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let (_, list) = request(&app, "GET", "/api/documents").await;
+    let (_, one) = request(&app, "GET", &format!("/api/documents/{}", doc.id)).await;
+
+    for body in [&list["documents"][0], &one] {
+        assert_eq!(body["correspondent"], "Finanzamt");
+        assert_eq!(body["document_type"], serde_json::Value::Null);
+        assert_eq!(body["tags"][0]["id"], tag.id.to_string());
+        assert_eq!(body["tags"][0]["name"], "Taxes");
+        assert_eq!(body["tags"][0]["color"], "#ff5733");
+    }
+}
+
+#[tokio::test]
+async fn list_filters_by_all_tags_and_by_creation_time() {
+    let app = test_app().await;
+    let make = |name: &str| {
+        app.state.tag_repo.create(CreateTag {
+            name: name.into(),
+            color: None,
+        })
+    };
+    let (tax, home) = (make("Tax").await.unwrap(), make("Home").await.unwrap());
+    tagged_document(&app, "both", &[tax.id, home.id]).await;
+    tagged_document(&app, "tax only", &[tax.id]).await;
+    tagged_document(&app, "none", &[]).await;
+
+    let titles = |body: &serde_json::Value| {
+        let mut titles: Vec<String> = body["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["title"].as_str().unwrap().to_string())
+            .collect();
+        titles.sort();
+        titles
+    };
+
+    let (_, body) = request(&app, "GET", &format!("/api/documents?tag_id={}", tax.id)).await;
+    assert_eq!(titles(&body), ["both", "tax only"]);
+
+    let uri = format!("/api/documents?tag_id={}&tag_id={}", tax.id, home.id);
+    let (_, body) = request(&app, "GET", &uri).await;
+    assert_eq!(titles(&body), ["both"]);
+    assert_eq!(body["count"], 1);
+
+    let (_, body) = request(
+        &app,
+        "GET",
+        "/api/documents?created_after=2999-01-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(body["count"], 0);
+    let (_, body) = request(
+        &app,
+        "GET",
+        "/api/documents?created_before=2999-01-01T00:00:00Z",
+    )
+    .await;
+    assert_eq!(body["count"], 3);
+}
+
+#[tokio::test]
+async fn list_rejects_malformed_filters() {
+    let app = test_app().await;
+    for query in [
+        "tag_id=nope",
+        "created_after=yesterday",
+        "correspondent_id=1",
+    ] {
+        let (status, body) = request(&app, "GET", &format!("/api/documents?{query}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert!(body["error"].as_str().is_some());
+    }
 }
 
 #[tokio::test]

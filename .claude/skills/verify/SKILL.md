@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify a Folio change in the running app by launching an ephemeral instance (own port, temp DB and storage, no user config), exercising it through the API, SSE and a browser, then tearing it down. Use after changing routes, templates, the worker, config or storage, and before claiming a feature works. Not for unit tests (use `cargo test`) or for touching a real or deployed Folio.
+description: Verify a Folio change in the running app by launching an ephemeral instance (own port, temp DB and storage, no user config), exercising it through the API, SSE and a browser (including a screenshot and axe tour of every screen), then tearing it down. Use after changing routes, templates, the worker, config or storage, and before claiming a feature works. Not for unit tests (use `cargo test`) or for touching a real or deployed Folio.
 ---
 
 # Verify Folio end to end
@@ -40,7 +40,26 @@ Known quirk: after the worker finishes, an SSE event swaps the list for a varian
 
 The Turbo/Stimulus UI updates the DOM after fetches; wait on visible text (`expect(...).toBeVisible()`), not on `networkidle` (debug builds hold a livereload connection open).
 
-## 4. Feature areas as they land
+## 4. Screen tour (required for UI changes)
+
+Any change to templates, `static/`, CSS or routes that render HTML MUST run the screen tour, and you MUST look at the result before claiming the change works.
+
+```bash
+S=.claude/skills/verify/scripts
+$S/with-instance.sh bash -c "node $S/screens.mjs \$FOLIO_VERIFY_ENV --seed --out \$PWD/screens-out"
+# Auth pages (setup, login, consent) need auth on:
+FOLIO_VERIFY_AUTH_REQUIRED=true $S/with-instance.sh bash -c "node $S/screens.mjs \$FOLIO_VERIFY_ENV --seed"
+```
+
+- `screens.json` (next to this file) lists the screens, viewports (desktop 1280x800, tablet 768x1024, mobile 390x844) and themes (light, dark). It is also read by `e2e/tests/a11y.spec.ts` and `e2e/tests/visual.spec.ts`, so add a new screen there once and both the tour and CI pick it up.
+- `--seed` loads deterministic demo data (`scripts/seed.cjs`: correspondents, types, tags, seven generated PDFs, a workflow, a source, one broken upload). `node $S/seed.cjs $FOLIO_VERIFY_ENV` seeds on its own (auth off only).
+- Auth is detected from the instance: with auth on the tour captures `/setup` first, creates a throwaway owner, signs in and captures the rest, including OAuth consent through a dynamic client registration.
+- Flags: `--only inbox,document`, `--viewports desktop,mobile`, `--themes dark`, `--headed` (or `FOLIO_VERIFY_HEADED=1`: visible Chromium, slowed down, one second per screen), `--out <dir>` (copy the results somewhere that survives teardown; `down.sh` deletes `$VERIFY_DIR`).
+- Output in `$VERIFY_DIR/screens/`: `<screen>--<viewport>--<theme>.png`, the matching `.axe.json` (axe-core violations, WCAG 2.2 AA tags) and `summary.json`. Stdout ends with a table: screen, viewport, theme, HTTP status, serious/critical axe count, horizontal overflow, console errors.
+
+Then read the PNGs (Read tool) for every screen your change touches, at least desktop and mobile in both themes, and report what you saw: layout, overflow, contrast in dark mode, focus and states. A green table is not a substitute for looking. A new serious/critical axe violation or horizontal overflow on mobile is a regression.
+
+## 5. Feature areas as they land
 
 Short notes for features that do not exist on main yet. Check the code first; skip a note whose feature is absent.
 

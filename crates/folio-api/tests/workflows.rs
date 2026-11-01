@@ -501,3 +501,76 @@ async fn workflows_sit_behind_authentication() {
         "unexpected status {status}"
     );
 }
+
+#[tokio::test]
+async fn the_form_shows_and_edits_every_action() {
+    let app = test_app().await;
+    let (_, tag) = json_request(
+        &app,
+        "POST",
+        "/api/tags",
+        Some(json!({ "name": "Utilities" })),
+    )
+    .await;
+    let (_, sender) = json_request(
+        &app,
+        "POST",
+        "/api/correspondents",
+        Some(json!({ "name": "Stadtwerke" })),
+    )
+    .await;
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "File power bills",
+            "trigger": "document.processed",
+            "actions": [
+                { "type": "set_correspondent", "correspondent_id": sender["id"] },
+                { "type": "add_tags", "tag_ids": [tag["id"]] }
+            ]
+        })),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let tag_id = tag["id"].as_str().unwrap();
+    let sender_id = sender["id"].as_str().unwrap();
+
+    let (status, html) = send(&app, "GET", &format!("/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("When a document has been read"));
+    assert!(html.contains(&format!(r#"name="action_tag_{tag_id}" checked"#)));
+    assert!(html.contains(&format!(r#"value="{sender_id}" selected"#)));
+    assert!(html.contains(r#"aria-label="How to match the sender""#));
+    assert!(html.contains(r#"for="email_to""#));
+
+    // Saving without a webhook keeps the other actions and drops the cleared one
+    let form = format!(
+        "name=File+power+bills&trigger=document.processed&enabled=on&action_tag_{tag_id}=on\
+         &action_correspondent_id=&action_document_type_id="
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(format!("/workflows/{id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let stored = app
+        .state
+        .workflow_repo
+        .find_by_id(id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.actions.len(), 1);
+    assert!(
+        matches!(&stored.actions[0], WorkflowAction::AddTags { tag_ids } if tag_ids.len() == 1)
+    );
+}

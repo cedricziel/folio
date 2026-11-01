@@ -11,6 +11,8 @@
         {% endif %}
         {% if row.is_processing() %}
         <span class="f-status f-status-pending">{{ row.reading_label() }}</span>
+        {% else if row.is_failed() %}
+        <span class="f-status f-status-failed">Couldn't read this file</span>
         {% else if row.needs_review() %}
         <span class="f-status f-status-pending">Needs a look</span>
         {% else %}

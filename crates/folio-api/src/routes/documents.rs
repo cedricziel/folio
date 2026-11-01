@@ -2,12 +2,14 @@
 
 use axum::{
     body::Body,
-    extract::{Multipart, Path, Query, State},
+    extract::{Multipart, Path, Query, RawQuery, State},
     http::header,
     routing::{get, post},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::{debug, error};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -36,25 +38,131 @@ pub fn router() -> Router<AppState> {
         .route("/search", get(search_documents_get).post(search_documents))
 }
 
-/// Query parameters for listing documents
-#[derive(Debug, Deserialize, IntoParams)]
+/// Query parameters for listing documents. Only documents the filters all match are returned.
+///
+/// Parsed by hand in the handler because `tag_id` repeats.
+#[derive(Debug, IntoParams)]
 #[into_params(parameter_in = Query)]
+#[allow(dead_code)]
 pub struct ListDocumentsQuery {
     /// Only return documents from this correspondent
     correspondent_id: Option<Uuid>,
     /// Only return documents of this type
     document_type_id: Option<Uuid>,
+    /// Only return documents that carry every one of these tags; repeat the parameter for several
+    #[param(style = Form, explode)]
+    tag_id: Option<Vec<Uuid>>,
+    /// Only return documents created at or after this instant (RFC 3339)
+    created_after: Option<DateTime<Utc>>,
+    /// Only return documents created before this instant (RFC 3339)
+    created_before: Option<DateTime<Utc>>,
+}
+
+impl ListDocumentsQuery {
+    fn filter(raw: Option<&str>) -> ApiResult<Option<DocumentFilter>> {
+        fn parse<T: std::str::FromStr>(name: &str, value: &str) -> ApiResult<T> {
+            value
+                .parse()
+                .map_err(|_| ApiError::bad_request(format!("Invalid value for {name}")))
+        }
+
+        let mut filter = DocumentFilter::default();
+        let mut any = false;
+        for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+            any = true;
+            match key.as_ref() {
+                "correspondent_id" => filter.correspondent_id = Some(parse(&key, &value)?),
+                "document_type_id" => filter.document_type_id = Some(parse(&key, &value)?),
+                "tag_id" => filter
+                    .tag_ids
+                    .get_or_insert_with(Vec::new)
+                    .push(parse(&key, &value)?),
+                "created_after" => filter.created_after = Some(parse(&key, &value)?),
+                "created_before" => filter.created_before = Some(parse(&key, &value)?),
+                _ => any = false,
+            }
+        }
+        Ok(any.then_some(filter))
+    }
+}
+
+/// A tag as shown on a document
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DocumentTag {
+    id: Uuid,
+    name: String,
+    /// Hex color such as "#ff5733", when the tag has one
+    color: Option<String>,
+}
+
+/// A document together with the names behind its ids
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DocumentView {
+    #[serde(flatten)]
+    #[schema(inline = false)]
+    document: Document,
+    /// Name of the correspondent, when one is set
+    correspondent: Option<String>,
+    /// Name of the document type, when one is set
+    document_type: Option<String>,
+    tags: Vec<DocumentTag>,
 }
 
 /// Response for document list
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DocumentListResponse {
-    documents: Vec<Document>,
+    documents: Vec<DocumentView>,
     /// Number of documents returned
     count: usize,
 }
 
-/// List documents, optionally filtered by correspondent or document type
+async fn present(state: &AppState, documents: Vec<Document>) -> ApiResult<Vec<DocumentView>> {
+    let correspondents: HashMap<_, _> = state
+        .correspondent_repo
+        .list()
+        .await?
+        .into_iter()
+        .map(|c| (c.id, c.name))
+        .collect();
+    let types: HashMap<_, _> = state
+        .document_type_repo
+        .list()
+        .await?
+        .into_iter()
+        .map(|t| (t.id, t.name))
+        .collect();
+
+    futures::future::try_join_all(documents.into_iter().map(|document| {
+        let correspondents = &correspondents;
+        let types = &types;
+        async move {
+            let tags = state
+                .document_repo
+                .get_tags(document.id)
+                .await?
+                .into_iter()
+                .map(|t| DocumentTag {
+                    id: t.id,
+                    name: t.name,
+                    color: t.color,
+                })
+                .collect();
+            Ok::<_, ApiError>(DocumentView {
+                correspondent: document
+                    .correspondent_id
+                    .and_then(|id| correspondents.get(&id).cloned()),
+                document_type: document
+                    .document_type_id
+                    .and_then(|id| types.get(&id).cloned()),
+                tags,
+                document,
+            })
+        }
+    }))
+    .await
+}
+
+/// List documents, newest first, with their tags and the names of their correspondent and type
 #[utoipa::path(
     get,
     path = "/api/documents",
@@ -63,24 +171,16 @@ pub struct DocumentListResponse {
     params(ListDocumentsQuery),
     responses(
         (status = 200, description = "Matching documents", body = DocumentListResponse),
+        BadRequest,
         InternalError,
     )
 )]
 pub(crate) async fn list_documents(
     State(state): State<AppState>,
-    Query(query): Query<ListDocumentsQuery>,
+    RawQuery(query): RawQuery,
 ) -> ApiResult<Json<DocumentListResponse>> {
-    let filter = if query.correspondent_id.is_some() || query.document_type_id.is_some() {
-        Some(DocumentFilter {
-            correspondent_id: query.correspondent_id,
-            document_type_id: query.document_type_id,
-            ..Default::default()
-        })
-    } else {
-        None
-    };
-
-    let documents = state.document_repo.list(filter).await?;
+    let filter = ListDocumentsQuery::filter(query.as_deref())?;
+    let documents = present(&state, state.document_repo.list(filter).await?).await?;
     let count = documents.len();
 
     Ok(Json(DocumentListResponse { documents, count }))
@@ -94,7 +194,7 @@ pub(crate) async fn list_documents(
     tag = "documents",
     params(("id" = Uuid, Path, description = "Document ID")),
     responses(
-        (status = 200, description = "The document", body = Document),
+        (status = 200, description = "The document", body = DocumentView),
         NotFound,
         InternalError,
     )
@@ -102,14 +202,15 @@ pub(crate) async fn list_documents(
 pub(crate) async fn get_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> ApiResult<Json<Document>> {
+) -> ApiResult<Json<DocumentView>> {
     let document = state
         .document_repo
         .find_by_id(id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
+    let view = present(&state, vec![document]).await?.remove(0);
 
-    Ok(Json(document))
+    Ok(Json(view))
 }
 
 /// Request body for creating a document
