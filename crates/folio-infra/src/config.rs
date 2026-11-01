@@ -94,6 +94,7 @@ pub struct AuthConfig {
     /// Require a session or token for the web UI and API.
     pub required: bool,
     pub forward: ForwardAuthConfig,
+    pub oidc: OidcConfig,
 }
 
 impl Default for AuthConfig {
@@ -101,6 +102,7 @@ impl Default for AuthConfig {
         Self {
             required: true,
             forward: ForwardAuthConfig::default(),
+            oidc: OidcConfig::default(),
         }
     }
 }
@@ -130,6 +132,57 @@ impl Default for ForwardAuthConfig {
             groups_header: "Remote-Groups".to_string(),
             trusted_proxies: Vec::new(),
             admin_group: None,
+        }
+    }
+}
+
+/// Sign-in through an OpenID Connect identity provider.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OidcConfig {
+    pub enabled: bool,
+    pub issuer: Option<String>,
+    pub client_id: Option<String>,
+    /// Unset for public clients.
+    pub client_secret: Option<String>,
+    /// Space-separated scopes to request.
+    pub scopes: String,
+    /// Label of the sign-in button.
+    pub display_name: String,
+    /// Claim holding the user's group names.
+    pub groups_claim: String,
+    /// Members of this (external) group become admins.
+    pub admin_group: Option<String>,
+    /// Keep the username and password form next to the SSO button.
+    pub allow_local_login: bool,
+    /// Create an account the first time someone signs in.
+    pub auto_create_users: bool,
+}
+
+impl std::fmt::Debug for OidcConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcConfig")
+            .field("enabled", &self.enabled)
+            .field("issuer", &self.issuer)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret.as_ref().map(|_| "***"))
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            issuer: None,
+            client_id: None,
+            client_secret: None,
+            scopes: "openid profile email".to_string(),
+            display_name: "Sign in with SSO".to_string(),
+            groups_claim: "groups".to_string(),
+            admin_group: None,
+            allow_local_login: true,
+            auto_create_users: true,
         }
     }
 }
@@ -254,6 +307,66 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AUTH__FORWARD__ADMIN_GROUP",
         legacy_env: &[],
         kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.enabled",
+        env: "FOLIO_AUTH__OIDC__ENABLED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "auth.oidc.issuer",
+        env: "FOLIO_AUTH__OIDC__ISSUER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.client_id",
+        env: "FOLIO_AUTH__OIDC__CLIENT_ID",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.client_secret",
+        env: "FOLIO_AUTH__OIDC__CLIENT_SECRET",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.scopes",
+        env: "FOLIO_AUTH__OIDC__SCOPES",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.display_name",
+        env: "FOLIO_AUTH__OIDC__DISPLAY_NAME",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.groups_claim",
+        env: "FOLIO_AUTH__OIDC__GROUPS_CLAIM",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.admin_group",
+        env: "FOLIO_AUTH__OIDC__ADMIN_GROUP",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.oidc.allow_local_login",
+        env: "FOLIO_AUTH__OIDC__ALLOW_LOCAL_LOGIN",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "auth.oidc.auto_create_users",
+        env: "FOLIO_AUTH__OIDC__AUTO_CREATE_USERS",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
     },
     Setting {
         key: "database.url",
@@ -510,6 +623,34 @@ mod tests {
         );
         assert_eq!(config.auth.forward.admin_group.as_deref(), Some("admins"));
         assert_eq!(config.auth.forward.user_header, "Remote-User");
+    }
+
+    #[test]
+    fn oidc_defaults_and_secret_file() {
+        let config = load(&[]);
+        let oidc = &config.auth.oidc;
+        assert!(!oidc.enabled);
+        assert_eq!(oidc.scopes, "openid profile email");
+        assert_eq!(oidc.groups_claim, "groups");
+        assert!(oidc.allow_local_login && oidc.auto_create_users);
+
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret");
+        std::fs::write(&secret, "s3cret\n").unwrap();
+        let config = load(&[
+            ("FOLIO_AUTH__OIDC__ENABLED", "true"),
+            (
+                "FOLIO_AUTH__OIDC__ISSUER",
+                "https://auth.example.com/application/o/folio/",
+            ),
+            (
+                "FOLIO_AUTH__OIDC__CLIENT_SECRET_FILE",
+                secret.to_str().unwrap(),
+            ),
+        ]);
+        assert!(config.auth.oidc.enabled);
+        assert_eq!(config.auth.oidc.client_secret.as_deref(), Some("s3cret"));
+        assert!(!format!("{:?}", config.auth.oidc).contains("s3cret"));
     }
 
     #[test]
