@@ -41,6 +41,7 @@ body {
   font: inherit;
   font-size: 14px;
   font-weight: 500;
+  text-decoration: none;
   cursor: pointer;
   transition:
     background 120ms ease-out,
@@ -209,13 +210,25 @@ body {
 .f-row .f-thumb {
   width: 40px;
 }
+.f-row-plain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
 .f-row-title {
+  display: block;
   font-weight: 600;
   font-size: 15px;
   line-height: 20px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+a.f-row-title,
+a.f-row-title:visited {
+  color: var(--ink);
+  text-decoration: none;
+}
+a.f-row-title:hover {
+  text-decoration: underline;
 }
 .f-row-sub {
   font-size: 13px;

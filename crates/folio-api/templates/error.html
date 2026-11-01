@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block title %}{{ heading }} - Folio{% endblock %}
+
+{% block content %}
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">{{ heading }}</h1>
+        <p class="lede">{{ message }}</p>
+    </header>
+    <p><a href="/">Back to the inbox</a></p>
+</section>
+{% endblock %}

@@ -7,61 +7,6 @@ import { authScreens, config, tour, TourInstance, viewportsFor } from "./tour";
 // and each entry shows up as a fixme test, so they stay visible in reports.
 // Remove an entry together with the fix; anything new still fails.
 const known: { rule: string; target: string; issue: string }[] = [
-  {
-    rule: "color-contrast",
-    target: ".search-label",
-    issue: "https://github.com/cedricziel/folio/issues/64",
-  },
-  {
-    rule: "target-size",
-    target: ".f-tag",
-    issue: "https://github.com/cedricziel/folio/issues/64",
-  },
-  {
-    rule: "target-size",
-    target: ".f-row-title",
-    issue: "https://github.com/cedricziel/folio/issues/59",
-  },
-  {
-    rule: "aria-required-children",
-    target: ".palette-results",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "aria-required-parent",
-    target: "data-index",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "aria-input-field-name",
-    target: ".palette-results",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "listitem",
-    target: ".palette-results",
-    issue: "https://github.com/cedricziel/folio/issues/62",
-  },
-  {
-    rule: "label",
-    target: "email_to",
-    issue: "https://github.com/cedricziel/folio/issues/63",
-  },
-  {
-    rule: "select-name",
-    target: "_mode",
-    issue: "https://github.com/cedricziel/folio/issues/63",
-  },
-  {
-    rule: "document-title",
-    target: "html",
-    issue: "https://github.com/cedricziel/folio/issues/60",
-  },
-  {
-    rule: "html-has-lang",
-    target: "html",
-    issue: "https://github.com/cedricziel/folio/issues/60",
-  },
 ];
 
 const isKnown = (rule: string, target: string) =>

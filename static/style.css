@@ -97,6 +97,19 @@ a:not([class]):hover,
   min-height: 100dvh;
 }
 
+/* The sidebar sticks at viewport height, so its own background ends there on
+   long pages. Paint the column on the grid so it spans the whole page. */
+@media (min-width: 769px) {
+  .app {
+    background: linear-gradient(
+      to right,
+      var(--paper-sunken) 247px,
+      var(--rule) 247px 248px,
+      transparent 248px
+    );
+  }
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -246,10 +259,11 @@ a:not([class]):hover,
 .side-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-2);
   margin-bottom: var(--space-2);
 }
 .side-tags .f-tag {
+  height: 24px;
   text-decoration: none;
 }
 
@@ -295,7 +309,7 @@ a:not([class]):hover,
 }
 .search-label {
   flex: 1;
-  color: var(--ink-faint);
+  color: var(--ink-muted);
 }
 .menu-btn {
   display: none;
@@ -320,6 +334,21 @@ a:not([class]):hover,
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+.page-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.page-head .back-link {
+  margin-bottom: var(--space-2);
+}
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .filter-line {
@@ -466,6 +495,10 @@ a:not([class]):hover,
   height: auto;
   transition: opacity 120ms ease-out;
 }
+.page-nav .f-btn[disabled] {
+  border-color: transparent;
+  background: transparent;
+}
 .page-nav {
   display: flex;
   align-items: center;
@@ -529,9 +562,12 @@ a:not([class]):hover,
   color: var(--ink-muted);
 }
 .tag-remove {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 2px;
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  margin-inline-end: -6px;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--ink-muted);
@@ -595,6 +631,61 @@ a:not([class]):hover,
 .input-row {
   display: flex;
   gap: var(--space-2);
+}
+.input-row .match-mode {
+  flex: none;
+  width: auto;
+}
+.input-row .input {
+  flex: 1;
+  min-width: 0;
+}
+fieldset.field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+.legend {
+  padding: 0;
+  margin-bottom: var(--space-2);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+}
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.workflow-form {
+  max-width: 640px;
+}
+.action-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--paper-raised);
+}
+.action-card > .heading {
+  font-size: 14px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 400;
+}
+.check-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+}
+.push-end {
+  margin-left: auto;
 }
 .form-actions {
   display: flex;
@@ -674,29 +765,23 @@ a:not([class]):hover,
 }
 
 /* Dialogs */
-.overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-4);
-  background: color-mix(in srgb, var(--ink) 40%, transparent);
+dialog.dialog {
+  width: min(480px, calc(100% - 2 * var(--space-4)));
+  max-width: none;
+  max-height: calc(100% - 2 * var(--space-4));
+  margin: auto;
+  padding: 0;
+  color: var(--ink);
+  overflow-y: auto;
 }
-.overlay.active {
-  display: flex;
+dialog.dialog[open] {
   animation: fade-in 200ms ease-out;
 }
-.overlay-top {
-  align-items: flex-start;
-  padding-top: 12vh;
+dialog.dialog::backdrop {
+  background: color-mix(in srgb, var(--ink) 40%, transparent);
 }
-.dialog {
-  width: min(480px, 100%);
-  max-height: 100%;
+.dialog-inner {
   padding: var(--space-4);
-  overflow-y: auto;
 }
 .dialog-header {
   display: flex;
@@ -714,16 +799,6 @@ a:not([class]):hover,
   margin: var(--space-2) 0 var(--space-4);
 }
 
-dialog.dialog {
-  margin: auto;
-  color: var(--ink);
-}
-dialog.dialog::backdrop {
-  background: color-mix(in srgb, var(--ink) 40%, transparent);
-}
-dialog.dialog[open] {
-  animation: fade-in 200ms ease-out;
-}
 dialog.dialog p + .dialog-actions,
 dialog.dialog h2 + p {
   margin-top: var(--space-2);
@@ -732,7 +807,8 @@ dialog.dialog form {
   margin-top: var(--space-4);
 }
 .shortcuts-dialog {
-  width: min(520px, 100%);
+  width: min(520px, calc(100% - 2 * var(--space-4)));
+  padding: var(--space-4);
 }
 .shortcuts-dialog .f-label {
   margin: var(--space-4) 0 var(--space-1);
@@ -763,9 +839,9 @@ dialog.dialog form {
   margin-top: var(--space-4);
 }
 
-.palette {
-  width: min(640px, 100%);
-  padding: 0;
+dialog.palette {
+  width: min(640px, calc(100% - 2 * var(--space-4)));
+  margin-top: 12vh;
 }
 .palette-header {
   display: flex;
@@ -801,15 +877,14 @@ dialog.dialog form {
   padding: var(--space-4);
   color: var(--ink-muted);
 }
-.palette-results {
-  margin: 0;
-  padding: 0;
-  list-style: none;
+.palette-note:empty,
+.palette-heading:empty {
+  display: none;
 }
 .palette-item {
   position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   min-height: 40px;
@@ -817,6 +892,20 @@ dialog.dialog form {
   border-radius: var(--radius-md);
   color: var(--ink);
   text-decoration: none;
+}
+.palette-item .f-meta {
+  flex: none;
+  white-space: nowrap;
+}
+.f-row-plain .f-row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-3);
+}
+.palette-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 .palette-item-title {
   min-width: 0;
@@ -955,11 +1044,16 @@ dialog.dialog form {
     z-index: 30;
     width: min(300px, 85vw);
     transform: translateX(-100%);
-    transition: transform 200ms ease-out;
+    visibility: hidden;
+    transition:
+      transform 200ms ease-out,
+      visibility 0s linear 200ms;
     box-shadow: var(--shadow-pop);
   }
   .nav-open .sidebar {
     transform: none;
+    visibility: visible;
+    transition-delay: 0s;
   }
   .nav-open .scrim {
     display: block;
@@ -997,8 +1091,8 @@ dialog.dialog form {
   .f-meta-list dd {
     margin-bottom: var(--space-3);
   }
-  .overlay-top {
-    padding-top: var(--space-4);
+  dialog.palette {
+    margin-top: var(--space-4);
   }
   .upload-queue {
     bottom: var(--space-2);
@@ -1039,6 +1133,10 @@ dialog.dialog form {
   }
   .page-thumb {
     min-width: 44px;
+  }
+  .f-notice a {
+    display: inline-block;
+    padding-block: 12px;
   }
   .f-row {
     min-height: 64px;
