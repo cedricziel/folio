@@ -1,8 +1,9 @@
 import CoreGraphics
-@testable import FolioKit
 import Foundation
 import PDFKit
 import Testing
+
+@testable import FolioKit
 
 private func page(width: Int, height: Int) -> CGImage {
     let context = CGContext(

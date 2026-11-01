@@ -134,7 +134,7 @@ public struct LiveFolioService: FolioService {
 
     private func check(_ response: URLResponse, body: Data?) throws {
         guard let http = response as? HTTPURLResponse else { throw FolioError.unreadableResponse }
-        guard (200 ..< 300).contains(http.statusCode) else {
+        guard (200..<300).contains(http.statusCode) else {
             throw FolioError.server(status: http.statusCode, message: body.flatMap(ErrorMappingMiddleware.message))
         }
     }

@@ -1,6 +1,7 @@
-@testable import FolioKit
 import Foundation
 import Testing
+
+@testable import FolioKit
 
 private let stadtwerke = Correspondent(name: "Stadtwerke Köln")
 private let invoice = DocumentType(name: "Invoice")

@@ -14,7 +14,7 @@ public enum PDFBuilder {
         guard !images.isEmpty else { throw Failure.noPages }
         let data = NSMutableData()
         guard let consumer = CGDataConsumer(data: data as CFMutableData),
-              let context = CGContext(consumer: consumer, mediaBox: nil, nil)
+            let context = CGContext(consumer: consumer, mediaBox: nil, nil)
         else { throw Failure.renderingFailed }
 
         for image in images {

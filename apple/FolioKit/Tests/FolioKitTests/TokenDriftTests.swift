@@ -1,6 +1,7 @@
-@testable import FolioTokens
 import Foundation
 import Testing
+
+@testable import FolioTokens
 
 /// Fails when design/tokens.json changes without regenerating the committed theme and asset catalog.
 struct TokenDriftTests {

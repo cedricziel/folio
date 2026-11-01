@@ -1,5 +1,6 @@
-@testable import FolioKit
 import Foundation
+
+@testable import FolioKit
 
 actor MockFolioService: FolioService {
     var documentList: [Document] = []

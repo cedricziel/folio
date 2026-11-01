@@ -18,6 +18,10 @@ public struct DocumentRow: Identifiable, Equatable, Sendable {
     public var status: Document.Status {
         document.status
     }
+
+    public var tags: [Tag] {
+        document.tags
+    }
 }
 
 @MainActor @Observable
@@ -69,8 +73,12 @@ public final class DocumentListViewModel {
             try? await Task.sleep(for: searchDebounce)
         }
         guard !Task.isCancelled else { return }
-        if rows.isEmpty { phase = .loading }
-        if !lookupsLoaded { await loadLookups() }
+        if rows.isEmpty {
+            phase = .loading
+        }
+        if !lookupsLoaded {
+            await loadLookups()
+        }
         await fetch(query: query)
         rebuildRows()
     }

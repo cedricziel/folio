@@ -40,8 +40,8 @@ public enum ServerAddress {
         }
 
         guard var components = URLComponents(string: text),
-              let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
-              let host = components.host, !host.isEmpty
+            let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme),
+            let host = components.host, !host.isEmpty
         else { throw FolioError.invalidServerURL }
 
         components.query = nil

@@ -1,6 +1,7 @@
-@testable import FolioTokens
 import Foundation
 import Testing
+
+@testable import FolioTokens
 
 private let sample = Data(
     """

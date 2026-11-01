@@ -17,10 +17,10 @@ let package = Package(
         .target(
             name: "FolioAPI",
             dependencies: [
-                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
+                .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")
             ],
             plugins: [
-                .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator"),
+                .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
             ]
         ),
         .target(
