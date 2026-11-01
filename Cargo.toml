@@ -5,6 +5,7 @@ members = [
     "crates/folio-infra",
     "crates/folio-api",
     "folio-app",
+    "xtask",
 ]
 
 [workspace.package]

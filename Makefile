@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup
+.PHONY: build run test lint format clean dev setup tokens
 
 # Default target
 all: build
@@ -30,6 +30,10 @@ lint:
 # Format code
 format:
 	cargo fmt --all
+
+# Regenerate static/tokens.css and static/components.css from design/
+tokens:
+	cargo run -p xtask -- tokens
 
 # Check formatting
 format-check:
