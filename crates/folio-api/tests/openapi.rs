@@ -25,7 +25,7 @@ fn committed_spec_matches_generated_spec() {
     assert!(
         committed == generated,
         "openapi/openapi.json is out of date. Regenerate it with:\n\n    \
-         UPDATE_OPENAPI=1 cargo test -p folio-api openapi\n\n(or `make openapi`) and commit the result."
+         UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi\n\n(or `make openapi`) and commit the result."
     );
 }
 
