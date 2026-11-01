@@ -2,22 +2,20 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 
-/// GET `/healthz` on loopback at `port`; succeeds only on a 2xx response.
+/// GET `/healthz` on loopback at `port`; fails on transport errors, timeouts, and 4xx or 5xx statuses.
 pub async fn run(port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/healthz");
     let client = reqwest::Client::builder().timeout(TIMEOUT).build()?;
-    let response = client
+    client
         .get(&url)
         .send()
         .await
+        .and_then(|response| response.error_for_status())
         .with_context(|| format!("GET {url} failed"))?;
-    if !response.status().is_success() {
-        bail!("GET {url} returned {}", response.status());
-    }
     Ok(())
 }
 
