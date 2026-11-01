@@ -13,7 +13,9 @@ use uuid::Uuid;
 use axum::response::{IntoResponse, Redirect, Response};
 
 use folio_core::events::DocumentEvent;
-use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
+use folio_core::models::{
+    CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
+};
 
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
@@ -139,10 +141,10 @@ pub(crate) async fn create_document(
         .create(CreateDocument {
             title: req.title,
             content: req.content,
-            original_filename: None,
-            mime_type: None,
             correspondent_id: req.correspondent_id,
             document_type_id: req.document_type_id,
+            source: DocumentSource::of(SourceKind::Api),
+            ..Default::default()
         })
         .await?;
 
@@ -257,8 +259,8 @@ pub(crate) async fn upload_document(
             content: content.clone(),
             original_filename: filename.clone(),
             mime_type: Some(mime_type),
-            correspondent_id: None,
-            document_type_id: None,
+            source: DocumentSource::of(SourceKind::Api),
+            ..Default::default()
         })
         .await?;
 

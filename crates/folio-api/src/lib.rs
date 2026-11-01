@@ -10,4 +10,4 @@ pub mod state;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use routes::create_router;
-pub use state::AppState;
+pub use state::{AppState, IngestionState};

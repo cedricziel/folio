@@ -9,16 +9,17 @@ use axum::{
     routing::post,
     Router,
 };
-use folio_api::{create_router, AppState};
+use folio_api::{create_router, AppState, IngestionState};
 use folio_core::{
     models::{WorkflowAction, WorkflowRun, WorkflowTrigger},
     EventBroadcaster,
 };
 use folio_infra::{
     create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
-    ThumbnailService, WebhookClient,
+    SourceFactory, SqliteCorrespondentRepository, SqliteDocumentRepository,
+    SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteSearchService,
+    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
+    SqliteWorkflowRepository, ThumbnailService, WebhookClient,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -48,6 +49,13 @@ async fn test_app() -> TestApp {
 
     let ai = Config::default().ai;
     let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
+    let ingestion = IngestionState {
+        managed: Arc::new(SqliteSourceRepository::new(pool.clone())),
+        configured: Arc::new(Vec::new()),
+        factory: Arc::new(SourceFactory::new(Arc::new(SqliteIngestLedger::new(
+            pool.clone(),
+        )))),
+    };
     let state = AppState::new(
         Arc::new(SqliteDocumentRepository::new(pool.clone())),
         Arc::new(SqliteTagRepository::new(pool.clone())),
@@ -68,6 +76,7 @@ async fn test_app() -> TestApp {
         Arc::new(SqliteWorkflowRepository::new(pool)),
         WebhookClient::new(),
         "http://folio.test".to_string(),
+        ingestion,
     );
 
     TestApp {

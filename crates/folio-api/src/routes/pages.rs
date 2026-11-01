@@ -12,8 +12,9 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use folio_core::models::{
-    Correspondent, CreateDocument, Document, DocumentType, Tag, UpdateDocument,
+    Correspondent, Document, DocumentSource, DocumentType, SourceKind, Tag, UpdateDocument,
 };
+use folio_core::ports::ImportRequest;
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
@@ -373,47 +374,18 @@ async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Create document record (OCR will be done by background worker)
+    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
     let document = state
-        .document_repo
-        .create(CreateDocument {
+        .importer
+        .import(ImportRequest {
             title,
-            content: None,
-            original_filename: filename.clone(),
-            mime_type: Some(mime_type),
-            correspondent_id: None,
-            document_type_id: None,
+            filename: filename.unwrap_or_else(|| "upload".to_string()),
+            mime_type,
+            data: file_data,
+            source: DocumentSource::of(SourceKind::Upload),
+            tag_ids: Vec::new(),
         })
         .await?;
-
-    // Store the file
-    let storage = folio_infra::FileStorage::new(&state.storage_path);
-    if let Some(fname) = filename {
-        if let Ok(file_path) = storage.store(document.id, &fname, &file_data).await {
-            let _ = state
-                .document_repo
-                .set_file_path(document.id, &file_path)
-                .await;
-        }
-    }
-
-    // Enqueue background job for thumbnail, OCR, and embedding
-    if let Err(e) = state
-        .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        })
-        .await
-    {
-        error!("Failed to enqueue document processing job: {}", e);
-    }
-
-    // Re-fetch to get updated document with file_path
-    let document = state
-        .document_repo
-        .find_by_id(document.id)
-        .await?
-        .unwrap_or(document);
 
     // Fetch all documents for the list update
     let documents = state.document_repo.list(None).await?;

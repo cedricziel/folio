@@ -56,10 +56,51 @@
         </fieldset>
 
         <fieldset class="f-field">
+            <legend class="f-label">Only if it came from</legend>
+            <p class="f-meta">For folders and mailboxes. Leave a field empty to ignore it.</p>
+            <label class="f-label" for="source_kind">Source</label>
+            <select class="f-input" id="source_kind" name="source_kind">
+                <option value="">Any</option>
+                <option value="upload"{% if values.source_kind == "upload" %} selected{% endif %}>upload</option>
+                <option value="api"{% if values.source_kind == "api" %} selected{% endif %}>api</option>
+                <option value="folder"{% if values.source_kind == "folder" %} selected{% endif %}>folder</option>
+                <option value="email"{% if values.source_kind == "email" %} selected{% endif %}>email</option>
+            </select>
+            <label class="f-label" for="folder_path_glob">Folder path</label>
+            <input class="f-input" type="text" id="folder_path_glob" name="folder_path_glob" value="{{ values.folder_path_glob }}" placeholder="Insurance/*">
+            <label class="f-label">Email sender</label>
+            <select class="f-input" name="email_from_mode">
+                <option value="glob"{% if values.email_from_mode == "glob" %} selected{% endif %}>matches wildcard</option>
+                <option value="contains"{% if values.email_from_mode == "contains" %} selected{% endif %}>contains</option>
+                <option value="regex"{% if values.email_from_mode == "regex" %} selected{% endif %}>matches regex</option>
+            </select>
+            <input class="f-input" type="text" name="email_from" value="{{ values.email_from }}" placeholder="*@newsletter.example">
+            <label class="f-label">Email recipient</label>
+            <select class="f-input" name="email_to_mode">
+                <option value="glob"{% if values.email_to_mode == "glob" %} selected{% endif %}>matches wildcard</option>
+                <option value="contains"{% if values.email_to_mode == "contains" %} selected{% endif %}>contains</option>
+                <option value="regex"{% if values.email_to_mode == "regex" %} selected{% endif %}>matches regex</option>
+            </select>
+            <input class="f-input" type="text" name="email_to" value="{{ values.email_to }}">
+            <label class="f-label">Email subject</label>
+            <select class="f-input" name="email_subject_mode">
+                <option value="glob"{% if values.email_subject_mode == "glob" %} selected{% endif %}>matches wildcard</option>
+                <option value="contains"{% if values.email_subject_mode == "contains" %} selected{% endif %}>contains</option>
+                <option value="regex"{% if values.email_subject_mode == "regex" %} selected{% endif %}>matches regex</option>
+            </select>
+            <input class="f-input" type="text" name="email_subject" value="{{ values.email_subject }}" placeholder="invoice">
+            <label class="f-label" for="email_attachment_glob">Attachment name</label>
+            <input class="f-input" type="text" id="email_attachment_glob" name="email_attachment_glob" value="{{ values.email_attachment_glob }}" placeholder="*.pdf">
+            <label class="f-label" for="email_mailbox_glob">Mailbox</label>
+            <input class="f-input" type="text" id="email_mailbox_glob" name="email_mailbox_glob" value="{{ values.email_mailbox_glob }}" placeholder="INBOX/Invoices">
+        </fieldset>
+
+        <fieldset class="f-field">
             <legend class="f-label">Send a webhook</legend>
+            <p class="f-meta">Not used for ingest.received: those workflows only discard files that match.</p>
             <p class="f-meta">Folio posts the event as JSON. Addresses on your own network are allowed; only http and https are accepted.</p>
             <label class="f-label" for="webhook_url">URL</label>
-            <input class="f-input" type="url" id="webhook_url" name="webhook_url" value="{{ values.webhook_url }}" placeholder="http://homeassistant.local:8123/api/webhook/folio" required>
+            <input class="f-input" type="url" id="webhook_url" name="webhook_url" value="{{ values.webhook_url }}" placeholder="http://homeassistant.local:8123/api/webhook/folio">
             <label class="f-label" for="webhook_secret">Secret</label>
             <input class="f-input" type="password" id="webhook_secret" name="webhook_secret" autocomplete="off"
                    placeholder="{% if has_secret %}{{ secret_mask }} (leave empty to keep){% else %}Optional, signs each delivery{% endif %}">

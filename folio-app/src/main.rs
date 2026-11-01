@@ -9,15 +9,18 @@ use tokio::sync::watch;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
-use folio_api::{create_router, AppState};
-use folio_core::services::{EventingDocumentRepository, WorkflowEngine};
+use folio_api::{create_router, AppState, IngestionState};
+use folio_core::services::{
+    EventingDocumentRepository, IngestPipeline, IngestScheduler, WorkflowEngine,
+};
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
     create_pool, run_migrations, Config, DatabaseHealthCheck, DynamicEmbeddingService,
-    DynamicOcrService, FileStorage, JobQueue, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
-    SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository, StorageFileMetadata,
-    ThumbnailService, WebhookClient, Worker, WorkerConfig, WorkflowRunner,
+    DynamicOcrService, FileStorage, JobQueue, SourceFactory, SqliteCorrespondentRepository, SqliteDocumentRepository,
+    SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteSearchService,
+    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
+    SqliteWorkflowRepository, StorageDocumentImporter, StorageFileMetadata, ThumbnailService,
+    WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };
 
 #[tokio::main]
@@ -133,6 +136,28 @@ async fn main() -> Result<()> {
         public_url.clone(),
     ));
 
+    let ledger = Arc::new(SqliteIngestLedger::new(pool.clone()));
+    let source_repo = Arc::new(SqliteSourceRepository::new(pool.clone()));
+    let source_factory = Arc::new(SourceFactory::new(ledger.clone()));
+    let configured_sources = config.ingest.definitions();
+    let ingest_pipeline = Arc::new(IngestPipeline::new(
+        document_repo.clone(),
+        tag_repo.clone(),
+        workflow_repo.clone(),
+        ledger,
+        Arc::new(StorageDocumentImporter::new(
+            api_document_repo.clone(),
+            FileStorage::new(&config.storage.path),
+            job_queue.clone(),
+        )),
+    ));
+    let ingest_scheduler = IngestScheduler::new(
+        source_repo.clone(),
+        configured_sources.clone(),
+        source_factory.clone(),
+        ingest_pipeline,
+    );
+
     info!("Services initialized");
 
     // Create shutdown channel for worker
@@ -154,6 +179,8 @@ async fn main() -> Result<()> {
 
     let engine_handle =
         tokio::spawn(workflow_engine.run(event_broadcaster.subscribe(), shutdown_tx.subscribe()));
+
+    let scheduler_handle = tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 
     let worker_handle = tokio::spawn(async move {
         worker.run(shutdown_rx).await;
@@ -181,6 +208,11 @@ async fn main() -> Result<()> {
         workflow_repo,
         webhook_client,
         public_url,
+        IngestionState {
+            managed: source_repo,
+            configured: Arc::new(configured_sources),
+            factory: source_factory,
+        },
     )
     .with_health_checks(health_checks);
 
@@ -209,6 +241,7 @@ async fn main() -> Result<()> {
     // Wait for worker to finish (with timeout)
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), worker_handle).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), engine_handle).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), scheduler_handle).await;
 
     info!("Folio shutdown complete");
     Ok(())

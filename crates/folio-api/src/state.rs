@@ -2,15 +2,29 @@
 
 use std::sync::Arc;
 
+use folio_core::models::IngestionSourceDef;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentTypeRepository,
+    EmbeddingService, HealthCheck, IngestionSourceFactory, OcrService, SearchService,
+    SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
-use folio_infra::{JobQueue, ThumbnailService, WebhookClient};
+use folio_infra::{
+    FileStorage, JobQueue, StorageDocumentImporter, ThumbnailService, WebhookClient,
+};
 
 use folio_core::EventBroadcaster;
 
 use crate::routes::HealthChecks;
+
+/// What the UI needs to manage and test ingestion sources
+#[derive(Clone)]
+pub struct IngestionState {
+    /// Sources created in the UI
+    pub managed: Arc<dyn SourceRepository>,
+    /// Sources from environment or `config.toml`, shown read-only
+    pub configured: Arc<Vec<IngestionSourceDef>>,
+    pub factory: Arc<dyn IngestionSourceFactory>,
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -32,6 +46,9 @@ pub struct AppState {
     pub webhook_client: WebhookClient,
     /// Externally reachable base URL, used for links in webhook payloads
     pub public_url: String,
+    /// The one path that stores a new document
+    pub importer: Arc<dyn DocumentImporter>,
+    pub ingestion: IngestionState,
 }
 
 impl AppState {
@@ -52,7 +69,13 @@ impl AppState {
         workflow_repo: Arc<dyn WorkflowRepository>,
         webhook_client: WebhookClient,
         public_url: String,
+        ingestion: IngestionState,
     ) -> Self {
+        let importer = Arc::new(StorageDocumentImporter::new(
+            document_repo.clone(),
+            FileStorage::new(&storage_path),
+            job_queue.clone(),
+        ));
         Self {
             document_repo,
             tag_repo,
@@ -70,6 +93,8 @@ impl AppState {
             workflow_repo,
             webhook_client,
             public_url,
+            importer,
+            ingestion,
         }
     }
 

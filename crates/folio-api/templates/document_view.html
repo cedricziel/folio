@@ -195,6 +195,11 @@
                     {% endmatch %}
 
                     <div class="doc-meta-item">
+                        <span class="doc-meta-label">Source</span>
+                        <span class="doc-meta-value">{{ document.source.describe() }}</span>
+                    </div>
+
+                    <div class="doc-meta-item">
                         <span class="doc-meta-label">Created</span>
                         <span class="doc-meta-value">{{ document.created_at.format("%B %d, %Y at %H:%M") }}</span>
                     </div>

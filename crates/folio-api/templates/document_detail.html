@@ -29,6 +29,9 @@
                 <dd>{{ mime }}</dd>
                 {% when None %}
                 {% endmatch %}
+
+                <dt>Source</dt>
+                <dd>{{ document.source.describe() }}</dd>
             </dl>
         </div>
 

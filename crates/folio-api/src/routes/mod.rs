@@ -8,6 +8,8 @@ mod health;
 mod manage;
 mod pages;
 mod settings;
+mod source_pages;
+pub(crate) mod sources;
 pub(crate) mod tags;
 mod workflow_pages;
 pub(crate) mod workflows;
@@ -36,6 +38,8 @@ pub fn create_router(state: AppState) -> Router {
         .merge(settings::router())
         // Workflow pages
         .merge(workflow_pages::router())
+        // Source pages
+        .merge(source_pages::router())
         // SSE events
         .merge(events::router())
         // Static files
@@ -65,4 +69,5 @@ fn api_router() -> Router<AppState> {
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())
         .nest("/workflows", workflows::router())
+        .nest("/sources", sources::router())
 }
