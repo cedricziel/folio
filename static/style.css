@@ -246,10 +246,11 @@ a:not([class]):hover,
 .side-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-2);
   margin-bottom: var(--space-2);
 }
 .side-tags .f-tag {
+  height: 24px;
   text-decoration: none;
 }
 
@@ -295,7 +296,7 @@ a:not([class]):hover,
 }
 .search-label {
   flex: 1;
-  color: var(--ink-faint);
+  color: var(--ink-muted);
 }
 .menu-btn {
   display: none;
@@ -480,6 +481,10 @@ a:not([class]):hover,
   width: 100%;
   height: auto;
   transition: opacity 120ms ease-out;
+}
+.page-nav .f-btn[disabled] {
+  border-color: transparent;
+  background: transparent;
 }
 .page-nav {
   display: flex;
@@ -1056,6 +1061,10 @@ dialog.palette {
   }
   .page-thumb {
     min-width: 44px;
+  }
+  .f-notice a {
+    display: inline-block;
+    padding-block: 12px;
   }
   .f-row {
     min-height: 64px;

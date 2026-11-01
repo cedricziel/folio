@@ -7,16 +7,6 @@ import { authScreens, config, tour, TourInstance, viewportsFor } from "./tour";
 // and each entry shows up as a fixme test, so they stay visible in reports.
 // Remove an entry together with the fix; anything new still fails.
 const known: { rule: string; target: string; issue: string }[] = [
-  {
-    rule: "color-contrast",
-    target: ".search-label",
-    issue: "https://github.com/cedricziel/folio/issues/64",
-  },
-  {
-    rule: "target-size",
-    target: ".f-tag",
-    issue: "https://github.com/cedricziel/folio/issues/64",
-  },
 ];
 
 const isKnown = (rule: string, target: string) =>
