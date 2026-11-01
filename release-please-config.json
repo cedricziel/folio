@@ -3,8 +3,6 @@
   "packages": {
     ".": {
       "release-type": "simple",
-      "versioning": "prerelease",
-      "prerelease": true,
       "package-name": "folio",
       "include-component-in-tag": false,
       "extra-files": [
@@ -33,7 +31,9 @@
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name=='folio-app')].version"
         }
-      ]
+      ],
+      "release-as": "0.1.0",
+      "bump-minor-pre-major": true
     }
   }
 }
