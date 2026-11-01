@@ -13,6 +13,33 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
+}
+
+/// MCP server configuration
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpConfig {
+    /// Serve the MCP endpoint at `/mcp`; the `mcp.enabled` DB setting overrides this
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+    /// Extra `Host` header values to accept (besides loopback), needed when
+    /// reaching Folio under another hostname
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+}
+
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcp_enabled(),
+            allowed_hosts: Vec::new(),
+        }
+    }
 }
 
 /// Server configuration
@@ -114,6 +141,7 @@ impl Default for Config {
                 openai_api_key: None,
                 anthropic_api_key: None,
             },
+            mcp: McpConfig::default(),
         }
     }
 }

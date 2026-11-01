@@ -14,3 +14,7 @@ provider = "openai"
 # API keys are loaded from environment variables:
 # - FOLIO_AI_OPENAI_API_KEY
 # - FOLIO_AI_ANTHROPIC_API_KEY
+
+[mcp]
+# Serve the MCP endpoint at /mcp (also controllable via the "mcp.enabled" setting)
+enabled = true
