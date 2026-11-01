@@ -8,8 +8,8 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument, UpdateDocumentType,
-    UpdateTag,
+    DocumentFilter, DocumentSource, DocumentType, Id, Tag, UpdateCorrespondent, UpdateDocument,
+    UpdateDocumentType, UpdateTag,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -56,6 +56,8 @@ struct DocumentRow {
     correspondent_id: Option<String>,
     document_type_id: Option<String>,
     page_count: Option<i64>,
+    source_type: String,
+    source_meta: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -74,6 +76,7 @@ impl TryFrom<DocumentRow> for Document {
             correspondent_id: parse_optional_uuid(row.correspondent_id)?,
             document_type_id: parse_optional_uuid(row.document_type_id)?,
             page_count: row.page_count.map(|c| c as u32),
+            source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
             created_at: row
                 .created_at
                 .parse::<DateTime<Utc>>()
@@ -160,7 +163,8 @@ impl DocumentRepository for SqliteDocumentRepository {
         let id_str = id.to_string();
         let row: Option<DocumentRow> = sqlx::query_as(
             "SELECT id, title, content, original_filename, file_path, mime_type,
-                    correspondent_id, document_type_id, page_count, created_at, updated_at
+                    correspondent_id, document_type_id, page_count, source_type, source_meta,
+                    created_at, updated_at
              FROM documents WHERE id = ?",
         )
         .bind(&id_str)
@@ -177,7 +181,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             if let Some(correspondent_id) = filter.correspondent_id {
                 sqlx::query_as(
                     "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, page_count, created_at, updated_at
+                            correspondent_id, document_type_id, page_count, source_type, source_meta,
+                    created_at, updated_at
                      FROM documents WHERE correspondent_id = ? ORDER BY created_at DESC",
                 )
                 .bind(correspondent_id.to_string())
@@ -187,7 +192,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             } else if let Some(document_type_id) = filter.document_type_id {
                 sqlx::query_as(
                     "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, page_count, created_at, updated_at
+                            correspondent_id, document_type_id, page_count, source_type, source_meta,
+                    created_at, updated_at
                      FROM documents WHERE document_type_id = ? ORDER BY created_at DESC",
                 )
                 .bind(document_type_id.to_string())
@@ -197,7 +203,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             } else {
                 sqlx::query_as(
                     "SELECT id, title, content, original_filename, file_path, mime_type,
-                            correspondent_id, document_type_id, page_count, created_at, updated_at
+                            correspondent_id, document_type_id, page_count, source_type, source_meta,
+                    created_at, updated_at
                      FROM documents ORDER BY created_at DESC",
                 )
                 .fetch_all(&self.pool)
@@ -207,7 +214,8 @@ impl DocumentRepository for SqliteDocumentRepository {
         } else {
             sqlx::query_as(
                 "SELECT id, title, content, original_filename, file_path, mime_type,
-                        correspondent_id, document_type_id, page_count, created_at, updated_at
+                        correspondent_id, document_type_id, page_count, source_type, source_meta,
+                    created_at, updated_at
                  FROM documents ORDER BY created_at DESC",
             )
             .fetch_all(&self.pool)
@@ -221,11 +229,13 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn create(&self, params: CreateDocument) -> Result<Document> {
         let id = Id::new_v4();
         let now = Utc::now();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
 
         sqlx::query(
             "INSERT INTO documents (id, title, content, original_filename, mime_type,
-                                    correspondent_id, document_type_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    correspondent_id, document_type_id, source_type, source_meta,
+                                    created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
         .bind(&params.title)
@@ -234,11 +244,23 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(&params.mime_type)
         .bind(params.correspondent_id.map(|id| id.to_string()))
         .bind(params.document_type_id.map(|id| id.to_string()))
+        .bind(params.source.kind.as_str())
+        .bind(params.source.metadata_json())
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+
+        for tag_id in &params.tag_ids {
+            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
+                .bind(id.to_string())
+                .bind(tag_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
+        tx.commit().await.map_err(map_sqlx_error)?;
 
         Ok(Document {
             id,
@@ -250,6 +272,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,
             page_count: None,
+            source: params.source,
             created_at: now,
             updated_at: now,
         })
@@ -292,6 +315,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             correspondent_id,
             document_type_id,
             page_count: existing.page_count,
+            source: existing.source,
             created_at: existing.created_at,
             updated_at: now,
         })

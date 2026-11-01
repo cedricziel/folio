@@ -2,6 +2,7 @@
 
 mod document_repo;
 mod health;
+mod ingest_repo;
 mod settings_repo;
 mod workflow_repo;
 
@@ -14,6 +15,7 @@ pub use document_repo::{
     SqliteTagRepository,
 };
 pub use health::DatabaseHealthCheck;
+pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
 pub use settings_repo::SqliteSettingsRepository;
 pub use workflow_repo::SqliteWorkflowRepository;
 
