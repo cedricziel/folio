@@ -66,7 +66,7 @@ public struct LiveFolioService: FolioService {
 
     public func deleteDocument(id: Document.ID) async throws {
         try await call {
-            _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).ok
+            _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).noContent
         }
     }
 

@@ -11,6 +11,8 @@ use axum::{
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+use folio_core::models::SourceKind;
+
 use super::pages::store_upload;
 
 const MANIFEST: &str = include_str!("../../../../static/manifest.webmanifest");
@@ -49,6 +51,6 @@ async fn service_worker() -> Response {
 
 /// Receives files shared to the installed app and files them into the inbox
 async fn share_target(State(state): State<AppState>, multipart: Multipart) -> ApiResult<Response> {
-    store_upload(&state, multipart).await?;
+    store_upload(&state, multipart, SourceKind::Upload).await?;
     Ok(Redirect::to("/").into_response())
 }
