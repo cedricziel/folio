@@ -112,6 +112,19 @@ private let documentJSON = """
         _ = try await makeService(token: FixedToken(value: "secret")).tags()
     }
 
+    @Test func removesATagWithAPostToTheTagPath() async throws {
+        let tag = UUID()
+        let document = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "POST")
+            #expect(
+                request.url?.path
+                    == "/api/documents/\(document.uuidString.lowercased())/tags/\(tag.uuidString.lowercased())")
+            return .init(contentType: "text/html")
+        }
+        try await makeService().removeTag(tag, from: document)
+    }
+
     @Test func surfacesServerErrorMessage() async throws {
         StubURLProtocol.handler = { _, _ in
             .init(status: 404, body: Data("{\"error\": \"Document not found\"}".utf8))

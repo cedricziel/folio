@@ -13,6 +13,7 @@ struct FolioApp: App {
             RootView(model: model)
                 .tint(.archive)
         }
+        .commands { FolioCommands() }
     }
 }
 

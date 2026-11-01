@@ -12,6 +12,7 @@ actor MockFolioService: FolioService {
     var uploadDelay: Duration?
     var tagList: [Tag] = []
     private(set) var tagged: [TagAssignment] = []
+    private(set) var untagged: [TagAssignment] = []
     private(set) var queries: [String] = []
     private(set) var uploads: [UploadFile] = []
     private(set) var deleted: [Document.ID] = []
@@ -102,6 +103,11 @@ actor MockFolioService: FolioService {
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
         if let failure { throw failure }
         tagged.append(TagAssignment(tag: tagID, document: documentID))
+    }
+
+    func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
+        if let failure { throw failure }
+        untagged.append(TagAssignment(tag: tagID, document: documentID))
     }
 
     func correspondents() async throws -> [Correspondent] {

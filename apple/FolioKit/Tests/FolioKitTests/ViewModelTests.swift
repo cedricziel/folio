@@ -44,6 +44,23 @@ struct DocumentStatusTests {
         DocumentListViewModel(service: service, searchDebounce: debounce)
     }
 
+    @Test func inboxScopeKeepsOnlyDocumentsWaitingForALook() async {
+        let service = MockFolioService(
+            documents: [
+                document("Unfiled"), document("Filed", correspondent: stadtwerke),
+                document("Reading", content: nil),
+            ], correspondents: [stadtwerke])
+        let model = makeModel(service)
+        await model.load()
+        #expect(model.rows.count == 3)
+
+        model.scope = .inbox
+        #expect(model.rows.map(\.title) == ["Unfiled", "Reading"])
+
+        model.scope = .all
+        #expect(model.rows.count == 3)
+    }
+
     @Test func loadFillsRowsWithCorrespondentTypeAndStatus() async {
         let service = MockFolioService(
             documents: [

@@ -21,6 +21,7 @@ struct DocumentDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
         #endif
         .task { await model.loadPreview() }
+        .task { await SpotlightDonor.donate(model.summary) }
     }
 
     @ViewBuilder
