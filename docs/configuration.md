@@ -35,7 +35,16 @@ startup by the first three layers.
 | `server.host` | `FOLIO_SERVER__HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` in containers. |
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
-| `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Directory for stored documents and thumbnails. |
+| `storage.backend` | `FOLIO_STORAGE__BACKEND` | `local` | `local` or `s3` (see [storage.md](storage.md)). |
+| `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Root directory for the `local` backend. |
+| `storage.s3.bucket` | `FOLIO_STORAGE__S3__BUCKET` | unset | Bucket name; required for `s3`. |
+| `storage.s3.region` | `FOLIO_STORAGE__S3__REGION` | unset (`us-east-1` for custom endpoints) | Bucket region. |
+| `storage.s3.endpoint` | `FOLIO_STORAGE__S3__ENDPOINT` | unset | Endpoint URL for MinIO, Garage, R2 and similar. |
+| `storage.s3.access_key_id` | `FOLIO_STORAGE__S3__ACCESS_KEY_ID` | unset | Access key; falls back to the standard `AWS_*` variables and instance credentials. |
+| `storage.s3.secret_access_key` | `FOLIO_STORAGE__S3__SECRET_ACCESS_KEY` | unset | Secret key. |
+| `storage.s3.path_style` | `FOLIO_STORAGE__S3__PATH_STYLE` | `false` | Address buckets as `endpoint/bucket`; needed for MinIO and Garage. |
+| `storage.s3.allow_http` | `FOLIO_STORAGE__S3__ALLOW_HTTP` | `false` | Allow a plain `http://` endpoint. |
+| `storage.s3.prefix` | `FOLIO_STORAGE__S3__PREFIX` | unset | Key prefix inside the bucket. |
 | `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |
 | `ai.openai_api_key` | `FOLIO_AI__OPENAI_API_KEY` | unset | OpenAI API key. |
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |

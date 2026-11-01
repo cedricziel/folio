@@ -34,17 +34,28 @@ The system SHALL accept a multipart upload at `POST /documents/upload` with a re
 
 ### Requirement: Files are stored per document
 
-The system SHALL store each uploaded file at `<storage path>/<document id>/<sanitized filename>` and record that relative path on the document. Sanitizing SHALL drop directory components and replace every character other than letters, digits, `.`, `-` and `_` with `_`.
+The system SHALL store each uploaded file in the configured object store (`local` directory or S3-compatible bucket) under the key `documents/<document id>/original` and record that key in the document's `file_path`. Thumbnails SHALL be stored as `documents/<document id>/thumb.jpg` and page previews as `documents/<document id>/pages/<n>.jpg`. Keys are opaque; no filesystem path is stored. At startup the system SHALL move objects written under the earlier layout (`<document id>/<file name>`, `thumbnails/<id>.jpg`) to their new keys and keep reading old rows until then.
 
-#### Scenario: Filename with spaces and directories
+#### Scenario: Upload with a filename
 
 - **WHEN** a file named `../scans/my letter.pdf` is uploaded
-- **THEN** it is stored as `<document id>/my_letter.pdf`
+- **THEN** it is stored under `documents/<document id>/original`
+- **AND** the original name is kept in `original_filename`
 
-#### Scenario: Filename that starts with a dot
+#### Scenario: Row from the earlier layout
 
-- **WHEN** a file named `.hidden` is uploaded
-- **THEN** the stored filename is prefixed with `document_`
+- **WHEN** a document's `file_path` is `<document id>/my_letter.pdf` and the object exists under that key
+- **THEN** downloads still succeed
+- **AND** the next start moves the object to `documents/<document id>/original` and updates `file_path`
+
+### Requirement: Downloads stream from storage
+
+`GET /api/documents/:id/download` SHALL stream the stored file with the document's MIME type, a `Content-Length` when the backend reports the size, and a `Content-Disposition: attachment` header with an ASCII `filename` and an RFC 6266 UTF-8 `filename*`. Thumbnail routes SHALL stream the stored JPEG with `Content-Type: image/jpeg`.
+
+#### Scenario: Download with a non-ASCII filename
+
+- **WHEN** a document with the original filename `Größe.pdf` is downloaded
+- **THEN** the response carries `filename*=UTF-8''Gr%C3%B6%C3%9Fe.pdf`
 
 ### Requirement: JSON upload extracts text inline
 
@@ -107,7 +118,7 @@ The system SHALL list documents newest first. `GET /api/documents` SHALL return 
 
 ### Requirement: Deleting a document
 
-The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. Deleting a document SHALL also remove its tag assignments and stored embedding.
+The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. Deleting a document SHALL also remove its tag assignments, its stored embedding and every stored object of the document, including thumbnails, page previews and files from the earlier layout.
 
 #### Scenario: Delete an existing document
 
