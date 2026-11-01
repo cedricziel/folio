@@ -25,9 +25,8 @@ export async function uploadViaUi(page: Page, title: string) {
   await page.getByRole("button", { name: "Upload", exact: true }).click();
   await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
 
-  // The worker finishes asynchronously and an SSE event then swaps the list for
-  // a variant whose links open into a frame. Waiting for the worker and
-  // reloading gives later steps a stable page.
+  // The worker finishes asynchronously and SSE then updates the row in place.
+  // Waiting for the worker and reloading gives later steps a stable page.
   await expect
     .poll(async () => {
       const res = await page.request.get("/api/documents");

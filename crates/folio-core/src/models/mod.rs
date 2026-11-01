@@ -8,7 +8,8 @@ mod tag;
 
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{
-    CreateDocument, Document, DocumentFilter, ProcessingStage, ProcessingStatus, UpdateDocument,
+    CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
+    UpdateDocument,
 };
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use settings::{

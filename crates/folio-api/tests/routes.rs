@@ -14,8 +14,9 @@ use folio_core::{
 };
 use folio_infra::{
     create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
-    SqliteSearchService, SqliteSettingsRepository, SqliteTagRepository, ThumbnailService,
+    PipelineContext, SqliteCorrespondentRepository, SqliteDocumentRepository,
+    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
+    SqliteTagRepository, ThumbnailService,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -45,19 +46,17 @@ async fn test_app() -> TestApp {
 
     let ai = Config::default().ai;
     let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
+    let pipeline = PipelineContext::new(settings_repo.clone(), ai);
     let state = AppState::new(
         Arc::new(SqliteDocumentRepository::new(pool.clone())),
         Arc::new(SqliteTagRepository::new(pool.clone())),
         Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
         Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
         settings_repo.clone(),
-        Arc::new(DynamicOcrService::new(
-            settings_repo.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
-        Arc::new(DynamicEmbeddingService::new(settings_repo, ai)),
+        Arc::new(DynamicOcrService::new(pipeline.clone())),
+        Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
         Arc::new(SqliteSearchService::new(pool.clone())),
+        pipeline,
         Arc::new(ThumbnailService::new(&storage_path)),
         JobQueue::new(pool),
         storage_path,

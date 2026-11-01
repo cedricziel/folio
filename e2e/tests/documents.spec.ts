@@ -3,7 +3,7 @@ import { expect, test, uniqueTitle, uploadViaUi } from "./fixtures";
 test("inbox loads", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveTitle(/Folio/);
-  await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Upload document", exact: true }),
   ).toBeVisible();
@@ -30,7 +30,7 @@ test.describe("document lifecycle", () => {
   test("search finds the document by title", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: /Search documents/ }).click();
-    await page.getByPlaceholder("Search documents...").last().fill(title);
+    await page.getByPlaceholder("Search documents").last().fill(title);
     await expect(
       page.getByTestId("command-palette").getByText(title),
     ).toBeVisible();

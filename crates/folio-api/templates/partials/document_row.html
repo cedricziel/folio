@@ -1,0 +1,21 @@
+<a class="f-row" id="document-{{ row.id }}" href="/documents/{{ row.id }}" data-turbo-frame="_top">
+    <div class="f-thumb"><img src="/documents/{{ row.id }}/thumbnail?v={{ row.version }}" alt="" loading="lazy"></div>
+    <div class="row-main">
+        <div class="f-row-title">{{ row.title }}</div>
+        {% let sub = row.subline() %}
+        {% if !sub.is_empty() %}<div class="f-row-sub">{{ sub }}</div>{% endif %}
+        {% if !row.tags.is_empty() %}
+        <div class="f-row-tags">
+            {% for tag in row.tags %}<span class="f-tag f-tag-{{ tag.tone }}">{{ tag.name }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if row.is_processing() %}
+        <span class="f-status f-status-pending">{{ row.reading_label() }}</span>
+        {% else if row.needs_review() %}
+        <span class="f-status f-status-pending">Needs a look</span>
+        {% else %}
+        <span class="f-status f-status-done">Filed</span>
+        {% endif %}
+    </div>
+    <div class="row-side"><span class="f-meta">{{ row.date }}</span></div>
+</a>

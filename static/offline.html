@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Offline - Folio</title>
+    <link rel="stylesheet" href="/static/tokens.css" />
+    <link rel="stylesheet" href="/static/components.css" />
+    <style>
+      main {
+        max-width: 28rem;
+        margin: 20vh auto;
+        padding: var(--space-4);
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 28px;
+        font-weight: 600;
+        margin: 0 0 var(--space-2);
+      }
+      p {
+        color: var(--ink-muted);
+        margin: 0 0 var(--space-4);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>You are offline.</h1>
+      <p>
+        Folio needs a connection to show your documents. Try again when you are
+        back online.
+      </p>
+      <button class="f-btn f-btn-primary" onclick="location.reload()">
+        Try again
+      </button>
+    </main>
+  </body>
+</html>

@@ -24,6 +24,9 @@ tower-livereload = { workspace = true }
 askama = { workspace = true }
 askama_axum = { workspace = true }
 
+# Embedded static assets
+rust-embed = { workspace = true }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }

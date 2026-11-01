@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup openapi apple apple-test apple-tokens apple-project e2e
+.PHONY: build run test lint format clean dev setup tokens assets openapi apple apple-test apple-tokens apple-project e2e
 
 # Default target
 all: build
@@ -30,6 +30,15 @@ lint:
 # Format code
 format:
 	cargo fmt --all
+
+# Regenerate static/tokens.css and static/components.css from design/
+tokens:
+	cargo run -p xtask -- tokens
+
+# Re-copy vendored scripts and fonts from npm into static/
+assets:
+	npm ci --prefix web
+	npm run vendor --prefix web
 
 # Regenerate openapi/openapi.json from the Rust code
 openapi:

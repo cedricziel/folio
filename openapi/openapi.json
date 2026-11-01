@@ -1224,7 +1224,7 @@
           "events"
         ],
         "summary": "Subscribe to real-time document events",
-        "description": "Each SSE message has the event name from `DocumentEvent` (for example `created`)\nand a JSON `DocumentEvent` as data. Comment-only keep-alive frames are sent every 30 seconds.",
+        "description": "Each SSE message has the event name from `DocumentEvent` (for example `created`)\nand a JSON `DocumentEvent` as data. Each event is followed by an unnamed message holding the\nTurbo Streams that update the web UI. Comment-only keep-alive frames are sent every 30 seconds.",
         "operationId": "streamEvents",
         "responses": {
           "200": {
@@ -1348,6 +1348,8 @@
         "required": [
           "id",
           "title",
+          "ocr_status",
+          "embed_status",
           "created_at",
           "updated_at"
         ],
@@ -1380,6 +1382,10 @@
             "format": "uuid",
             "description": "Document type classification"
           },
+          "embed_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the embedding stage"
+          },
           "file_path": {
             "type": [
               "string",
@@ -1398,6 +1404,10 @@
               "null"
             ],
             "description": "MIME type of the original document"
+          },
+          "ocr_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the OCR stage"
           },
           "original_filename": {
             "type": [
@@ -1600,6 +1610,17 @@
         "type": "string",
         "format": "binary",
         "description": "Binary payload of a stored file"
+      },
+      "ProcessingStatus": {
+        "type": "string",
+        "description": "State of one pipeline stage for one document",
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed",
+          "skipped"
+        ]
       },
       "SearchRequest": {
         "type": "object",

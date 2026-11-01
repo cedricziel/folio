@@ -17,6 +17,8 @@ use folio_infra::JobType;
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+use super::view::{Nav, Sidebar};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings", get(settings_page))
@@ -45,6 +47,7 @@ fn options(ids: Vec<&'static str>, current: &str) -> Vec<ProviderOption> {
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate {
+    sidebar: Sidebar,
     title: String,
     ai_settings: AiSettings,
     processing: PipelineSettings,
@@ -74,6 +77,7 @@ async fn settings_page(
     };
 
     let template = SettingsTemplate {
+        sidebar: Sidebar::load(&state, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
         ai_settings: processing.ai.clone(),
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),

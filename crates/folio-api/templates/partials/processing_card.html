@@ -1,0 +1,64 @@
+<div class="panel settings-card">
+    <h2 class="heading">Processing</h2>
+    <p class="hint">Choose how uploaded documents are read and made searchable.</p>
+
+    {% if !notice.is_empty() %}
+    <div class="f-notice" role="status"><p>{{ notice }}</p></div>
+    {% endif %}
+
+    <form action="/settings/processing" method="post" data-turbo-frame="processing-test">
+        <div class="field">
+            <label for="ocr_provider">Reading provider</label>
+            <select id="ocr_provider" name="ocr_provider" class="select">
+                {% for p in ocr_providers %}<option value="{{ p.id }}" {% if p.selected %}selected{% endif %}>{{ p.id }}</option>{% endfor %}
+            </select>
+            <span class="hint">tesseract runs on this machine; the vision providers send pages to a model.</span>
+        </div>
+        <div class="field">
+            <label for="ocr_model">Reading model</label>
+            <input class="input" type="text" id="ocr_model" name="ocr_model" value="{{ processing.ocr.model }}" placeholder="provider default">
+        </div>
+        <div class="field">
+            <label for="ocr_languages">Languages</label>
+            <input class="input" type="text" id="ocr_languages" name="ocr_languages" value="{{ processing.ocr.languages }}" placeholder="deu+eng">
+            <span class="hint">Tesseract language codes joined by +.</span>
+        </div>
+        <div class="field">
+            <label for="ocr_base_url">Reading base URL</label>
+            <input class="input" type="text" id="ocr_base_url" name="ocr_base_url" value="{{ processing.ocr.base_url }}" placeholder="http://localhost:11434">
+        </div>
+
+        <div class="field">
+            <label for="embeddings_provider">Search provider</label>
+            <select id="embeddings_provider" name="embeddings_provider" class="select">
+                {% for p in embedding_providers %}<option value="{{ p.id }}" {% if p.selected %}selected{% endif %}>{{ p.id }}</option>{% endfor %}
+            </select>
+            <span class="hint">none turns off search by meaning; title and text search keep working.</span>
+        </div>
+        <div class="field">
+            <label for="embeddings_model">Embedding model</label>
+            <input class="input" type="text" id="embeddings_model" name="embeddings_model" value="{{ processing.embeddings.model }}" placeholder="provider default">
+        </div>
+        <div class="field">
+            <label for="embeddings_base_url">Embedding base URL</label>
+            <input class="input" type="text" id="embeddings_base_url" name="embeddings_base_url" value="{{ processing.embeddings.base_url }}" placeholder="http://localhost:11434 or an OpenAI-compatible /v1 endpoint">
+        </div>
+
+        <div class="field">
+            <label><input type="checkbox" name="auto_ocr" {% if processing.processing.auto_ocr %}checked{% endif %}> Read new documents automatically</label>
+            <label><input type="checkbox" name="auto_embed" {% if processing.processing.auto_embed %}checked{% endif %}> Make new documents searchable by meaning</label>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="f-btn f-btn-primary" data-turbo-frame="_top">Save processing settings</button>
+            <button type="submit" class="f-btn" formaction="/settings/processing/test">Test connection</button>
+        </div>
+    </form>
+
+    <turbo-frame id="processing-test"></turbo-frame>
+
+    <form action="/settings/processing/reembed" method="post">
+        <p class="hint">Search ignores vectors made by a different model. Re-embed to rebuild them with the active one.</p>
+        <button type="submit" class="f-btn">Re-embed all</button>
+    </form>
+</div>
