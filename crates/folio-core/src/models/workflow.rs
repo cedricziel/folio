@@ -194,7 +194,7 @@ pub enum WorkflowAction {
 }
 
 impl WorkflowAction {
-    /// Whether the action only needs the event payload, not the live document
+    /// Whether the action sends the event payload rather than changing the document
     pub fn is_webhook(&self) -> bool {
         matches!(self, Self::Webhook { .. })
     }
