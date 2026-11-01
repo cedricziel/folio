@@ -24,6 +24,7 @@ use super::auth::{
     cookie, render, set_cookie, start_session, wait_text, with_cookies, AuthState, ClientIp,
     MfaLogin, PasskeyAuth,
 };
+use crate::extract::ApiJson;
 
 /// Wrong codes allowed on one pending login before the password is asked again.
 const ATTEMPTS_PER_LOGIN: u32 = 5;
@@ -352,7 +353,7 @@ pub(crate) async fn passkey_finish(
     State(auth): State<AuthState>,
     headers: HeaderMap,
     ClientIp(ip): ClientIp,
-    Json(body): Json<PasskeyFinish>,
+    ApiJson(body): ApiJson<PasskeyFinish>,
 ) -> Response {
     let Some(webauthn) = auth.webauthn.clone() else {
         return StatusCode::NOT_FOUND.into_response();

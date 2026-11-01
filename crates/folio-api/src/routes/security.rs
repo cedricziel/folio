@@ -25,7 +25,7 @@ use super::{
     mfa::{credential_id_string, parse_user_uuid, recovery_hash, verify_second_factor},
     view::{Nav, Sidebar},
 };
-use crate::{error::ApiResult, state::AppState};
+use crate::{error::ApiResult, extract::ApiJson, state::AppState};
 
 const MIN_PASSWORD_LEN: usize = 12;
 const MAX_PASSWORD_LEN: usize = 1024;
@@ -637,7 +637,7 @@ struct RegisterFinish {
 async fn passkey_register_finish(
     Extension(auth): Extension<AuthState>,
     headers: HeaderMap,
-    Json(body): Json<RegisterFinish>,
+    ApiJson(body): ApiJson<RegisterFinish>,
 ) -> Response {
     let caller = match checked_json(&auth, &headers).await {
         Ok(c) => c,
