@@ -27,7 +27,7 @@ tower-livereload = "0.10"
 
 # HTML templating (for HTMX responses)
 askama = "0.16"
-askama_axum = "0.4"
+askama_axum = "0.5"
 
 # Database
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate"] }
