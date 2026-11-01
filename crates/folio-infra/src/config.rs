@@ -32,6 +32,7 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    pub mcp: McpConfig,
 }
 
 /// Server configuration
@@ -100,12 +101,25 @@ impl Default for AiConfig {
     }
 }
 
+/// MCP server configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Serve the MCP endpoint at `/mcp`; off by default because it is not authenticated yet.
+    /// The `mcp.enabled` DB setting overrides this.
+    pub enabled: bool,
+    /// Extra `Host` header values to accept besides loopback
+    pub allowed_hosts: Vec<String>,
+}
+
 /// How an environment value is converted before it reaches the config tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
     Str,
     Port,
     Bool,
+    /// Comma-separated values
+    List,
 }
 
 /// One configurable setting. This table drives env parsing and keeps
@@ -163,6 +177,18 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AI__ANTHROPIC_API_KEY",
         legacy_env: &["FOLIO_AI_ANTHROPIC_API_KEY"],
         kind: ValueKind::Str,
+    },
+    Setting {
+        key: "mcp.enabled",
+        env: "FOLIO_MCP__ENABLED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "mcp.allowed_hosts",
+        env: "FOLIO_MCP__ALLOWED_HOSTS",
+        legacy_env: &[],
+        kind: ValueKind::List,
     },
 ];
 
@@ -262,6 +288,14 @@ fn to_value(setting: &Setting, raw: String) -> Result<figment::value::Value, fig
             .parse::<u16>()
             .map(Value::from)
             .map_err(|_| invalid("a port number")),
+        ValueKind::List => {
+            let items: Vec<&str> = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            Value::serialize(items).map_err(|e| invalid(&format!("a comma-separated list ({e})")))
+        }
         ValueKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" | "on" => Ok(Value::from(true)),
             "false" | "0" | "no" | "off" => Ok(Value::from(false)),
@@ -308,17 +342,24 @@ mod tests {
     }
 
     #[test]
+    fn mcp_is_disabled_by_default() {
+        assert!(!load(&[]).mcp.enabled);
+        assert!(load(&[("FOLIO_MCP__ENABLED", "true")]).mcp.enabled);
+    }
+
+    #[test]
     fn every_setting_is_set_by_its_env_var() {
         for setting in SETTINGS {
-            let sample = match setting.kind {
-                ValueKind::Str => "sample-value",
-                ValueKind::Port => "4242",
-                ValueKind::Bool => "true",
+            let (sample, expected) = match setting.kind {
+                ValueKind::Str => ("sample-value", "sample-value"),
+                ValueKind::Port => ("4242", "4242"),
+                ValueKind::Bool => ("true", "true"),
+                ValueKind::List => ("a.example, b.example", r#"["a.example","b.example"]"#),
             };
             let config = load(&[(setting.env, sample)]);
             assert_eq!(
                 lookup(&config, setting.key).as_deref(),
-                Some(sample),
+                Some(expected),
                 "{} did not land in {}",
                 setting.env,
                 setting.key
@@ -330,13 +371,14 @@ mod tests {
     fn legacy_names_still_work() {
         for setting in SETTINGS {
             for legacy in setting.legacy_env {
-                let sample = match setting.kind {
-                    ValueKind::Str => "legacy-value",
-                    ValueKind::Port => "4343",
-                    ValueKind::Bool => "true",
+                let (sample, expected) = match setting.kind {
+                    ValueKind::Str => ("legacy-value", "legacy-value"),
+                    ValueKind::Port => ("4343", "4343"),
+                    ValueKind::Bool => ("true", "true"),
+                    ValueKind::List => ("legacy.example", r#"["legacy.example"]"#),
                 };
                 let config = load(&[(legacy, sample)]);
-                assert_eq!(lookup(&config, setting.key).as_deref(), Some(sample));
+                assert_eq!(lookup(&config, setting.key).as_deref(), Some(expected));
             }
         }
     }

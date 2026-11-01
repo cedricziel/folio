@@ -13,6 +13,7 @@ use uuid::Uuid;
 use axum::response::{IntoResponse, Redirect, Response};
 
 use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
+use folio_core::services::SearchServiceFacade;
 
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
@@ -334,6 +335,26 @@ pub struct SearchResultWithDocument {
     score: f32,
 }
 
+async fn semantic_search(
+    state: &AppState,
+    query: &str,
+    limit: usize,
+) -> ApiResult<Vec<SearchResultWithDocument>> {
+    let facade = SearchServiceFacade::new(
+        state.document_repo.clone(),
+        state.embedding_service.clone(),
+        state.search_service.clone(),
+    );
+    let hits = facade.search_documents(query, limit).await?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchResultWithDocument {
+            document: h.document,
+            score: h.score,
+        })
+        .collect())
+}
+
 /// Search documents by semantic similarity
 #[utoipa::path(
     post,
@@ -350,28 +371,7 @@ pub(crate) async fn search_documents(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
-    // Generate embedding for query
-    let query_embedding = state
-        .embedding_service
-        .generate_embedding(&req.query)
-        .await?;
-
-    // Search for similar documents
-    let search_results = state
-        .search_service
-        .search(&query_embedding, req.limit)
-        .await?;
-
-    // Fetch full document details
-    let mut results = Vec::new();
-    for result in search_results {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
-            results.push(SearchResultWithDocument {
-                document,
-                score: result.score,
-            });
-        }
-    }
+    let results = semantic_search(&state, &req.query, req.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }
@@ -392,28 +392,7 @@ pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
     Query(params): Query<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
-    // Generate embedding for query
-    let query_embedding = state
-        .embedding_service
-        .generate_embedding(&params.q)
-        .await?;
-
-    // Search for similar documents
-    let search_results = state
-        .search_service
-        .search(&query_embedding, params.limit)
-        .await?;
-
-    // Fetch full document details
-    let mut results = Vec::new();
-    for result in search_results {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
-            results.push(SearchResultWithDocument {
-                document,
-                score: result.score,
-            });
-        }
-    }
+    let results = semantic_search(&state, &params.q, params.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }
