@@ -2,8 +2,8 @@
     <template>
         <turbo-frame id="ai-settings">
             <div class="settings-card">
-                <h3>AI Configuration</h3>
-                <p class="settings-description">Configure AI providers for OCR and semantic search.</p>
+                <h3>API Keys</h3>
+                <p class="settings-description">Credentials for hosted OCR and embedding providers.</p>
 
                 <div class="alert alert-success" data-controller="flash" data-flash-delay-value="5000">
                     Settings saved successfully!
@@ -14,19 +14,7 @@
                       data-controller="settings-form"
                       data-action="turbo:submit-start->settings-form#submit turbo:submit-end->settings-form#complete">
 
-                    <div class="form-group">
-                        <label for="provider">AI Provider</label>
-                        <select id="provider" name="provider" data-settings-form-target="provider"
-                                data-action="change->settings-form#providerChanged">
-                            <option value="local" {% if ai_settings.provider == "local" %}selected{% endif %}>Local (No AI)</option>
-                            <option value="openai" {% if ai_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
-                            <option value="anthropic" {% if ai_settings.provider == "anthropic" %}selected{% endif %}>Anthropic</option>
-                        </select>
-                        <span class="form-hint">Select the AI provider for OCR and embeddings</span>
-                    </div>
-
-                    <div class="form-group" data-settings-form-target="openaiFields"
-                         {% if ai_settings.provider != "openai" %}style="display: none;"{% endif %}>
+                    <div class="form-group" >
                         <label for="openai_api_key">OpenAI API Key</label>
                         <input type="password" id="openai_api_key" name="openai_api_key"
                                value="{{ ai_settings.openai_api_key }}"
@@ -34,29 +22,12 @@
                         <span class="form-hint">Your OpenAI API key for GPT-4 Vision and embeddings</span>
                     </div>
 
-                    <div class="form-group" data-settings-form-target="anthropicFields"
-                         {% if ai_settings.provider != "anthropic" %}style="display: none;"{% endif %}>
+                    <div class="form-group" >
                         <label for="anthropic_api_key">Anthropic API Key</label>
                         <input type="password" id="anthropic_api_key" name="anthropic_api_key"
                                value="{{ ai_settings.anthropic_api_key }}"
                                placeholder="sk-ant-...">
                         <span class="form-hint">Your Anthropic API key for Claude Vision</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="ocr_model">OCR Model</label>
-                        <input type="text" id="ocr_model" name="ocr_model"
-                               value="{{ ai_settings.ocr_model }}"
-                               placeholder="gpt-4o-mini">
-                        <span class="form-hint">Model to use for text extraction from images/PDFs</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="embedding_model">Embedding Model</label>
-                        <input type="text" id="embedding_model" name="embedding_model"
-                               value="{{ ai_settings.embedding_model }}"
-                               placeholder="text-embedding-3-small">
-                        <span class="form-hint">Model to use for generating search embeddings</span>
                     </div>
 
                     <div class="form-actions">

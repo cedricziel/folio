@@ -445,6 +445,7 @@
             }
 
             providerChanged() {
+                if (!this.hasProviderTarget) return;
                 const provider = this.providerTarget.value;
 
                 if (this.hasOpenaiFieldsTarget) {

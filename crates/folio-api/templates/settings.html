@@ -11,26 +11,14 @@
 
     <turbo-frame id="ai-settings">
         <div class="settings-card">
-            <h3>AI Configuration</h3>
-            <p class="settings-description">Configure AI providers for OCR and semantic search.</p>
+            <h3>API Keys</h3>
+            <p class="settings-description">Credentials for hosted OCR and embedding providers.</p>
 
             <form action="/settings/ai" method="post"
                   data-controller="settings-form"
                   data-action="turbo:submit-start->settings-form#submit turbo:submit-end->settings-form#complete">
 
-                <div class="form-group">
-                    <label for="provider">AI Provider</label>
-                    <select id="provider" name="provider" data-settings-form-target="provider"
-                            data-action="change->settings-form#providerChanged">
-                        <option value="local" {% if ai_settings.provider == "local" %}selected{% endif %}>Local (No AI)</option>
-                        <option value="openai" {% if ai_settings.provider == "openai" %}selected{% endif %}>OpenAI</option>
-                        <option value="anthropic" {% if ai_settings.provider == "anthropic" %}selected{% endif %}>Anthropic</option>
-                    </select>
-                    <span class="form-hint">Select the AI provider for OCR and embeddings</span>
-                </div>
-
-                <div class="form-group" data-settings-form-target="openaiFields"
-                     {% if ai_settings.provider != "openai" %}style="display: none;"{% endif %}>
+                <div class="form-group" >
                     <label for="openai_api_key">OpenAI API Key</label>
                     <div class="password-input-wrapper" data-controller="password-toggle">
                         <input type="password" id="openai_api_key" name="openai_api_key"
@@ -43,11 +31,10 @@
                             </svg>
                         </button>
                     </div>
-                    <span class="form-hint">Your OpenAI API key for GPT-4 Vision and embeddings</span>
+                    <span class="form-hint">Used by the openai-vision and openai providers</span>
                 </div>
 
-                <div class="form-group" data-settings-form-target="anthropicFields"
-                     {% if ai_settings.provider != "anthropic" %}style="display: none;"{% endif %}>
+                <div class="form-group" >
                     <label for="anthropic_api_key">Anthropic API Key</label>
                     <div class="password-input-wrapper" data-controller="password-toggle">
                         <input type="password" id="anthropic_api_key" name="anthropic_api_key"
@@ -60,23 +47,7 @@
                             </svg>
                         </button>
                     </div>
-                    <span class="form-hint">Your Anthropic API key for Claude Vision</span>
-                </div>
-
-                <div class="form-group">
-                    <label for="ocr_model">OCR Model</label>
-                    <input type="text" id="ocr_model" name="ocr_model"
-                           value="{{ ai_settings.ocr_model }}"
-                           placeholder="gpt-4o-mini">
-                    <span class="form-hint">Model to use for text extraction from images/PDFs</span>
-                </div>
-
-                <div class="form-group">
-                    <label for="embedding_model">Embedding Model</label>
-                    <input type="text" id="embedding_model" name="embedding_model"
-                           value="{{ ai_settings.embedding_model }}"
-                           placeholder="text-embedding-3-small">
-                    <span class="form-hint">Model to use for generating search embeddings</span>
+                    <span class="form-hint">Used by the anthropic-vision provider</span>
                 </div>
 
                 <div class="form-actions">
@@ -86,5 +57,70 @@
             </form>
         </div>
     </turbo-frame>
+
+    <div class="settings-card">
+        <h3>Processing</h3>
+        <p class="settings-description">Choose how uploaded documents are scanned and embedded for search.</p>
+
+        {% if !notice.is_empty() %}
+        <div class="alert alert-success">{{ notice }}</div>
+        {% endif %}
+
+        <form action="/settings/processing" method="post" data-turbo-frame="processing-test">
+            <div class="form-group">
+                <label for="ocr_provider">OCR provider</label>
+                <select id="ocr_provider" name="ocr_provider">
+                    {% for p in ocr_providers %}<option value="{{ p.id }}" {% if p.selected %}selected{% endif %}>{{ p.id }}</option>{% endfor %}
+                </select>
+                <span class="form-hint">tesseract runs locally; the vision providers send pages to a model</span>
+            </div>
+            <div class="form-group">
+                <label for="ocr_model">OCR model</label>
+                <input type="text" id="ocr_model" name="ocr_model" value="{{ processing.ocr.model }}" placeholder="provider default">
+            </div>
+            <div class="form-group">
+                <label for="ocr_languages">OCR languages</label>
+                <input type="text" id="ocr_languages" name="ocr_languages" value="{{ processing.ocr.languages }}" placeholder="deu+eng">
+                <span class="form-hint">Tesseract language codes joined by +</span>
+            </div>
+            <div class="form-group">
+                <label for="ocr_base_url">OCR base URL</label>
+                <input type="text" id="ocr_base_url" name="ocr_base_url" value="{{ processing.ocr.base_url }}" placeholder="http://localhost:11434">
+            </div>
+
+            <div class="form-group">
+                <label for="embeddings_provider">Embedding provider</label>
+                <select id="embeddings_provider" name="embeddings_provider">
+                    {% for p in embedding_providers %}<option value="{{ p.id }}" {% if p.selected %}selected{% endif %}>{{ p.id }}</option>{% endfor %}
+                </select>
+                <span class="form-hint">none disables semantic search</span>
+            </div>
+            <div class="form-group">
+                <label for="embeddings_model">Embedding model</label>
+                <input type="text" id="embeddings_model" name="embeddings_model" value="{{ processing.embeddings.model }}" placeholder="provider default">
+            </div>
+            <div class="form-group">
+                <label for="embeddings_base_url">Embedding base URL</label>
+                <input type="text" id="embeddings_base_url" name="embeddings_base_url" value="{{ processing.embeddings.base_url }}" placeholder="http://localhost:11434 or an OpenAI-compatible /v1 endpoint">
+            </div>
+
+            <div class="form-group">
+                <label><input type="checkbox" name="auto_ocr" {% if processing.processing.auto_ocr %}checked{% endif %}> Run OCR automatically on upload</label>
+                <label><input type="checkbox" name="auto_embed" {% if processing.processing.auto_embed %}checked{% endif %}> Create embeddings automatically</label>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" data-turbo-frame="_top">Save Processing Settings</button>
+                <button type="submit" formaction="/settings/processing/test" class="btn-secondary">Test connection</button>
+            </div>
+        </form>
+
+        <turbo-frame id="processing-test"></turbo-frame>
+
+        <form action="/settings/processing/reembed" method="post">
+            <p class="form-hint">Vectors from a different model are ignored by search. Re-embed to rebuild them with the active model.</p>
+            <button type="submit" class="btn-secondary">Re-embed all</button>
+        </form>
+    </div>
 </section>
 {% endblock %}

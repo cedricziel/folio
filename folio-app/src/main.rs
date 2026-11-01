@@ -11,7 +11,7 @@ use folio_api::{create_router, AppState};
 use folio_core::EventBroadcaster;
 use folio_infra::{
     create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, FileStorage,
-    JobQueue, SqliteCorrespondentRepository, SqliteDocumentRepository,
+    JobQueue, PipelineContext, SqliteCorrespondentRepository, SqliteDocumentRepository,
     SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
     SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
 };
@@ -32,7 +32,6 @@ async fn main() -> Result<()> {
     info!("  Server: {}:{}", config.server.host, config.server.port);
     info!("  Database: {}", config.database.url);
     info!("  Storage: {}", config.storage.path);
-    info!("  AI Provider: {}", config.ai.provider);
 
     // Initialize database
     let pool = create_pool(&config.database.url)
@@ -71,16 +70,10 @@ async fn main() -> Result<()> {
     let document_type_repo = Arc::new(SqliteDocumentTypeRepository::new(pool.clone()));
     let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
 
-    // Create AI services (dynamic - reads from database settings with config.toml fallback)
-    let ocr_service = Arc::new(DynamicOcrService::new(
-        settings_repo.clone(),
-        config.ai.clone(),
-        &config.storage.path,
-    ));
-    let embedding_service = Arc::new(DynamicEmbeddingService::new(
-        settings_repo.clone(),
-        config.ai.clone(),
-    ));
+    // Create AI services (providers follow the database settings, config.toml keys as fallback)
+    let pipeline = PipelineContext::new(settings_repo.clone(), config.ai.clone());
+    let ocr_service = Arc::new(DynamicOcrService::new(pipeline.clone()));
+    let embedding_service = Arc::new(DynamicEmbeddingService::new(pipeline.clone()));
     let search_service = Arc::new(SqliteSearchService::new(pool.clone()));
 
     // Create job queue
@@ -101,6 +94,7 @@ async fn main() -> Result<()> {
         ocr_service.clone(),
         embedding_service.clone(),
         search_service.clone(),
+        pipeline.clone(),
         thumbnail_service.clone(),
         &config.storage.path,
         WorkerConfig::default(),
@@ -123,6 +117,7 @@ async fn main() -> Result<()> {
         ocr_service,
         embedding_service,
         search_service,
+        pipeline,
         thumbnail_service,
         job_queue,
         config.storage.path.clone(),

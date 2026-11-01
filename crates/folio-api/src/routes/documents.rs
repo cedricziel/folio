@@ -13,6 +13,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 
 use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
 
+use folio_infra::JobType;
+
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -165,19 +167,12 @@ async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Extract text from document using OCR
-    let content = state
-        .ocr_service
-        .extract_text(&file_data, &mime_type)
-        .await
-        .ok();
-
     // Create document record
     let document = state
         .document_repo
         .create(CreateDocument {
             title,
-            content: content.clone(),
+            content: None,
             original_filename: filename.clone(),
             mime_type: Some(mime_type),
             correspondent_id: None,
@@ -196,16 +191,15 @@ async fn upload_document(
         }
     }
 
-    // Generate and store embedding for search
-    if let Some(ref text) = content {
-        if !text.is_empty() {
-            if let Ok(embedding) = state.embedding_service.generate_embedding(text).await {
-                let _ = state
-                    .search_service
-                    .store_embedding(document.id, &embedding)
-                    .await;
-            }
-        }
+    // OCR and embedding run in the background pipeline
+    if let Err(e) = state
+        .job_queue
+        .enqueue(JobType::ProcessDocument {
+            document_id: document.id,
+        })
+        .await
+    {
+        error!("Failed to enqueue document processing job: {}", e);
     }
 
     // Re-fetch to get updated document with file_path
@@ -255,17 +249,7 @@ async fn search_documents(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
-    // Generate embedding for query
-    let query_embedding = state
-        .embedding_service
-        .generate_embedding(&req.query)
-        .await?;
-
-    // Search for similar documents
-    let search_results = state
-        .search_service
-        .search(&query_embedding, req.limit)
-        .await?;
+    let search_results = state.semantic_search(&req.query, req.limit).await?;
 
     // Fetch full document details
     let mut results = Vec::new();
@@ -286,17 +270,7 @@ async fn search_documents_get(
     State(state): State<AppState>,
     Query(params): Query<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
-    // Generate embedding for query
-    let query_embedding = state
-        .embedding_service
-        .generate_embedding(&params.q)
-        .await?;
-
-    // Search for similar documents
-    let search_results = state
-        .search_service
-        .search(&query_embedding, params.limit)
-        .await?;
+    let search_results = state.semantic_search(&params.q, params.limit).await?;
 
     // Fetch full document details
     let mut results = Vec::new();

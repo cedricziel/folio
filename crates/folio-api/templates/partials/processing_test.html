@@ -1,0 +1,10 @@
+<turbo-frame id="processing-test">
+    {% for (label, result) in results %}
+    {% match result %}
+    {% when Ok with (_) %}
+    <div class="alert alert-success">{{ label }}: OK</div>
+    {% when Err with (message) %}
+    <div class="alert alert-error">{{ label }}: {{ message }}</div>
+    {% endmatch %}
+    {% endfor %}
+</turbo-frame>
