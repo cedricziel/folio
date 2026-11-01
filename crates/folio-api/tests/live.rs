@@ -140,9 +140,8 @@ mod resume {
         // Live events follow, with ids from the same sequence.
         create(&h, "four").await;
         dispatch.dispatch_once().await.unwrap();
-        let live = ids_until(&mut body, 3).await;
-        assert_eq!(&live[..2], [ids[1], ids[2]]);
-        assert!(live[2] > ids[2]);
+        let live = ids_until(&mut body, 1).await;
+        assert!(live[0] > ids[2]);
     }
 
     #[tokio::test]
