@@ -128,6 +128,7 @@ targets:
           NSExtensionPointIdentifier: com.apple.fileprovider-nonui
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FolioFileProvider
           NSExtensionFileProviderSupportsEnumeration: true
+          NSExtensionFileProviderDocumentGroup: group.com.cedricziel.folio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.fileprovider
