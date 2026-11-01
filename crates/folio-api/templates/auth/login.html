@@ -3,13 +3,16 @@
 {% block content %}
 <h1 class="auth-title">Sign in</h1>
 {% match error %}{% when Some with (message) %}<div class="f-notice f-notice-danger" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
+{% match sso %}{% when Some with (sso) %}<a class="f-btn f-btn-primary" href="{{ sso.href }}" data-turbo="false">{{ sso.label }}</a>{% when None %}{% endmatch %}
+{% if password_form %}
 <form method="post" action="/login" class="auth-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="username">Username</label>
-    <input class="f-input" id="username" name="username" type="text" autocomplete="username" required autofocus>
+    <input class="f-input" id="username" name="username" type="text" autocomplete="username" required{% if sso.is_none() %} autofocus{% endif %}>
     <label for="password">Password</label>
     <input class="f-input" id="password" name="password" type="password" autocomplete="current-password" required>
-    <button class="f-btn f-btn-primary" type="submit">Sign in</button>
+    <button class="f-btn {% if sso.is_none() %}f-btn-primary{% else %}f-btn-quiet{% endif %}" type="submit">Sign in</button>
 </form>
+{% endif %}
 {% endblock %}

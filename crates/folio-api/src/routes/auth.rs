@@ -18,6 +18,8 @@ use serde_json::Value;
 use tokio::sync::Semaphore;
 use url::{form_urlencoded, Url};
 
+use super::oidc;
+
 use folio_auth::{
     base_url,
     crypto::{
@@ -25,6 +27,7 @@ use folio_auth::{
     },
     limit::{FailureLimiter, RateLimiter},
     model::SOURCE_LOCAL,
+    oidc::OidcProvider,
     redirect::safe_next,
     server::{
         authorization_server_metadata, now, protected_resource_metadata, AuthorizeFailure,
@@ -50,6 +53,7 @@ const MAX_CONCURRENT_HASHES: usize = 4;
 const LOGIN_FAILURES_PER_USER: u32 = 5;
 const LOGIN_FAILURES_PER_IP: u32 = 10;
 const REGISTER_BODY_LIMIT: usize = 16 * 1024;
+const OIDC_STARTS_PER_MINUTE: u32 = 30;
 
 fn login_limiter(free_attempts: u32) -> FailureLimiter {
     FailureLimiter::new(
@@ -70,6 +74,11 @@ pub struct AuthState {
     pub required: bool,
     /// Trusted-header login, see [`crate::forward::forward_auth`].
     pub forward: Option<Arc<ForwardAuth>>,
+    /// Sign-in through an OpenID Connect provider.
+    pub oidc: Option<Arc<OidcProvider>>,
+    /// Caps how often one address can start an OIDC login; every start
+    /// stores a row.
+    oidc_starts: Arc<RateLimiter>,
     setup_token: Arc<str>,
     csrf_secret: Arc<[u8; 32]>,
     register_limit: Arc<RateLimiter>,
@@ -87,6 +96,11 @@ impl AuthState {
             public_url,
             required: true,
             forward: None,
+            oidc: None,
+            oidc_starts: Arc::new(RateLimiter::new(
+                OIDC_STARTS_PER_MINUTE,
+                OIDC_STARTS_PER_MINUTE as f64 / 60.0,
+            )),
             setup_token: random_token().into(),
             csrf_secret: Arc::new(random_secret()),
             login_by_ip: Arc::new(login_limiter(LOGIN_FAILURES_PER_IP)),
@@ -132,6 +146,21 @@ impl AuthState {
     pub fn with_forward(mut self, forward: ForwardAuth) -> Self {
         self.forward = Some(Arc::new(forward));
         self
+    }
+
+    pub fn with_oidc(mut self, oidc: OidcProvider) -> Self {
+        self.oidc = Some(Arc::new(oidc));
+        self
+    }
+
+    /// Whether the username and password form works.
+    pub(crate) fn local_login_allowed(&self) -> bool {
+        self.oidc.as_ref().is_none_or(|o| o.allow_local_login())
+    }
+
+    /// `Err(retry_after_secs)` when `ip` started too many OIDC logins lately.
+    pub(crate) fn oidc_start_allowed(&self, ip: &str) -> Result<(), u64> {
+        self.oidc_starts.check(ip)
     }
 
     pub fn with_required(mut self, required: bool) -> Self {
@@ -250,7 +279,7 @@ impl AuthState {
 
     /// CSRF token for a form shown to a logged-in user: an HMAC of the session
     /// id, so a token from one session is worthless in another.
-    fn csrf_session_token(&self, session_id: &str) -> String {
+    pub fn csrf_session_token(&self, session_id: &str) -> String {
         self.csrf_mac(&format!("session:{session_id}"))
     }
 
@@ -302,7 +331,13 @@ const EXEMPT_EXACT: [&str; 10] = [
     "/manifest.webmanifest",
     "/sw.js",
 ];
-const EXEMPT_PREFIX: [&str; 4] = ["/static/", "/oauth/", "/.well-known/", "/mcp/"];
+const EXEMPT_PREFIX: [&str; 5] = [
+    "/static/",
+    "/oauth/",
+    "/.well-known/",
+    "/mcp/",
+    "/auth/oidc/",
+];
 
 fn is_exempt(path: &str) -> bool {
     EXEMPT_EXACT.contains(&path) || EXEMPT_PREFIX.iter().any(|p| path.starts_with(p))
@@ -397,6 +432,8 @@ where
         .route("/setup", get(setup_page).post(setup_submit))
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", post(logout))
+        .route("/auth/oidc/login", get(oidc::start))
+        .route("/auth/oidc/callback", get(oidc::callback))
         .route("/.well-known/oauth-authorization-server", get(as_metadata))
         .route(
             "/.well-known/oauth-protected-resource",
@@ -441,7 +478,10 @@ pub(crate) fn set_cookie(name: &str, value: &str, max_age: i64, secure: bool) ->
     format!("{name}={value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")
 }
 
-fn with_cookies(mut response: Response, cookies: impl IntoIterator<Item = String>) -> Response {
+pub(crate) fn with_cookies(
+    mut response: Response,
+    cookies: impl IntoIterator<Item = String>,
+) -> Response {
     for c in cookies {
         if let Ok(v) = HeaderValue::from_str(&c) {
             response.headers_mut().append(header::SET_COOKIE, v);
@@ -509,6 +549,22 @@ struct SetupTemplate {
     csrf: String,
     token: String,
     error: Option<String>,
+    sso: Option<Sso>,
+}
+
+/// The single sign-on button.
+struct Sso {
+    label: String,
+    href: String,
+}
+
+fn sso_button(auth: &AuthState, next: &str) -> Option<Sso> {
+    let provider = auth.oidc.as_ref()?;
+    let encoded: String = form_urlencoded::byte_serialize(next.as_bytes()).collect();
+    Some(Sso {
+        label: provider.display_name().to_string(),
+        href: format!("/auth/oidc/login?next={encoded}"),
+    })
 }
 
 #[derive(Template)]
@@ -525,6 +581,8 @@ struct LoginTemplate {
     csrf: String,
     next: String,
     error: Option<String>,
+    sso: Option<Sso>,
+    password_form: bool,
 }
 
 #[derive(Template)]
@@ -563,7 +621,7 @@ async fn setup_page(
     headers: HeaderMap,
     Query(q): Query<SetupQuery>,
 ) -> Response {
-    if auth.store.count_users().await.unwrap_or(1) > 0 {
+    if auth.store.count_users().await.unwrap_or(1) > 0 || !auth.local_login_allowed() {
         return Redirect::to("/login").into_response();
     }
     let Some(token) = q.token.filter(|t| auth.setup_token_ok(Some(t))) else {
@@ -576,6 +634,8 @@ async fn setup_page(
                 csrf,
                 token,
                 error: None,
+                // The table is empty, so signing in creates the owner.
+                sso: sso_button(&auth, "/"),
             },
             StatusCode::OK,
         ),
@@ -599,7 +659,7 @@ async fn setup_submit(
     if auth.store.count_users().await.unwrap_or(1) > 0 {
         return Redirect::to("/login").into_response();
     }
-    if !auth.csrf_pre_ok(&headers, &form.csrf) {
+    if !auth.local_login_allowed() || !auth.csrf_pre_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
     if !auth.setup_token_ok(form.token.as_deref()) {
@@ -611,6 +671,7 @@ async fn setup_submit(
                 csrf: form.csrf.clone(),
                 token: form.token.clone().unwrap_or_default(),
                 error: Some(msg.to_string()),
+                sso: sso_button(&auth, "/"),
             },
             StatusCode::UNPROCESSABLE_ENTITY,
         )
@@ -656,8 +717,8 @@ async fn setup_submit(
 }
 
 #[derive(Deserialize)]
-struct NextQuery {
-    next: Option<String>,
+pub(crate) struct NextQuery {
+    pub(crate) next: Option<String>,
 }
 
 async fn login_page(
@@ -665,7 +726,7 @@ async fn login_page(
     headers: HeaderMap,
     Query(q): Query<NextQuery>,
 ) -> Response {
-    if auth.store.count_users().await.unwrap_or(1) == 0 {
+    if auth.store.count_users().await.unwrap_or(1) == 0 && auth.local_login_allowed() {
         return Redirect::to("/setup").into_response();
     }
     let next = safe_next(q.next.as_deref());
@@ -677,6 +738,8 @@ async fn login_page(
         render(
             LoginTemplate {
                 csrf,
+                sso: sso_button(&auth, &next),
+                password_form: auth.local_login_allowed(),
                 next,
                 error: None,
             },
@@ -700,7 +763,7 @@ async fn login_submit(
     ClientIp(ip): ClientIp,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    if !auth.csrf_pre_ok(&headers, &form.csrf) {
+    if !auth.local_login_allowed() || !auth.csrf_pre_ok(&headers, &form.csrf) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let next = safe_next(form.next.as_deref());
@@ -714,6 +777,8 @@ async fn login_submit(
         let mut response = render(
             LoginTemplate {
                 csrf: form.csrf,
+                sso: sso_button(&auth, &next),
+                password_form: true,
                 next,
                 error: Some(format!(
                     "Too many failed attempts. Try again in {}.",
@@ -769,6 +834,8 @@ async fn login_submit(
             render(
                 LoginTemplate {
                     csrf: form.csrf,
+                    sso: sso_button(&auth, &next),
+                    password_form: true,
                     next,
                     error: Some("That username and password don't match.".into()),
                 },
@@ -796,16 +863,29 @@ async fn logout(
     Form(form): Form<CsrfForm>,
 ) -> Response {
     // Without a live session there is nothing to protect; just clear the cookie.
-    if auth.session(&headers).await.is_some() {
+    let mut provider_logout = None;
+    if let Some((id, user)) = auth.session(&headers).await {
         if !auth.csrf_session_ok(&headers, &form.csrf).await {
             return StatusCode::FORBIDDEN.into_response();
         }
-        if let Some(id) = cookie(&headers, auth.session_cookie_name()) {
-            let _ = auth.store.delete_session(&hash_token(&id)).await;
+        let hash = hash_token(&id);
+        let id_token_hint = auth.store.session_id_token(&hash).await.ok().flatten();
+        let _ = auth.store.delete_session(&hash).await;
+        // Also end the session at the provider, or its single sign-on would
+        // log the user straight back in.
+        if let Some(p) = auth
+            .oidc
+            .as_ref()
+            .filter(|p| user.auth_source == p.source())
+        {
+            provider_logout = p
+                .logout_url(&format!("{}/login", auth.base()), id_token_hint.as_deref())
+                .await;
         }
     }
     let clear = set_cookie(auth.session_cookie_name(), "", 0, auth.secure());
-    with_cookies(Redirect::to("/login").into_response(), [clear])
+    let target = provider_logout.map_or_else(|| "/login".to_string(), |u| u.to_string());
+    with_cookies(Redirect::to(&target).into_response(), [clear])
 }
 
 // ---- metadata and registration ----------------------------------------------
@@ -887,11 +967,15 @@ async fn register(
 // ---- authorize --------------------------------------------------------------
 
 fn error_page(message: &str) -> Response {
+    error_page_with(message, StatusCode::BAD_REQUEST)
+}
+
+pub(crate) fn error_page_with(message: &str, status: StatusCode) -> Response {
     render(
         ErrorTemplate {
             message: message.to_string(),
         },
-        StatusCode::BAD_REQUEST,
+        status,
     )
 }
 

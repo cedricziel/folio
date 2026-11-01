@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use folio_auth::{
-    AccessToken, AuthCode, AuthError, AuthStore, Group, GroupSource, OAuthClient, RefreshToken,
-    Session, User,
+    AccessToken, AuthCode, AuthError, AuthStore, Group, GroupSource, OAuthClient, OidcLogin,
+    RefreshToken, Session, User,
 };
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
@@ -272,6 +272,25 @@ impl AuthStore for SqliteAuthStore {
             .map_err(err)
     }
 
+    async fn set_session_id_token(&self, id_hash: &str, id_token: &str) -> Result<(), AuthError> {
+        sqlx::query("UPDATE sessions SET id_token = $1 WHERE id_hash = $2")
+            .bind(id_token)
+            .bind(id_hash)
+            .execute(&self.pool)
+            .await
+            .map_err(err)?;
+        Ok(())
+    }
+
+    async fn session_id_token(&self, id_hash: &str) -> Result<Option<String>, AuthError> {
+        let row = sqlx::query("SELECT id_token FROM sessions WHERE id_hash = $1")
+            .bind(id_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(err)?;
+        Ok(row.and_then(|r| r.get("id_token")))
+    }
+
     async fn delete_session(&self, id_hash: &str) -> Result<(), AuthError> {
         sqlx::query("DELETE FROM sessions WHERE id_hash = $1")
             .bind(id_hash)
@@ -506,12 +525,47 @@ impl AuthStore for SqliteAuthStore {
         Ok(())
     }
 
+    async fn insert_oidc_login(&self, login: OidcLogin) -> Result<(), AuthError> {
+        sqlx::query(
+            "INSERT INTO oidc_logins
+             (state_hash, browser_hash, nonce, pkce_verifier, next, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(login.state_hash)
+        .bind(login.browser_hash)
+        .bind(login.nonce)
+        .bind(login.pkce_verifier)
+        .bind(login.next)
+        .bind(login.expires_at)
+        .execute(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(())
+    }
+
+    async fn take_oidc_login(&self, state_hash: &str) -> Result<Option<OidcLogin>, AuthError> {
+        let row = sqlx::query("DELETE FROM oidc_logins WHERE state_hash = $1 RETURNING *")
+            .bind(state_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(err)?;
+        Ok(row.map(|r| OidcLogin {
+            state_hash: r.get("state_hash"),
+            browser_hash: r.get("browser_hash"),
+            nonce: r.get("nonce"),
+            pkce_verifier: r.get("pkce_verifier"),
+            next: r.get("next"),
+            expires_at: r.get("expires_at"),
+        }))
+    }
+
     async fn purge_expired(&self, now: i64) -> Result<(), AuthError> {
         let statements = [
             "DELETE FROM oauth_codes WHERE expires_at <= $1",
             "DELETE FROM oauth_access_tokens WHERE expires_at <= $1",
             "DELETE FROM oauth_refresh_tokens WHERE expires_at <= $1",
             "DELETE FROM sessions WHERE expires_at <= $1",
+            "DELETE FROM oidc_logins WHERE expires_at <= $1",
         ];
         for sql in statements {
             sqlx::query(sql)

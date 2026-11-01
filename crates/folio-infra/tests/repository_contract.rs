@@ -1378,6 +1378,48 @@ async fn auth_contract(r: &Repositories) {
     assert!(auth.find_access_token("a2").await.unwrap().is_none());
     assert!(auth.find_access_token("a3").await.unwrap().is_some());
 
+    let login = |state: &str, exp: i64| folio_auth::OidcLogin {
+        state_hash: state.into(),
+        browser_hash: "browser".into(),
+        nonce: "nonce".into(),
+        pkce_verifier: "verifier".into(),
+        next: "/documents".into(),
+        expires_at: exp,
+    };
+    auth.insert_oidc_login(login("s1", far)).await.unwrap();
+    let taken = auth.take_oidc_login("s1").await.unwrap().unwrap();
+    assert_eq!(taken.browser_hash, "browser");
+    assert_eq!(taken.nonce, "nonce");
+    assert_eq!(taken.pkce_verifier, "verifier");
+    assert_eq!(taken.next, "/documents");
+    assert_eq!(taken.expires_at, far);
+    assert!(
+        auth.take_oidc_login("s1").await.unwrap().is_none(),
+        "a callback can be replayed only once"
+    );
+    assert!(auth.take_oidc_login("unknown").await.unwrap().is_none());
+    auth.insert_oidc_login(login("stale", 5)).await.unwrap();
+
+    auth.create_session(Session {
+        id_hash: "with-token".into(),
+        user_id: owner.id.clone(),
+        expires_at: far,
+    })
+    .await
+    .unwrap();
+    assert!(auth.session_id_token("with-token").await.unwrap().is_none());
+    auth.set_session_id_token("with-token", "jwt")
+        .await
+        .unwrap();
+    assert_eq!(
+        auth.session_id_token("with-token")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("jwt")
+    );
+    assert!(auth.session_id_token("unknown").await.unwrap().is_none());
+
     auth.insert_access_token(access("old", "g9", 5))
         .await
         .unwrap();
@@ -1385,6 +1427,7 @@ async fn auth_contract(r: &Repositories) {
     auth.purge_expired(10).await.unwrap();
     assert!(auth.find_access_token("old").await.unwrap().is_none());
     assert!(auth.take_code("oldcode").await.unwrap().is_none());
+    assert!(auth.take_oidc_login("stale").await.unwrap().is_none());
 }
 
 async fn run_contract(db: &Database) {

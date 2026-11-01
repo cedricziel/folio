@@ -11,6 +11,7 @@ pub mod external;
 pub mod forward;
 pub mod limit;
 pub mod model;
+pub mod oidc;
 pub mod redirect;
 pub mod server;
 pub mod store;
@@ -18,8 +19,8 @@ pub mod validator;
 
 pub use forward::{ForwardAuth, ForwardConfig};
 pub use model::{
-    AccessToken, AuthCode, AuthContext, Group, GroupSource, OAuthClient, RefreshToken, Session,
-    User, SCOPES,
+    AccessToken, AuthCode, AuthContext, Group, GroupSource, OAuthClient, OidcLogin, RefreshToken,
+    Session, User, SCOPES,
 };
 pub use store::{AuthError, AuthStore};
 pub use validator::{base_url, require_bearer, TokenValidator};
