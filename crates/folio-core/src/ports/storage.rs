@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::models::Id;
@@ -46,6 +47,11 @@ pub mod keys {
     /// Keys used before the object-key layout existed.
     pub mod legacy {
         use super::Id;
+
+        /// Directory holding the original under the old layout, with a trailing slash.
+        pub fn document_prefix(id: Id) -> String {
+            format!("{id}/")
+        }
 
         pub fn thumbnail(id: Id) -> String {
             format!("thumbnails/{id}.jpg")
@@ -106,6 +112,9 @@ pub trait DocumentStore: Send + Sync {
     /// Whether an object exists.
     async fn exists(&self, key: &str) -> Result<bool>;
 
+    /// Copy an object within the store (server-side where the backend can).
+    async fn copy(&self, from: &str, to: &str) -> Result<()>;
+
     /// Delete an object. Deleting a missing key succeeds.
     async fn delete(&self, key: &str) -> Result<()>;
 
@@ -147,21 +156,44 @@ pub trait DocumentStore: Send + Sync {
     }
 }
 
-/// Remove everything stored for a document, including objects written under
-/// the pre-key layout. `legacy_file_path` and `page_count` come from the
-/// document row.
+/// Remove everything stored for a document: its objects under the key layout
+/// and anything left by the layout before it (`{id}/...` originals and
+/// `thumbnails/...`). `page_count` comes from the document row.
 pub async fn purge_document(
     store: &dyn DocumentStore,
     id: Id,
-    legacy_file_path: Option<&str>,
     page_count: Option<u32>,
 ) -> Result<()> {
     store.delete_prefix(&keys::document_prefix(id)).await?;
+    store
+        .delete_prefix(&keys::legacy::document_prefix(id))
+        .await?;
     for page in 1..=page_count.unwrap_or(1) {
         store.delete(&keys::legacy::page(id, page)).await?;
     }
-    if let Some(path) = legacy_file_path.filter(|p| !p.starts_with("documents/")) {
-        store.delete(path).await?;
-    }
     Ok(())
+}
+
+/// Where a document is in the background processing pipeline
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingStatus {
+    /// Queued, not started yet
+    Pending,
+    /// Currently being processed
+    Processing,
+    /// No outstanding or failed work
+    Completed,
+    /// At least one processing step failed
+    Failed,
+}
+
+/// Background processing (thumbnail, OCR, embedding) of documents
+#[async_trait]
+pub trait ProcessingQueue: Send + Sync {
+    /// Schedule full processing for a newly stored document
+    async fn enqueue_processing(&self, document_id: Id) -> Result<()>;
+
+    /// Current processing status of a document
+    async fn processing_status(&self, document_id: Id) -> Result<ProcessingStatus>;
 }

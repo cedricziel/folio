@@ -6,15 +6,43 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
-use folio_api::{create_router, AppState};
-use folio_core::{ports::HealthCheck, EventBroadcaster};
+use folio_api::{create_router, AppState, AuthState};
+use folio_core::ports::{HealthCheck, SettingsRepository};
+use folio_core::services::LibraryService;
+use folio_core::EventBroadcaster;
 use folio_infra::{
-    build_store, migrate_legacy_layout, Config, Database, DatabaseHealthCheck,
-    DynamicEmbeddingService, DynamicOcrService, ThumbnailService, Worker, WorkerConfig,
+    build_store, cleanup_legacy_layout, migrate_legacy_layout, Config, Database,
+    DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, ThumbnailService, Worker,
+    WorkerConfig,
 };
+use folio_mcp::McpOptions;
+
+/// What the binary was asked to do
+enum Mode {
+    Server,
+    McpStdio,
+    /// Delete old-layout copies left behind by the storage migration
+    CleanupLegacyStorage,
+}
+
+fn parse_args() -> Result<Mode> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        [] => Ok(Mode::Server),
+        ["mcp", "--stdio"] => Ok(Mode::McpStdio),
+        ["storage", "cleanup-legacy"] => Ok(Mode::CleanupLegacyStorage),
+        _ => anyhow::bail!("usage: folio-app [mcp --stdio | storage cleanup-legacy]"),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,9 +58,12 @@ async fn main() -> Result<()> {
         };
     }
 
-    // Initialize logging
+    let mode = parse_args()?;
+
+    // Initialize logging; stdout carries the protocol in stdio mode
     FmtSubscriber::builder()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
 
     info!("Starting Folio...");
@@ -75,10 +106,23 @@ async fn main() -> Result<()> {
     let correspondent_repo = repos.correspondents;
     let document_type_repo = repos.document_types;
     let settings_repo = repos.settings;
+    let auth_store = repos.auth;
 
-    migrate_legacy_layout(store.as_ref(), document_repo.as_ref())
-        .await
-        .context("Failed to migrate stored files to object keys")?;
+    if matches!(mode, Mode::CleanupLegacyStorage) {
+        let cleaned = cleanup_legacy_layout(store.as_ref(), document_repo.as_ref())
+            .await
+            .context("Failed to clean up old storage layout")?;
+        info!("Removed old-layout files of {cleaned} documents");
+        return Ok(());
+    }
+
+    migrate_legacy_layout(
+        store.as_ref(),
+        document_repo.as_ref(),
+        settings_repo.as_ref(),
+    )
+    .await
+    .context("Failed to migrate stored files to object keys")?;
 
     // Create AI services (dynamic - reads from database settings with config.toml fallback)
     let ocr_service = Arc::new(DynamicOcrService::new(
@@ -121,6 +165,32 @@ async fn main() -> Result<()> {
 
     info!("Background job worker started");
 
+    let library = Arc::new(LibraryService::new(
+        document_repo.clone(),
+        tag_repo.clone(),
+        correspondent_repo.clone(),
+        document_type_repo.clone(),
+        embedding_service.clone(),
+        search_service.clone(),
+        store.clone(),
+        Arc::new(job_queue.clone()),
+    ));
+
+    if matches!(mode, Mode::McpStdio) {
+        let served = folio_mcp::serve_stdio(library).await;
+        stop_worker(shutdown_tx, worker_handle).await;
+        return served.map_err(|e| anyhow::anyhow!(e));
+    }
+
+    let mcp_settings: Arc<dyn SettingsRepository> = settings_repo.clone();
+    let mcp_default = config.mcp.enabled.unwrap_or(config.auth.required);
+    if !config.auth.required && folio_mcp::is_enabled(mcp_settings.as_ref(), mcp_default).await {
+        tracing::warn!(
+            "MCP endpoint /mcp is enabled without authentication (auth.required is false); \
+             do not expose this server beyond localhost"
+        );
+    }
+
     // Create application state
     let health_checks: Vec<Arc<dyn HealthCheck>> =
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
@@ -141,8 +211,28 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks);
 
+    let auth = AuthState::new(auth_store, config.server.public_url.clone())
+        .with_required(config.auth.required);
+
     // Create router
-    let app = create_router(state);
+    let mcp = folio_mcp::router(
+        library,
+        mcp_settings,
+        McpOptions {
+            enabled_by_default: mcp_default,
+            allowed_hosts: config.mcp.allowed_hosts.clone(),
+        },
+    );
+    let mcp = if config.auth.required {
+        mcp.layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))
+            .layer(axum::middleware::from_fn_with_state(
+                auth.validator("/mcp"),
+                folio_auth::require_bearer,
+            ))
+    } else {
+        mcp
+    };
+    let app = create_router(state, auth).merge(mcp);
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -159,15 +249,17 @@ async fn main() -> Result<()> {
         tracing::error!("Server error: {}", e);
     }
 
-    // Signal worker to shut down
-    info!("Shutting down background worker...");
-    let _ = shutdown_tx.send(true);
-
-    // Wait for worker to finish (with timeout)
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), worker_handle).await;
+    stop_worker(shutdown_tx, worker_handle).await;
 
     info!("Folio shutdown complete");
     Ok(())
+}
+
+/// Signal the background worker to stop and wait for it, with a timeout
+async fn stop_worker(shutdown_tx: watch::Sender<bool>, worker_handle: JoinHandle<()>) {
+    info!("Shutting down background worker...");
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), worker_handle).await;
 }
 
 /// Shutdown signal handler for graceful termination

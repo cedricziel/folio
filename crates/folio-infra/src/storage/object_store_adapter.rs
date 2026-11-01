@@ -35,7 +35,8 @@ impl ObjectStoreDocumentStore {
             .await
             .map_err(|e| storage_err("Failed to create storage directory", e))?;
         let store = LocalFileSystem::new_with_prefix(root)
-            .map_err(|e| storage_err("Failed to open local storage", e))?;
+            .map_err(|e| storage_err("Failed to open local storage", e))?
+            .with_automatic_cleanup(true);
         Ok(Self {
             store: Arc::new(store),
             backend: "local",
@@ -53,9 +54,11 @@ impl ObjectStoreDocumentStore {
             .filter(|b| !b.is_empty())
             .ok_or_else(|| Error::Storage("storage.s3.bucket is required".into()))?;
 
+        // Custom endpoints (MinIO, Garage, R2) are addressed by path unless told otherwise.
+        let path_style = config.path_style.unwrap_or(config.endpoint.is_some());
         let mut builder = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
-            .with_virtual_hosted_style_request(!config.path_style)
+            .with_virtual_hosted_style_request(!path_style)
             .with_allow_http(config.allow_http);
         if let Some(region) = &config.region {
             builder = builder.with_region(region);
@@ -153,6 +156,13 @@ impl DocumentStore for ObjectStoreDocumentStore {
             Err(object_store::Error::NotFound { .. }) => Ok(false),
             Err(e) => Err(storage_err(&format!("Failed to stat {key}"), e)),
         }
+    }
+
+    async fn copy(&self, from: &str, to: &str) -> Result<()> {
+        self.store
+            .copy(&Self::path(from)?, &Self::path(to)?)
+            .await
+            .map_err(|e| Self::map_get_error(from, e))
     }
 
     async fn delete(&self, key: &str) -> Result<()> {

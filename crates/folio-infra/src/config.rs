@@ -32,6 +32,8 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    pub auth: AuthConfig,
+    pub mcp: McpConfig,
 }
 
 /// Server configuration
@@ -40,6 +42,9 @@ pub struct Config {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    /// Externally visible base URL (for example `https://folio.example.com`).
+    /// Used in OAuth metadata and redirects; derived from the request when unset.
+    pub public_url: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -47,6 +52,7 @@ impl Default for ServerConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3000,
+            public_url: None,
         }
     }
 }
@@ -106,11 +112,27 @@ pub struct S3Config {
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
     /// Address buckets as `endpoint/bucket` instead of `bucket.endpoint`.
-    pub path_style: bool,
+    /// Unset means path-style when a custom endpoint is set, virtual-hosted
+    /// style otherwise.
+    pub path_style: Option<bool>,
     /// Allow plain HTTP endpoints.
     pub allow_http: bool,
     /// Key prefix inside the bucket.
     pub prefix: Option<String>,
+}
+
+/// Authentication configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// Require a session or token for the web UI and API.
+    pub required: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self { required: true }
+    }
 }
 
 /// AI provider configuration
@@ -132,12 +154,26 @@ impl Default for AiConfig {
     }
 }
 
+/// MCP server configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Serve the MCP endpoint at `/mcp`. Unset means on when `auth.required` is
+    /// true and off otherwise, since the endpoint is only protected by auth.
+    /// The `mcp.enabled` DB setting overrides this.
+    pub enabled: Option<bool>,
+    /// Extra `Host` header values to accept besides loopback
+    pub allowed_hosts: Vec<String>,
+}
+
 /// How an environment value is converted before it reaches the config tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
     Str,
     Port,
     Bool,
+    /// Comma-separated values
+    List,
 }
 
 /// One configurable setting. This table drives env parsing and keeps
@@ -165,6 +201,18 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_SERVER__PORT",
         legacy_env: &["FOLIO_SERVER_PORT"],
         kind: ValueKind::Port,
+    },
+    Setting {
+        key: "server.public_url",
+        env: "FOLIO_SERVER__PUBLIC_URL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.required",
+        env: "FOLIO_AUTH__REQUIRED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
     },
     Setting {
         key: "database.url",
@@ -249,6 +297,18 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AI__ANTHROPIC_API_KEY",
         legacy_env: &["FOLIO_AI_ANTHROPIC_API_KEY"],
         kind: ValueKind::Str,
+    },
+    Setting {
+        key: "mcp.enabled",
+        env: "FOLIO_MCP__ENABLED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "mcp.allowed_hosts",
+        env: "FOLIO_MCP__ALLOWED_HOSTS",
+        legacy_env: &[],
+        kind: ValueKind::List,
     },
 ];
 
@@ -348,6 +408,14 @@ fn to_value(setting: &Setting, raw: String) -> Result<figment::value::Value, fig
             .parse::<u16>()
             .map(Value::from)
             .map_err(|_| invalid("a port number")),
+        ValueKind::List => {
+            let items: Vec<&str> = raw
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            Value::serialize(items).map_err(|e| invalid(&format!("a comma-separated list ({e})")))
+        }
         ValueKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
             "true" | "1" | "yes" | "on" => Ok(Value::from(true)),
             "false" | "0" | "no" | "off" => Ok(Value::from(false)),
@@ -394,18 +462,28 @@ mod tests {
     }
 
     #[test]
+    fn mcp_follows_the_auth_requirement_unless_set() {
+        assert_eq!(load(&[]).mcp.enabled, None);
+        assert_eq!(
+            load(&[("FOLIO_MCP__ENABLED", "true")]).mcp.enabled,
+            Some(true)
+        );
+    }
+
+    #[test]
     fn every_setting_is_set_by_its_env_var() {
         for setting in SETTINGS {
-            let sample = match (setting.key, setting.kind) {
-                ("storage.backend", _) => "s3",
-                (_, ValueKind::Str) => "sample-value",
-                (_, ValueKind::Port) => "4242",
-                (_, ValueKind::Bool) => "true",
+            let (sample, expected) = match (setting.key, setting.kind) {
+                ("storage.backend", _) => ("s3", "s3"),
+                (_, ValueKind::Str) => ("sample-value", "sample-value"),
+                (_, ValueKind::Port) => ("4242", "4242"),
+                (_, ValueKind::Bool) => ("true", "true"),
+                (_, ValueKind::List) => ("a.example, b.example", r#"["a.example","b.example"]"#),
             };
             let config = load(&[(setting.env, sample)]);
             assert_eq!(
                 lookup(&config, setting.key).as_deref(),
-                Some(sample),
+                Some(expected),
                 "{} did not land in {}",
                 setting.env,
                 setting.key
@@ -417,13 +495,14 @@ mod tests {
     fn legacy_names_still_work() {
         for setting in SETTINGS {
             for legacy in setting.legacy_env {
-                let sample = match setting.kind {
-                    ValueKind::Str => "legacy-value",
-                    ValueKind::Port => "4343",
-                    ValueKind::Bool => "true",
+                let (sample, expected) = match setting.kind {
+                    ValueKind::Str => ("legacy-value", "legacy-value"),
+                    ValueKind::Port => ("4343", "4343"),
+                    ValueKind::Bool => ("true", "true"),
+                    ValueKind::List => ("legacy.example", r#"["legacy.example"]"#),
                 };
                 let config = load(&[(legacy, sample)]);
-                assert_eq!(lookup(&config, setting.key).as_deref(), Some(sample));
+                assert_eq!(lookup(&config, setting.key).as_deref(), Some(expected));
             }
         }
     }

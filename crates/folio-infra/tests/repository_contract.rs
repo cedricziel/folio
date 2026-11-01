@@ -422,6 +422,139 @@ async fn documents_contract(r: &Repositories) {
     );
 }
 
+async fn document_filter_contract(r: &Repositories) {
+    let tax = r
+        .tags
+        .create(CreateTag {
+            name: "filter-tax".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let home = r
+        .tags
+        .create(CreateTag {
+            name: "filter-home".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let acme = r
+        .correspondents
+        .create(CreateCorrespondent {
+            name: "Filter Acme".into(),
+        })
+        .await
+        .unwrap();
+
+    let mut invoice = new_document("Filter invoice");
+    invoice.content = Some("Total due: 100 EUR for March".into());
+    let invoice = r.documents.create(invoice).await.unwrap();
+    let mut letter = new_document("Filter letter");
+    letter.content = Some("Dear Sir".into());
+    let letter = r.documents.create(letter).await.unwrap();
+    r.documents.add_tag(invoice.id, tax.id).await.unwrap();
+    r.documents.add_tag(invoice.id, home.id).await.unwrap();
+    r.documents.add_tag(letter.id, home.id).await.unwrap();
+    r.documents
+        .update(
+            invoice.id,
+            UpdateDocument {
+                correspondent_id: Some(Some(acme.id)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let ids = |docs: Vec<folio_core::models::Document>| {
+        docs.into_iter().map(|d| d.id).collect::<Vec<_>>()
+    };
+    let list =
+        |filter: DocumentFilter| async move { r.documents.list(Some(filter)).await.unwrap() };
+
+    // Every term must match, case-insensitively, in any order and field
+    let by_terms = list(DocumentFilter {
+        search_query: Some("100 INVOICE".into()),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(by_terms), vec![invoice.id]);
+    // LIKE wildcards in user input match literally
+    let wildcard = list(DocumentFilter {
+        search_query: Some("%".into()),
+        ..Default::default()
+    })
+    .await;
+    assert!(wildcard.is_empty());
+
+    // A document must carry all requested tags; repeated ids count once
+    let all_tags = list(DocumentFilter {
+        tag_ids: Some(vec![tax.id, home.id]),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(all_tags), vec![invoice.id]);
+    let repeated = list(DocumentFilter {
+        tag_ids: Some(vec![tax.id, tax.id]),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(repeated), vec![invoice.id]);
+    let one_tag = list(DocumentFilter {
+        tag_ids: Some(vec![home.id]),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(one_tag.len(), 2);
+
+    // Filters combine
+    let combined = list(DocumentFilter {
+        tag_ids: Some(vec![home.id]),
+        correspondent_id: Some(acme.id),
+        search_query: Some("march".into()),
+        ..Default::default()
+    })
+    .await;
+    assert_eq!(ids(combined), vec![invoice.id]);
+    let none = list(DocumentFilter {
+        tag_ids: Some(vec![tax.id]),
+        correspondent_id: Some(Id::new_v4()),
+        ..Default::default()
+    })
+    .await;
+    assert!(none.is_empty());
+
+    // created_after is inclusive, created_before exclusive
+    let stored = r.documents.find_by_id(invoice.id).await.unwrap().unwrap();
+    let at = stored.created_at;
+    let has = |docs: &[folio_core::models::Document]| docs.iter().any(|d| d.id == invoice.id);
+    let from = list(DocumentFilter {
+        created_after: Some(at),
+        ..Default::default()
+    })
+    .await;
+    assert!(has(&from));
+    let until_exact = list(DocumentFilter {
+        created_before: Some(at),
+        ..Default::default()
+    })
+    .await;
+    assert!(!has(&until_exact));
+    let until_later = list(DocumentFilter {
+        created_before: Some(at + Duration::seconds(1)),
+        ..Default::default()
+    })
+    .await;
+    assert!(has(&until_later));
+    let future = list(DocumentFilter {
+        created_after: Some(Utc::now() + Duration::days(1)),
+        ..Default::default()
+    })
+    .await;
+    assert!(future.is_empty());
+}
+
 async fn settings_contract(r: &Repositories) {
     let seeded = r.settings.get("ai.provider").await.unwrap().unwrap();
     assert_eq!(seeded.value, "local");
@@ -622,6 +755,132 @@ async fn concurrent_dequeue_contract(r: &Repositories) {
     assert_eq!(ids.len(), 8, "no job is handed out twice");
 }
 
+async fn auth_contract(r: &Repositories) {
+    use folio_auth::{AccessToken, AuthCode, OAuthClient, RefreshToken, Session, User};
+    let auth = &r.auth;
+    let user = |name: &str| User {
+        id: Id::new_v4().to_string(),
+        username: name.to_string(),
+        password_hash: "hash".into(),
+        created_at: 1,
+    };
+
+    assert_eq!(auth.count_users().await.unwrap(), 0);
+    let owner = auth
+        .create_first_user(user("Owner"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(auth
+        .create_first_user(user("second"))
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(auth.count_users().await.unwrap(), 1);
+    let by_name = auth.find_user_by_username("oWnEr").await.unwrap().unwrap();
+    assert_eq!(by_name.id, owner.id);
+    assert_eq!(by_name.username, "Owner");
+    assert!(auth
+        .find_user_by_username("nobody")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        auth.find_user_by_id(&owner.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .username,
+        "Owner"
+    );
+
+    let far = i64::MAX / 2;
+    auth.create_session(Session {
+        id_hash: "sess".into(),
+        user_id: owner.id.clone(),
+        expires_at: far,
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        auth.find_session("sess").await.unwrap().unwrap().user_id,
+        owner.id
+    );
+    auth.delete_session("sess").await.unwrap();
+    assert!(auth.find_session("sess").await.unwrap().is_none());
+
+    auth.insert_client(OAuthClient {
+        client_id: "client".into(),
+        client_name: "Claude".into(),
+        redirect_uris: vec!["https://a.example/cb".into(), "app:/cb".into()],
+        created_at: 1,
+    })
+    .await
+    .unwrap();
+    let client = auth.find_client("client").await.unwrap().unwrap();
+    assert_eq!(client.redirect_uris, ["https://a.example/cb", "app:/cb"]);
+    assert!(auth.find_client("other").await.unwrap().is_none());
+
+    let code = |hash: &str, expires_at| AuthCode {
+        code_hash: hash.into(),
+        client_id: "client".into(),
+        user_id: owner.id.clone(),
+        redirect_uri: "https://a.example/cb".into(),
+        code_challenge: "challenge".into(),
+        scopes: vec!["documents:read".into(), "documents:write".into()],
+        audience: "https://folio.example/mcp".into(),
+        expires_at,
+    };
+    auth.insert_code(code("c1", far)).await.unwrap();
+    let taken = auth.take_code("c1").await.unwrap().unwrap();
+    assert_eq!(taken.scopes, ["documents:read", "documents:write"]);
+    assert_eq!(taken.audience, "https://folio.example/mcp");
+    assert!(
+        auth.take_code("c1").await.unwrap().is_none(),
+        "codes are single-use"
+    );
+
+    let access = |hash: &str, expires_at| AccessToken {
+        token_hash: hash.into(),
+        client_id: "client".into(),
+        user_id: owner.id.clone(),
+        scopes: vec!["documents:read".into()],
+        audience: "aud".into(),
+        expires_at,
+    };
+    let refresh = |hash: &str, expires_at| RefreshToken {
+        token_hash: hash.into(),
+        client_id: "client".into(),
+        user_id: owner.id.clone(),
+        scopes: vec!["documents:read".into()],
+        audience: "aud".into(),
+        expires_at,
+    };
+    auth.insert_access_token(access("a1", far)).await.unwrap();
+    assert_eq!(
+        auth.find_access_token("a1").await.unwrap().unwrap().scopes,
+        ["documents:read"]
+    );
+    auth.insert_refresh_token(refresh("r1", far)).await.unwrap();
+    assert!(auth.take_refresh_token("r1").await.unwrap().is_some());
+    assert!(
+        auth.take_refresh_token("r1").await.unwrap().is_none(),
+        "rotation consumes"
+    );
+    auth.insert_refresh_token(refresh("r2", far)).await.unwrap();
+    auth.revoke_token("a1").await.unwrap();
+    auth.revoke_token("r2").await.unwrap();
+    auth.revoke_token("unknown").await.unwrap();
+    assert!(auth.find_access_token("a1").await.unwrap().is_none());
+    assert!(auth.take_refresh_token("r2").await.unwrap().is_none());
+
+    auth.insert_access_token(access("old", 5)).await.unwrap();
+    auth.insert_code(code("oldcode", 5)).await.unwrap();
+    auth.purge_expired(10).await.unwrap();
+    assert!(auth.find_access_token("old").await.unwrap().is_none());
+    assert!(auth.take_code("oldcode").await.unwrap().is_none());
+}
+
 async fn run_contract(db: &Database) {
     db.migrate().await.unwrap();
     // Migrating twice is a no-op
@@ -632,10 +891,12 @@ async fn run_contract(db: &Database) {
     correspondents_contract(&repos).await;
     document_types_contract(&repos).await;
     documents_contract(&repos).await;
+    document_filter_contract(&repos).await;
     settings_contract(&repos).await;
     search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
     jobs_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
+    auth_contract(&repos).await;
 }
 
 #[tokio::test]

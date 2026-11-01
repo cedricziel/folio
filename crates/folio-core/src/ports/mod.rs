@@ -14,3 +14,4 @@ pub use repository::{
     TagRepository,
 };
 pub use storage::{keys, purge_document, DocumentStore, LocalCopy, StoredObject};
+pub use storage::{ProcessingQueue, ProcessingStatus};

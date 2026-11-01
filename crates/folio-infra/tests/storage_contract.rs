@@ -10,7 +10,9 @@ use folio_core::error::Error;
 use folio_core::models::CreateDocument;
 use folio_core::ports::{keys, purge_document, DocumentStore};
 use folio_infra::config::{S3Config, StorageBackend, StorageConfig};
-use folio_infra::{build_store, migrate_legacy_layout, Database, ObjectStoreDocumentStore};
+use folio_infra::{
+    build_store, cleanup_legacy_layout, migrate_legacy_layout, Database, ObjectStoreDocumentStore,
+};
 use futures::StreamExt;
 use testcontainers_modules::testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
@@ -35,6 +37,17 @@ async fn contract(store: &dyn DocumentStore) {
         .await
         .unwrap();
     assert_eq!(store.get_bytes(&key).await.unwrap(), b"replaced!");
+
+    // copy keeps the source
+    let copy_key = keys::thumbnail(id);
+    store.copy(&key, &copy_key).await.unwrap();
+    assert_eq!(store.get_bytes(&copy_key).await.unwrap(), b"replaced!");
+    assert!(store.exists(&key).await.unwrap());
+    assert!(store
+        .copy("documents/none/original", &copy_key)
+        .await
+        .is_err());
+    store.delete(&copy_key).await.unwrap();
 
     // missing objects
     let missing = store.get(&keys::thumbnail(id)).await.err().unwrap();
@@ -111,9 +124,7 @@ async fn contract(store: &dyn DocumentStore) {
     ] {
         store.put(&k, Bytes::from_static(b"x")).await.unwrap();
     }
-    purge_document(store, doc, Some(&legacy_original), Some(2))
-        .await
-        .unwrap();
+    purge_document(store, doc, Some(2)).await.unwrap();
     for k in [
         keys::original(doc),
         keys::thumbnail(doc),
@@ -192,7 +203,7 @@ async fn s3_satisfies_the_contract_on_minio() {
         endpoint: Some(endpoint.clone()),
         access_key_id: Some(common::MINIO_USER.into()),
         secret_access_key: Some(common::MINIO_PASSWORD.into()),
-        path_style: true,
+        path_style: None,
         allow_http: true,
         prefix: prefix.map(str::to_string),
     };
@@ -233,26 +244,26 @@ async fn s3_satisfies_the_contract_on_minio() {
     assert_eq!(&body[..], b"scoped");
 }
 
-#[tokio::test]
-async fn legacy_layout_is_migrated_to_object_keys() {
+async fn legacy_migration_scenario(store: &dyn DocumentStore) {
     let dir = tempfile::tempdir().unwrap();
     let database = Database::connect(&format!("sqlite:{}", dir.path().join("folio.db").display()))
         .await
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
-    let store = ObjectStoreDocumentStore::in_memory();
+
+    let new_document = |title: &str| CreateDocument {
+        title: title.into(),
+        content: None,
+        original_filename: Some("scan.pdf".into()),
+        mime_type: Some("application/pdf".into()),
+        correspondent_id: None,
+        document_type_id: None,
+    };
 
     let legacy = repos
         .documents
-        .create(CreateDocument {
-            title: "legacy".into(),
-            content: None,
-            original_filename: Some("scan.pdf".into()),
-            mime_type: Some("application/pdf".into()),
-            correspondent_id: None,
-            document_type_id: None,
-        })
+        .create(new_document("legacy"))
         .await
         .unwrap();
     let legacy_path = format!("{}/scan.pdf", legacy.id);
@@ -280,14 +291,7 @@ async fn legacy_layout_is_migrated_to_object_keys() {
 
     let current = repos
         .documents
-        .create(CreateDocument {
-            title: "current".into(),
-            content: None,
-            original_filename: None,
-            mime_type: None,
-            correspondent_id: None,
-            document_type_id: None,
-        })
+        .create(new_document("current"))
         .await
         .unwrap();
     repos
@@ -300,13 +304,11 @@ async fn legacy_layout_is_migrated_to_object_keys() {
         .await
         .unwrap();
 
-    assert_eq!(
-        migrate_legacy_layout(&store, repos.documents.as_ref())
-            .await
-            .unwrap(),
-        1
-    );
+    let migrate =
+        || migrate_legacy_layout(store, repos.documents.as_ref(), repos.settings.as_ref());
+    assert_eq!(migrate().await.unwrap(), 1);
 
+    // New keys exist and the row points at them ...
     let moved = repos
         .documents
         .find_by_id(legacy.id)
@@ -326,17 +328,84 @@ async fn legacy_layout_is_migrated_to_object_keys() {
         store.get_bytes(&keys::page(legacy.id, 2)).await.unwrap(),
         b"t2"
     );
+    // ... and the old files stay, so a rollback to the previous release still works.
+    assert_eq!(store.get_bytes(&legacy_path).await.unwrap(), b"pdf");
+    assert!(store
+        .exists(&keys::legacy::thumbnail(legacy.id))
+        .await
+        .unwrap());
+    assert!(store
+        .exists(&keys::legacy::page(legacy.id, 2))
+        .await
+        .unwrap());
+
+    // A clean pass is recorded, so the next start does nothing, even for new legacy data.
+    store
+        .put(
+            &keys::legacy::thumbnail(current.id),
+            Bytes::from_static(b"late"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(migrate().await.unwrap(), 0);
+    assert!(!store.exists(&keys::thumbnail(current.id)).await.unwrap());
+
+    // Cleanup is separate and only removes documents that have a new-layout original.
+    assert_eq!(
+        cleanup_legacy_layout(store, repos.documents.as_ref())
+            .await
+            .unwrap(),
+        2
+    );
     assert!(!store.exists(&legacy_path).await.unwrap());
     assert!(!store
         .exists(&keys::legacy::thumbnail(legacy.id))
         .await
         .unwrap());
-
-    // second run is a no-op
+    assert!(!store
+        .exists(&keys::legacy::page(legacy.id, 2))
+        .await
+        .unwrap());
     assert_eq!(
-        migrate_legacy_layout(&store, repos.documents.as_ref())
-            .await
-            .unwrap(),
-        0
+        store.get_bytes(&keys::original(legacy.id)).await.unwrap(),
+        b"pdf"
+    );
+    assert_eq!(
+        store.get_bytes(&keys::page(legacy.id, 2)).await.unwrap(),
+        b"t2"
+    );
+}
+
+#[tokio::test]
+async fn legacy_layout_is_migrated_in_memory() {
+    legacy_migration_scenario(&ObjectStoreDocumentStore::in_memory()).await;
+}
+
+#[tokio::test]
+async fn legacy_layout_is_migrated_on_local_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("storage");
+    let store = build_store(&StorageConfig {
+        backend: StorageBackend::Local,
+        path: root.to_string_lossy().into_owned(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    legacy_migration_scenario(store.as_ref()).await;
+
+    // The scenario writes old-layout files straight through the store, which
+    // lays them out as the previous release did: `<root>/<id>/scan.pdf`.
+    // After cleanup no empty `<id>` directory may remain.
+    let stale: Vec<_> = std::fs::read_dir(&root)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.len() == 36)
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "legacy directories left behind: {stale:?}"
     );
 }

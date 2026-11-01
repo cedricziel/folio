@@ -31,6 +31,7 @@ ln -s "$repo/static" "$dir/static"
     FOLIO_DATABASE__URL="sqlite:$dir/folio.db?mode=rwc" \
     FOLIO_STORAGE__PATH="$dir/storage" \
     FOLIO_AI__PROVIDER=local \
+    FOLIO_AUTH__REQUIRED=false \
     "$bin"
 ) >"$dir/server.log" 2>&1 &
 pid=$!

@@ -80,7 +80,10 @@ impl ThumbnailService {
 
     /// Generate thumbnail from a PDF (first page)
     async fn generate_pdf_thumbnail(&self, data: &[u8]) -> Result<Vec<u8>> {
-        match render_pdf_page(data, 1, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT).await {
+        let dir = temp_dir()?;
+        let pdf = dir.path().join("input.pdf");
+        write_file(&pdf, data).await?;
+        match render_pdf_page(&pdf, 1, THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT).await {
             Some(jpeg) => Ok(jpeg),
             None => self.generate_placeholder_thumbnail("PDF", (239, 68, 68)), // Red color
         }
@@ -215,31 +218,9 @@ impl ThumbnailService {
         Ok(buffer)
     }
 
-    /// Check if a thumbnail exists
-    pub async fn exists(&self, document_id: Uuid) -> bool {
-        self.store
-            .exists(&keys::thumbnail(document_id))
-            .await
-            .unwrap_or(false)
-    }
-
-    /// Read a thumbnail
-    pub async fn read(&self, document_id: Uuid) -> Result<Vec<u8>> {
-        self.read_page(document_id, 1).await
-    }
-
-    /// Delete a thumbnail
-    pub async fn delete(&self, document_id: Uuid) -> Result<()> {
-        self.store.delete(&keys::thumbnail(document_id)).await
-    }
-
-    /// Get the number of pages in a PDF
-    pub async fn get_pdf_page_count(&self, data: &[u8]) -> Result<u32> {
-        let dir = temp_dir()?;
-        let pdf = dir.path().join("input.pdf");
-        write_file(&pdf, data).await?;
-
-        match Command::new("pdfinfo").arg(&pdf).output().await {
+    /// Get the number of pages in a PDF on local disk
+    pub async fn get_pdf_page_count(&self, pdf: &Path) -> Result<u32> {
+        match Command::new("pdfinfo").arg(pdf).output().await {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let pages = stdout
@@ -256,10 +237,10 @@ impl ThumbnailService {
         }
     }
 
-    /// Generate a page thumbnail for a specific page and return its object key
-    #[instrument(skip(self, data))]
-    pub async fn generate_page(&self, document_id: Uuid, data: &[u8], page: u32) -> Result<String> {
-        let thumbnail_data = match render_pdf_page(data, page, PAGE_WIDTH, PAGE_HEIGHT).await {
+    /// Generate a page thumbnail for a PDF on local disk and return its object key
+    #[instrument(skip(self))]
+    pub async fn generate_page(&self, document_id: Uuid, pdf: &Path, page: u32) -> Result<String> {
+        let thumbnail_data = match render_pdf_page(pdf, page, PAGE_WIDTH, PAGE_HEIGHT).await {
             Some(jpeg) => jpeg,
             None => {
                 self.generate_placeholder_thumbnail(&format!("Page {}", page), (239, 68, 68))?
@@ -271,27 +252,6 @@ impl ThumbnailService {
 
         debug!("Generated page {} thumbnail: {}", page, key);
         Ok(key)
-    }
-
-    /// Check if a page thumbnail exists
-    pub async fn page_exists(&self, document_id: Uuid, page: u32) -> bool {
-        self.store
-            .exists(&keys::page(document_id, page))
-            .await
-            .unwrap_or(false)
-    }
-
-    /// Read a page thumbnail
-    pub async fn read_page(&self, document_id: Uuid, page: u32) -> Result<Vec<u8>> {
-        self.store.get_bytes(&keys::page(document_id, page)).await
-    }
-
-    /// Delete all thumbnails for a document (including page thumbnails)
-    pub async fn delete_all(&self, document_id: Uuid) -> Result<()> {
-        self.store
-            .delete_prefix(&keys::document_prefix(document_id))
-            .await
-            .map(|_| ())
     }
 }
 
@@ -307,17 +267,15 @@ async fn write_file(path: &Path, data: &[u8]) -> Result<()> {
 
 /// Render one PDF page to JPEG with poppler, falling back to ImageMagick.
 /// Returns `None` when neither tool produced an image.
-async fn render_pdf_page(data: &[u8], page: u32, width: u32, height: u32) -> Option<Vec<u8>> {
+async fn render_pdf_page(pdf: &Path, page: u32, width: u32, height: u32) -> Option<Vec<u8>> {
     let dir = temp_dir().ok()?;
-    let pdf = dir.path().join("input.pdf");
-    write_file(&pdf, data).await.ok()?;
 
     let page_str = page.to_string();
     let out_prefix = dir.path().join("out");
     let result = Command::new("pdftoppm")
         .args(["-jpeg", "-f", &page_str, "-l", &page_str, "-scale-to"])
         .arg(width.to_string())
-        .arg(&pdf)
+        .arg(pdf)
         .arg(&out_prefix)
         .output()
         .await;

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 # Core domain
 folio-core = { workspace = true }
+folio-auth = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
