@@ -34,7 +34,7 @@ startup by the first three layers.
 | --- | --- | --- | --- |
 | `server.host` | `FOLIO_SERVER__HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` in containers. |
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
-| `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | SQLite connection URL. |
+| `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
 | `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Directory for stored documents and thumbnails. |
 | `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |
 | `ai.openai_api_key` | `FOLIO_AI__OPENAI_API_KEY` | unset | OpenAI API key. |
