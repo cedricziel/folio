@@ -435,13 +435,6 @@ mod tests {
         match node {
             serde_json::Value::Null => None,
             serde_json::Value::String(s) => Some(s.clone()),
-            serde_json::Value::Array(items) => Some(
-                items
-                    .iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
             other => Some(other.to_string()),
         }
     }

@@ -60,6 +60,11 @@ async fn issue(server: &Server, token: &str, scopes: &[&str]) {
             username: "alice".into(),
             password_hash: "x".into(),
             created_at: 0,
+            email: None,
+            display_name: None,
+            is_admin: true,
+            auth_source: "local".into(),
+            external_id: None,
         })
         .await
         .unwrap();

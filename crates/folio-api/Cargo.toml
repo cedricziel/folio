@@ -50,6 +50,7 @@ url = "2"
 async-trait = { workspace = true }
 
 [dev-dependencies]
+sqlx = { workspace = true }
 base64 = "0.22"
 sha2 = "0.10"
 tempfile = "3"

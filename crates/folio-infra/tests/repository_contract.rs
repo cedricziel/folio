@@ -763,6 +763,11 @@ async fn auth_contract(r: &Repositories) {
         username: name.to_string(),
         password_hash: "hash".into(),
         created_at: 1,
+        email: None,
+        display_name: None,
+        is_admin: false,
+        auth_source: "local".into(),
+        external_id: None,
     };
 
     assert_eq!(auth.count_users().await.unwrap(), 0);
@@ -793,6 +798,76 @@ async fn auth_contract(r: &Repositories) {
             .username,
         "Owner"
     );
+
+    assert!(
+        owner.is_admin
+            || auth
+                .find_user_by_id(&owner.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_admin
+    );
+
+    // External users: linked by (source, external id), usernames stay unique
+    let ext = |name: &str, ext_id: &str| User {
+        auth_source: "forward".into(),
+        external_id: Some(ext_id.into()),
+        password_hash: "!".into(),
+        email: Some(format!("{name}@example.com")),
+        ..user(name)
+    };
+    let alice = ext("alice", "alice");
+    auth.create_user(alice.clone()).await.unwrap();
+    assert!(matches!(
+        auth.create_user(ext("ALICE", "other")).await,
+        Err(folio_auth::AuthError::Conflict)
+    ));
+    assert!(matches!(
+        auth.create_user(ext("alice2", "alice")).await,
+        Err(folio_auth::AuthError::Conflict)
+    ));
+    let found = auth
+        .find_user_by_external("forward", "alice")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.id, alice.id);
+    assert_eq!(found.email.as_deref(), Some("alice@example.com"));
+    assert!(!found.is_admin);
+    assert!(auth
+        .find_user_by_external("oidc", "alice")
+        .await
+        .unwrap()
+        .is_none());
+    auth.update_user_profile(&alice.id, None, Some("Alice A."), true)
+        .await
+        .unwrap();
+    let updated = auth.find_user_by_id(&alice.id).await.unwrap().unwrap();
+    assert_eq!(updated.display_name.as_deref(), Some("Alice A."));
+    assert_eq!(updated.email, None);
+    assert!(updated.is_admin);
+
+    let names = |groups: Vec<folio_auth::Group>| -> Vec<String> {
+        groups.into_iter().map(|g| g.name).collect()
+    };
+    auth.set_external_groups(
+        &alice.id,
+        &["family".into(), "admins".into(), "family".into()],
+    )
+    .await
+    .unwrap();
+    let groups = auth.user_groups(&alice.id).await.unwrap();
+    assert!(groups
+        .iter()
+        .all(|g| g.source == folio_auth::GroupSource::External));
+    assert_eq!(names(groups), ["admins", "family"]);
+    auth.set_external_groups(&alice.id, &["kids".into()])
+        .await
+        .unwrap();
+    assert_eq!(names(auth.user_groups(&alice.id).await.unwrap()), ["kids"]);
+    auth.set_external_groups(&alice.id, &[]).await.unwrap();
+    assert!(auth.user_groups(&alice.id).await.unwrap().is_empty());
 
     let far = i64::MAX / 2;
     auth.create_session(Session {

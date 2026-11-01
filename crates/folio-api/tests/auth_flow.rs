@@ -745,3 +745,265 @@ mod enforcement {
         assert_eq!(status(&app, "/api/documents").await, StatusCode::OK);
     }
 }
+
+mod forward {
+    use super::*;
+    use axum::extract::ConnectInfo;
+    use folio_api::{enforce_auth, forward_auth};
+    use folio_auth::{AuthStore, ForwardAuth, GroupSource};
+    use folio_infra::Database;
+    use std::net::SocketAddr;
+
+    const TRUSTED: &str = "10.1.2.3:5555";
+    const UNTRUSTED: &str = "203.0.113.9:5555";
+
+    struct Fwd {
+        app: App,
+        store: Arc<dyn AuthStore>,
+        pool: sqlx::SqlitePool,
+    }
+
+    async fn fwd_app(admin_group: Option<&str>, user_header: &str) -> Fwd {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::connect(&format!("sqlite:{}/t.db?mode=rwc", dir.path().display()))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let Database::Sqlite(pool) = db.clone() else {
+            unreachable!()
+        };
+        let store = db.repositories().await.auth;
+        let forward = ForwardAuth::new(
+            user_header,
+            "Remote-Email",
+            "Remote-Name",
+            "Remote-Groups",
+            &["10.0.0.0/8".to_string()],
+            admin_group.map(String::from),
+        )
+        .unwrap();
+        let auth = AuthState::new(store.clone(), Some(BASE.into())).with_forward(forward);
+        let router = auth_router(auth.clone())
+            .merge(Router::new().route("/", get(|| async { "home" })))
+            .layer(middleware::from_fn_with_state(auth.clone(), enforce_auth))
+            .layer(middleware::from_fn_with_state(auth, forward_auth));
+        Fwd {
+            app: App { router, _dir: dir },
+            store,
+            pool,
+        }
+    }
+
+    async fn send_from(app: &App, peer: &str, mut req: Request<Body>) -> Resp {
+        let addr: SocketAddr = peer.parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(addr));
+        send(app, req).await
+    }
+
+    fn with_identity(uri: &str, user: &str, extra: &[(&str, &str)]) -> Request<Body> {
+        let mut b = Request::get(uri).header("Remote-User", user);
+        for (k, v) in extra {
+            b = b.header(*k, *v);
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn headers_from_an_untrusted_peer_are_ignored() {
+        let f = fwd_app(None, "Remote-User").await;
+        let res = send_from(&f.app, UNTRUSTED, with_identity("/", "alice", &[])).await;
+        assert_eq!(res.status, StatusCode::SEE_OTHER);
+        assert!(res.location().starts_with("/login"));
+        assert!(res.cookies().is_empty());
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn requests_without_a_peer_address_are_not_trusted() {
+        let f = fwd_app(None, "Remote-User").await;
+        let res = send(&f.app, with_identity("/", "alice", &[])).await;
+        assert_eq!(res.status, StatusCode::SEE_OTHER);
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn trusted_peer_without_header_is_not_logged_in() {
+        let f = fwd_app(None, "Remote-User").await;
+        let res = send_from(
+            &f.app,
+            TRUSTED,
+            Request::get("/").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(res.status, StatusCode::SEE_OTHER);
+    }
+
+    #[tokio::test]
+    async fn trusted_peer_gets_a_session_and_the_first_user_is_admin() {
+        let f = fwd_app(None, "Remote-User").await;
+        let req = with_identity(
+            "/",
+            "Alice",
+            &[
+                ("Remote-Email", "alice@example.com"),
+                ("Remote-Name", "Alice A."),
+            ],
+        );
+        let res = send_from(&f.app, TRUSTED, req).await;
+        assert_eq!(res.status, StatusCode::OK);
+        let session = res
+            .cookies()
+            .into_iter()
+            .find(|c| c.starts_with("folio_session="))
+            .expect("session cookie");
+
+        let alice = f
+            .store
+            .find_user_by_external("forward", "alice")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(alice.username, "Alice");
+        assert_eq!(alice.email.as_deref(), Some("alice@example.com"));
+        assert_eq!(alice.display_name.as_deref(), Some("Alice A."));
+        assert!(alice.is_admin, "the first user becomes the owner");
+
+        // The cookie alone keeps working, from any peer and without the header.
+        let again = send_from(&f.app, UNTRUSTED, get_req("/", &session)).await;
+        assert_eq!(again.status, StatusCode::OK);
+
+        // A repeat request through the proxy reuses the session.
+        let repeat = send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "Alice", &[("Cookie", &session)]),
+        )
+        .await;
+        assert_eq!(repeat.status, StatusCode::OK);
+        assert!(repeat.cookies().is_empty());
+    }
+
+    #[tokio::test]
+    async fn admin_group_maps_to_admin_and_follows_the_idp() {
+        let f = fwd_app(Some("admins"), "Remote-User").await;
+        send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "root", &[("Remote-Groups", "admins,family")]),
+        )
+        .await;
+        let bob = send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "bob", &[("Remote-Groups", "family")]),
+        )
+        .await;
+        assert_eq!(bob.status, StatusCode::OK);
+        let user = |name: &'static str| {
+            let store = f.store.clone();
+            async move {
+                store
+                    .find_user_by_external("forward", name)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            }
+        };
+        assert!(user("root").await.is_admin);
+        assert!(!user("bob").await.is_admin);
+
+        // Promoted when added to the group, demoted when removed.
+        send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "bob", &[("Remote-Groups", "family|admins")]),
+        )
+        .await;
+        assert!(user("bob").await.is_admin);
+        send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "bob", &[("Remote-Groups", "family")]),
+        )
+        .await;
+        assert!(!user("bob").await.is_admin);
+    }
+
+    #[tokio::test]
+    async fn external_and_local_groups_are_separate_namespaces() {
+        let f = fwd_app(None, "Remote-User").await;
+        send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "carol", &[("Remote-Groups", "admins")]),
+        )
+        .await;
+        let carol = f
+            .store
+            .find_user_by_external("forward", "carol")
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query("INSERT INTO auth_groups (id, source, name, created_at) VALUES ('g-local', 'local', 'admins', 0)")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO auth_group_members (group_id, user_id) VALUES ('g-local', $1)")
+            .bind(&carol.id)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        let groups = f.store.user_groups(&carol.id).await.unwrap();
+        assert_eq!(groups.len(), 2, "same name, two namespaces: {groups:?}");
+        assert!(groups.iter().any(|g| g.source == GroupSource::Local));
+        assert!(groups.iter().any(|g| g.source == GroupSource::External));
+
+        // The IdP drops the group: only the external membership goes away.
+        send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/", "carol", &[("Remote-Groups", "")]),
+        )
+        .await;
+        let groups = f.store.user_groups(&carol.id).await.unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].source, GroupSource::Local);
+    }
+
+    #[tokio::test]
+    async fn a_forwarded_name_cannot_take_over_a_local_account() {
+        let f = fwd_app(None, "Remote-User").await;
+        let _owner_session = setup_and_login_with(&f.app).await;
+        let res = send_from(&f.app, TRUSTED, with_identity("/", "OWNER", &[])).await;
+        assert_eq!(res.status, StatusCode::FORBIDDEN);
+        assert!(res.cookies().is_empty());
+    }
+
+    #[tokio::test]
+    async fn header_names_are_configurable() {
+        let f = fwd_app(None, "X-Authentik-Username").await;
+        let ignored = send_from(&f.app, TRUSTED, with_identity("/", "dave", &[])).await;
+        assert_eq!(ignored.status, StatusCode::SEE_OTHER);
+        let req = Request::get("/")
+            .header("X-Authentik-Username", "dave")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send_from(&f.app, TRUSTED, req).await.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn oauth_authorize_works_through_forward_auth() {
+        let f = fwd_app(None, "Remote-User").await;
+        let client = register(&f.app).await;
+        let uri = format!("/oauth/authorize?{}", authorize_query(&client));
+        let res = send_from(&f.app, TRUSTED, with_identity(&uri, "erin", &[])).await;
+        assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+        assert!(res
+            .body
+            .contains("Allow Claude to read and change your documents?"));
+    }
+
+    async fn setup_and_login_with(app: &App) -> String {
+        setup_and_login(app).await
+    }
+}
