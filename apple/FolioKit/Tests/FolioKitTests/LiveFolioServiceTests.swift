@@ -62,6 +62,7 @@ private let documentJSON = """
      "content": "Rechnungsnummer 2025-00318", "original_filename": "bill.pdf",
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
+     "ocr_status": "done", "embed_status": "skipped",
      "created_at": "2025-03-14T10:15:30.123456789Z", "updated_at": "2025-03-14T10:15:30Z"}
     """
 
