@@ -19,7 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_document_types).post(create_document_type))
         .route(
-            "/{id}",
+            "/:id",
             get(get_document_type)
                 .put(update_document_type)
                 .delete(delete_document_type),

@@ -19,7 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_correspondents).post(create_correspondent))
         .route(
-            "/{id}",
+            "/:id",
             get(get_correspondent)
                 .put(update_correspondent)
                 .delete(delete_correspondent),
