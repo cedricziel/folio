@@ -13,10 +13,7 @@ use folio_core::{
     EventBroadcaster,
 };
 use folio_infra::{
-    create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    PipelineContext, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
-    SqliteTagRepository, ThumbnailService,
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -39,26 +36,26 @@ async fn test_app() -> TestApp {
     let storage_path = dir.to_str().unwrap().to_string();
 
     // A file-backed database: each pooled connection to `:memory:` would see its own empty DB.
-    let pool = create_pool(&format!("sqlite://{}/test.db", storage_path))
+    let database = Database::connect(&format!("sqlite://{}/test.db", storage_path))
         .await
         .unwrap();
-    run_migrations(&pool).await.unwrap();
+    database.migrate().await.unwrap();
+    let repos = database.repositories().await;
 
     let ai = Config::default().ai;
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
-    let pipeline = PipelineContext::new(settings_repo.clone(), ai);
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let state = AppState::new(
-        Arc::new(SqliteDocumentRepository::new(pool.clone())),
-        Arc::new(SqliteTagRepository::new(pool.clone())),
-        Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-        Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-        settings_repo.clone(),
+        repos.documents,
+        repos.tags,
+        repos.correspondents,
+        repos.document_types,
+        repos.settings.clone(),
         Arc::new(DynamicOcrService::new(pipeline.clone())),
         Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
-        Arc::new(SqliteSearchService::new(pool.clone())),
+        repos.search,
         pipeline,
         Arc::new(ThumbnailService::new(&storage_path)),
-        JobQueue::new(pool),
+        repos.jobs,
         storage_path,
         EventBroadcaster::default(),
     );

@@ -43,6 +43,8 @@ jobs:
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
+        env:
+          FOLIO_REQUIRE_DOCKER: "1"
         run: cargo test --locked --workspace
 
   # Not a required check yet; make it required once it has been stable for a while.

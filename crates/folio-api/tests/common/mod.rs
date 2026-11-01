@@ -12,10 +12,7 @@ use uuid::Uuid;
 
 use folio_api::{create_router, AppState, EventBroadcaster};
 use folio_infra::{
-    create_pool, run_migrations, DynamicEmbeddingService, DynamicOcrService, JobQueue,
-    PipelineContext, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
-    SqliteTagRepository, ThumbnailService,
+    Database, DynamicEmbeddingService, DynamicOcrService, PipelineContext, ThumbnailService,
 };
 
 pub struct Harness {
@@ -28,12 +25,12 @@ pub async fn harness() -> Harness {
     std::fs::create_dir_all(&dir).unwrap();
     let storage = dir.to_string_lossy().to_string();
 
-    let pool = create_pool(&format!("sqlite:{}/folio.db", storage))
+    let database = Database::connect(&format!("sqlite:{}/folio.db", storage))
         .await
         .unwrap();
-    run_migrations(&pool).await.unwrap();
+    database.migrate().await.unwrap();
+    let repos = database.repositories().await;
 
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
     let ai = folio_infra::config::AiConfig {
         provider: "local".into(),
         openai_api_key: None,
@@ -42,19 +39,19 @@ pub async fn harness() -> Harness {
     let thumbnails = Arc::new(ThumbnailService::new(&storage));
     thumbnails.init().await.unwrap();
 
-    let pipeline = PipelineContext::new(settings_repo.clone(), ai);
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let state = AppState::new(
-        Arc::new(SqliteDocumentRepository::new(pool.clone())),
-        Arc::new(SqliteTagRepository::new(pool.clone())),
-        Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-        Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-        settings_repo.clone(),
+        repos.documents,
+        repos.tags,
+        repos.correspondents,
+        repos.document_types,
+        repos.settings.clone(),
         Arc::new(DynamicOcrService::new(pipeline.clone())),
         Arc::new(DynamicEmbeddingService::new(pipeline.clone())),
-        Arc::new(SqliteSearchService::new(pool.clone())),
+        repos.search,
         pipeline,
         thumbnails,
-        JobQueue::new(pool),
+        repos.jobs,
         storage,
         EventBroadcaster::new(16),
     );

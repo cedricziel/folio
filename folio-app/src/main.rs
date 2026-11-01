@@ -12,10 +12,8 @@ use tracing_subscriber::FmtSubscriber;
 use folio_api::{create_router, AppState};
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
-    create_pool, run_migrations, Config, DatabaseHealthCheck, DynamicEmbeddingService,
-    DynamicOcrService, FileStorage, JobQueue, PipelineContext, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
-    SqliteSettingsRepository, SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
+    Config, Database, DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, FileStorage,
+    PipelineContext, ThumbnailService, Worker, WorkerConfig,
 };
 
 #[tokio::main]
@@ -44,18 +42,18 @@ async fn main() -> Result<()> {
 
     info!("Configuration loaded");
     info!("  Server: {}:{}", config.server.host, config.server.port);
-    info!("  Database: {}", config.database.url);
+    info!("  Database: {}", redact_url(&config.database.url));
     info!("  Storage: {}", config.storage.path);
 
     // Initialize database
-    let pool = create_pool(&config.database.url)
+    let database = Database::connect(&config.database.url)
         .await
         .context("Failed to connect to database")?;
 
-    info!("Connected to database");
+    info!("Connected to {:?} database", database.backend());
 
-    // Run migrations
-    run_migrations(&pool)
+    database
+        .migrate()
         .await
         .context("Failed to run database migrations")?;
 
@@ -78,20 +76,21 @@ async fn main() -> Result<()> {
     info!("Storage initialized at: {}", config.storage.path);
 
     // Create repositories
-    let document_repo = Arc::new(SqliteDocumentRepository::new(pool.clone()));
-    let tag_repo = Arc::new(SqliteTagRepository::new(pool.clone()));
-    let correspondent_repo = Arc::new(SqliteCorrespondentRepository::new(pool.clone()));
-    let document_type_repo = Arc::new(SqliteDocumentTypeRepository::new(pool.clone()));
-    let settings_repo = Arc::new(SqliteSettingsRepository::new(pool.clone()));
+    let repos = database.repositories().await;
+    let document_repo = repos.documents;
+    let tag_repo = repos.tags;
+    let correspondent_repo = repos.correspondents;
+    let document_type_repo = repos.document_types;
+    let settings_repo = repos.settings;
 
     // Create AI services (providers follow the database settings, config.toml keys as fallback)
     let pipeline = PipelineContext::new(settings_repo.clone(), config.ai.clone());
     let ocr_service = Arc::new(DynamicOcrService::new(pipeline.clone()));
     let embedding_service = Arc::new(DynamicEmbeddingService::new(pipeline.clone()));
-    let search_service = Arc::new(SqliteSearchService::new(pool.clone()));
+    let search_service = repos.search;
 
     // Create job queue
-    let job_queue = JobQueue::new(pool.clone());
+    let job_queue = repos.jobs;
 
     // Create event broadcaster for SSE
     let event_broadcaster = EventBroadcaster::new(100);
@@ -123,7 +122,7 @@ async fn main() -> Result<()> {
 
     // Create application state
     let health_checks: Vec<Arc<dyn HealthCheck>> =
-        vec![Arc::new(DatabaseHealthCheck::new(pool.clone()))];
+        vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
     let state = AppState::new(
         document_repo,
@@ -196,4 +195,31 @@ async fn shutdown_signal() {
     }
 
     info!("Shutdown signal received");
+}
+
+/// Hide credentials in a database URL before logging it.
+fn redact_url(url: &str) -> String {
+    match (url.find("://"), url.rfind('@')) {
+        (Some(scheme_end), Some(at)) if scheme_end < at => {
+            format!("{}://***@{}", &url[..scheme_end], &url[at + 1..])
+        }
+        _ => url.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_url;
+
+    #[test]
+    fn redacts_credentials() {
+        assert_eq!(
+            redact_url("postgres://folio:secret@db:5432/folio"),
+            "postgres://***@db:5432/folio"
+        );
+        assert_eq!(
+            redact_url("sqlite:folio.db?mode=rwc"),
+            "sqlite:folio.db?mode=rwc"
+        );
+    }
 }

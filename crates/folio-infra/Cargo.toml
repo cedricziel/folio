@@ -52,3 +52,6 @@ fastembed = ["dep:fastembed"]
 [dependencies.fastembed]
 version = "5"
 optional = true
+
+[dev-dependencies]
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

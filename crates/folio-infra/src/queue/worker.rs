@@ -609,9 +609,9 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ai::SqliteSearchService;
     use crate::config::AiConfig;
     use crate::database::{test_pool, SqliteDocumentRepository, SqliteSettingsRepository};
+    use crate::SqliteSearchService;
     use async_trait::async_trait;
     use folio_core::error::Result;
     use folio_core::models::CreateDocument;
@@ -666,7 +666,7 @@ mod tests {
         let repo = Arc::new(SqliteDocumentRepository::new(pool.clone()));
         let settings = Arc::new(SqliteSettingsRepository::new(pool.clone()));
         let search = Arc::new(SqliteSearchService::new(pool.clone()));
-        let queue = JobQueue::new(pool.clone());
+        let queue = JobQueue::sqlite(pool.clone());
         let pipeline = PipelineContext::new(
             settings.clone(),
             AiConfig {

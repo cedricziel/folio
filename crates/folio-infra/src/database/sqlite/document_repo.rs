@@ -31,6 +31,19 @@ fn map_sqlx_error(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
 }
 
+// Helper to map a write error, turning unique violations into `Duplicate`
+fn map_write_error(e: sqlx::Error, entity_type: &'static str, value: &str) -> Error {
+    if e.to_string().contains("UNIQUE constraint failed") {
+        Error::Duplicate {
+            entity_type,
+            field: "name",
+            value: value.to_string(),
+        }
+    } else {
+        map_sqlx_error(e)
+    }
+}
+
 // Helper to parse UUID from string
 fn parse_uuid(s: &str) -> Result<Uuid> {
     Uuid::parse_str(s).map_err(|e| Error::Repository(format!("Invalid UUID: {}", e)))
@@ -566,17 +579,7 @@ impl TagRepository for SqliteTagRepository {
             .bind(now.to_rfc3339())
             .execute(&self.pool)
             .await
-            .map_err(|e| {
-                if e.to_string().contains("UNIQUE constraint failed") {
-                    Error::Duplicate {
-                        entity_type: "Tag",
-                        field: "name",
-                        value: params.name.clone(),
-                    }
-                } else {
-                    map_sqlx_error(e)
-                }
-            })?;
+            .map_err(|e| map_write_error(e, "Tag", &params.name))?;
 
         Ok(Tag {
             id,
@@ -601,7 +604,7 @@ impl TagRepository for SqliteTagRepository {
             .bind(id.to_string())
             .execute(&self.pool)
             .await
-            .map_err(map_sqlx_error)?;
+            .map_err(|e| map_write_error(e, "Tag", &name))?;
 
         Ok(Tag {
             id,
@@ -684,17 +687,7 @@ impl CorrespondentRepository for SqliteCorrespondentRepository {
             .bind(now.to_rfc3339())
             .execute(&self.pool)
             .await
-            .map_err(|e| {
-                if e.to_string().contains("UNIQUE constraint failed") {
-                    Error::Duplicate {
-                        entity_type: "Correspondent",
-                        field: "name",
-                        value: params.name.clone(),
-                    }
-                } else {
-                    map_sqlx_error(e)
-                }
-            })?;
+            .map_err(|e| map_write_error(e, "Correspondent", &params.name))?;
 
         Ok(Correspondent {
             id,
@@ -716,7 +709,7 @@ impl CorrespondentRepository for SqliteCorrespondentRepository {
             .bind(id.to_string())
             .execute(&self.pool)
             .await
-            .map_err(map_sqlx_error)?;
+            .map_err(|e| map_write_error(e, "Correspondent", &name))?;
 
         Ok(Correspondent {
             id,
@@ -798,17 +791,7 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
             .bind(now.to_rfc3339())
             .execute(&self.pool)
             .await
-            .map_err(|e| {
-                if e.to_string().contains("UNIQUE constraint failed") {
-                    Error::Duplicate {
-                        entity_type: "DocumentType",
-                        field: "name",
-                        value: params.name.clone(),
-                    }
-                } else {
-                    map_sqlx_error(e)
-                }
-            })?;
+            .map_err(|e| map_write_error(e, "DocumentType", &params.name))?;
 
         Ok(DocumentType {
             id,
@@ -830,7 +813,7 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
             .bind(id.to_string())
             .execute(&self.pool)
             .await
-            .map_err(map_sqlx_error)?;
+            .map_err(|e| map_write_error(e, "DocumentType", &name))?;
 
         Ok(DocumentType {
             id,
