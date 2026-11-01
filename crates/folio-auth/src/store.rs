@@ -46,6 +46,9 @@ pub trait AuthStore: Send + Sync {
     async fn create_session(&self, session: Session) -> Result<(), AuthError>;
     async fn find_session(&self, id_hash: &str) -> Result<Option<Session>, AuthError>;
     async fn delete_session(&self, id_hash: &str) -> Result<(), AuthError>;
+    /// Remembers the OpenID Connect ID token that created the session.
+    async fn set_session_id_token(&self, id_hash: &str, id_token: &str) -> Result<(), AuthError>;
+    async fn session_id_token(&self, id_hash: &str) -> Result<Option<String>, AuthError>;
 
     async fn insert_client(&self, client: OAuthClient) -> Result<(), AuthError>;
     async fn find_client(&self, client_id: &str) -> Result<Option<OAuthClient>, AuthError>;

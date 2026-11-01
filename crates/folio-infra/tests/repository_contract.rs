@@ -1155,6 +1155,26 @@ async fn auth_contract(r: &Repositories) {
     assert!(auth.take_oidc_login("unknown").await.unwrap().is_none());
     auth.insert_oidc_login(login("stale", 5)).await.unwrap();
 
+    auth.create_session(Session {
+        id_hash: "with-token".into(),
+        user_id: owner.id.clone(),
+        expires_at: far,
+    })
+    .await
+    .unwrap();
+    assert!(auth.session_id_token("with-token").await.unwrap().is_none());
+    auth.set_session_id_token("with-token", "jwt")
+        .await
+        .unwrap();
+    assert_eq!(
+        auth.session_id_token("with-token")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("jwt")
+    );
+    assert!(auth.session_id_token("unknown").await.unwrap().is_none());
+
     auth.insert_access_token(access("old", 5)).await.unwrap();
     auth.insert_code(code("oldcode", 5)).await.unwrap();
     auth.purge_expired(10).await.unwrap();

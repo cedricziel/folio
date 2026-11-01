@@ -241,6 +241,25 @@ impl AuthStore for SqliteAuthStore {
             .map_err(err)
     }
 
+    async fn set_session_id_token(&self, id_hash: &str, id_token: &str) -> Result<(), AuthError> {
+        sqlx::query("UPDATE sessions SET id_token = $1 WHERE id_hash = $2")
+            .bind(id_token)
+            .bind(id_hash)
+            .execute(&self.pool)
+            .await
+            .map_err(err)?;
+        Ok(())
+    }
+
+    async fn session_id_token(&self, id_hash: &str) -> Result<Option<String>, AuthError> {
+        let row = sqlx::query("SELECT id_token FROM sessions WHERE id_hash = $1")
+            .bind(id_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(err)?;
+        Ok(row.and_then(|r| r.get("id_token")))
+    }
+
     async fn delete_session(&self, id_hash: &str) -> Result<(), AuthError> {
         sqlx::query("DELETE FROM sessions WHERE id_hash = $1")
             .bind(id_hash)
