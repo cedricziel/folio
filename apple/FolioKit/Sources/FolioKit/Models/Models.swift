@@ -9,6 +9,8 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var correspondentID: UUID?
     public var documentTypeID: UUID?
     public var pageCount: Int?
+    /// Not in the API response yet; the UI renders them as soon as the server sends them.
+    public var tags: [Tag]
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -21,6 +23,7 @@ public struct Document: Identifiable, Hashable, Sendable {
         correspondentID: UUID? = nil,
         documentTypeID: UUID? = nil,
         pageCount: Int? = nil,
+        tags: [Tag] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -32,6 +35,7 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.correspondentID = correspondentID
         self.documentTypeID = documentTypeID
         self.pageCount = pageCount
+        self.tags = tags
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

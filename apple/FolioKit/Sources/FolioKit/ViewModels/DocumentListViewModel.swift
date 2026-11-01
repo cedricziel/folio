@@ -38,6 +38,7 @@ public final class DocumentListViewModel {
     private let service: any FolioService
     private let searchDebounce: Duration
     private var documents: [Document] = []
+    private var lookupsLoaded = false
 
     public init(service: any FolioService, searchDebounce: Duration = .milliseconds(300)) {
         self.service = service
@@ -52,11 +53,8 @@ public final class DocumentListViewModel {
         document.documentTypeID.flatMap { documentTypes[$0] }
     }
 
-    /// Initial load and pull to refresh.
+    /// Pull to refresh.
     public func load() async {
-        if rows.isEmpty {
-            phase = .loading
-        }
         async let lookups: Void = loadLookups()
         await fetch(query: searchText)
         await lookups
@@ -71,6 +69,8 @@ public final class DocumentListViewModel {
             try? await Task.sleep(for: searchDebounce)
         }
         guard !Task.isCancelled else { return }
+        if rows.isEmpty { phase = .loading }
+        if !lookupsLoaded { await loadLookups() }
         await fetch(query: query)
         rebuildRows()
     }
@@ -91,14 +91,14 @@ public final class DocumentListViewModel {
             guard !Task.isCancelled else { return }
             documents = result
             phase = .loaded
-        } catch is CancellationError {
-            return
         } catch {
+            guard !Task.isCancelled else { return }
             phase = .failed(error.localizedDescription)
         }
     }
 
     private func loadLookups() async {
+        lookupsLoaded = true
         async let people = try? service.correspondents()
         async let types = try? service.documentTypes()
         let (loadedPeople, loadedTypes) = await (people, types)
