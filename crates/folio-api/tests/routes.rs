@@ -8,11 +8,15 @@ use axum::{
     Router,
 };
 use folio_api::{create_router, AppState};
+use folio_core::ports::{keys, DocumentStore};
 use folio_core::{
     models::{CreateDocument, CreateTag},
     EventBroadcaster,
 };
-use folio_infra::{Config, Database, DynamicEmbeddingService, DynamicOcrService, ThumbnailService};
+use folio_infra::{
+    Config, Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
+    ThumbnailService,
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -40,6 +44,7 @@ async fn test_app() -> TestApp {
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
 
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let ai = Config::default().ai;
     let state = AppState::new(
         repos.documents,
@@ -47,16 +52,12 @@ async fn test_app() -> TestApp {
         repos.correspondents,
         repos.document_types,
         repos.settings.clone(),
-        Arc::new(DynamicOcrService::new(
-            repos.settings.clone(),
-            ai.clone(),
-            &storage_path,
-        )),
+        Arc::new(DynamicOcrService::new(repos.settings.clone(), ai.clone())),
         Arc::new(DynamicEmbeddingService::new(repos.settings, ai)),
         repos.search,
-        Arc::new(ThumbnailService::new(&storage_path)),
+        Arc::new(ThumbnailService::new(store.clone())),
         repos.jobs,
-        storage_path,
+        store,
         EventBroadcaster::default(),
     );
 
@@ -180,4 +181,130 @@ async fn update_tag_clears_color_on_null_and_keeps_it_when_absent() {
     assert_eq!(status, StatusCode::OK);
     assert!(body["color"].is_null());
     assert_eq!(body["name"], "Taxes");
+}
+
+async fn stored_document(app: &TestApp, filename: &str, bytes: &'static [u8]) -> Uuid {
+    let doc = app
+        .state
+        .document_repo
+        .create(CreateDocument {
+            title: "Stored".into(),
+            content: None,
+            original_filename: Some(filename.into()),
+            mime_type: Some("application/pdf".into()),
+            correspondent_id: None,
+            document_type_id: None,
+        })
+        .await
+        .unwrap();
+    let key = keys::original(doc.id);
+    app.state.store.put(&key, bytes.into()).await.unwrap();
+    app.state
+        .document_repo
+        .set_file_path(doc.id, &key)
+        .await
+        .unwrap();
+    doc.id
+}
+
+#[tokio::test]
+async fn download_streams_the_stored_file_with_headers() {
+    let app = test_app().await;
+    let id = stored_document(&app, "Größe.pdf", b"%PDF-1.4 body").await;
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/documents/{id}/download"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers().clone();
+    assert_eq!(headers["content-type"], "application/pdf");
+    assert_eq!(headers["content-length"], "13");
+    let disposition = headers["content-disposition"].to_str().unwrap();
+    assert!(
+        disposition.ends_with("filename*=UTF-8''Gr%C3%B6%C3%9Fe.pdf"),
+        "{disposition}"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"%PDF-1.4 body");
+}
+
+#[tokio::test]
+async fn thumbnail_route_streams_jpeg_from_the_store() {
+    let app = test_app().await;
+    let id = stored_document(&app, "a.pdf", b"x").await;
+    app.state
+        .store
+        .put(&keys::thumbnail(id), b"jpeg-bytes".as_slice().into())
+        .await
+        .unwrap();
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/documents/{id}/thumbnail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/jpeg");
+    assert_eq!(response.headers()["content-length"], "10");
+}
+
+#[tokio::test]
+async fn deleting_a_document_removes_all_of_its_objects() {
+    let app = test_app().await;
+    let id = stored_document(&app, "a.pdf", b"original").await;
+    let other = stored_document(&app, "b.pdf", b"keep me").await;
+    app.state.document_repo.set_page_count(id, 3).await.unwrap();
+    for key in [
+        keys::thumbnail(id),
+        keys::page(id, 2),
+        keys::page(id, 3),
+        keys::legacy::page(id, 2),
+    ] {
+        app.state
+            .store
+            .put(&key, b"t".as_slice().into())
+            .await
+            .unwrap();
+    }
+
+    let (status, _) = request(&app, "DELETE", &format!("/api/documents/{id}")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(app
+        .state
+        .store
+        .list(&keys::document_prefix(id))
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(!app
+        .state
+        .store
+        .exists(&keys::legacy::page(id, 2))
+        .await
+        .unwrap());
+    assert!(app
+        .state
+        .store
+        .exists(&keys::original(other))
+        .await
+        .unwrap());
 }
