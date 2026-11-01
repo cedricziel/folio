@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/cedricziel/folio/compare/v0.1.0...v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **apple:** take app and build versions from the build settings ([#87](https://github.com/cedricziel/folio/issues/87)) ([42d4819](https://github.com/cedricziel/folio/commit/42d481982e6bc28f2ded0eb525a39c5957864359))
+
 ## [0.1.0](https://github.com/cedricziel/folio/compare/v0.1.0-alpha.2...v0.1.0) (2026-11-01)
 
 

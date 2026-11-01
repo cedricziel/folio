@@ -11,6 +11,7 @@
 //! Kubernetes secrets.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
 use figment::{
     providers::{Format, Serialized, Toml},
@@ -19,6 +20,7 @@ use figment::{
 use folio_core::models::{
     EmailConfig, FolderConfig, Id, IngestionSourceDef, SourceConfig, SourceOrigin,
 };
+use folio_core::redact::Redacted;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::warn;
@@ -148,10 +150,18 @@ impl ServerConfig {
 }
 
 /// Database configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
     pub url: String,
+}
+
+impl fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("url", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Default for DatabaseConfig {
@@ -192,7 +202,7 @@ pub enum StorageBackend {
 }
 
 /// S3-compatible object storage (AWS S3, MinIO, Garage, R2, ...)
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct S3Config {
     pub bucket: Option<String>,
@@ -211,8 +221,23 @@ pub struct S3Config {
     pub prefix: Option<String>,
 }
 
+impl fmt::Debug for S3Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("S3Config")
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("endpoint", &self.endpoint)
+            .field("access_key_id", &Redacted(&self.access_key_id))
+            .field("secret_access_key", &Redacted(&self.secret_access_key))
+            .field("path_style", &self.path_style)
+            .field("allow_http", &self.allow_http)
+            .field("prefix", &self.prefix)
+            .finish()
+    }
+}
+
 /// Authentication configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AuthConfig {
     /// Require a session or token for the web UI and API.
@@ -225,6 +250,16 @@ pub struct AuthConfig {
     /// Encrypts TOTP seeds at rest. When unset a key is generated on first
     /// start and kept in the database settings.
     pub secret_key: Option<String>,
+}
+
+impl fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("required", &self.required)
+            .field("forward", &self.forward)
+            .field("setup_token", &Redacted(&self.setup_token))
+            .finish()
+    }
 }
 
 impl Default for AuthConfig {
@@ -240,7 +275,7 @@ impl Default for AuthConfig {
 }
 
 /// Trusted-header authentication behind a reverse proxy or SSO gateway.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ForwardAuthConfig {
     pub enabled: bool,
@@ -266,6 +301,27 @@ pub struct ForwardAuthConfig {
     pub session_ttl_secs: u64,
     /// Separator between group names in `groups_header`.
     pub group_separator: String,
+}
+
+impl fmt::Debug for ForwardAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ForwardAuthConfig")
+            .field("enabled", &self.enabled)
+            .field("user_header", &self.user_header)
+            .field("email_header", &self.email_header)
+            .field("name_header", &self.name_header)
+            .field("groups_header", &self.groups_header)
+            .field("role_header", &self.role_header)
+            .field("user_id_header", &self.user_id_header)
+            .field("trusted_proxies", &self.trusted_proxies)
+            .field("admin_group", &self.admin_group)
+            .field("admin_role", &self.admin_role)
+            .field("shared_secret", &Redacted(&self.shared_secret))
+            .field("secret_header", &self.secret_header)
+            .field("session_ttl_secs", &self.session_ttl_secs)
+            .field("group_separator", &self.group_separator)
+            .finish()
+    }
 }
 
 impl Default for ForwardAuthConfig {
@@ -341,12 +397,22 @@ impl Default for OidcConfig {
 }
 
 /// AI provider configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiConfig {
     pub provider: String,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
+}
+
+impl fmt::Debug for AiConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AiConfig")
+            .field("provider", &self.provider)
+            .field("openai_api_key", &Redacted(&self.openai_api_key))
+            .field("anthropic_api_key", &Redacted(&self.anthropic_api_key))
+            .finish()
+    }
 }
 
 impl Default for AiConfig {
@@ -891,6 +957,54 @@ fn to_value(setting: &Setting, raw: String) -> Result<figment::value::Value, fig
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_output_never_contains_secrets() {
+        let config = Config {
+            database: DatabaseConfig {
+                url: "postgres://folio:db-secret@db/folio".into(),
+            },
+            storage: StorageConfig {
+                s3: S3Config {
+                    bucket: Some("docs".into()),
+                    access_key_id: Some("key-id-secret".into()),
+                    secret_access_key: Some("access-secret".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            auth: AuthConfig {
+                setup_token: Some("setup-secret".into()),
+                forward: ForwardAuthConfig {
+                    shared_secret: Some("proxy-secret".into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ai: AiConfig {
+                provider: "openai".into(),
+                openai_api_key: Some("sk-openai-secret".into()),
+                anthropic_api_key: Some("sk-anthropic-secret".into()),
+            },
+            ..Default::default()
+        };
+
+        let debug = format!("{config:?}");
+
+        for secret in [
+            "db-secret",
+            "key-id-secret",
+            "access-secret",
+            "setup-secret",
+            "proxy-secret",
+            "sk-openai-secret",
+            "sk-anthropic-secret",
+        ] {
+            assert!(!debug.contains(secret), "{secret} leaked: {debug}");
+        }
+        assert!(debug.contains("docs"), "non-secret fields stay visible");
+        assert!(debug.contains("<redacted>"));
+    }
 
     fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs

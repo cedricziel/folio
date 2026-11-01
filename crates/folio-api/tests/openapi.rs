@@ -68,3 +68,19 @@ fn operation_ids_are_unique_camel_case() {
         }
     }
 }
+
+#[tokio::test]
+async fn docs_page_loads_the_vendored_viewer_without_a_cdn() {
+    let response = openapi::router::<()>()
+        .oneshot(Request::get("/api/docs").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("/static/vendor/scalar.js"));
+    assert!(!html.contains("https://"), "{html}");
+}

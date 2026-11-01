@@ -465,21 +465,23 @@ impl DocumentStreams {
 }
 
 /// Read the uploaded file out of a multipart body, store it and queue processing
-pub(super) async fn store_upload(
+pub(crate) async fn store_upload(
     state: &AppState,
     mut multipart: Multipart,
+    source: SourceKind,
 ) -> ApiResult<Document> {
-    debug!("Starting document upload (HTML)");
+    debug!("Starting document upload");
 
     let mut title: Option<String> = None;
     let mut file_data: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
     let mut mime_type: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        error!("Multipart error: {}", e);
-        ApiError::bad_request(format!("Invalid multipart data: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| multipart_error("Invalid multipart data", e))?
+    {
         let name = field.name().unwrap_or("").to_string();
         debug!("Processing field: {}", name);
 
@@ -488,7 +490,7 @@ pub(super) async fn store_upload(
                 let text = field
                     .text()
                     .await
-                    .map_err(|e| ApiError::bad_request(format!("Invalid title: {}", e)))?;
+                    .map_err(|e| multipart_error("Invalid title", e))?;
                 if !text.is_empty() {
                     title = Some(text);
                 }
@@ -500,7 +502,7 @@ pub(super) async fn store_upload(
                     field
                         .bytes()
                         .await
-                        .map_err(|e| ApiError::bad_request(format!("Failed to read file: {}", e)))?
+                        .map_err(|e| multipart_error("Failed to read file", e))?
                         .to_vec(),
                 );
             }
@@ -522,7 +524,7 @@ pub(super) async fn store_upload(
             filename: filename.unwrap_or_else(|| "upload".to_string()),
             mime_type: Some(mime_type),
             data: file_data,
-            source: DocumentSource::of(SourceKind::Upload),
+            source: DocumentSource::of(source),
             tag_ids: Vec::new(),
         })
         .await?;
@@ -532,12 +534,18 @@ pub(super) async fn store_upload(
     Ok(document)
 }
 
+/// Keeps the status the multipart parser chose, such as 413 for an oversized body
+fn multipart_error(context: &str, e: axum::extract::multipart::MultipartError) -> ApiError {
+    error!("Multipart error: {}", e);
+    ApiError::new(e.status(), format!("{context}: {}", e.body_text()))
+}
+
 /// Upload a document (returns Turbo Stream)
 async fn upload_document(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let document = store_upload(&state, multipart).await?;
+    let document = store_upload(&state, multipart, SourceKind::Upload).await?;
     let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())

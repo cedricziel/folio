@@ -2,15 +2,15 @@ name: Folio
 options:
   bundleIdPrefix: com.cedricziel
   deploymentTarget:
-    iOS: "18.0"
-    macOS: "15.0"
+    iOS: '18.0'
+    macOS: '15.0'
   createIntermediateGroups: true
 settings:
   base:
-    SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
-    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_VERSION: '6.0'
+    MARKETING_VERSION: 0.1.1
+    CURRENT_PROJECT_VERSION: '1'
+    ENABLE_USER_SCRIPT_SANDBOXING: 'YES'
     DEVELOPMENT_TEAM: WPW3QSLZ2F
 packages:
   FolioKit:
@@ -18,7 +18,9 @@ packages:
 targets:
   Folio:
     type: application
-    supportedDestinations: [iOS, macOS]
+    supportedDestinations:
+      - iOS
+      - macOS
     sources:
       - path: Sources
       - path: Resources/Assets.xcassets
@@ -29,14 +31,18 @@ targets:
     entitlements:
       path: Resources/Folio.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.cedricziel.folio]
+        com.apple.security.application-groups:
+          - group.com.cedricziel.folio
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-write: true
-        keychain-access-groups: [$(AppIdentifierPrefix)com.cedricziel.folio]
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.cedricziel.folio
     info:
       path: Resources/Folio-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         UILaunchScreen: {}
@@ -53,20 +59,22 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio
-        ENABLE_APP_SANDBOX: YES
-        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
+        ENABLE_APP_SANDBOX: 'YES'
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: 'YES'
         ENABLE_USER_SELECTED_FILES: readwrite
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
-          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Distribution
-          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Distribution
-          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": match AppStore com.cedricziel.folio
-          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": match AppStore com.cedricziel.folio macos
+          CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Distribution
+          CODE_SIGN_IDENTITY[sdk=macosx*]: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]: match AppStore com.cedricziel.folio
+          PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]: match AppStore com.cedricziel.folio macos
   FolioShare:
     type: app-extension
-    supportedDestinations: [iOS, macOS]
+    supportedDestinations:
+      - iOS
+      - macOS
     sources:
       - path: ShareExtension
     dependencies:
@@ -74,14 +82,18 @@ targets:
     entitlements:
       path: Resources/FolioShare.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.cedricziel.folio]
+        com.apple.security.application-groups:
+          - group.com.cedricziel.folio
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-only: true
-        keychain-access-groups: [$(AppIdentifierPrefix)com.cedricziel.folio]
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.cedricziel.folio
     info:
       path: Resources/FolioShare-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Add to Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         NSExtension:
@@ -94,19 +106,21 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.share
-        ENABLE_APP_SANDBOX: YES
-        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
+        ENABLE_APP_SANDBOX: 'YES'
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: 'YES'
         ENABLE_USER_SELECTED_FILES: readonly
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
-          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Distribution
-          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Distribution
-          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": match AppStore com.cedricziel.folio.share
-          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": match AppStore com.cedricziel.folio.share macos
+          CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Distribution
+          CODE_SIGN_IDENTITY[sdk=macosx*]: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]: match AppStore com.cedricziel.folio.share
+          PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]: match AppStore com.cedricziel.folio.share macos
   FolioFileProvider:
     type: app-extension
-    supportedDestinations: [iOS, macOS]
+    supportedDestinations:
+      - iOS
+      - macOS
     sources:
       - path: FileProvider
     dependencies:
@@ -114,14 +128,18 @@ targets:
     entitlements:
       path: Resources/FolioFileProvider.entitlements
       properties:
-        com.apple.security.application-groups: [group.com.cedricziel.folio]
+        com.apple.security.application-groups:
+          - group.com.cedricziel.folio
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.files.user-selected.read-only: true
-        keychain-access-groups: [$(AppIdentifierPrefix)com.cedricziel.folio]
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.cedricziel.folio
     info:
       path: Resources/FolioFileProvider-Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         NSExtension:
@@ -132,17 +150,17 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.fileprovider
-        ENABLE_APP_SANDBOX: YES
-        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
+        ENABLE_APP_SANDBOX: 'YES'
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: 'YES'
         ENABLE_USER_SELECTED_FILES: readonly
-        SWIFT_VERSION: "5.0"
+        SWIFT_VERSION: '5.0'
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
-          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Distribution
-          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Distribution
-          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": match AppStore com.cedricziel.folio.fileprovider
-          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": match AppStore com.cedricziel.folio.fileprovider macos
+          CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Distribution
+          CODE_SIGN_IDENTITY[sdk=macosx*]: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]: match AppStore com.cedricziel.folio.fileprovider
+          PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]: match AppStore com.cedricziel.folio.fileprovider macos
 schemes:
   Folio:
     build:
