@@ -43,4 +43,6 @@ ENV FOLIO_SERVER_HOST=0.0.0.0 \
 USER folio
 VOLUME /data
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/folio-app", "healthcheck"]
 ENTRYPOINT ["folio-app"]
