@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% import "partials/icons.html" as icons %}
 
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
 <section class="page">
     <header class="page-head">
+        <a href="/workflows" class="back-link">{{ icons::arrow_left() }} Workflows</a>
         <h1 class="title">{% if workflow_id.is_some() %}Edit workflow{% else %}New workflow{% endif %}</h1>
-        <a href="/workflows" class="f-btn f-btn-quiet">Back to workflows</a>
     </header>
 
     {% match notice %}
@@ -17,7 +18,7 @@
     {% when None %}
     {% endmatch %}
 
-    <form method="post" data-turbo="false"
+    <form method="post" data-turbo="false" data-controller="workflow-form" class="workflow-form"
           action="{% match workflow_id %}{% when Some with (id) %}/workflows/{{ id }}{% when None %}/workflows{% endmatch %}">
         <div class="field">
             <label for="name">Name</label>
@@ -26,14 +27,14 @@
 
         <div class="field">
             <label for="trigger">When</label>
-            <select class="select" id="trigger" name="trigger">
+            <select class="select" id="trigger" name="trigger" data-workflow-form-target="trigger" data-action="change->workflow-form#sync">
                 {% for t in triggers %}<option value="{{ t.value }}"{% if t.selected %} selected{% endif %}>{{ t.label }}</option>{% endfor %}
             </select>
         </div>
 
         <fieldset class="field">
-            <legend class="f-label">Only if the document matches</legend>
-            <p class="f-meta">Leave a field empty to match any document.</p>
+            <legend class="legend">Only if the document matches</legend>
+            <p class="hint">Leave a field empty to match any document.</p>
             <label for="mime_type">File type</label>
             <input class="input" type="text" id="mime_type" name="mime_type" value="{{ values.mime_type }}" placeholder="application/pdf or image/*">
             <label for="filename_glob">File name</label>
@@ -56,91 +57,136 @@
         </fieldset>
 
         <fieldset class="field">
-            <legend class="f-label">Only if it came from</legend>
-            <p class="f-meta">For folders and mailboxes. Leave a field empty to ignore it.</p>
+            <legend class="legend">Only if it came from</legend>
             <label for="source_kind">Source</label>
-            <select class="select" id="source_kind" name="source_kind">
-                <option value="">Any</option>
-                <option value="upload"{% if values.source_kind == "upload" %} selected{% endif %}>upload</option>
-                <option value="api"{% if values.source_kind == "api" %} selected{% endif %}>api</option>
-                <option value="folder"{% if values.source_kind == "folder" %} selected{% endif %}>folder</option>
-                <option value="email"{% if values.source_kind == "email" %} selected{% endif %}>email</option>
+            <select class="select" id="source_kind" name="source_kind" data-workflow-form-target="source" data-action="change->workflow-form#sync">
+                <option value="">Anywhere</option>
+                {% for k in source_kinds %}<option value="{{ k.value }}"{% if k.selected %} selected{% endif %}>{{ k.label }}</option>{% endfor %}
             </select>
-            <label for="folder_path_glob">Folder path</label>
-            <input class="input" type="text" id="folder_path_glob" name="folder_path_glob" value="{{ values.folder_path_glob }}" placeholder="Insurance/*">
-            <label>Email sender</label>
-            <select class="select" name="email_from_mode">
-                <option value="glob"{% if values.email_from_mode == "glob" %} selected{% endif %}>matches wildcard</option>
-                <option value="contains"{% if values.email_from_mode == "contains" %} selected{% endif %}>contains</option>
-                <option value="regex"{% if values.email_from_mode == "regex" %} selected{% endif %}>matches regex</option>
-            </select>
-            <input class="input" type="text" name="email_from" value="{{ values.email_from }}" placeholder="*@newsletter.example">
-            <label>Email recipient</label>
-            <select class="select" name="email_to_mode">
-                <option value="glob"{% if values.email_to_mode == "glob" %} selected{% endif %}>matches wildcard</option>
-                <option value="contains"{% if values.email_to_mode == "contains" %} selected{% endif %}>contains</option>
-                <option value="regex"{% if values.email_to_mode == "regex" %} selected{% endif %}>matches regex</option>
-            </select>
-            <input class="input" type="text" name="email_to" value="{{ values.email_to }}">
-            <label>Email subject</label>
-            <select class="select" name="email_subject_mode">
-                <option value="glob"{% if values.email_subject_mode == "glob" %} selected{% endif %}>matches wildcard</option>
-                <option value="contains"{% if values.email_subject_mode == "contains" %} selected{% endif %}>contains</option>
-                <option value="regex"{% if values.email_subject_mode == "regex" %} selected{% endif %}>matches regex</option>
-            </select>
-            <input class="input" type="text" name="email_subject" value="{{ values.email_subject }}" placeholder="invoice">
-            <label for="email_attachment_glob">Attachment name</label>
-            <input class="input" type="text" id="email_attachment_glob" name="email_attachment_glob" value="{{ values.email_attachment_glob }}" placeholder="*.pdf">
-            <label for="email_mailbox_glob">Mailbox</label>
-            <input class="input" type="text" id="email_mailbox_glob" name="email_mailbox_glob" value="{{ values.email_mailbox_glob }}" placeholder="INBOX/Invoices">
+
+            <div class="field-group" data-workflow-form-target="folder"{% if !show_folder %} hidden{% endif %}>
+                <label for="folder_path_glob">Folder path</label>
+                <input class="input" type="text" id="folder_path_glob" name="folder_path_glob" value="{{ values.folder_path_glob }}" placeholder="Insurance/*">
+            </div>
+
+            <div class="field-group" data-workflow-form-target="email"{% if !show_email %} hidden{% endif %}>
+                <p class="hint">For mail accounts. Leave a field empty to ignore it.</p>
+                <label for="email_from">Email sender</label>
+                <div class="input-row">
+                    <select class="select match-mode" name="email_from_mode" aria-label="How to match the sender">
+                        <option value="glob"{% if values.email_from_mode == "glob" %} selected{% endif %}>matches wildcard</option>
+                        <option value="contains"{% if values.email_from_mode == "contains" %} selected{% endif %}>contains</option>
+                        <option value="regex"{% if values.email_from_mode == "regex" %} selected{% endif %}>matches regex</option>
+                    </select>
+                    <input class="input" type="text" id="email_from" name="email_from" value="{{ values.email_from }}" placeholder="*@newsletter.example">
+                </div>
+                <label for="email_to">Email recipient</label>
+                <div class="input-row">
+                    <select class="select match-mode" name="email_to_mode" aria-label="How to match the recipient">
+                        <option value="glob"{% if values.email_to_mode == "glob" %} selected{% endif %}>matches wildcard</option>
+                        <option value="contains"{% if values.email_to_mode == "contains" %} selected{% endif %}>contains</option>
+                        <option value="regex"{% if values.email_to_mode == "regex" %} selected{% endif %}>matches regex</option>
+                    </select>
+                    <input class="input" type="text" id="email_to" name="email_to" value="{{ values.email_to }}">
+                </div>
+                <label for="email_subject">Email subject</label>
+                <div class="input-row">
+                    <select class="select match-mode" name="email_subject_mode" aria-label="How to match the subject">
+                        <option value="glob"{% if values.email_subject_mode == "glob" %} selected{% endif %}>matches wildcard</option>
+                        <option value="contains"{% if values.email_subject_mode == "contains" %} selected{% endif %}>contains</option>
+                        <option value="regex"{% if values.email_subject_mode == "regex" %} selected{% endif %}>matches regex</option>
+                    </select>
+                    <input class="input" type="text" id="email_subject" name="email_subject" value="{{ values.email_subject }}" placeholder="invoice">
+                </div>
+                <label for="email_attachment_glob">Attachment name</label>
+                <input class="input" type="text" id="email_attachment_glob" name="email_attachment_glob" value="{{ values.email_attachment_glob }}" placeholder="*.pdf">
+                <label for="email_mailbox_glob">Mailbox</label>
+                <input class="input" type="text" id="email_mailbox_glob" name="email_mailbox_glob" value="{{ values.email_mailbox_glob }}" placeholder="INBOX/Invoices">
+            </div>
         </fieldset>
 
-        <fieldset class="field">
-            <legend class="f-label">Send a webhook</legend>
-            <p class="f-meta">Not used for ingest.received: those workflows only discard files that match.</p>
-            <p class="f-meta">Folio posts the event as JSON. Addresses on your own network are allowed; only http and https are accepted.</p>
-            <label for="webhook_url">URL</label>
-            <input class="input" type="url" id="webhook_url" name="webhook_url" value="{{ values.webhook_url }}" placeholder="http://homeassistant.local:8123/api/webhook/folio">
-            <label for="webhook_secret">Secret</label>
-            <input class="input" type="password" id="webhook_secret" name="webhook_secret" autocomplete="off"
-                   placeholder="{% if has_secret %}{{ secret_mask }} (leave empty to keep){% else %}Optional, signs each delivery{% endif %}">
-            {% if has_secret %}
-            <label><input type="checkbox" name="clear_secret"> Remove the secret</label>
-            {% endif %}
-            <label for="webhook_headers">Extra headers</label>
-            <textarea class="input" id="webhook_headers" name="webhook_headers" rows="3" placeholder="Authorization: Bearer ...">{{ values.webhook_headers }}</textarea>
-        </fieldset>
+        <p class="f-notice" data-workflow-form-target="discard" hidden>
+            Files that match are discarded instead of imported. Nothing else to set up.
+        </p>
+
+        <div data-workflow-form-target="actions">
+            <fieldset class="field">
+                <legend class="legend">Then Folio does</legend>
+                <p class="hint">Every step runs, in this order. Leave a step empty to skip it.</p>
+
+                <div class="action-card">
+                    <p class="heading">Add tags</p>
+                    {% if action_tags.is_empty() %}
+                    <p class="hint">No tags yet. <a href="/manage">Create one</a>.</p>
+                    {% else %}
+                    <div class="check-list">
+                        {% for t in action_tags %}<label class="check"><input type="checkbox" name="action_tag_{{ t.value }}"{% if t.selected %} checked{% endif %}> {{ t.label }}</label>{% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="action-card">
+                    <label class="heading" for="action_correspondent_id">Set who it is from</label>
+                    <select class="select" id="action_correspondent_id" name="action_correspondent_id">
+                        <option value="">Leave as is</option>
+                        {% for c in action_correspondents %}<option value="{{ c.value }}"{% if c.selected %} selected{% endif %}>{{ c.label }}</option>{% endfor %}
+                    </select>
+                </div>
+
+                <div class="action-card">
+                    <label class="heading" for="action_document_type_id">Set the type</label>
+                    <select class="select" id="action_document_type_id" name="action_document_type_id">
+                        <option value="">Leave as is</option>
+                        {% for d in action_document_types %}<option value="{{ d.value }}"{% if d.selected %} selected{% endif %}>{{ d.label }}</option>{% endfor %}
+                    </select>
+                </div>
+
+                <div class="action-card">
+                    <p class="heading">Send a webhook</p>
+                    <p class="hint">Folio posts the event as JSON. Addresses on your own network are allowed; only http and https are accepted.</p>
+                    <label for="webhook_url">URL</label>
+                    <input class="input" type="url" id="webhook_url" name="webhook_url" value="{{ values.webhook_url }}" placeholder="http://homeassistant.local:8123/api/webhook/folio">
+                    <label for="webhook_secret">Secret</label>
+                    <input class="input" type="password" id="webhook_secret" name="webhook_secret" autocomplete="off"
+                           placeholder="{% if has_secret %}{{ secret_mask }} (leave empty to keep){% else %}Optional, signs each delivery{% endif %}">
+                    {% if has_secret %}
+                    <label class="check"><input type="checkbox" name="clear_secret"> Remove the secret</label>
+                    {% endif %}
+                    <label for="webhook_headers">Extra headers</label>
+                    <textarea class="input" id="webhook_headers" name="webhook_headers" rows="3" placeholder="Authorization: Bearer ...">{{ values.webhook_headers }}</textarea>
+                </div>
+            </fieldset>
+        </div>
 
         <div class="field">
-            <label><input type="checkbox" name="enabled"{% if values.enabled.is_some() %} checked{% endif %}> Enabled</label>
+            <label class="check"><input type="checkbox" name="enabled"{% if values.enabled.is_some() %} checked{% endif %}> Enabled</label>
         </div>
 
         <div class="form-actions">
             <button type="submit" class="f-btn f-btn-primary">Save workflow</button>
+            {% match workflow_id %}
+            {% when Some with (id) %}
+            <button type="submit" class="f-btn" formaction="/workflows/{{ id }}/test" formnovalidate>Send test</button>
+            <button type="submit" class="f-btn f-btn-quiet f-btn-danger push-end" formaction="/workflows/{{ id }}/delete" formnovalidate>Delete workflow</button>
+            {% when None %}
+            {% endmatch %}
         </div>
     </form>
 
     {% match workflow_id %}
     {% when Some with (id) %}
-    <div class="form-actions">
-        <form action="/workflows/{{ id }}/test" method="post" data-turbo="false">
-            <button type="submit" class="f-btn">Send test</button>
-        </form>
-        <form action="/workflows/{{ id }}/delete" method="post" data-turbo="false">
-            <button type="submit" class="f-btn f-btn-danger">Delete workflow</button>
-        </form>
-    </div>
-
-    <h3>Recent runs</h3>
+    <h2 class="heading">Recent runs</h2>
     {% if runs.is_empty() %}
-    <p class="f-meta">Nothing has run yet.</p>
+    <p class="hint">Nothing has run yet.</p>
     {% else %}
     <div class="f-list">
         {% for run in runs %}
-        <div class="f-row">
-            <div>
-                <span class="f-status {{ run.status_class }}">{{ run.status_label }}</span>
-                <span class="f-meta">{{ run.event }}</span>
+        <div class="f-row f-row-plain">
+            <div class="row-main">
+                <div>
+                    <span class="f-status {{ run.status_class }}">{{ run.status_label }}</span>
+                    <span class="hint">{{ run.event }}</span>
+                </div>
                 <div class="f-row-sub">
                     <dl class="f-meta-list">
                         <dt>Time</dt><dd>{{ run.created }}</dd>

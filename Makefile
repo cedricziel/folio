@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup tokens assets openapi apple apple-test apple-tokens apple-project e2e
+.PHONY: build run test lint format clean dev setup tokens assets openapi apple apple-test apple-tokens apple-project e2e e2e-update-snapshots
 
 # Default target
 all: build
@@ -94,3 +94,17 @@ apple-tokens:
 # End-to-end tests (Playwright) against an ephemeral instance; rebuilds folio-app first
 e2e: build
 	cd e2e && npm ci && npx playwright install chromium && npx playwright test
+
+# Regenerate the visual baselines in e2e/tests/__screenshots__ on Linux, as CI renders them.
+# Builds folio-app in a Rust container (target-linux/), then runs the visual spec in the
+# official Playwright image pinned to e2e's @playwright/test version. amd64 matches CI;
+# on Apple silicon this runs under emulation and takes a while.
+PLAYWRIGHT_VERSION = $(shell node -p "require('./e2e/package.json').devDependencies['@playwright/test']")
+DOCKER_PLATFORM ?= linux/amd64
+e2e-update-snapshots:
+	docker run --rm --platform $(DOCKER_PLATFORM) -v "$(CURDIR)":/src -w /src \
+		-e CARGO_TARGET_DIR=/src/target-linux rust:1-bookworm cargo build --locked -p folio-app
+	docker run --rm --platform $(DOCKER_PLATFORM) --ipc=host -v "$(CURDIR)":/src -v /src/e2e/node_modules \
+		-w /src/e2e -e FOLIO_BIN=/src/target-linux/debug/folio-app -e FOLIO_REPO=/src \
+		mcr.microsoft.com/playwright:v$(PLAYWRIGHT_VERSION)-noble \
+		bash -c "apt-get update -qq && apt-get install -y -qq poppler-utils >/dev/null && npm ci && npx playwright test visual.spec.ts --update-snapshots"

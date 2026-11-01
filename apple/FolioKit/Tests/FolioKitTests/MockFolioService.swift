@@ -12,6 +12,7 @@ actor MockFolioService: FolioService {
     var uploadDelay: Duration?
     var tagList: [Tag] = []
     private(set) var tagged: [TagAssignment] = []
+    private(set) var untagged: [TagAssignment] = []
     private(set) var queries: [String] = []
     private(set) var uploads: [UploadFile] = []
     private(set) var deleted: [Document.ID] = []
@@ -91,17 +92,28 @@ actor MockFolioService: FolioService {
         tagList
     }
 
-    func documents(correspondentID: UUID?, documentTypeID: UUID?) async throws -> [Document] {
+    private(set) var filters: [DocumentFilter] = []
+
+    func documents(filter: DocumentFilter) async throws -> [Document] {
+        filters.append(filter)
         if let failure { throw failure }
-        return documentList.filter {
-            (correspondentID == nil || $0.correspondentID == correspondentID)
-                && (documentTypeID == nil || $0.documentTypeID == documentTypeID)
+        return documentList.filter { document in
+            (filter.correspondentID == nil || document.correspondentID == filter.correspondentID)
+                && (filter.documentTypeID == nil || document.documentTypeID == filter.documentTypeID)
+                && filter.tagIDs.allSatisfy { id in document.tags.contains { $0.id == id } }
+                && (filter.createdAfter.map { document.createdAt >= $0 } ?? true)
+                && (filter.createdBefore.map { document.createdAt < $0 } ?? true)
         }
     }
 
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
         if let failure { throw failure }
         tagged.append(TagAssignment(tag: tagID, document: documentID))
+    }
+
+    func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
+        if let failure { throw failure }
+        untagged.append(TagAssignment(tag: tagID, document: documentID))
     }
 
     func correspondents() async throws -> [Correspondent] {

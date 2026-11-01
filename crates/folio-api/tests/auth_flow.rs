@@ -499,6 +499,27 @@ async fn setup_requires_the_one_time_token() {
 }
 
 #[tokio::test]
+async fn sign_in_page_shares_the_apps_fonts_tokens_and_theme_choice() {
+    let app = app().await;
+    setup_and_login(&app).await;
+    let page = send(&app, Request::get("/login").body(Body::empty()).unwrap()).await;
+
+    for asset in [
+        "/static/fonts/fonts.css",
+        "/static/tokens.css",
+        "/static/components.css",
+    ] {
+        assert!(page.body.contains(asset), "{asset} is linked");
+    }
+    assert!(
+        page.body.contains("folio-theme"),
+        "applies the chosen theme"
+    );
+    assert!(page.body.contains("auth-mark"), "shows the mark");
+    assert!(!page.body.contains("f-label"), "labels are sentence case");
+}
+
+#[tokio::test]
 async fn login_rejects_bad_password_and_bad_csrf_and_open_redirects() {
     let app = app().await;
     setup_and_login(&app).await;

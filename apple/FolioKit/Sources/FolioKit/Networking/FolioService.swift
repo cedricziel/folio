@@ -4,13 +4,15 @@ import Foundation
 public protocol FolioService: Sendable {
     func ping() async throws
     func documents(matching query: String) async throws -> [Document]
-    func documents(correspondentID: UUID?, documentTypeID: UUID?) async throws -> [Document]
+    /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.
+    func documents(filter: DocumentFilter) async throws -> [Document]
     func deleteDocument(id: Document.ID) async throws
     /// Downloads the original file to a temporary location whose extension matches the file type.
     func downloadFile(for document: Document) async throws -> URL
     func upload(_ file: UploadFile) async throws -> Document
     func tags() async throws -> [Tag]
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws
+    func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws
     func correspondents() async throws -> [Correspondent]
     func documentTypes() async throws -> [DocumentType]
 }

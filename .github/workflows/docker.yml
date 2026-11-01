@@ -19,8 +19,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-${{ github.ref }}-${{ inputs.tag }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: docker-${{ github.ref }}-${{ inputs.tag || 'edge' }}
+  cancel-in-progress: ${{ !inputs.tag }}
 
 env:
   IMAGE: ghcr.io/cedricziel/folio

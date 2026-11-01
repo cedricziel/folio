@@ -673,12 +673,10 @@ struct ErrorTemplate {
 }
 
 async fn theme() -> impl IntoResponse {
-    let css = concat!(
-        include_str!("../../../../design/components.css"),
-        "\n",
-        include_str!("auth_theme.css")
-    );
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], css)
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("auth_theme.css"),
+    )
 }
 
 // ---- setup / login / logout -------------------------------------------------

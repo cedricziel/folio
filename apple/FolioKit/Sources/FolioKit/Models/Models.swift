@@ -9,7 +9,7 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var correspondentID: UUID?
     public var documentTypeID: UUID?
     public var pageCount: Int?
-    /// Not in the API response yet; the UI renders them as soon as the server sends them.
+    /// Only the list and get endpoints report tags; search results and uploads come back without them.
     public var tags: [Tag]
     public var createdAt: Date
     public var updatedAt: Date
@@ -90,6 +90,28 @@ public struct DocumentType: Identifiable, Hashable, Sendable {
     public init(id: UUID = UUID(), name: String) {
         self.id = id
         self.name = name
+    }
+}
+
+/// What the list endpoint can narrow by. Empty fields do not filter.
+public struct DocumentFilter: Equatable, Sendable {
+    public var tagIDs: [Tag.ID]
+    public var correspondentID: Correspondent.ID?
+    public var documentTypeID: DocumentType.ID?
+    /// Inclusive.
+    public var createdAfter: Date?
+    /// Exclusive.
+    public var createdBefore: Date?
+
+    public init(
+        tagIDs: [Tag.ID] = [], correspondentID: Correspondent.ID? = nil, documentTypeID: DocumentType.ID? = nil,
+        createdAfter: Date? = nil, createdBefore: Date? = nil
+    ) {
+        self.tagIDs = tagIDs
+        self.correspondentID = correspondentID
+        self.documentTypeID = documentTypeID
+        self.createdAfter = createdAfter
+        self.createdBefore = createdBefore
     }
 }
 
