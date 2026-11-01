@@ -169,6 +169,22 @@ fn resolve_audience(base: &str, resource: Option<&str>) -> Result<String, String
     }
 }
 
+/// A `resource` sent at the token endpoint must match the granted audience.
+fn check_resource(base: &str, resource: Option<&str>, granted: &str) -> Result<(), OAuthError> {
+    if resource.is_none() {
+        return Ok(());
+    }
+    let audience =
+        resolve_audience(base, resource).map_err(|m| OAuthError::new("invalid_target", m))?;
+    if audience != granted {
+        return Err(OAuthError::new(
+            "invalid_target",
+            "resource differs from the original grant",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct OAuthServer {
     store: Arc<dyn AuthStore>,
@@ -382,16 +398,7 @@ impl OAuthServer {
         if !verify_pkce(verifier, &record.code_challenge) {
             return Err(grant_err("PKCE verification failed"));
         }
-        if req.resource.is_some() {
-            let audience = resolve_audience(base, req.resource.as_deref())
-                .map_err(|m| OAuthError::new("invalid_target", m))?;
-            if audience != record.audience {
-                return Err(OAuthError::new(
-                    "invalid_target",
-                    "resource differs from the authorization request",
-                ));
-            }
-        }
+        check_resource(base, req.resource.as_deref(), &record.audience)?;
         self.issue_tokens(client_id, &record.user_id, record.scopes, record.audience)
             .await
     }
@@ -415,16 +422,7 @@ impl OAuthServer {
         if record.expires_at <= now() || !ct_eq(&record.client_id, client_id) {
             return Err(grant_err("invalid refresh token"));
         }
-        if req.resource.is_some() {
-            let audience = resolve_audience(base, req.resource.as_deref())
-                .map_err(|m| OAuthError::new("invalid_target", m))?;
-            if audience != record.audience {
-                return Err(OAuthError::new(
-                    "invalid_target",
-                    "resource differs from the original grant",
-                ));
-            }
-        }
+        check_resource(base, req.resource.as_deref(), &record.audience)?;
         let scopes = match req.scope.as_deref() {
             None => record.scopes.clone(),
             Some(s) => {
