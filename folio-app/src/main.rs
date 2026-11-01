@@ -12,8 +12,8 @@ use tracing_subscriber::FmtSubscriber;
 use folio_api::{create_router, AppState};
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
-    Config, Database, DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, FileStorage,
-    ThumbnailService, Worker, WorkerConfig,
+    build_store, migrate_legacy_layout, Config, Database, DatabaseHealthCheck,
+    DynamicEmbeddingService, DynamicOcrService, ThumbnailService, Worker, WorkerConfig,
 };
 
 #[tokio::main]
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
     info!("Configuration loaded");
     info!("  Server: {}:{}", config.server.host, config.server.port);
     info!("  Database: {}", redact_url(&config.database.url));
-    info!("  Storage: {}", config.storage.path);
+    info!("  Storage: {:?}", config.storage.backend);
     info!("  AI Provider: {}", config.ai.provider);
 
     // Initialize database
@@ -61,20 +61,12 @@ async fn main() -> Result<()> {
     info!("Database migrations complete");
 
     // Initialize storage
-    let storage = FileStorage::new(&config.storage.path);
-    storage
-        .init()
+    let store = build_store(&config.storage)
         .await
         .context("Failed to initialize storage")?;
+    let thumbnail_service = Arc::new(ThumbnailService::new(store.clone()));
 
-    // Initialize thumbnail service
-    let thumbnail_service = Arc::new(ThumbnailService::new(&config.storage.path));
-    thumbnail_service
-        .init()
-        .await
-        .context("Failed to initialize thumbnail service")?;
-
-    info!("Storage initialized at: {}", config.storage.path);
+    info!("Storage initialized ({} backend)", store.backend());
 
     // Create repositories
     let repos = database.repositories().await;
@@ -84,11 +76,14 @@ async fn main() -> Result<()> {
     let document_type_repo = repos.document_types;
     let settings_repo = repos.settings;
 
+    migrate_legacy_layout(store.as_ref(), document_repo.as_ref())
+        .await
+        .context("Failed to migrate stored files to object keys")?;
+
     // Create AI services (dynamic - reads from database settings with config.toml fallback)
     let ocr_service = Arc::new(DynamicOcrService::new(
         settings_repo.clone(),
         config.ai.clone(),
-        &config.storage.path,
     ));
     let embedding_service = Arc::new(DynamicEmbeddingService::new(
         settings_repo.clone(),
@@ -115,7 +110,7 @@ async fn main() -> Result<()> {
         embedding_service.clone(),
         search_service.clone(),
         thumbnail_service.clone(),
-        &config.storage.path,
+        store.clone(),
         WorkerConfig::default(),
         event_broadcaster.clone(),
     );
@@ -141,7 +136,7 @@ async fn main() -> Result<()> {
         search_service,
         thumbnail_service,
         job_queue,
-        config.storage.path.clone(),
+        store,
         event_broadcaster,
     )
     .with_health_checks(health_checks);

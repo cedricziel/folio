@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository,
+    CorrespondentRepository, DocumentRepository, DocumentStore, DocumentTypeRepository,
+    EmbeddingService, HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository,
 };
 use folio_infra::{JobQueue, ThumbnailService};
 
@@ -25,7 +25,7 @@ pub struct AppState {
     pub search_service: Arc<dyn SearchService>,
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
-    pub storage_path: String,
+    pub store: Arc<dyn DocumentStore>,
     pub event_broadcaster: EventBroadcaster,
     pub health_checks: HealthChecks,
 }
@@ -43,7 +43,7 @@ impl AppState {
         search_service: Arc<dyn SearchService>,
         thumbnail_service: Arc<ThumbnailService>,
         job_queue: JobQueue,
-        storage_path: String,
+        store: Arc<dyn DocumentStore>,
         event_broadcaster: EventBroadcaster,
     ) -> Self {
         Self {
@@ -57,7 +57,7 @@ impl AppState {
             search_service,
             thumbnail_service,
             job_queue,
-            storage_path,
+            store,
             event_broadcaster,
             health_checks: Arc::from(Vec::new()),
         }
