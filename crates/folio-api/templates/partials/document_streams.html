@@ -16,4 +16,4 @@
 {% endmatch %}
 <turbo-stream action="replace" target="inbox-count"><template>{{ counts::inbox_badge(counts.inbox) }}</template></turbo-stream>
 <turbo-stream action="replace" target="all-count"><template>{{ counts::all_badge(counts.total) }}</template></turbo-stream>
-<turbo-stream action="replace" target="inbox-notice"><template>{{ counts::review_notice(counts.review, counts.first_review) }}</template></turbo-stream>
+<turbo-stream action="replace" target="inbox-notice"><template>{{ counts::review_notice(counts) }}</template></turbo-stream>

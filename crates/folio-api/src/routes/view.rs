@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use folio_core::models::{Correspondent, Document, DocumentStatus, DocumentType, Id, Tag};
+use folio_core::models::{
+    Correspondent, Document, DocumentStatus, DocumentType, Id, ProcessingStatus, Tag,
+};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -80,19 +82,26 @@ pub struct Counts {
     pub total: usize,
     pub review: usize,
     pub first_review: String,
+    pub failed: usize,
+    pub first_failed: String,
 }
 
 impl Counts {
     pub fn from_documents(documents: &[Document]) -> Self {
-        let mut review = documents
-            .iter()
-            .filter(|d| d.status() == DocumentStatus::NeedsReview);
-        let first_review = review.next().map(|d| d.id.to_string());
+        let with_status = |status| documents.iter().filter(move |d| d.status() == status);
+        let first_id = |status| {
+            with_status(status)
+                .next()
+                .map(|d| d.id.to_string())
+                .unwrap_or_default()
+        };
         Self {
             inbox: inbox_count(documents),
             total: documents.len(),
-            review: first_review.is_some() as usize + review.count(),
-            first_review: first_review.unwrap_or_default(),
+            review: with_status(DocumentStatus::NeedsReview).count(),
+            first_review: first_id(DocumentStatus::NeedsReview),
+            failed: with_status(DocumentStatus::Failed).count(),
+            first_failed: first_id(DocumentStatus::Failed),
         }
     }
 
@@ -147,6 +156,10 @@ impl DocumentRow {
 
     pub fn needs_review(&self) -> bool {
         self.status == DocumentStatus::NeedsReview
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.status == DocumentStatus::Failed
     }
 
     /// "From · Type", skipping whichever is not set
@@ -231,12 +244,17 @@ mod tests {
         let filed = Document::new("c")
             .with_content("x")
             .with_document_type(Id::new_v4());
+        let mut unreadable = Document::new("d");
+        unreadable.ocr_status = ProcessingStatus::Failed;
         let review_id = review.id.to_string();
-        let counts = Counts::from_documents(&[processing, review, filed]);
-        assert_eq!(counts.inbox, 2);
-        assert_eq!(counts.total, 3);
+        let failed_id = unreadable.id.to_string();
+        let counts = Counts::from_documents(&[processing, review, filed, unreadable]);
+        assert_eq!(counts.inbox, 3);
+        assert_eq!(counts.total, 4);
         assert_eq!(counts.review, 1);
         assert_eq!(counts.first_review, review_id);
+        assert_eq!(counts.failed, 1);
+        assert_eq!(counts.first_failed, failed_id);
     }
 
     fn row(from: Option<&str>, doc_type: Option<&str>, pages: Option<u32>) -> DocumentRow {

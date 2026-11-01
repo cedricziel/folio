@@ -145,3 +145,41 @@ async fn vendored_scripts_and_fonts_are_served_without_a_cdn() {
     assert!(!page.contains("esm.sh"));
     assert!(!page.contains("googleapis"));
 }
+
+#[tokio::test]
+async fn unreadable_files_say_so_instead_of_waiting_for_review() {
+    use folio_core::models::{ProcessingStage, ProcessingStatus};
+
+    let h = harness().await;
+    let doc = h
+        .state
+        .document_repo
+        .create(folio_core::models::CreateDocument {
+            title: "scan_0042.pdf".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .set_stage_status(doc.id, ProcessingStage::Ocr, ProcessingStatus::Failed)
+        .await
+        .unwrap();
+
+    let inbox = text(h.app.clone().oneshot(get("/")).await.unwrap()).await;
+    assert!(inbox.contains("Couldn't read this file"));
+    assert!(inbox.contains("1 file couldn't be read"));
+    assert!(!inbox.contains("Needs a look"));
+    assert!(!inbox.contains("needs a look"));
+
+    let page = text(
+        h.app
+            .clone()
+            .oneshot(get(&format!("/documents/{}", doc.id)))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.contains("Folio couldn't read this file"));
+    assert!(!page.contains("Reading"));
+}
