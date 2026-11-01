@@ -1235,6 +1235,48 @@ mod enforcement {
             )));
     }
 
+    #[tokio::test]
+    async fn cookie_writes_must_be_same_origin() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let write = |extra: &[(&str, &str)]| {
+            let mut req = Request::post("/api/tags").header(header::COOKIE, &session);
+            for (k, v) in extra {
+                req = req.header(*k, *v);
+            }
+            req.body(Body::empty()).unwrap()
+        };
+        let ok = [
+            vec![],
+            vec![("sec-fetch-site", "same-origin")],
+            vec![("sec-fetch-site", "none")],
+            vec![("origin", BASE)],
+        ];
+        for headers in ok {
+            let r = send(&app, write(&headers)).await;
+            assert_eq!(r.status, StatusCode::OK, "{headers:?}");
+        }
+        let forbidden = [
+            vec![("sec-fetch-site", "cross-site")],
+            vec![("sec-fetch-site", "same-site")],
+            vec![("origin", "https://evil.example")],
+            vec![("origin", "null")],
+            // Fetch metadata wins over a spoofable-looking Origin.
+            vec![("sec-fetch-site", "cross-site"), ("origin", BASE)],
+        ];
+        for headers in forbidden {
+            let r = send(&app, write(&headers)).await;
+            assert_eq!(r.status, StatusCode::FORBIDDEN, "{headers:?}");
+        }
+        // Reads are not state-changing.
+        let read = Request::get("/api/documents")
+            .header(header::COOKIE, &session)
+            .header("sec-fetch-site", "cross-site")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(&app, read).await.status, StatusCode::OK);
+    }
+
     /// Runs consent for an `/api` audience with the given scopes and returns the access token.
     async fn api_token(app: &App, session: &str, scope: &str) -> String {
         let client = register(app).await;

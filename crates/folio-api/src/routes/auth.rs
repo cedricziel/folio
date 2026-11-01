@@ -140,6 +140,21 @@ impl AuthState {
         tokio::task::spawn_blocking(work).await.ok()
     }
 
+    /// Cookie-authenticated writes must come from our own pages. Fetch metadata
+    /// is authoritative when the browser sends it; `Origin` covers older ones.
+    /// Requests with neither are not from a browser and carry no ambient cookie.
+    fn is_same_origin(&self, headers: &HeaderMap) -> bool {
+        let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        if let Some(site) = text("sec-fetch-site") {
+            return matches!(site, "same-origin" | "none");
+        }
+        match text("origin") {
+            None => true,
+            Some(origin) => Url::parse(&self.base())
+                .is_ok_and(|base| base.origin().ascii_serialization() == origin),
+        }
+    }
+
     fn base(&self) -> String {
         base_url(self.public_url.as_deref())
     }
@@ -217,6 +232,9 @@ pub async fn enforce_auth(
     }
     let is_api = path == "/api" || path.starts_with("/api/");
     if auth.current_user(request.headers()).await.is_some() {
+        if !is_read_method(request.method()) && !auth.is_same_origin(request.headers()) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
         return next.run(request).await;
     }
     if is_api {
