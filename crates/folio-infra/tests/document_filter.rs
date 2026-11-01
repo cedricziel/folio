@@ -76,6 +76,15 @@ async fn combines_text_tag_correspondent_and_date_filters() {
         .unwrap();
     assert_eq!(ids(by_text), vec![invoice.id]);
 
+    let by_scattered_terms = docs
+        .list(Some(DocumentFilter {
+            search_query: Some("100 invoice".into()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    assert_eq!(ids(by_scattered_terms), vec![invoice.id]);
+
     let by_tag = docs
         .list(Some(DocumentFilter {
             tag_ids: Some(vec![tag.id]),

@@ -204,13 +204,15 @@ impl DocumentRepository for SqliteDocumentRepository {
                     .push_bind(tag_ids.len() as i64)
                     .push(")");
             }
-            if let Some(query) = filter.search_query.filter(|q| !q.trim().is_empty()) {
-                let pattern = format!("%{}%", escape_like(query.trim()));
-                qb.push(" AND (title LIKE ")
-                    .push_bind(pattern.clone())
-                    .push(" ESCAPE '\\' OR content LIKE ")
-                    .push_bind(pattern)
-                    .push(" ESCAPE '\\')");
+            if let Some(query) = filter.search_query {
+                for term in query.split_whitespace() {
+                    let pattern = format!("%{}%", escape_like(term));
+                    qb.push(" AND (title LIKE ")
+                        .push_bind(pattern.clone())
+                        .push(" ESCAPE '\\' OR content LIKE ")
+                        .push_bind(pattern)
+                        .push(" ESCAPE '\\')");
+                }
             }
             if let Some(after) = filter.created_after {
                 qb.push(" AND created_at >= ").push_bind(after.to_rfc3339());
