@@ -45,6 +45,14 @@ pub async fn forward_auth(
         forward.strip(request.headers_mut());
         return next.run(request).await;
     }
+    if forward.has_repeated_header(request.headers()) {
+        tracing::warn!("rejecting a request with a repeated forward-auth header");
+        return (
+            StatusCode::BAD_REQUEST,
+            "Repeated identity headers are not accepted.",
+        )
+            .into_response();
+    }
     let identity = forward.identity(request.headers());
     forward.strip(request.headers_mut());
     let Some(identity) = identity else {

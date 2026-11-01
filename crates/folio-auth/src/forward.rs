@@ -112,15 +112,25 @@ impl ForwardAuth {
         headers.contains_key(&self.user_header)
     }
 
-    /// Removes the identity headers so later layers never see unverified values.
-    pub fn strip(&self, headers: &mut HeaderMap) {
-        for name in [&self.user_header, &self.email_header, &self.name_header]
+    fn identity_headers(&self) -> impl Iterator<Item = &HeaderName> {
+        [&self.user_header, &self.email_header, &self.name_header]
             .into_iter()
             .chain(&self.groups_header)
             .chain(&self.role_header)
-        {
+    }
+
+    /// Removes the identity headers so later layers never see unverified values.
+    pub fn strip(&self, headers: &mut HeaderMap) {
+        for name in self.identity_headers() {
             headers.remove(name);
         }
+    }
+
+    /// True when any identity header appears more than once. Which copy a
+    /// proxy and Folio each pick is ambiguous, so such requests are refused.
+    pub fn has_repeated_header(&self, headers: &HeaderMap) -> bool {
+        self.identity_headers()
+            .any(|name| headers.get_all(name).iter().nth(1).is_some())
     }
 
     /// Reads the identity from headers. Call only for trusted peers.
@@ -203,6 +213,18 @@ mod tests {
             user_header: "bad header".into(),
             ..ForwardConfig::default()
         }));
+    }
+
+    #[test]
+    fn detects_repeated_identity_headers() {
+        let f = fwd(&[]);
+        let mut h = HeaderMap::new();
+        h.append("remote-user", "a".parse().unwrap());
+        h.append("x-other", "a".parse().unwrap());
+        h.append("x-other", "b".parse().unwrap());
+        assert!(!f.has_repeated_header(&h));
+        h.append("remote-user", "b".parse().unwrap());
+        assert!(f.has_repeated_header(&h));
     }
 
     #[test]

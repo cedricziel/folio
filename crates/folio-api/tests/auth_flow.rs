@@ -1076,6 +1076,30 @@ mod forward {
     }
 
     #[tokio::test]
+    async fn repeated_identity_headers_are_rejected() {
+        let f = fwd_app(all_identity_headers).await;
+        let doubled = |name: &str| {
+            Request::get("/")
+                .header("Remote-User", "alice")
+                .header(name, "one")
+                .header(name, "two")
+                .body(Body::empty())
+                .unwrap()
+        };
+        for name in [
+            "Remote-User",
+            "Remote-Email",
+            "Remote-Name",
+            "Remote-Groups",
+            "Remote-Role",
+        ] {
+            let res = send_from(&f.app, TRUSTED, doubled(name)).await;
+            assert_eq!(res.status, StatusCode::BAD_REQUEST, "{name}");
+        }
+        assert_eq!(f.store.count_users().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
         let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;
         send_from(
