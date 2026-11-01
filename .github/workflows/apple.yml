@@ -1,0 +1,109 @@
+name: Apple
+
+# Every push to main that touches the Apple app, the API spec or the design tokens goes to TestFlight.
+# Secrets: MATCH_DEPLOY_KEY (ssh key with read access to the certificates repo), MATCH_GIT_URL,
+# MATCH_PASSWORD, MATCH_KEYCHAIN_PASSWORD, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_CONTENT.
+
+on:
+  pull_request:
+    paths: &paths
+      - "apple/**"
+      - "openapi/**"
+      - "design/tokens.json"
+      - ".github/workflows/apple.yml"
+  push:
+    branches: [main]
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        with:
+          working-directory: apple
+          bundler-cache: true
+      - run: brew install xcodegen
+      - run: bundle exec fastlane test
+
+  beta:
+    name: TestFlight (iOS)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 60
+    # One TestFlight upload at a time; a queued run waits instead of cancelling a running upload.
+    concurrency:
+      group: apple-beta
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: apple
+    env: &signing
+      MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      MATCH_KEYCHAIN_PASSWORD: ${{ secrets.MATCH_KEYCHAIN_PASSWORD }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_CONTENT: ${{ secrets.ASC_KEY_CONTENT }}
+    steps:
+      # The changelog is built from git history since the last tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        with:
+          working-directory: apple
+          bundler-cache: true
+      - name: Configure SSH for the match repo
+        env:
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MATCH_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+      - run: brew install xcodegen
+      - run: bundle exec fastlane beta
+
+  beta-mac:
+    name: TestFlight (macOS)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 60
+    # Stays non-blocking until the Mac installer certificate exists in the match repo.
+    continue-on-error: true
+    concurrency:
+      group: apple-beta-mac
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: apple
+    env: *signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        with:
+          working-directory: apple
+          bundler-cache: true
+      - name: Configure SSH for the match repo
+        env:
+          MATCH_DEPLOY_KEY: ${{ secrets.MATCH_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$MATCH_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+      - run: brew install xcodegen
+      - run: bundle exec fastlane beta_mac

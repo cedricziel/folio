@@ -1,5 +1,7 @@
 //! Folio Application - Main entry point
 
+mod healthcheck;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -8,16 +10,28 @@ use tracing::info;
 use tracing_subscriber::FmtSubscriber;
 
 use folio_api::{create_router, AppState};
-use folio_core::EventBroadcaster;
+use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
-    create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, FileStorage,
-    JobQueue, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
-    SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
+    create_pool, run_migrations, Config, DatabaseHealthCheck, DynamicEmbeddingService,
+    DynamicOcrService, FileStorage, JobQueue, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
+    SqliteSettingsRepository, SqliteTagRepository, ThumbnailService, Worker, WorkerConfig,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `healthcheck` needs only the port, so it skips logging, migrations and the worker
+    if std::env::args().nth(1).as_deref() == Some("healthcheck") {
+        let config = Config::load().context("Failed to load configuration")?;
+        return match healthcheck::run(config.server.port).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("healthcheck failed: {e:#}");
+                std::process::exit(1);
+            }
+        };
+    }
+
     // Initialize logging
     FmtSubscriber::builder()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -114,6 +128,9 @@ async fn main() -> Result<()> {
     info!("Background job worker started");
 
     // Create application state
+    let health_checks: Vec<Arc<dyn HealthCheck>> =
+        vec![Arc::new(DatabaseHealthCheck::new(pool.clone()))];
+
     let state = AppState::new(
         document_repo,
         tag_repo,
@@ -127,7 +144,8 @@ async fn main() -> Result<()> {
         job_queue,
         config.storage.path.clone(),
         event_broadcaster,
-    );
+    )
+    .with_health_checks(health_checks);
 
     // Create router
     let app = create_router(state);

@@ -4,11 +4,13 @@ use std::sync::Arc;
 
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    OcrService, SearchService, SettingsRepository, TagRepository,
+    HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository,
 };
 use folio_infra::{JobQueue, ThumbnailService};
 
 use folio_core::EventBroadcaster;
+
+use crate::routes::HealthChecks;
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -25,6 +27,7 @@ pub struct AppState {
     pub job_queue: JobQueue,
     pub storage_path: String,
     pub event_broadcaster: EventBroadcaster,
+    pub health_checks: HealthChecks,
 }
 
 impl AppState {
@@ -56,6 +59,13 @@ impl AppState {
             job_queue,
             storage_path,
             event_broadcaster,
+            health_checks: Arc::from(Vec::new()),
         }
+    }
+
+    /// Register the readiness checks reported by `/readyz`.
+    pub fn with_health_checks(mut self, checks: Vec<Arc<dyn HealthCheck>>) -> Self {
+        self.health_checks = checks.into();
+        self
     }
 }

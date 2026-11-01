@@ -36,12 +36,14 @@ WORKDIR /app
 COPY --from=builder /build/target/release/folio-app /usr/local/bin/folio-app
 COPY config.toml ./config.toml
 
-ENV FOLIO_SERVER_HOST=0.0.0.0 \
-    FOLIO_SERVER_PORT=3000 \
-    FOLIO_DATABASE_URL="sqlite:/data/folio.db?mode=rwc" \
-    FOLIO_STORAGE_PATH=/data/documents
+ENV FOLIO_SERVER__HOST=0.0.0.0 \
+    FOLIO_SERVER__PORT=3000 \
+    FOLIO_DATABASE__URL="sqlite:/data/folio.db?mode=rwc" \
+    FOLIO_STORAGE__PATH=/data/documents
 
 USER folio
 VOLUME /data
 EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["/usr/local/bin/folio-app", "healthcheck"]
 ENTRYPOINT ["folio-app"]

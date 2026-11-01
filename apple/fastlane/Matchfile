@@ -1,0 +1,4 @@
+git_url(ENV["MATCH_GIT_URL"] || "git@github.com:cedricziel/certificates.git")
+storage_mode("git")
+type("appstore")
+app_identifier(["com.cedricziel.folio", "com.cedricziel.folio.share", "com.cedricziel.folio.fileprovider"])

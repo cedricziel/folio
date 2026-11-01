@@ -40,3 +40,9 @@
 
 # Node (front-end asset vendoring)
 /web/node_modules/
+
+# Swift / Xcode build output
+.build/
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/xcuserdata/

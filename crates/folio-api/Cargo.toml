@@ -44,6 +44,10 @@ tracing = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 
+# Async traits
+async-trait = { workspace = true }
+
 [dev-dependencies]
-tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
+tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["test-util"] }
