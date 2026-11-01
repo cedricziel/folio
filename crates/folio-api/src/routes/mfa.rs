@@ -12,7 +12,7 @@ use folio_auth::{
     crypto::{hash_token, random_token},
     mfa,
     model::SOURCE_LOCAL,
-    passkey::{DiscoverableKey, Passkey, PublicKeyCredential, Uuid},
+    passkey::{Passkey, PublicKeyCredential, Uuid},
     redirect::safe_next,
     server::now,
     User,
@@ -405,26 +405,20 @@ pub(crate) async fn passkey_finish(
         .into_iter()
         .filter_map(|r| Some((r.id, serde_json::from_str(&r.data).ok()?)))
         .collect();
-    let keys: Vec<DiscoverableKey> = passkeys
-        .iter()
-        .map(|(_, p)| DiscoverableKey::from(p))
-        .collect();
-    let Ok(result) =
-        webauthn.finish_discoverable_authentication(&body.credential, state.state, &keys)
+    let Some((id, passkey)) = passkeys
+        .iter_mut()
+        .find(|(_, p)| p.cred_id().as_slice() == credential_id.as_slice())
     else {
         return fail();
     };
-    if result.cred_id().as_ref() != credential_id.as_slice() {
+    let Ok(result) =
+        webauthn.finish_discoverable_authentication_v2(&body.credential, state.state, &*passkey)
+    else {
         return fail();
-    }
-    if let Some((id, passkey)) = passkeys
-        .iter_mut()
-        .find(|(_, p)| p.cred_id() == result.cred_id())
-    {
-        passkey.update_credential(&result);
-        if let Ok(data) = serde_json::to_string(passkey) {
-            let _ = auth.store.touch_passkey(id, &data, now()).await;
-        }
+    };
+    passkey.update_credential(&result);
+    if let Ok(data) = serde_json::to_string(passkey) {
+        let _ = auth.store.touch_passkey(id, &data, now()).await;
     }
     auth.code_by_ip.record_success(&ip);
 

@@ -117,7 +117,7 @@ pub struct AuthState {
     csrf_secret: Arc<[u8; 32]>,
     register_limit: Arc<RateLimiter>,
     login_by_ip: Arc<FailureLimiter>,
-    login_by_user: Arc<FailureLimiter>,
+    pub(crate) login_by_user: Arc<FailureLimiter>,
     /// Bounds concurrent argon2 hashes, which are memory-hungry.
     hash_permits: Arc<Semaphore>,
 }
