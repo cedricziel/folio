@@ -1811,7 +1811,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "folio-api"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "askama 0.16.1",
  "askama_axum",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "folio-app"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "folio-auth"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "argon2",
  "async-trait",
@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "folio-core"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "folio-infra"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "folio-mcp"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -6981,7 +6981,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "anyhow",
  "image",
