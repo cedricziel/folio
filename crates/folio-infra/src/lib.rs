@@ -2,7 +2,7 @@
 //!
 //! This crate implements the port traits from folio-core:
 //! - SQLite database repositories
-//! - AI service providers (OpenAI, Anthropic, Local)
+//! - OCR and embedding providers behind a registry (see `docs/pipeline.md`)
 //! - File storage
 //! - Thumbnail generation
 //! - Job queue for background processing
@@ -15,7 +15,7 @@ pub mod queue;
 pub mod storage;
 pub mod thumbnail;
 
-pub use ai::{AiServiceFactory, DynamicEmbeddingService, DynamicOcrService, SqliteSearchService};
+pub use ai::{DynamicEmbeddingService, DynamicOcrService, PipelineContext, SqliteSearchService};
 pub use config::Config;
 pub use database::{
     create_pool, run_migrations, SqliteCorrespondentRepository, SqliteDocumentRepository,
