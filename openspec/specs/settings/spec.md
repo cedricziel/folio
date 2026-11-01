@@ -10,19 +10,28 @@ How Folio is configured: startup configuration from `config.toml` and the enviro
 
 The system SHALL read `config.toml` at startup and let environment variables prefixed `FOLIO_` override it. It SHALL configure the server host and port, the database URL, the storage path, and fallback AI settings. Each of the `[server]`, `[database]`, `[storage]` and `[ai]` sections must be present; keys missing inside a section default to `127.0.0.1`, `3000`, `sqlite:folio.db?mode=rwc`, `./data` and provider `openai`.
 
-#### Scenario: Override the port
-
-- **WHEN** the server starts with `FOLIO_SERVER_PORT=8080`
-- **THEN** it listens on port 8080 regardless of `config.toml`
-
 #### Scenario: Key missing from a section
 
 - **WHEN** `config.toml` has a `[server]` section without `port`
 - **THEN** the server listens on port 3000
 
+### Requirement: Environment overrides
+
+Every `_` after the `FOLIO_` prefix SHALL be read as a section separator, so only keys without an underscore can be overridden: `FOLIO_SERVER_HOST`, `FOLIO_SERVER_PORT`, `FOLIO_DATABASE_URL`, `FOLIO_STORAGE_PATH` and `FOLIO_AI_PROVIDER`.
+
+#### Scenario: Override the port
+
+- **WHEN** the server starts with `FOLIO_SERVER_PORT=8080`
+- **THEN** it listens on port 8080 regardless of `config.toml`
+
+#### Scenario: Override a key that contains an underscore
+
+- **WHEN** the server starts with `FOLIO_AI_OPENAI_API_KEY` set
+- **THEN** the value is not applied, and the OpenAI key falls back to `config.toml` or the database
+
 ### Requirement: Database settings
 
-The system SHALL store runtime settings as key-value rows in the `settings` table. A migration SHALL seed `ai.provider` (`local`), `ai.openai_api_key`, `ai.anthropic_api_key`, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_ocr`, `processing.auto_thumbnail` and `processing.auto_embedding` flags.
+The system SHALL store runtime settings as key-value rows in the `settings` table. A migration SHALL seed `ai.provider` (`local`), `ai.openai_api_key`, `ai.anthropic_api_key`, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_ocr`, `processing.auto_thumbnail` and `processing.auto_embedding` flags. Of these, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_*` flags are stored but not yet applied.
 
 #### Scenario: Fresh database
 
