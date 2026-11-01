@@ -29,6 +29,8 @@ async fn serve(fx: &Fixture) -> Server {
     db.migrate().await.unwrap();
     let store = db.repositories().await.auth;
 
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
     let mcp = folio_mcp::router(
         fx.library.clone(),
         fx.settings_port(),
@@ -39,11 +41,9 @@ async fn serve(fx: &Fixture) -> Server {
     )
     .layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))
     .layer(from_fn_with_state(
-        TokenValidator::new(store.clone(), None, "/mcp"),
+        TokenValidator::new(store.clone(), Some(format!("http://{addr}")), "/mcp"),
         require_bearer,
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, mcp).await.unwrap() });
     Server {
         url: format!("http://{addr}/mcp"),
