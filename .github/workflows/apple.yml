@@ -1,0 +1,64 @@
+name: Apple
+
+on:
+  pull_request:
+    paths:
+      - "apple/**"
+      - "openapi/**"
+      - "design/tokens.json"
+      - ".github/workflows/apple.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apple/**"
+      - ".github/workflows/apple.yml"
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apple
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        with:
+          working-directory: apple
+          bundler-cache: true
+      - run: brew install xcodegen
+      - run: bundle exec fastlane test
+
+  beta:
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    # One TestFlight upload at a time; a queued run waits instead of cancelling a running upload.
+    concurrency:
+      group: apple-beta
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: apple
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      MATCH_GIT_URL: https://github.com/cedricziel/certificates.git
+      MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The changelog is built from git history since the last tag.
+          fetch-depth: 0
+      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1.336.0
+        with:
+          working-directory: apple
+          bundler-cache: true
+      - run: brew install xcodegen
+      - run: bundle exec fastlane beta

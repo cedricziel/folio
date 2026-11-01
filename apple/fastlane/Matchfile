@@ -1,0 +1,5 @@
+# CI clones over https with MATCH_GIT_BASIC_AUTHORIZATION; local runs use ssh.
+git_url(ENV.fetch("MATCH_GIT_URL", "git@github.com:cedricziel/certificates.git"))
+storage_mode("git")
+type("appstore")
+app_identifier(["com.cedricziel.folio", "com.cedricziel.folio.share"])

@@ -44,12 +44,20 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         ITSAppUsesNonExemptEncryption: false
+        LSApplicationCategoryType: public.app-category.productivity
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio
         ENABLE_APP_SANDBOX: YES
         ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
         ENABLE_USER_SELECTED_FILES: readonly
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          "CODE_SIGN_IDENTITY[sdk=iphoneos*]": Apple Distribution
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": 3rd Party Mac Developer Application
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]": match AppStore com.cedricziel.folio
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": match AppStore com.cedricziel.folio macos
   FolioShare:
     type: app-extension
     supportedDestinations: [iOS]
@@ -75,6 +83,11 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.share
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: match AppStore com.cedricziel.folio.share
 schemes:
   Folio:
     build:

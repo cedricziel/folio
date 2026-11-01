@@ -33,3 +33,17 @@ Use `xcrun swift …` and `xcrun xcodebuild …` rather than bare `swift`, so th
 ```sh
 cd apple/FolioKit && xcrun swift test
 ```
+
+## Fastlane and TestFlight
+
+```sh
+cd apple
+bundle install
+bundle exec fastlane test   # FolioKit tests, then builds for iOS Simulator and macOS
+bundle exec fastlane beta   # match (appstore) -> build number -> build -> TestFlight (iOS)
+bundle exec fastlane beta_mac   # same for macOS; not yet run against real signing assets
+```
+
+`beta` needs these environment variables: `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8` (base64 of the App Store Connect API key), `MATCH_PASSWORD`. Locally, match clones `git@github.com:cedricziel/certificates.git` over ssh; CI sets `MATCH_GIT_URL` to the https URL plus `MATCH_GIT_BASIC_AUTHORIZATION`. The build number is the latest TestFlight build plus one. Fastlane runs `xcrun xcodebuild` under the active Xcode, so select the right one with `xcode-select` or `DEVELOPER_DIR` (the machine rules apply: no bare `swift`).
+
+Bundle ids are `com.cedricziel.folio` and `com.cedricziel.folio.share`, matching the other apps in the certificates repo. Create the app record in App Store Connect by hand once (iOS and macOS share one record), and register the App Group `group.com.cedricziel.folio` in the developer portal.

@@ -1,0 +1,78 @@
+require "base64"
+
+APPLE_DIR = File.expand_path("..", __dir__)
+PROJECT = File.join(APPLE_DIR, "Folio", "Folio.xcodeproj")
+IOS_IDS = ["com.cedricziel.folio", "com.cedricziel.folio.share"].freeze
+MAC_IDS = ["com.cedricziel.folio"].freeze
+XCODEBUILD_FLAGS = "-skipPackagePluginValidation -skipMacroValidation"
+
+default_platform(:ios)
+
+def asc_api_key
+  app_store_connect_api_key(
+    key_id: ENV.fetch("ASC_KEY_ID"),
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_content: ENV.fetch("ASC_KEY_P8"),
+    is_key_content_base64: true,
+    in_house: false
+  )
+end
+
+def generate_project
+  sh("cd '#{APPLE_DIR}/Folio' && xcodegen generate")
+end
+
+def changelog_since_last_tag
+  tag = sh("git describe --tags --abbrev=0 2>/dev/null || true", log: false).strip
+  range = tag.empty? ? "-n 20" : "#{tag}..HEAD"
+  log = sh("git log #{range} --no-merges --pretty='- %s' -- apple design/tokens.json", log: false).strip
+  log.empty? ? "Maintenance build." : log
+end
+
+def beta_build(platform:, identifiers:, destination:)
+  setup_ci if is_ci
+  key = asc_api_key
+  match(type: "appstore", platform: platform, app_identifier: identifiers,
+        readonly: is_ci, api_key: key)
+
+  build_number = latest_testflight_build_number(api_key: key, app_identifier: identifiers.first,
+                                                platform: platform == "macos" ? "osx" : "ios") + 1
+  build_app(
+    project: PROJECT,
+    scheme: "Folio",
+    configuration: "Release",
+    destination: destination,
+    export_method: "app-store",
+    xcargs: "#{XCODEBUILD_FLAGS} CURRENT_PROJECT_VERSION=#{build_number}",
+    output_directory: File.join(APPLE_DIR, "build", platform),
+    clean: true
+  )
+  upload_to_testflight(
+    api_key: key,
+    app_identifier: identifiers.first,
+    changelog: changelog_since_last_tag,
+    skip_waiting_for_build_processing: true
+  )
+end
+
+desc "Run FolioKit tests and build the app for iOS Simulator and macOS"
+lane :test do
+  sh("cd '#{APPLE_DIR}/FolioKit' && xcrun swift test")
+  generate_project
+  ["generic/platform=iOS Simulator", "platform=macOS"].each do |destination|
+    sh("cd '#{APPLE_DIR}/Folio' && xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio " \
+       "-destination '#{destination}' #{XCODEBUILD_FLAGS} CODE_SIGNING_ALLOWED=NO")
+  end
+end
+
+desc "Sign with match, build for iOS and upload to TestFlight"
+lane :beta do
+  generate_project
+  beta_build(platform: "ios", identifiers: IOS_IDS, destination: "generic/platform=iOS")
+end
+
+desc "Sign with match, build for macOS and upload to TestFlight"
+lane :beta_mac do
+  generate_project
+  beta_build(platform: "macos", identifiers: MAC_IDS, destination: "generic/platform=macOS")
+end
