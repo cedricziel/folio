@@ -146,11 +146,20 @@ slash if the provider has one.
   pending login is stored server-side for ten minutes, bound to the browser by
   a cookie, and can be used once.
 - **Validation.** The ID token must be signed by a key from the provider's
-  JWKS (RSA or ECDSA) and carry the right issuer, audience, nonce and a valid
+  JWKS and carry the right issuer, audience, nonce and a valid
   `exp` (one minute of clock leeway). An unknown `kid` makes Folio refetch the
   JWKS at most every ten seconds, so key rotation needs no restart. Discovery
   is cached for an hour. If the ID token lacks `preferred_username` or the
   groups claim and the provider has a userinfo endpoint, Folio asks it.
+- **Algorithms.** Only asymmetric signatures are accepted: RS256/384/512,
+  PS256/384/512, ES256/384/512 and EdDSA. HMAC (`HS*`) ID tokens are refused,
+  because anyone who knows the client secret could forge them. Set the
+  provider's signing key to RSA or ECDSA (in Authentik, pick a signing key,
+  not "HS256").
+- **Endpoints.** The authorization, token, userinfo and JWKS URLs from
+  discovery must be https (loopback excepted).
+- **Rate limit.** One client address can start 30 sign-ins per minute; behind a
+  reverse proxy that address is the proxy's.
 - **Users.** An account is linked by issuer and `sub`, never by name or email.
   The username comes from `preferred_username`, then `email`, then `sub`. A
   name that already belongs to a local or forward-auth account is refused with
@@ -164,7 +173,10 @@ slash if the provider has one.
   the provider becomes owner and admin. Keep it `true` until SSO works, so you
   cannot lock yourself out.
 - **Logout.** If the provider advertises an `end_session_endpoint`, signing out
-  of Folio also ends the session at the provider (RP-initiated logout).
+  of Folio also ends the session at the provider (RP-initiated logout). Folio
+  keeps the ID token with the session and sends it as `id_token_hint`, and asks
+  the provider to return to `<public_url>/login`; register that URL as an
+  allowed post-logout redirect.
 
 ### Authentik
 
@@ -173,7 +185,9 @@ slash if the provider has one.
    signing key any RSA key. Note the client ID and secret.
 2. Create an application with slug `folio` and attach the provider. The issuer
    is `https://auth.example.com/application/o/folio/`.
-3. Groups: the default `profile` scope mapping already adds a `groups` claim
+3. Add `https://folio.example.com/login` to the provider's allowed redirect
+   URIs too: Authentik uses that list for the post-logout redirect.
+4. Groups: the default `profile` scope mapping already adds a `groups` claim
    with the user's group names. Create a group `folio-admins` and add admins to
    it, then set `admin_group = "folio-admins"`.
 
