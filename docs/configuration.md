@@ -54,12 +54,26 @@ startup by the first three layers.
 | `auth.oidc.allow_local_login` | `FOLIO_AUTH__OIDC__ALLOW_LOCAL_LOGIN` | `true` | Keep the username and password form. With `false` only SSO works and `/setup` is not needed. |
 | `auth.oidc.auto_create_users` | `FOLIO_AUTH__OIDC__AUTO_CREATE_USERS` | `true` | Create an account on first sign-in. With `false` only users who already signed in once can sign in. |
 | `database.url` | `FOLIO_DATABASE__URL` | `sqlite:folio.db?mode=rwc` | Database URL. The scheme picks the backend: `sqlite:` or `postgres://` (see [database.md](database.md)). |
-| `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Directory for stored documents and thumbnails. |
+| `storage.backend` | `FOLIO_STORAGE__BACKEND` | `local` | `local` or `s3` (see [storage.md](storage.md)). |
+| `storage.path` | `FOLIO_STORAGE__PATH` | `./data` | Root directory for the `local` backend. |
+| `storage.s3.bucket` | `FOLIO_STORAGE__S3__BUCKET` | unset | Bucket name; required for `s3`. |
+| `storage.s3.region` | `FOLIO_STORAGE__S3__REGION` | unset (`us-east-1` for custom endpoints) | Bucket region. |
+| `storage.s3.endpoint` | `FOLIO_STORAGE__S3__ENDPOINT` | unset | Endpoint URL for MinIO, Garage, R2 and similar. |
+| `storage.s3.access_key_id` | `FOLIO_STORAGE__S3__ACCESS_KEY_ID` | unset | Access key; falls back to the standard `AWS_*` variables and instance credentials. |
+| `storage.s3.secret_access_key` | `FOLIO_STORAGE__S3__SECRET_ACCESS_KEY` | unset | Secret key. |
+| `storage.s3.path_style` | `FOLIO_STORAGE__S3__PATH_STYLE` | unset (on when an endpoint is set) | Address buckets as `endpoint/bucket` instead of `bucket.endpoint`. |
+| `storage.s3.allow_http` | `FOLIO_STORAGE__S3__ALLOW_HTTP` | `false` | Allow a plain `http://` endpoint. |
+| `storage.s3.prefix` | `FOLIO_STORAGE__S3__PREFIX` | unset | Key prefix inside the bucket. |
 | `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |
 | `ai.openai_api_key` | `FOLIO_AI__OPENAI_API_KEY` | unset | OpenAI API key. |
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |
 | `mcp.enabled` | `FOLIO_MCP__ENABLED` | follows `auth.required` | Serve the MCP endpoint at `/mcp`. On when `auth.required` is true, off otherwise because the endpoint is only protected by auth. The `mcp.enabled` database setting overrides it. See [mcp.md](mcp.md). |
 | `mcp.allowed_hosts` | `FOLIO_MCP__ALLOWED_HOSTS` | empty | Comma-separated extra `Host` headers `/mcp` accepts besides loopback. |
+
+Ingestion sources have names of your choosing, so they are not listed above:
+`FOLIO_INGEST__FOLDERS__<NAME>__<KEY>` and `FOLIO_INGEST__EMAIL__<NAME>__<KEY>`
+(for example `FOLIO_INGEST__FOLDERS__INBOX__PATH=/consume`). `_FILE` works on
+them too. See [ingestion](ingestion.md).
 
 Other variables read directly: `FOLIO_CONFIG` (config file path) and `RUST_LOG`
 (log filter).

@@ -1,4 +1,4 @@
-# Folio with PostgreSQL. Copy to docker-compose.yml and change the passwords.
+# Folio with PostgreSQL and MinIO object storage. Copy to docker-compose.yml and change the passwords.
 #
 #   docker compose up -d
 #
@@ -22,31 +22,58 @@ services:
       timeout: 3s
       retries: 10
 
+  # The upstream minio/minio images are no longer published to Docker Hub or
+  # Quay; any S3-compatible service works. Create the `folio` bucket once, for
+  # example through the console on port 9001 or with `mc mb local/folio`.
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: folio
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_password
+    secrets:
+      - minio_password
+    volumes:
+      - minio-data:/data
+
   folio:
     image: ghcr.io/cedricziel/folio:latest
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_started
     ports:
       - "3000:3000"
     environment:
       # Compose does not expand secrets inside URLs, so keep the password here
       # in sync with secrets/db_password, or use an .env file.
       FOLIO_DATABASE__URL: postgres://folio:change-me@postgres:5432/folio
+      FOLIO_STORAGE__BACKEND: s3
+      FOLIO_STORAGE__S3__ENDPOINT: http://minio:9000
+      FOLIO_STORAGE__S3__BUCKET: folio
+      FOLIO_STORAGE__S3__ACCESS_KEY_ID: folio
+      FOLIO_STORAGE__S3__SECRET_ACCESS_KEY_FILE: /run/secrets/minio_password
+      FOLIO_STORAGE__S3__ALLOW_HTTP: "true"
       FOLIO_AI__PROVIDER: openai
       FOLIO_AI__OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
     secrets:
       - openai_api_key
+      - minio_password
     volumes:
       - folio-data:/data
 
 volumes:
   postgres-data:
+  minio-data:
   folio-data:
 
 secrets:
   db_password:
     file: ./secrets/db_password
+  minio_password:
+    file: ./secrets/minio_password
   openai_api_key:
     file: ./secrets/openai_api_key

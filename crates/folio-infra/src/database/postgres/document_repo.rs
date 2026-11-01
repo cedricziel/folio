@@ -8,8 +8,8 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag, UpdateCorrespondent,
-    UpdateDocument, UpdateDocumentType, UpdateTag,
+    DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -40,7 +40,8 @@ macro_rules! select_documents {
     ($tail:literal) => {
         concat!(
             "SELECT id, title, content, original_filename, file_path, mime_type, ",
-            "correspondent_id, document_type_id, page_count, ocr_status, embed_status, ",
+            "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
+            "ocr_status, embed_status, ",
             "created_at, updated_at ",
             "FROM documents ",
             $tail
@@ -59,6 +60,8 @@ struct DocumentRow {
     correspondent_id: Option<Uuid>,
     document_type_id: Option<Uuid>,
     page_count: Option<i32>,
+    source_type: String,
+    source_meta: Option<String>,
     ocr_status: String,
     embed_status: String,
     created_at: DateTime<Utc>,
@@ -79,6 +82,7 @@ impl TryFrom<DocumentRow> for Document {
             correspondent_id: row.correspondent_id,
             document_type_id: row.document_type_id,
             page_count: row.page_count.map(|c| c as u32),
+            source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
             ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
             embed_status: row.embed_status.parse().map_err(Error::Repository)?,
             created_at: row.created_at,
@@ -228,12 +232,13 @@ impl DocumentRepository for PostgresDocumentRepository {
         } else {
             ProcessingStatus::Pending
         };
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
 
         sqlx::query(
             "INSERT INTO documents (id, title, content, original_filename, mime_type,
                                     correspondent_id, document_type_id, ocr_status,
-                                    created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)",
+                                    source_type, source_meta, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)",
         )
         .bind(id)
         .bind(&params.title)
@@ -243,10 +248,25 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(params.correspondent_id)
         .bind(params.document_type_id)
         .bind(ocr_status.as_str())
+        .bind(params.source.kind.as_str())
+        .bind(params.source.metadata_json())
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
+
+        for tag_id in &params.tag_ids {
+            sqlx::query(
+                "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(id)
+            .bind(tag_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        }
+        tx.commit().await.map_err(repo_err)?;
 
         Ok(Document {
             id,
@@ -258,6 +278,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,
             page_count: None,
+            source: params.source,
             ocr_status,
             embed_status: ProcessingStatus::Pending,
             created_at: now,
@@ -302,6 +323,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             correspondent_id,
             document_type_id,
             page_count: existing.page_count,
+            source: existing.source,
             ocr_status: existing.ocr_status,
             embed_status: existing.embed_status,
             created_at: existing.created_at,

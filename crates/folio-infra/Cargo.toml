@@ -27,8 +27,14 @@ anyhow = { workspace = true }
 figment = { workspace = true }
 dotenvy = { workspace = true }
 
-# Logging
+# Logging and telemetry
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
@@ -40,6 +46,12 @@ chrono = { workspace = true }
 # HTTP client (for AI APIs)
 reqwest = { workspace = true }
 
+# Object storage
+object_store = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true }
+
 # Image processing
 image = { workspace = true }
 
@@ -48,8 +60,14 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
-# Temporary files for PDF/OCR tooling
-tempfile = "3"
+# Consume folder watching
+notify = "8"
+
+# Mailbox access
+async-imap = { version = "0.12", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "1"
+native-tls = "0.2"
+tokio-native-tls = "0.3"
 
 [features]
 # Local ONNX embeddings (downloads onnxruntime and models); off by default to keep builds small
@@ -62,3 +80,5 @@ optional = true
 [dev-dependencies]
 axum = { workspace = true }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
+hmac = "0.12"
+sha2 = "0.10"

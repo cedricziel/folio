@@ -3,17 +3,29 @@
 use std::sync::Arc;
 
 use folio_core::error::Result;
-use folio_core::ports::SearchResult;
+use folio_core::models::IngestionSourceDef;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, EmbeddingService,
-    HealthCheck, OcrService, SearchService, SettingsRepository, TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
+    DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory,
+    OcrService, SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
+    WorkflowRepository,
 };
-use folio_core::services::SearchServiceFacade;
-use folio_infra::{JobQueue, PipelineContext, ThumbnailService, WebhookClient};
+use folio_core::services::{Importer, SearchServiceFacade};
+use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
 
 use folio_core::EventBroadcaster;
 
 use crate::routes::HealthChecks;
+
+/// What the UI needs to manage and test ingestion sources
+#[derive(Clone)]
+pub struct IngestionState {
+    /// Sources created in the UI
+    pub managed: Arc<dyn SourceRepository>,
+    /// Sources from environment or `config.toml`, shown read-only
+    pub configured: Arc<Vec<IngestionSourceDef>>,
+    pub factory: Arc<dyn IngestionSourceFactory>,
+}
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -29,13 +41,30 @@ pub struct AppState {
     pub pipeline: Arc<PipelineContext>,
     pub thumbnail_service: Arc<ThumbnailService>,
     pub job_queue: JobQueue,
-    pub storage_path: String,
+    pub store: Arc<dyn DocumentStore>,
     pub event_broadcaster: EventBroadcaster,
     pub health_checks: HealthChecks,
     pub workflow_repo: Arc<dyn WorkflowRepository>,
     pub webhook_client: WebhookClient,
     /// Externally reachable base URL, used for links in webhook payloads
     pub public_url: String,
+    /// The one path that stores a new document
+    pub importer: Arc<dyn DocumentImporter>,
+    pub ingestion: IngestionState,
+}
+
+impl IngestionState {
+    pub fn new(
+        managed: Arc<dyn SourceRepository>,
+        ledger: Arc<dyn IngestLedger>,
+        configured: Vec<IngestionSourceDef>,
+    ) -> Self {
+        Self {
+            managed,
+            configured: Arc::new(configured),
+            factory: Arc::new(SourceFactory::new(ledger)),
+        }
+    }
 }
 
 impl AppState {
@@ -52,12 +81,18 @@ impl AppState {
         pipeline: Arc<PipelineContext>,
         thumbnail_service: Arc<ThumbnailService>,
         job_queue: JobQueue,
-        storage_path: String,
+        store: Arc<dyn DocumentStore>,
         event_broadcaster: EventBroadcaster,
         workflow_repo: Arc<dyn WorkflowRepository>,
         webhook_client: WebhookClient,
         public_url: String,
+        ingestion: IngestionState,
     ) -> Self {
+        let importer = Arc::new(Importer::new(
+            document_repo.clone(),
+            store.clone(),
+            Arc::new(job_queue.clone()),
+        ));
         Self {
             document_repo,
             tag_repo,
@@ -70,12 +105,14 @@ impl AppState {
             pipeline,
             thumbnail_service,
             job_queue,
-            storage_path,
+            store,
             event_broadcaster,
             health_checks: Arc::from(Vec::new()),
             workflow_repo,
             webhook_client,
             public_url,
+            importer,
+            ingestion,
         }
     }
 

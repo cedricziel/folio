@@ -10,7 +10,7 @@ use folio_core::ports::{
     DocumentRepository, EmbeddingBatch, EmbeddingService, SearchService, SettingsRepository,
 };
 use folio_core::services::LibraryService;
-use folio_infra::{Database, FileStorage};
+use folio_infra::{Database, ObjectStoreDocumentStore};
 use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RunningService, ServiceError};
 use rmcp::{RoleClient, ServiceExt};
@@ -130,8 +130,7 @@ impl Fixture {
         db.migrate().await.unwrap();
         let repos = db.repositories().await;
 
-        let storage = FileStorage::new(dir.path().join("data"));
-        storage.init().await.unwrap();
+        let storage = ObjectStoreDocumentStore::in_memory();
 
         let library = Arc::new(LibraryService::new(
             repos.documents.clone(),
@@ -157,10 +156,7 @@ impl Fixture {
             .create(CreateDocument {
                 title: title.to_string(),
                 content: Some(content.to_string()),
-                original_filename: None,
-                mime_type: None,
-                correspondent_id: None,
-                document_type_id: None,
+                ..Default::default()
             })
             .await
             .unwrap()

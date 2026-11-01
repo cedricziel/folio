@@ -41,6 +41,9 @@ thiserror = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-http = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
@@ -53,6 +56,8 @@ async-trait = { workspace = true }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { workspace = true }
 sqlx = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+tracing-subscriber = { workspace = true }
 base64 = "0.22"
 sha2 = "0.10"
 tempfile = "3"

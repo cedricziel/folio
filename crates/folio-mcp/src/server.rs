@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use folio_core::models::{Document, Id, Tag};
+use folio_core::models::{Document, DocumentSource, Id, SourceKind, Tag};
 use folio_core::ports::ProcessingStatus;
 use folio_core::services::{
     DocumentDetail, DocumentQuery, LibraryService, MetadataUpdate, NewUpload,
@@ -570,6 +570,8 @@ impl FolioMcp {
                 data,
                 title: args.title,
                 mime_type: args.mime_type,
+                source: DocumentSource::of(SourceKind::Mcp),
+                ..Default::default()
             })
             .await
             .map_err(tool_error)?;

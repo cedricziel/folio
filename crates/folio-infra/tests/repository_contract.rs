@@ -13,6 +13,10 @@ use folio_core::models::{
     UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, WebhookMethod,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
+use folio_core::models::{
+    DocumentSource, EmailOrigin, IngestionSourceInput, LedgerEntry, SourceConfig, SourceKind,
+    SourceStatus,
+};
 use folio_core::ports::{EmbeddedChunk, SearchService};
 use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
 use testcontainers_modules::postgres::Postgres;
@@ -25,8 +29,7 @@ fn new_document(title: &str) -> CreateDocument {
         content: Some("initial".to_string()),
         original_filename: Some(format!("{title}.pdf")),
         mime_type: Some("application/pdf".to_string()),
-        correspondent_id: None,
-        document_type_id: None,
+        ..Default::default()
     }
 }
 
@@ -939,6 +942,113 @@ async fn workflows_contract(r: &Repositories) {
     assert!(is_not_found(r.workflows.delete(off.id).await));
 }
 
+async fn ingestion_contract(r: &Repositories) {
+    // A document keeps its source and the tags it was created with
+    let tag = r
+        .tags
+        .create(CreateTag {
+            name: "ingested".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let source = DocumentSource::email(
+        "work",
+        EmailOrigin {
+            account: "work".into(),
+            mailbox: "INBOX".into(),
+            message_id: "m@test".into(),
+            from: "a@b.test".into(),
+            to: vec!["me@home.test".into()],
+            subject: "Invoice".into(),
+            date: None,
+            attachment_filename: Some("inv.pdf".into()),
+            attachment_content_type: Some("application/pdf".into()),
+        },
+    );
+    let doc = r
+        .documents
+        .create(CreateDocument {
+            source: source.clone(),
+            tag_ids: vec![tag.id, tag.id],
+            ..new_document("mail")
+        })
+        .await
+        .unwrap();
+    let found = r.documents.find_by_id(doc.id).await.unwrap().unwrap();
+    assert_eq!(found.source, source);
+    assert_eq!(r.documents.get_tags(doc.id).await.unwrap().len(), 1);
+    let plain = r.documents.create(new_document("plain")).await.unwrap();
+    assert_eq!(plain.source.kind, SourceKind::Upload);
+
+    // Managed sources: unique names, replace, status
+    let input = |name: &str| -> IngestionSourceInput {
+        IngestionSourceInput {
+            name: name.into(),
+            enabled: true,
+            config: serde_json::from_value::<SourceConfig>(
+                serde_json::json!({"type": "folder", "path": "/consume"}),
+            )
+            .unwrap(),
+        }
+    };
+    let created = r.sources.create(input("inbox")).await.unwrap();
+    assert!(is_duplicate(
+        r.sources.create(input("inbox")).await.unwrap_err()
+    ));
+    let mut off = input("inbox");
+    off.enabled = false;
+    let updated = r.sources.update(created.id, off).await.unwrap();
+    assert!(!updated.enabled);
+    assert_eq!(r.sources.list().await.unwrap().len(), 1);
+    assert!(is_not_found(
+        r.sources.update(Id::new_v4(), input("x")).await
+    ));
+
+    assert!(r.sources.status(created.id).await.unwrap().is_none());
+    let status = SourceStatus {
+        last_run_at: Some(Utc::now()),
+        last_error: Some("boom".into()),
+        last_imported: 3,
+        last_skipped: 2,
+        last_failed: 1,
+    };
+    r.sources.save_status(created.id, &status).await.unwrap();
+    r.sources.save_status(created.id, &status).await.unwrap();
+    let saved = r.sources.status(created.id).await.unwrap().unwrap();
+    assert_eq!(
+        (saved.last_imported, saved.last_error.as_deref()),
+        (3, Some("boom"))
+    );
+    r.sources.delete(created.id).await.unwrap();
+    assert!(r.sources.find(created.id).await.unwrap().is_none());
+    assert!(r.sources.status(created.id).await.unwrap().is_none());
+    assert!(is_not_found(r.sources.delete(created.id).await));
+
+    // Ledger: the first insert wins, later ones report false
+    let entry = LedgerEntry {
+        key: "hash:abc".into(),
+        source_id: Id::new_v4(),
+        document_id: None,
+        outcome: "claimed".into(),
+        created_at: Utc::now(),
+    };
+    assert!(r.ledger.insert(&entry).await.unwrap());
+    assert!(!r.ledger.insert(&entry).await.unwrap());
+    r.ledger
+        .complete("hash:abc", "imported", Some(doc.id))
+        .await
+        .unwrap();
+    let stored = r.ledger.find("hash:abc").await.unwrap().unwrap();
+    assert_eq!(
+        (stored.outcome.as_str(), stored.document_id),
+        ("imported", Some(doc.id))
+    );
+    r.ledger.delete("hash:abc").await.unwrap();
+    assert!(r.ledger.find("hash:abc").await.unwrap().is_none());
+    assert!(r.ledger.insert(&entry).await.unwrap());
+}
+
 async fn auth_contract(r: &Repositories) {
     use folio_auth::{AccessToken, AuthCode, OAuthClient, RefreshToken, Session, User};
     let auth = &r.auth;
@@ -1197,6 +1307,7 @@ async fn run_contract(db: &Database) {
     settings_contract(&repos).await;
     search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
     workflows_contract(&repos).await;
+    ingestion_contract(&repos).await;
     jobs_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
     auth_contract(&repos).await;

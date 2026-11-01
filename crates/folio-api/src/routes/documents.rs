@@ -1,7 +1,9 @@
 //! Document API routes
 
 use axum::{
+    body::Body,
     extract::{Multipart, Path, Query, State},
+    http::header,
     routing::{get, post},
     Json, Router,
 };
@@ -12,10 +14,10 @@ use uuid::Uuid;
 
 use axum::response::{IntoResponse, Redirect, Response};
 
-use folio_core::models::{CreateDocument, Document, DocumentFilter, UpdateDocument};
-use folio_core::services::SearchServiceFacade;
-
-use folio_infra::JobType;
+use folio_core::models::{
+    CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
+};
+use folio_core::services::{NewUpload, SearchServiceFacade};
 
 use crate::error::{ApiError, ApiResult};
 use crate::openapi::{BadRequest, InternalError, NotFound};
@@ -141,10 +143,10 @@ pub(crate) async fn create_document(
         .create(CreateDocument {
             title: req.title,
             content: req.content,
-            original_filename: None,
-            mime_type: None,
             correspondent_id: req.correspondent_id,
             document_type_id: req.document_type_id,
+            source: DocumentSource::of(SourceKind::Api),
+            ..Default::default()
         })
         .await?;
 
@@ -168,7 +170,9 @@ pub(crate) async fn delete_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<()>> {
+    purge_document_files(&state, id).await?;
     state.document_repo.delete(id).await?;
+    folio_infra::telemetry::metrics().documents_changed(-1);
     Ok(Json(()))
 }
 
@@ -244,47 +248,19 @@ pub(crate) async fn upload_document(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Create document record
     let document = state
-        .document_repo
-        .create(CreateDocument {
-            title,
-            content: None,
-            original_filename: filename.clone(),
+        .importer
+        .import(NewUpload {
+            title: Some(title),
+            filename: filename.unwrap_or_else(|| "upload".to_string()),
             mime_type: Some(mime_type),
-            correspondent_id: None,
-            document_type_id: None,
+            data: file_data,
+            source: DocumentSource::of(SourceKind::Api),
+            tag_ids: Vec::new(),
         })
         .await?;
 
-    // Store the file
-    let storage = folio_infra::FileStorage::new(&state.storage_path);
-    if let Some(fname) = filename {
-        if let Ok(file_path) = storage.store(document.id, &fname, &file_data).await {
-            let _ = state
-                .document_repo
-                .set_file_path(document.id, &file_path)
-                .await;
-        }
-    }
-
-    // OCR and embedding run in the background pipeline
-    if let Err(e) = state
-        .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        })
-        .await
-    {
-        error!("Failed to enqueue document processing job: {}", e);
-    }
-
-    // Re-fetch to get updated document with file_path
-    let document = state
-        .document_repo
-        .find_by_id(document.id)
-        .await?
-        .unwrap_or(document);
+    folio_infra::telemetry::metrics().documents_changed(1);
 
     Ok(Json(document))
 }
@@ -425,11 +401,13 @@ pub(crate) async fn download_document(
         .file_path
         .ok_or_else(|| ApiError::not_found("Document has no file"))?;
 
-    let storage = folio_infra::FileStorage::new(&state.storage_path);
-    let data = storage
-        .read(&file_path)
-        .await
-        .map_err(|_| ApiError::internal("Failed to read file"))?;
+    let object = state.store.get(&file_path).await.map_err(|e| match e {
+        folio_core::Error::NotFound { .. } => ApiError::not_found("Stored file not found"),
+        e => {
+            tracing::error!("Failed to read {file_path}: {e}");
+            ApiError::internal("Failed to read file")
+        }
+    })?;
 
     let mime_type = document
         .mime_type
@@ -439,17 +417,77 @@ pub(crate) async fn download_document(
         .original_filename
         .unwrap_or_else(|| format!("document-{}", id));
 
-    Ok((
-        [
-            (axum::http::header::CONTENT_TYPE, mime_type),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", filename),
-            ),
-        ],
-        data,
-    )
-        .into_response())
+    let mut response = Response::builder()
+        .header(header::CONTENT_TYPE, mime_type)
+        .header(header::CONTENT_DISPOSITION, content_disposition(&filename));
+    if let Some(size) = object.size {
+        response = response.header(header::CONTENT_LENGTH, size);
+    }
+    response
+        .body(Body::from_stream(object.stream))
+        .map_err(|_| ApiError::internal("Failed to build response"))
+}
+
+/// `Content-Disposition: attachment` with an ASCII fallback and an RFC 6266
+/// `filename*` parameter carrying the exact UTF-8 name.
+pub(crate) fn content_disposition(filename: &str) -> String {
+    let fallback: String = filename
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' && c != '%' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut encoded = String::new();
+    for byte in filename.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#' | b'$' | b'&' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
+            )
+        {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::content_disposition;
+
+    #[test]
+    fn plain_names_get_both_parameters() {
+        assert_eq!(
+            content_disposition("report.pdf"),
+            "attachment; filename=\"report.pdf\"; filename*=UTF-8''report.pdf"
+        );
+    }
+
+    #[test]
+    fn non_ascii_names_are_percent_encoded() {
+        let header = content_disposition("Rechnung Größe.pdf");
+        assert!(
+            header.contains("filename=\"Rechnung Gr__e.pdf\""),
+            "{header}"
+        );
+        assert!(
+            header.ends_with("filename*=UTF-8''Rechnung%20Gr%C3%B6%C3%9Fe.pdf"),
+            "{header}"
+        );
+    }
+
+    #[test]
+    fn quotes_and_separators_cannot_break_out() {
+        let header = content_disposition("a\"; x=\"b\r\n.pdf");
+        assert!(!header.contains('\r') && !header.contains('\n'));
+        assert_eq!(header.matches('"').count(), 2, "{header}");
+    }
 }
 
 /// Form data for setting correspondent
@@ -550,4 +588,13 @@ async fn remove_tag(
     state.document_repo.remove_tag(path.id, path.tag_id).await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
+}
+
+/// Remove every stored object of a document, including pre-key-layout files.
+pub(crate) async fn purge_document_files(state: &AppState, id: Uuid) -> ApiResult<()> {
+    let Some(document) = state.document_repo.find_by_id(id).await? else {
+        return Ok(());
+    };
+    folio_core::ports::purge_document(state.store.as_ref(), id, document.page_count).await?;
+    Ok(())
 }

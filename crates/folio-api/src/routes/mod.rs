@@ -12,6 +12,8 @@ mod oidc;
 mod pages;
 mod pwa;
 mod settings;
+mod source_pages;
+pub(crate) mod sources;
 pub(crate) mod tags;
 mod view;
 mod workflow_pages;
@@ -20,7 +22,7 @@ pub(crate) mod workflows;
 pub use events::turbo_streams_for;
 
 use axum::{extract::DefaultBodyLimit, Router};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::cors::CorsLayer;
 
 pub use health::HealthChecks;
 
@@ -33,7 +35,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let forward = axum::middleware::from_fn_with_state(auth.clone(), crate::forward::forward_auth);
     let auth_routes = auth::router(auth);
 
-    let router = Router::new()
+    let routes = Router::new()
         // API routes
         .nest("/api", api_router())
         // OpenAPI spec and docs viewer
@@ -48,16 +50,19 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(settings::router())
         // Workflow pages
         .merge(workflow_pages::router())
+        // Source pages
+        .merge(source_pages::router())
         // SSE events
         .merge(events::router())
         // Login, setup and OAuth authorization server
         .merge(auth_routes)
         // Static files
-        .merge(assets::router())
+        .merge(assets::router());
+
+    let router = crate::telemetry::instrument(routes)
         // Middleware
         .layer(enforcement)
         .layer(forward)
-        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
@@ -81,4 +86,5 @@ fn api_router() -> Router<AppState> {
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())
         .nest("/workflows", workflows::router())
+        .nest("/sources", sources::router())
 }
