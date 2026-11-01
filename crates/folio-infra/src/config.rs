@@ -471,8 +471,14 @@ mod tests {
             ("FOLIO_INGEST__FOLDERS__INBOX__SETTLE_SECS", "2"),
             ("FOLIO_INGEST__EMAIL__WORK__HOST", "imap.test"),
             ("FOLIO_INGEST__EMAIL__WORK__USERNAME", "me"),
-            ("FOLIO_INGEST__EMAIL__WORK__PASSWORD_FILE", pw.to_str().unwrap()),
-            ("FOLIO_INGEST__EMAIL__WORK__MAILBOXES", "[INBOX, \"Invoices\"]"),
+            (
+                "FOLIO_INGEST__EMAIL__WORK__PASSWORD_FILE",
+                pw.to_str().unwrap(),
+            ),
+            (
+                "FOLIO_INGEST__EMAIL__WORK__MAILBOXES",
+                "[INBOX, \"Invoices\"]",
+            ),
             ("FOLIO_INGEST__EMAIL__OLD__HOST", "x"),
             ("FOLIO_INGEST__EMAIL__OLD__USERNAME", "x"),
             ("FOLIO_INGEST__EMAIL__OLD__PASSWORD", "x"),
@@ -484,9 +490,11 @@ mod tests {
         else {
             panic!("folder")
         };
-        assert_eq!((f.path.as_str(), f.settle_secs, f.recursive), ("/consume", 2, true));
-        let SourceConfig::Email(e) = &defs.iter().find(|d| d.name == "work").unwrap().config
-        else {
+        assert_eq!(
+            (f.path.as_str(), f.settle_secs, f.recursive),
+            ("/consume", 2, true)
+        );
+        let SourceConfig::Email(e) = &defs.iter().find(|d| d.name == "work").unwrap().config else {
             panic!("email")
         };
         assert_eq!(e.mailboxes, ["INBOX", "Invoices"]);

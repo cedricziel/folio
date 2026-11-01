@@ -16,9 +16,9 @@ use folio_core::services::{
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
     create_pool, run_migrations, Config, DatabaseHealthCheck, DynamicEmbeddingService,
-    DynamicOcrService, FileStorage, JobQueue, SourceFactory, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteSearchService,
-    SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
+    DynamicOcrService, FileStorage, JobQueue, SourceFactory, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger,
+    SqliteSearchService, SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
     SqliteWorkflowRepository, StorageDocumentImporter, StorageFileMetadata, ThumbnailService,
     WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };

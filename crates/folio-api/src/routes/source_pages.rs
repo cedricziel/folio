@@ -23,10 +23,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings/sources", get(list_page).post(create))
         .route("/settings/sources/new", get(new_page))
-        .route("/settings/sources/:id", get(edit_page).post(update))
-        .route("/settings/sources/:id/toggle", post(toggle))
-        .route("/settings/sources/:id/delete", post(delete))
-        .route("/settings/sources/:id/test", post(test_saved))
+        .route("/settings/sources/{id}", get(edit_page).post(update))
+        .route("/settings/sources/{id}/toggle", post(toggle))
+        .route("/settings/sources/{id}/delete", post(delete))
+        .route("/settings/sources/{id}/test", post(test_saved))
 }
 
 struct Notice {

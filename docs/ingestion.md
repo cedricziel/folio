@@ -38,7 +38,7 @@ FOLIO_INGEST__FOLDERS__INBOX__AFTER_IMPORT=move
 
 FOLIO_INGEST__EMAIL__WORK__HOST=imap.example.com
 FOLIO_INGEST__EMAIL__WORK__USERNAME=me@example.com
-FOLIO_INGEST__EMAIL__WORK__PASSWORD_FILE=/run/secrets/imap_work
+FOLIO_INGEST__EMAIL__WORK__PASSWORD_FILE=/run/secrets/imap_work   # same as the _FILE suffix elsewhere
 FOLIO_INGEST__EMAIL__WORK__MAILBOXES='["INBOX", "Invoices"]'
 ```
 

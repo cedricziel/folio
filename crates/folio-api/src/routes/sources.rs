@@ -24,10 +24,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_sources).post(create_source))
         .route(
-            "/:id",
+            "/{id}",
             get(get_source).put(update_source).delete(delete_source),
         )
-        .route("/:id/test", post(test_source))
+        .route("/{id}/test", post(test_source))
 }
 
 /// A source with its latest run

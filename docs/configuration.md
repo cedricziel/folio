@@ -41,6 +41,11 @@ startup by the first three layers.
 | `ai.openai_api_key` | `FOLIO_AI__OPENAI_API_KEY` | unset | OpenAI API key. |
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |
 
+Ingestion sources have names of your choosing, so they are not listed above:
+`FOLIO_INGEST__FOLDERS__<NAME>__<KEY>` and `FOLIO_INGEST__EMAIL__<NAME>__<KEY>`
+(for example `FOLIO_INGEST__FOLDERS__INBOX__PATH=/consume`). `_FILE` works on
+them too. See [ingestion](ingestion.md).
+
 Other variables read directly: `FOLIO_CONFIG` (config file path) and `RUST_LOG`
 (log filter).
 
