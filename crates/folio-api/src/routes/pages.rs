@@ -284,8 +284,10 @@ async fn document_detail(
 /// object-key layout, kept so thumbnails survive until the layout migration ran.
 async fn first_object(store: &dyn DocumentStore, candidates: &[String]) -> Option<StoredObject> {
     for key in candidates {
-        if let Ok(object) = store.get(key).await {
-            return Some(object);
+        match store.get(key).await {
+            Ok(object) => return Some(object),
+            Err(folio_core::Error::NotFound { .. }) => {}
+            Err(e) => error!("Failed to read {key}: {e}"),
         }
     }
     None

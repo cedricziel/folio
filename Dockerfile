@@ -11,6 +11,7 @@ COPY folio-app ./folio-app
 COPY migrations ./migrations
 COPY xtask ./xtask
 COPY static ./static
+COPY design ./design
 RUN cargo build --release --locked --bin folio-app
 
 FROM debian:bookworm-slim

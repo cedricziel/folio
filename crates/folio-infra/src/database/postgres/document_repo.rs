@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
@@ -19,6 +19,13 @@ use super::map_write_error;
 
 fn repo_err(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
+}
+
+/// Escape LIKE wildcards so user input matches literally
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn not_found(entity_type: &'static str, id: Id) -> Error {
@@ -155,27 +162,53 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
-        let filter = filter.unwrap_or_default();
-        let rows: Vec<DocumentRow> = if let Some(correspondent_id) = filter.correspondent_id {
-            sqlx::query_as(select_documents!(
-                "WHERE correspondent_id = $1 ORDER BY created_at DESC"
-            ))
-            .bind(correspondent_id)
-            .fetch_all(&self.pool)
-            .await
-        } else if let Some(document_type_id) = filter.document_type_id {
-            sqlx::query_as(select_documents!(
-                "WHERE document_type_id = $1 ORDER BY created_at DESC"
-            ))
-            .bind(document_type_id)
-            .fetch_all(&self.pool)
-            .await
-        } else {
-            sqlx::query_as(select_documents!("ORDER BY created_at DESC"))
-                .fetch_all(&self.pool)
-                .await
+        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE TRUE"));
+
+        if let Some(filter) = filter {
+            if let Some(id) = filter.correspondent_id {
+                qb.push(" AND correspondent_id = ").push_bind(id);
+            }
+            if let Some(id) = filter.document_type_id {
+                qb.push(" AND document_type_id = ").push_bind(id);
+            }
+            if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
+                // Duplicates would make the distinct count below unreachable
+                tag_ids.sort();
+                tag_ids.dedup();
+                qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
+                let mut sep = qb.separated(", ");
+                for tag_id in &tag_ids {
+                    sep.push_bind(*tag_id);
+                }
+                qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
+                    .push_bind(tag_ids.len() as i64)
+                    .push(")");
+            }
+            if let Some(query) = filter.search_query {
+                for term in query.split_whitespace() {
+                    let pattern = format!("%{}%", escape_like(term));
+                    qb.push(" AND (title ILIKE ")
+                        .push_bind(pattern.clone())
+                        .push(" ESCAPE '\\' OR content ILIKE ")
+                        .push_bind(pattern)
+                        .push(" ESCAPE '\\')");
+                }
+            }
+            if let Some(after) = filter.created_after {
+                qb.push(" AND created_at >= ").push_bind(after);
+            }
+            if let Some(before) = filter.created_before {
+                qb.push(" AND created_at < ").push_bind(before);
+            }
         }
-        .map_err(repo_err)?;
+
+        qb.push(" ORDER BY created_at DESC");
+
+        let rows: Vec<DocumentRow> = qb
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
 
         Ok(rows.into_iter().map(Into::into).collect())
     }

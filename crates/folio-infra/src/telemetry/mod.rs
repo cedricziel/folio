@@ -152,7 +152,9 @@ pub fn init() -> TelemetryGuard {
     // OTEL_* settings may live in .env during development.
     let _ = dotenvy::dotenv();
     let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    // stderr: in `mcp --stdio` mode stdout carries the protocol.
     let mut layers: Vec<BoxedLayer> = vec![tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
         .with_filter(filter())
         .boxed()];
 

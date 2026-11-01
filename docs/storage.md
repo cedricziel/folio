@@ -55,6 +55,10 @@ FOLIO_STORAGE__S3__PATH_STYLE=true
 FOLIO_STORAGE__S3__ALLOW_HTTP=true
 ```
 
+Buckets on a custom endpoint are addressed by path (`endpoint/bucket`) unless you
+set `FOLIO_STORAGE__S3__PATH_STYLE=false`. AWS S3 uses virtual-hosted style
+(`bucket.s3.region.amazonaws.com`) unless you set it to `true`.
+
 `docker-compose.example.yml` runs Folio with PostgreSQL and MinIO. Create the
 bucket once before first use; Folio does not.
 
@@ -63,7 +67,6 @@ bucket once before first use; Folio does not.
 ```sh
 FOLIO_STORAGE__S3__ENDPOINT=http://garage:3900
 FOLIO_STORAGE__S3__REGION=garage
-FOLIO_STORAGE__S3__PATH_STYLE=true
 ```
 
 ### Cloudflare R2
@@ -71,17 +74,30 @@ FOLIO_STORAGE__S3__PATH_STYLE=true
 ```sh
 FOLIO_STORAGE__S3__ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 FOLIO_STORAGE__S3__REGION=auto
+FOLIO_STORAGE__S3__PATH_STYLE=true
 ```
 
 ## Moving from the old layout
 
 Versions before the storage port wrote `{id}/{file name}` and
-`thumbnails/{id}.jpg` under `FOLIO_STORAGE__PATH`. On start, Folio copies those
-objects to their new keys, updates `documents.file_path`, and removes the old
-ones. The pass is idempotent. Until a document is moved, its old path keeps
-working for reads. Switching an existing installation to S3 requires copying
-the old directory into the bucket first (for example with `rclone`), then
-starting Folio so the pass can rename the keys.
+`thumbnails/{id}.jpg` under `FOLIO_STORAGE__PATH`. On the first start after the
+upgrade, Folio copies those objects to their new keys and updates
+`documents.file_path`. The old files stay where they are, so rolling back to the
+previous release still works (it reads the same root). After a pass without
+errors the setting `storage.layout_version` is set to `2` and later starts skip
+the pass. Until a document is copied, its old path keeps working for reads.
+
+When you are sure you will not roll back, remove the old copies:
+
+```sh
+folio-app storage cleanup-legacy
+```
+
+It only deletes the old files of documents whose new original exists.
+
+Switching an existing installation to S3 requires copying the old directory
+into the bucket first (for example with `rclone`), then starting Folio so the
+pass can copy the keys.
 
 ## Working with local tools
 

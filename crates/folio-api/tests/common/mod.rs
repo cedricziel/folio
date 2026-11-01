@@ -10,7 +10,7 @@ use axum::Router;
 use http_body_util::BodyExt;
 use uuid::Uuid;
 
-use folio_api::{create_router, AppState, EventBroadcaster};
+use folio_api::{create_router, AppState, AuthState, EventBroadcaster};
 use folio_core::ports::DocumentStore;
 use folio_infra::{
     Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
@@ -32,6 +32,7 @@ pub async fn harness() -> Harness {
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let auth = AuthState::new(repos.auth.clone(), None).with_required(false);
 
     let ai = folio_infra::config::AiConfig {
         provider: "local".into(),
@@ -56,7 +57,7 @@ pub async fn harness() -> Harness {
         EventBroadcaster::new(16),
     );
     Harness {
-        app: create_router(state.clone()),
+        app: create_router(state.clone(), auth),
         state,
     }
 }

@@ -13,7 +13,7 @@ use folio_core::ports::DocumentStore;
 
 use crate::config::{StorageBackend, StorageConfig};
 
-pub use legacy::migrate_legacy_layout;
+pub use legacy::{cleanup_legacy_layout, migrate_legacy_layout};
 pub use object_store_adapter::ObjectStoreDocumentStore;
 
 /// Build the store selected by `storage.backend`.

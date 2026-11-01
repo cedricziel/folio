@@ -34,7 +34,7 @@ The system SHALL accept a multipart upload at `POST /documents/upload` with a re
 
 ### Requirement: Files are stored per document
 
-The system SHALL store each uploaded file in the configured object store (`local` directory or S3-compatible bucket) under the key `documents/<document id>/original` and record that key in the document's `file_path`. Thumbnails SHALL be stored as `documents/<document id>/thumb.jpg` and page previews as `documents/<document id>/pages/<n>.jpg`. Keys are opaque; no filesystem path is stored. At startup the system SHALL move objects written under the earlier layout (`<document id>/<file name>`, `thumbnails/<id>.jpg`) to their new keys and keep reading old rows until then.
+The system SHALL store each uploaded file in the configured object store (`local` directory or S3-compatible bucket) under the key `documents/<document id>/original` and record that key in the document's `file_path`. Thumbnails SHALL be stored as `documents/<document id>/thumb.jpg` and page previews as `documents/<document id>/pages/<n>.jpg`. Keys are opaque; no filesystem path is stored. At the first start after the upgrade the system SHALL copy objects written under the earlier layout (`<document id>/<file name>`, `thumbnails/<id>.jpg`) to their new keys, leave the old copies in place, record `storage.layout_version` so later starts skip the pass, and keep reading old rows until then. `folio-app storage cleanup-legacy` SHALL remove the old copies of documents whose new original exists.
 
 #### Scenario: Upload with a filename
 
@@ -46,7 +46,7 @@ The system SHALL store each uploaded file in the configured object store (`local
 
 - **WHEN** a document's `file_path` is `<document id>/my_letter.pdf` and the object exists under that key
 - **THEN** downloads still succeed
-- **AND** the next start moves the object to `documents/<document id>/original` and updates `file_path`
+- **AND** the next start copies the object to `documents/<document id>/original`, updates `file_path` and keeps the old file
 
 ### Requirement: Downloads stream from storage
 
@@ -118,7 +118,7 @@ The system SHALL list documents newest first. `GET /api/documents` SHALL return 
 
 ### Requirement: Deleting a document
 
-The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. Deleting a document SHALL also remove its tag assignments, its stored embedding and every stored object of the document, including thumbnails, page previews and files from the earlier layout.
+The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. Deleting a document SHALL also remove its tag assignments, its stored embedding and every stored object of the document, including thumbnails, page previews and files from the earlier layout (`<document id>/` and `thumbnails/`).
 
 #### Scenario: Delete an existing document
 

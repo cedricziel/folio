@@ -385,19 +385,33 @@ impl Worker {
             }
         };
 
-        info!("Reading file from: {}", file_path);
-        let data = self.store.get_bytes(&file_path).await?;
-        info!("File read successfully, size: {} bytes", data.len());
-
         let mime_type = document
             .mime_type
             .as_deref()
             .unwrap_or("application/octet-stream");
 
+        // PDFs go through poppler, which needs a file: fetch them to disk once
+        // and reuse that copy for the page count and every page.
+        info!("Reading file from: {}", file_path);
+        let local_pdf = if mime_type == "application/pdf" {
+            Some(self.store.download_to_temp(&file_path).await?)
+        } else {
+            None
+        };
+        let data = match &local_pdf {
+            Some(local) => tokio::fs::read(local.path()).await?,
+            None => self.store.get_bytes(&file_path).await?,
+        };
+        info!("File read successfully, size: {} bytes", data.len());
+
         // Step 1: Generate thumbnail(s) and get page count for PDFs
-        let (thumbnail_ok, page_count) = if mime_type == "application/pdf" {
+        let (thumbnail_ok, page_count) = if let Some(local_pdf) = &local_pdf {
             // Get page count
-            let count = match self.thumbnail_service.get_pdf_page_count(&data).await {
+            let count = match self
+                .thumbnail_service
+                .get_pdf_page_count(local_pdf.path())
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     debug!("Failed to get PDF page count: {}", e);
@@ -417,7 +431,7 @@ impl Worker {
             for page in 1..=max_pages {
                 match self
                     .thumbnail_service
-                    .generate_page(document_id, &data, page)
+                    .generate_page(document_id, local_pdf.path(), page)
                     .await
                 {
                     Ok(_) => {

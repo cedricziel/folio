@@ -1,0 +1,16 @@
+{% extends "auth/layout.html" %}
+{% block title %}Set up Folio{% endblock %}
+{% block content %}
+<h1 class="auth-title">Create the owner account</h1>
+<p class="auth-lede">This is the first start. The account you create here owns this Folio.</p>
+{% match error %}{% when Some with (message) %}<div class="f-notice f-notice-danger" role="alert">{{ message }}</div>{% when None %}{% endmatch %}
+<form method="post" action="/setup" class="auth-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="f-label" for="username">Username</label>
+    <input class="f-input" id="username" name="username" type="text" autocomplete="username" required autofocus>
+    <label class="f-label" for="password">Password</label>
+    <input class="f-input" id="password" name="password" type="password" autocomplete="new-password" minlength="12" required>
+    <p class="f-meta">At least 12 characters.</p>
+    <button class="f-btn f-btn-primary" type="submit">Create account</button>
+</form>
+{% endblock %}
