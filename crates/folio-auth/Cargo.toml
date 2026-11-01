@@ -18,7 +18,7 @@ openidconnect = "4.1"
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 base64 = "0.22"
-hmac = "0.12"
+hmac = "0.13"
 rand = "0.8"
 sha2 = "0.10"
 subtle = "2"

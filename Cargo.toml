@@ -72,7 +72,7 @@ utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
 object_store = { version = "0.14", default-features = false, features = ["fs", "aws"] }
 
 # Webhook signing
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 hex = "0.4"
 

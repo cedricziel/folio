@@ -80,5 +80,5 @@ optional = true
 [dev-dependencies]
 axum = { workspace = true }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
