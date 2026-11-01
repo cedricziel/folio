@@ -204,3 +204,78 @@ async fn full_router_enforces_auth_when_required() {
         assert_eq!(status, StatusCode::OK, "{probe} must stay unauthenticated");
     }
 }
+
+async fn document_with_file(app: &TestApp, mime: &str, name: &str, data: &[u8]) -> Uuid {
+    let doc = app
+        .state
+        .document_repo
+        .create(CreateDocument {
+            title: "File".into(),
+            content: None,
+            original_filename: Some(name.into()),
+            mime_type: Some(mime.into()),
+            correspondent_id: None,
+            document_type_id: None,
+        })
+        .await
+        .unwrap();
+    let storage = folio_infra::FileStorage::new(&app.state.storage_path);
+    let path = storage.store(doc.id, name, data).await.unwrap();
+    app.state
+        .document_repo
+        .set_file_path(doc.id, &path)
+        .await
+        .unwrap();
+    doc.id
+}
+
+async fn raw_get(app: &TestApp, uri: &str) -> axum::response::Response {
+    app.router
+        .clone()
+        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn file_responses_are_hardened_against_active_content() {
+    let app = test_app().await;
+    let html = document_with_file(&app, "text/html", "x.html", b"<script>1</script>").await;
+    let svg = document_with_file(&app, "image/svg+xml", "x.svg", b"<svg onload=1/>").await;
+    let png = document_with_file(&app, "image/png", "x.png", b"png").await;
+
+    for uri in [
+        format!("/api/documents/{html}/download"),
+        format!("/documents/{html}/thumbnail"),
+        format!("/documents/{svg}/thumbnail"),
+        format!("/documents/{png}/thumbnail"),
+    ] {
+        let res = raw_get(&app, &uri).await;
+        let h = res.headers();
+        assert_eq!(h["x-content-type-options"], "nosniff", "{uri}");
+        assert_eq!(
+            h["content-security-policy"], "default-src 'none'; sandbox",
+            "{uri}"
+        );
+    }
+
+    // Untrusted types never render inline.
+    for (uri, kind) in [
+        (format!("/documents/{svg}/thumbnail"), "image/svg+xml"),
+        (format!("/api/documents/{html}/download"), "text/html"),
+    ] {
+        let res = raw_get(&app, &uri).await;
+        let disposition = res.headers()["content-disposition"].to_str().unwrap();
+        assert!(
+            disposition.starts_with("attachment"),
+            "{kind}: {disposition}"
+        );
+    }
+    // Allowlisted image types stay inline so <img> thumbnails keep working.
+    let res = raw_get(&app, &format!("/documents/{png}/thumbnail")).await;
+    assert_eq!(res.headers()["content-type"], "image/png");
+    assert!(res.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .starts_with("inline"));
+}

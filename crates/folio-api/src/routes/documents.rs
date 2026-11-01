@@ -445,17 +445,12 @@ pub(crate) async fn download_document(
         .original_filename
         .unwrap_or_else(|| format!("document-{}", id));
 
-    Ok((
-        [
-            (axum::http::header::CONTENT_TYPE, mime_type),
-            (
-                axum::http::header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", filename),
-            ),
-        ],
+    Ok(super::file_response::file_response(
+        &mime_type,
+        Some(&filename),
+        true,
         data,
-    )
-        .into_response())
+    ))
 }
 
 /// Form data for setting correspondent
