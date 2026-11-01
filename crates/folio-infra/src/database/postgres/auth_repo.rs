@@ -124,13 +124,20 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn set_external_groups(&self, user_id: &str, groups: &[String]) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        // Serialises syncs for this user so the diff below cannot go stale.
+        sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(err)?;
         let mut current: Vec<String> = sqlx::query_scalar(
             "SELECT g.name FROM auth_group_members m
              JOIN auth_groups g ON g.id = m.group_id
              WHERE m.user_id = $1 AND g.source = 'external'",
         )
         .bind(user_id)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await
         .map_err(err)?;
         let mut wanted = groups.to_vec();
@@ -141,7 +148,6 @@ impl AuthStore for PostgresAuthStore {
             return Ok(());
         }
 
-        let mut tx = self.pool.begin().await.map_err(err)?;
         sqlx::query(
             "DELETE FROM auth_group_members
              WHERE user_id = $1
@@ -164,7 +170,8 @@ impl AuthStore for PostgresAuthStore {
             .map_err(err)?;
             sqlx::query(
                 "INSERT INTO auth_group_members (group_id, user_id)
-                 SELECT id, $1 FROM auth_groups WHERE source = 'external' AND name = $2",
+                 SELECT id, $1 FROM auth_groups WHERE source = 'external' AND name = $2
+                 ON CONFLICT DO NOTHING",
             )
             .bind(user_id)
             .bind(name)

@@ -1053,6 +1053,36 @@ async fn auth_contract(r: &Repositories) {
     auth.set_external_groups(&alice.id, &[]).await.unwrap();
     assert!(auth.user_groups(&alice.id).await.unwrap().is_empty());
 
+    // Simultaneous syncs for one user (parallel first requests) must all
+    // succeed and leave exactly one of the requested sets behind.
+    let sets: Vec<Vec<String>> = vec![
+        vec!["a".into(), "b".into()],
+        vec!["b".into(), "c".into()],
+        vec!["a".into()],
+        vec!["c".into(), "d".into(), "a".into()],
+    ];
+    let mut tasks = tokio::task::JoinSet::new();
+    for i in 0..24 {
+        let auth = r.auth.clone();
+        let id = alice.id.clone();
+        let set = sets[i % sets.len()].clone();
+        tasks.spawn(async move { auth.set_external_groups(&id, &set).await });
+    }
+    while let Some(done) = tasks.join_next().await {
+        done.unwrap().expect("concurrent group sync failed");
+    }
+    let mut left = names(auth.user_groups(&alice.id).await.unwrap());
+    left.sort();
+    assert!(
+        sets.iter().any(|set| {
+            let mut set = set.clone();
+            set.sort();
+            set == left
+        }),
+        "mixed result: {left:?}"
+    );
+    auth.set_external_groups(&alice.id, &[]).await.unwrap();
+
     let far = i64::MAX / 2;
     auth.create_session(Session {
         id_hash: "sess".into(),
