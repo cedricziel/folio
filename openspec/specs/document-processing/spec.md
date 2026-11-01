@@ -66,6 +66,11 @@ A processing job SHALL, in order: generate thumbnails and record the page count,
 - **WHEN** an image is processed
 - **THEN** one thumbnail is generated and the page count is set to 1
 
+#### Scenario: Local provider
+
+- **WHEN** a document is processed while the provider is `local`
+- **THEN** its thumbnails and page count are stored, its content stays empty, and no embedding is stored
+
 #### Scenario: Document that already has content
 
 - **WHEN** a document with existing content is processed
@@ -116,7 +121,7 @@ The system SHALL enqueue a processing job for a document at `POST /documents/:id
 
 ### Requirement: Thumbnail serving
 
-`GET /documents/:id/thumbnail` SHALL return the generated JPEG thumbnail when one exists, otherwise the original file for image documents, otherwise an SVG placeholder labelled `PDF` or `FILE`. Generated thumbnails fit within 300 × 300 pixels.
+`GET /documents/:id/thumbnail` SHALL return the generated JPEG thumbnail when one exists, otherwise the original file for image documents, otherwise an SVG placeholder labelled `PDF` or `FILE`. Image thumbnails fit within 300 × 300 pixels; PDF thumbnails are page 1 rendered by `pdftoppm` with its longer side scaled to 800 pixels.
 
 #### Scenario: Thumbnail not generated yet
 
