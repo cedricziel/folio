@@ -1,7 +1,7 @@
 //! Folio Infrastructure - External adapters
 //!
 //! This crate implements the port traits from folio-core:
-//! - SQLite database repositories
+//! - SQLite and PostgreSQL database repositories
 //! - AI service providers (OpenAI, Anthropic, Local)
 //! - File storage
 //! - Thumbnail generation
@@ -16,12 +16,15 @@ pub mod storage;
 pub mod thumbnail;
 pub mod workflow;
 
-pub use ai::{AiServiceFactory, DynamicEmbeddingService, DynamicOcrService, SqliteSearchService};
+pub use ai::{AiServiceFactory, DynamicEmbeddingService, DynamicOcrService};
 pub use config::Config;
 pub use database::{
-    create_pool, run_migrations, DatabaseHealthCheck, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSettingsRepository,
-    SqliteTagRepository, SqliteWorkflowRepository,
+    create_pool, run_migrations, Database, DatabaseBackend, DatabaseError, DatabaseHealthCheck,
+    PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
+    PostgresSearchService, PostgresSettingsRepository, PostgresTagRepository,
+    PostgresWorkflowRepository, Repositories, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
+    SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
 };
 pub use queue::{Job, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
 pub use storage::FileStorage;

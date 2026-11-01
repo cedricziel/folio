@@ -50,3 +50,4 @@ hex = { workspace = true }
 [dev-dependencies]
 axum = { workspace = true }
 tempfile = "3"
+testcontainers-modules = { version = "0.15", features = ["postgres"] }

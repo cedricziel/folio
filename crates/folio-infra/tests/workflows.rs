@@ -25,9 +25,7 @@ use folio_core::services::{EventingDocumentRepository, WorkflowEngine};
 use folio_core::{DocumentEvent, EventBroadcaster};
 use folio_infra::workflow::{sign, RunOutcome, WebhookRequest, MAX_ATTEMPTS};
 use folio_infra::{
-    create_pool, run_migrations, FileStorage, JobQueue, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteTagRepository,
-    SqliteWorkflowRepository, StorageFileMetadata, WebhookClient, WorkflowRunner,
+    Database, FileStorage, JobQueue, StorageFileMetadata, WebhookClient, WorkflowRunner,
 };
 
 struct Received {
@@ -105,11 +103,11 @@ impl TestServer {
 }
 
 struct Harness {
-    workflows: Arc<SqliteWorkflowRepository>,
-    raw_documents: Arc<SqliteDocumentRepository>,
+    workflows: Arc<dyn WorkflowRepository>,
+    raw_documents: Arc<dyn DocumentRepository>,
     documents: Arc<EventingDocumentRepository>,
-    tags: Arc<SqliteTagRepository>,
-    correspondents: Arc<SqliteCorrespondentRepository>,
+    tags: Arc<dyn TagRepository>,
+    correspondents: Arc<dyn CorrespondentRepository>,
     queue: JobQueue,
     events: EventBroadcaster,
     engine: Arc<WorkflowEngine>,
@@ -127,28 +125,29 @@ impl Harness {
     async fn new() -> Self {
         let dir = std::env::temp_dir().join(format!("folio-workflows-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pool = create_pool(&format!("sqlite://{}/test.db", dir.display()))
+        let database = Database::connect(&format!("sqlite:{}/test.db?mode=rwc", dir.display()))
             .await
             .unwrap();
-        run_migrations(&pool).await.unwrap();
+        database.migrate().await.unwrap();
+        let repos = database.repositories().await;
 
         let events = EventBroadcaster::default();
-        let workflows = Arc::new(SqliteWorkflowRepository::new(pool.clone()));
-        let raw_documents = Arc::new(SqliteDocumentRepository::new(pool.clone()));
+        let workflows = repos.workflows;
+        let raw_documents = repos.documents;
         let documents = Arc::new(EventingDocumentRepository::new(
             raw_documents.clone(),
             events.clone(),
         ));
-        let tags = Arc::new(SqliteTagRepository::new(pool.clone()));
-        let correspondents = Arc::new(SqliteCorrespondentRepository::new(pool.clone()));
-        let queue = JobQueue::new(pool.clone());
+        let tags = repos.tags;
+        let correspondents = repos.correspondents;
+        let queue = repos.jobs;
 
         let engine = Arc::new(
             WorkflowEngine::new(
                 workflows.clone(),
                 raw_documents.clone(),
                 correspondents.clone(),
-                Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
+                repos.document_types,
                 Arc::new(queue.clone()),
                 Arc::new(StorageFileMetadata::new(FileStorage::new(&dir))),
                 "http://folio.test",
