@@ -207,7 +207,7 @@
       "path": "/manage",
       "phase": "seeded",
       "auth": "any",
-      "wait": "Utilities"
+      "wait": "Keep the names Folio files under tidy"
     },
     {
       "name": "settings",
