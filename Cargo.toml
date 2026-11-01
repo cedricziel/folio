@@ -23,7 +23,7 @@ futures = "0.3"
 axum = { version = "0.7", features = ["macros", "multipart"] }
 tower = "0.5"
 tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
-tower-livereload = "0.9"
+tower-livereload = "0.10"
 
 # HTML templating (for HTMX responses)
 askama = "0.16"
