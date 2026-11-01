@@ -9,6 +9,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY folio-app ./folio-app
 COPY migrations ./migrations
+COPY xtask ./xtask
+COPY static ./static
 RUN cargo build --release --locked --bin folio-app
 
 FROM debian:bookworm-slim
@@ -33,7 +35,6 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=builder /build/target/release/folio-app /usr/local/bin/folio-app
 COPY config.toml ./config.toml
-COPY static ./static
 
 ENV FOLIO_SERVER_HOST=0.0.0.0 \
     FOLIO_SERVER_PORT=3000 \

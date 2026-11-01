@@ -1,5 +1,6 @@
 //! API routes
 
+mod assets;
 mod correspondents;
 mod document_types;
 mod documents;
@@ -14,7 +15,7 @@ mod view;
 pub use events::turbo_streams_for;
 
 use axum::{extract::DefaultBodyLimit, Router};
-use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::state::AppState;
 
@@ -34,7 +35,7 @@ pub fn create_router(state: AppState) -> Router {
         // SSE events
         .merge(events::router())
         // Static files
-        .nest_service("/static", ServeDir::new("static"))
+        .merge(assets::router())
         // Middleware
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())

@@ -88,3 +88,55 @@ async fn every_page_renders() {
         assert!(!body.contains("Error rendering"), "{uri}");
     }
 }
+
+#[tokio::test]
+async fn vendored_scripts_and_fonts_are_served_without_a_cdn() {
+    let h = harness().await;
+
+    let turbo = h
+        .app
+        .clone()
+        .oneshot(get("/static/vendor/turbo.js"))
+        .await
+        .unwrap();
+    assert_eq!(turbo.status(), StatusCode::OK);
+    assert!(turbo.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .contains("javascript"));
+    assert!(turbo.headers()[header::CACHE_CONTROL]
+        .to_str()
+        .unwrap()
+        .contains("max-age=604800"));
+    let etag = turbo.headers()[header::ETAG].clone();
+
+    let again = h
+        .app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/static/vendor/turbo.js")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+
+    let font = h
+        .app
+        .clone()
+        .oneshot(get("/static/fonts/geist-latin-wght-normal.woff2"))
+        .await
+        .unwrap();
+    assert_eq!(font.status(), StatusCode::OK);
+    assert_eq!(font.headers()[header::CONTENT_TYPE], "font/woff2");
+
+    let missing = h.app.clone().oneshot(get("/static/nope.js")).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let page = text(h.app.clone().oneshot(get("/")).await.unwrap()).await;
+    assert!(!page.contains("esm.sh"));
+    assert!(!page.contains("googleapis"));
+}
