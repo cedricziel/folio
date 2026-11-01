@@ -1527,6 +1527,8 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
+ "url",
  "utoipa",
  "uuid",
 ]
@@ -1537,6 +1539,7 @@ version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "bytes",
  "chrono",
  "dotenvy",
@@ -1545,6 +1548,7 @@ dependencies = [
  "folio-auth",
  "folio-core",
  "futures",
+ "hex",
  "hmac 0.12.1",
  "image",
  "object_store",

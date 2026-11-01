@@ -81,7 +81,7 @@ struct ShareRoot: View {
             return nil
         }
         let uploader = BackgroundUploader(
-            serverURL: serverURL, token: await KeychainTokenStore().token(),
+            serverURL: serverURL, token: await SharedConfiguration.tokenProvider().token(),
             identifier: "com.cedricziel.folio.share.\(UUID().uuidString)"
         )
         return await ShareViewModel(files: files, service: service, background: uploader)

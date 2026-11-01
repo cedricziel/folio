@@ -14,7 +14,7 @@ use folio_api::{create_router, AppState, AuthState, EventBroadcaster};
 use folio_core::ports::DocumentStore;
 use folio_infra::{
     Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
-    PipelineContext, ThumbnailService,
+    PipelineContext, ThumbnailService, WebhookClient,
 };
 
 pub struct Harness {
@@ -57,6 +57,9 @@ pub async fn harness() -> Harness {
         repos.jobs,
         store,
         EventBroadcaster::new(16),
+        repos.workflows,
+        WebhookClient::new(),
+        "http://folio.test".to_string(),
     );
     Harness {
         app: create_router(state.clone(), auth),

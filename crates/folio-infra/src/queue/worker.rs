@@ -17,6 +17,7 @@ use super::{JobQueue, JobType};
 use crate::ai::chunker::{chunk_text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS};
 use crate::ai::PipelineContext;
 use crate::thumbnail::ThumbnailService;
+use crate::workflow::{RunOutcome, WorkflowRunner};
 
 /// Chunks sent to the embedding provider per request
 const EMBED_BATCH_SIZE: usize = 16;
@@ -59,6 +60,7 @@ pub struct Worker {
     store: Arc<dyn DocumentStore>,
     config: WorkerConfig,
     event_broadcaster: EventBroadcaster,
+    workflow_runner: Option<Arc<WorkflowRunner>>,
 }
 
 impl Worker {
@@ -87,7 +89,14 @@ impl Worker {
             store,
             config,
             event_broadcaster,
+            workflow_runner: None,
         }
+    }
+
+    /// Let this worker execute workflow runs
+    pub fn with_workflow_runner(mut self, runner: Arc<WorkflowRunner>) -> Self {
+        self.workflow_runner = Some(runner);
+        self
     }
 
     /// Start the worker (runs until shutdown signal)
@@ -254,6 +263,22 @@ impl Worker {
                 self.process_embedding(*document_id).await
             }
             JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
+            JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
+        }
+    }
+
+    /// Run a workflow; a retryable failure is reported as an error so the queue backs off
+    async fn execute_workflow_run(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let runner = self
+            .workflow_runner
+            .as_ref()
+            .ok_or("Workflow runner is not configured")?;
+        match runner.execute(run_id).await? {
+            RunOutcome::Retry => Err("Workflow action failed, will retry".into()),
+            RunOutcome::Succeeded | RunOutcome::Failed => Ok(()),
         }
     }
 
@@ -372,6 +397,20 @@ impl Worker {
         self.schedule_embedding(document_id, has_text).await
     }
 
+    /// End the embedding stage, the last step of the pipeline, and announce that processing finished
+    async fn finish_embed_stage(
+        &self,
+        document_id: uuid::Uuid,
+        status: ProcessingStatus,
+    ) -> Result<(), BoxError> {
+        self.document_repo
+            .set_stage_status(document_id, ProcessingStage::Embed, status)
+            .await?;
+        self.event_broadcaster
+            .send(DocumentEvent::Processed { document_id });
+        Ok(())
+    }
+
     /// Queue the embedding stage, or mark it skipped when it cannot or should not run
     async fn schedule_embedding(
         &self,
@@ -391,12 +430,7 @@ impl Worker {
                 .enqueue(JobType::GenerateEmbedding { document_id })
                 .await?;
         } else {
-            self.document_repo
-                .set_stage_status(
-                    document_id,
-                    ProcessingStage::Embed,
-                    ProcessingStatus::Skipped,
-                )
+            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
                 .await?;
         }
         Ok(())
@@ -413,23 +447,13 @@ impl Worker {
         let content = document.content.unwrap_or_default();
         let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
         if chunks.is_empty() {
-            self.document_repo
-                .set_stage_status(
-                    document_id,
-                    ProcessingStage::Embed,
-                    ProcessingStatus::Skipped,
-                )
+            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
                 .await?;
             return Ok(());
         }
 
         if self.pipeline.settings().await.embeddings.provider == "none" {
-            self.document_repo
-                .set_stage_status(
-                    document_id,
-                    ProcessingStage::Embed,
-                    ProcessingStatus::Skipped,
-                )
+            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
                 .await?;
             return Ok(());
         }
@@ -456,8 +480,7 @@ impl Worker {
             self.search_service
                 .store_chunks(document_id, &model, &embedded)
                 .await?;
-            self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Embed, ProcessingStatus::Done)
+            self.finish_embed_stage(document_id, ProcessingStatus::Done)
                 .await?;
             info!(
                 "Stored {} embedded chunks for document {} (model {})",
@@ -513,7 +536,7 @@ impl Worker {
         info!("File read successfully, size: {} bytes", data.len());
 
         // Step 1: Generate thumbnail(s) and get page count for PDFs
-        let (thumbnail_ok, page_count) = if let Some(local_pdf) = &local_pdf {
+        let (_, page_count) = if let Some(local_pdf) = &local_pdf {
             // Get page count
             let count = match self
                 .thumbnail_service
@@ -608,12 +631,6 @@ impl Worker {
         }
 
         info!("Completed processing document {}", document_id);
-
-        // Emit final updated event if any processing happened
-        if thumbnail_ok {
-            self.event_broadcaster
-                .send(DocumentEvent::Updated { document_id });
-        }
 
         Ok(())
     }

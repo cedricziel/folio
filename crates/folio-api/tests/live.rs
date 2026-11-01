@@ -36,6 +36,7 @@ async fn event_stream_turns_a_new_document_into_turbo_streams() {
         &h.state,
         &folio_api::DocumentEvent::Deleted {
             document_id: doc.id,
+            snapshot: None,
         },
     )
     .await

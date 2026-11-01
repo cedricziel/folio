@@ -49,6 +49,11 @@ tempfile = { workspace = true }
 # Image processing
 image = { workspace = true }
 
+# Webhook signing
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
 [features]
 # Local ONNX embeddings (downloads onnxruntime and models); off by default to keep builds small
 fastembed = ["dep:fastembed"]
@@ -58,6 +63,7 @@ version = "5"
 optional = true
 
 [dev-dependencies]
+axum = { workspace = true }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 hmac = "0.12"
 sha2 = "0.10"

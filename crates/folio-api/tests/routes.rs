@@ -15,7 +15,7 @@ use folio_core::{
 };
 use folio_infra::{
     Config, Database, DynamicEmbeddingService, DynamicOcrService, ObjectStoreDocumentStore,
-    PipelineContext, ThumbnailService,
+    PipelineContext, ThumbnailService, WebhookClient,
 };
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -66,6 +66,9 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         repos.jobs,
         store,
         EventBroadcaster::default(),
+        repos.workflows,
+        WebhookClient::new(),
+        "http://folio.test".to_string(),
     );
 
     TestApp {

@@ -14,6 +14,7 @@ pub enum Nav {
     All,
     Manage,
     Settings,
+    Workflows,
     None,
 }
 
@@ -24,6 +25,7 @@ impl Nav {
             Nav::All => "all",
             Nav::Manage => "manage",
             Nav::Settings => "settings",
+            Nav::Workflows => "workflows",
             Nav::None => "",
         }
     }
