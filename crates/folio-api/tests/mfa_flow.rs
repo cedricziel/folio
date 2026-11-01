@@ -374,7 +374,12 @@ async fn pending_login_needs_the_same_browser() {
     let page = stranger.get("/login/code").await;
     assert_eq!(page.location(), "/login");
     let code = totp.generate(now() as u64 + 30).to_string();
-    assert!(!stranger.submit_code(&code).await.status.is_success());
+    let csrf = field(&stranger.get("/login").await.body, "csrf");
+    let forged = stranger
+        .form("/login/code", &[("csrf", &csrf), ("code", &code)])
+        .await;
+    assert!(!forged.status.is_success());
+    assert!(!stranger.has_session());
 }
 
 #[tokio::test]
@@ -426,11 +431,11 @@ async fn disabling_and_regenerating_need_password_and_code() {
         .await
         .unwrap());
 
-    let code = totp.generate(now() as u64 + 60).to_string();
+    // The TOTP steps within the skew are spent by now, so a fresh recovery code authorises it.
     let off = b
         .form(
             "/settings/security/totp/disable",
-            &[("csrf", &csrf), ("password", PASSWORD), ("code", &code)],
+            &[("csrf", &csrf), ("password", PASSWORD), ("code", fresh[0])],
         )
         .await;
     assert!(off.location().contains("totp-off"), "{}", off.location());
@@ -505,7 +510,10 @@ async fn password_change_signs_out_other_devices() {
     let mut again = Browser::new(&w.app);
     assert_eq!(again.password_login("ada", new).await.location(), "/");
     assert_eq!(
-        again.password_login("ada", PASSWORD).await.status,
+        Browser::new(&w.app)
+            .password_login("ada", PASSWORD)
+            .await
+            .status,
         StatusCode::UNAUTHORIZED
     );
 }
@@ -568,11 +576,7 @@ fn origin() -> Url {
     Url::parse(BASE).unwrap()
 }
 
-async fn register_passkey(
-    b: &mut Browser,
-    authenticator: &mut WebauthnAuthenticator<SoftPasskey>,
-    name: &str,
-) -> Resp {
+async fn register_passkey(b: &mut Browser, authenticator: &mut SoftPasskey, name: &str) -> Resp {
     let csrf = b.csrf().await;
     let start = b
         .json(
@@ -597,7 +601,7 @@ async fn register_passkey(
 /// and does not return the user handle a resident key would.
 async fn passkey_login(
     b: &mut Browser,
-    authenticator: &mut WebauthnAuthenticator<SoftPasskey>,
+    authenticator: &mut SoftPasskey,
     credential_id: &str,
     user_id: &str,
 ) -> Resp {
@@ -622,7 +626,7 @@ async fn passkey_login(
 #[tokio::test]
 async fn passkeys_register_sign_in_and_manage() {
     let w = world().await;
-    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let mut authenticator = SoftPasskey::new(true);
     let mut b = Browser::new(&w.app);
     b.password_login("ada", PASSWORD).await;
 
@@ -674,7 +678,7 @@ async fn passkeys_register_sign_in_and_manage() {
 #[tokio::test]
 async fn a_passkey_satisfies_the_second_factor() {
     let w = world().await;
-    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let mut authenticator = SoftPasskey::new(true);
     let (mut b, _totp, _codes) = enroll(&w).await;
     register_passkey(&mut b, &mut authenticator, "Phone").await;
     let credential_id = w.store.list_passkeys(&w.user.id).await.unwrap()[0]
@@ -697,7 +701,7 @@ async fn a_passkey_satisfies_the_second_factor() {
 #[tokio::test]
 async fn a_passkey_of_another_user_cannot_finish_a_pending_login() {
     let w = world().await;
-    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+    let mut authenticator = SoftPasskey::new(true);
     let mut mallory_session = Browser::new(&w.app);
     // A second local account with its own passkey.
     let mallory = User {
@@ -735,4 +739,45 @@ async fn forged_or_missing_ceremony_state_is_refused() {
         )
         .await;
     assert_eq!(res.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sso_accounts_get_the_security_page_without_local_enrollment() {
+    let w = world().await;
+    let sso = User {
+        id: uuid::Uuid::new_v4().to_string(),
+        username: "grace".into(),
+        password_hash: String::new(),
+        auth_source: format!("{}authentik", folio_auth::model::SOURCE_OIDC_PREFIX),
+        external_id: Some("sub-1".into()),
+        ..w.user.clone()
+    };
+    w.store.create_user(sso.clone()).await.unwrap();
+    let session = folio_auth::crypto::random_token();
+    w.store
+        .create_session(folio_auth::Session {
+            id_hash: folio_auth::crypto::hash_token(&session),
+            user_id: sso.id.clone(),
+            expires_at: now() + 600,
+            created_at: now(),
+            user_agent: None,
+        })
+        .await
+        .unwrap();
+    let mut b = Browser::new(&w.app);
+    b.jar.insert("__Host-folio_session".into(), session);
+
+    let page = b.get("/settings/security").await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(page.body.contains("Active sessions"), "{}", page.body);
+    assert!(page.body.contains("identity provider"));
+    assert!(!page.body.contains("/settings/security/totp/start"));
+    assert!(!page.body.contains("passkeys/register"));
+
+    let csrf = field(&page.body, "csrf");
+    let start = b
+        .form("/settings/security/totp/start", &[("csrf", &csrf)])
+        .await;
+    assert_ne!(start.status, StatusCode::OK);
+    assert!(w.store.get_totp(&sso.id).await.unwrap().is_none());
 }
