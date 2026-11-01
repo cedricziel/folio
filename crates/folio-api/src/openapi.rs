@@ -4,9 +4,10 @@
 //! JSON, multipart, and SSE endpoints are described; HTML page routes and the
 //! form/redirect handlers used by the web UI are deliberately left out.
 
-use axum::{response::Html, routing::get, Json, Router};
+use std::sync::LazyLock;
+
+use axum::{http::header, response::Html, routing::get, Router};
 use utoipa::{IntoResponses, OpenApi};
-use utoipa_scalar::Scalar;
 
 use folio_core::models::WebhookPayload;
 
@@ -93,6 +94,7 @@ error_response!(
     409,
     "A resource with the same unique value already exists"
 );
+error_response!(PayloadTooLarge, 413, "The upload exceeds the 50 MB limit");
 error_response!(InternalError, 500, "Unexpected server error");
 
 /// The OpenAPI document describing the JSON API.
@@ -100,13 +102,33 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     ApiDoc::openapi()
 }
 
-/// The spec as pretty-printed JSON, exactly as committed to `openapi/openapi.json`.
-pub fn spec_json() -> String {
+/// The spec as pretty-printed JSON, built once: the document never changes while running.
+static SPEC_JSON: LazyLock<String> = LazyLock::new(|| {
     let mut json = openapi()
         .to_pretty_json()
         .expect("OpenAPI document serializes to JSON");
     json.push('\n');
     json
+});
+
+/// Viewer page. Scalar is vendored under `static/vendor`, so the page works offline.
+const DOCS_HTML: &str = r#"<!doctype html>
+<html>
+<head>
+    <title>Folio API</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+</head>
+<body>
+<script id="api-reference" data-url="/api/openapi.json"></script>
+<script src="/static/vendor/scalar.js"></script>
+</body>
+</html>
+"#;
+
+/// The spec as pretty-printed JSON, exactly as committed to `openapi/openapi.json`.
+pub fn spec_json() -> String {
+    SPEC_JSON.clone()
 }
 
 /// Routes serving the spec (`/api/openapi.json`) and an interactive viewer (`/api/docs`).
@@ -115,9 +137,9 @@ where
     S: Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/api/openapi.json", get(|| async { Json(openapi()) }))
         .route(
-            "/api/docs",
-            get(|| async { Html(Scalar::new(openapi()).to_html()) }),
+            "/api/openapi.json",
+            get(|| async { ([(header::CONTENT_TYPE, "application/json")], &**SPEC_JSON) }),
         )
+        .route("/api/docs", get(|| async { Html(DOCS_HTML) }))
 }

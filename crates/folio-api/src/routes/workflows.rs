@@ -1,7 +1,7 @@
 //! Workflow API routes
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::State,
     http::StatusCode,
     routing::{get, post},
     Json, Router,
@@ -17,6 +17,7 @@ use folio_core::ports::WorkflowRepository;
 use folio_infra::{workflow::WebhookRequest, WebhookClient};
 
 use crate::error::{ApiError, ApiResult};
+use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
 
@@ -159,7 +160,7 @@ pub(crate) async fn list_workflows(
 )]
 pub(crate) async fn get_workflow(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<Workflow>> {
     let workflow = find(&*state.workflow_repo, id).await?;
     Ok(Json(redact(workflow)))
@@ -180,7 +181,7 @@ pub(crate) async fn get_workflow(
 )]
 pub(crate) async fn create_workflow(
     State(state): State<AppState>,
-    Json(input): Json<WorkflowInput>,
+    ApiJson(input): ApiJson<WorkflowInput>,
 ) -> ApiResult<(StatusCode, Json<Workflow>)> {
     reject_masks(&input)?;
     let workflow = state.workflow_repo.create(input).await?;
@@ -206,8 +207,8 @@ pub(crate) async fn create_workflow(
 )]
 pub(crate) async fn update_workflow(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(mut input): Json<WorkflowInput>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(mut input): ApiJson<WorkflowInput>,
 ) -> ApiResult<Json<Workflow>> {
     let existing = find(&*state.workflow_repo, id).await?;
     restore_secrets(&mut input, &existing)?;
@@ -230,7 +231,7 @@ pub(crate) async fn update_workflow(
 )]
 pub(crate) async fn delete_workflow(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
     state.workflow_repo.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -275,7 +276,7 @@ pub struct TestResult {
 )]
 pub(crate) async fn test_workflow(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<TestResult>> {
     let workflow = find(&*state.workflow_repo, id).await?;
     let result = send_test(&state.webhook_client, &workflow, &state.public_url).await?;
@@ -354,8 +355,8 @@ pub struct ListRunsQuery {
 )]
 pub(crate) async fn list_runs(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Query(query): Query<ListRunsQuery>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiQuery(query): ApiQuery<ListRunsQuery>,
 ) -> ApiResult<Json<Vec<WorkflowRun>>> {
     find(&*state.workflow_repo, id).await?;
     let limit = query.limit.unwrap_or(DEFAULT_RUN_LIMIT).min(MAX_RUN_LIMIT);

@@ -302,6 +302,68 @@ async fn nested_tag_route_matches() {
 }
 
 #[tokio::test]
+async fn extractor_rejections_return_the_json_error_body() {
+    let app = test_app().await;
+
+    for (method, uri, body, expected) in [
+        (
+            "POST",
+            "/api/tags",
+            Some("{}"),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("POST", "/api/tags", Some("{"), StatusCode::BAD_REQUEST),
+        ("GET", "/api/tags/not-a-uuid", None, StatusCode::BAD_REQUEST),
+        (
+            "GET",
+            "/api/documents?correspondent_id=nope",
+            None,
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let (status, json) = request_json(&app, method, uri, body).await;
+        assert_eq!(status, expected, "{method} {uri}");
+        assert!(
+            json["error"].as_str().is_some_and(|e| !e.is_empty()),
+            "{method} {uri} did not return an ErrorResponse: {json}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn deletes_return_no_content_with_an_empty_body() {
+    let app = test_app().await;
+    let tag = app
+        .state
+        .tag_repo
+        .create(CreateTag {
+            name: "Tax".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/tags/{}", tag.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.is_empty());
+}
+
+#[tokio::test]
 async fn update_tag_clears_color_on_null_and_keeps_it_when_absent() {
     let app = test_app().await;
     let tag = app
@@ -428,7 +490,7 @@ async fn deleting_a_document_removes_all_of_its_objects() {
 
     let (status, _) = request(&app, "DELETE", &format!("/api/documents/{id}")).await;
 
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(app
         .state
         .store

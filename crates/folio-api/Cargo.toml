@@ -35,7 +35,6 @@ serde_json = { workspace = true }
 
 # OpenAPI
 utoipa = { workspace = true }
-utoipa-scalar = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
