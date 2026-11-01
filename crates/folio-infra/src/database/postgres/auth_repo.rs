@@ -6,6 +6,9 @@ use folio_auth::{
 };
 use sqlx::{postgres::PgRow, PgPool, Row};
 
+/// Arbitrary key of the advisory lock that serialises first-user creation.
+const FIRST_USER_LOCK: i64 = 0x666f_6c69_6f5f_7573;
+
 pub struct PostgresAuthStore {
     pool: PgPool,
 }
@@ -43,6 +46,14 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn create_first_user(&self, user: User) -> Result<Option<User>, AuthError> {
+        // READ COMMITTED lets concurrent `INSERT ... WHERE NOT EXISTS` statements
+        // all see an empty table, so serialise creators on a transaction lock.
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        sqlx::query("SELECT pg_advisory_xact_lock($1)")
+            .bind(FIRST_USER_LOCK)
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?;
         let result = sqlx::query(
             "INSERT INTO users (id, username, username_normalized, password_hash, created_at)
              SELECT $1, $2, $3, $4, $5 WHERE NOT EXISTS (SELECT 1 FROM users)",
@@ -52,9 +63,10 @@ impl AuthStore for PostgresAuthStore {
         .bind(user.username.to_lowercase())
         .bind(&user.password_hash)
         .bind(user.created_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(err)?;
+        tx.commit().await.map_err(err)?;
         Ok((result.rows_affected() == 1).then_some(user))
     }
 

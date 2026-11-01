@@ -766,20 +766,35 @@ async fn auth_contract(r: &Repositories) {
     };
 
     assert_eq!(auth.count_users().await.unwrap(), 0);
-    let owner = auth
-        .create_first_user(user("Owner"))
-        .await
-        .unwrap()
-        .unwrap();
+    // Racing setup requests: exactly one may become the owner.
+    let racers: Vec<_> = (0..8)
+        .map(|i| {
+            let auth = auth.clone();
+            let candidate = user(&format!("Racer{i}"));
+            tokio::spawn(async move { auth.create_first_user(candidate).await })
+        })
+        .collect();
+    let mut winners = Vec::new();
+    for racer in racers {
+        if let Some(created) = racer.await.unwrap().unwrap() {
+            winners.push(created);
+        }
+    }
+    assert_eq!(winners.len(), 1, "exactly one concurrent setup may win");
+    let owner = winners.remove(0);
     assert!(auth
         .create_first_user(user("second"))
         .await
         .unwrap()
         .is_none());
     assert_eq!(auth.count_users().await.unwrap(), 1);
-    let by_name = auth.find_user_by_username("oWnEr").await.unwrap().unwrap();
+    let by_name = auth
+        .find_user_by_username(&owner.username.to_uppercase())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(by_name.id, owner.id);
-    assert_eq!(by_name.username, "Owner");
+    assert_eq!(by_name.username, owner.username);
     assert!(auth
         .find_user_by_username("nobody")
         .await
@@ -791,7 +806,7 @@ async fn auth_contract(r: &Repositories) {
             .unwrap()
             .unwrap()
             .username,
-        "Owner"
+        owner.username
     );
 
     let far = i64::MAX / 2;
