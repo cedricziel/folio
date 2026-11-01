@@ -128,6 +128,8 @@ def beta_build(platform:, destination:)
     scheme: "Folio",
     configuration: "Release",
     destination: destination,
+    # Folio is a multiplatform target; without the SDK gym cannot tell a Mac build from an iOS one and looks for an .ipa.
+    sdk: mac ? "macosx" : "iphoneos",
     export_method: "app-store",
     export_team_id: TEAM_ID,
     xcargs: "#{XCODEBUILD_FLAGS} CURRENT_PROJECT_VERSION=#{build_number}",
