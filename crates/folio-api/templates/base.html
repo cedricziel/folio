@@ -44,6 +44,24 @@ import { Application, Controller } from "@hotwired/stimulus";
 
 window.Stimulus = Application.start();
 
+// Native <dialog> gives focus placement, a focus trap, Escape and a backdrop.
+// The inner panel carries the padding, so a click that lands on the dialog
+// element itself is a click on the backdrop.
+const openDialog = (dialog) => {
+  if (dialog.open) return;
+  document.dispatchEvent(new CustomEvent("folio:dialog-open"));
+  dialog.showModal();
+  document.body.style.overflow = "hidden";
+};
+
+const closeDialog = (dialog) => {
+  if (dialog.open) dialog.close();
+};
+
+const dialogClosed = () => {
+  if (!document.querySelector("dialog[open]")) document.body.style.overflow = "";
+};
+
 const escapeHtml = (text) => {
   const div = document.createElement("div");
   div.textContent = text;
@@ -147,30 +165,82 @@ window.showToast = (message, type = "info", duration = 5000) => {
   }
 };
 
-// Navigation drawer (mobile)
+// Navigation drawer (mobile): the closed drawer is hidden from keyboards by CSS,
+// the open one traps focus by making the rest of the page inert.
 Stimulus.register(
   "nav",
   class extends Controller {
+    static targets = ["sidebar", "button", "shell"];
+
     connect() {
+      this.narrow = window.matchMedia("(max-width: 768px)");
       this.onKeydown = (event) => {
+        if (!this.isOpen) return;
         if (event.key === "Escape") this.close();
+        if (event.key === "Tab") this.trapTab(event);
       };
-      this.onVisit = () => this.close();
+      this.onVisit = () => this.close(false);
+      this.onDialog = () => this.close(false);
+      this.onBreakpoint = () => {
+        if (!this.narrow.matches) this.close(false);
+      };
       document.addEventListener("keydown", this.onKeydown);
       document.addEventListener("turbo:before-visit", this.onVisit);
+      document.addEventListener("folio:dialog-open", this.onDialog);
+      this.narrow.addEventListener("change", this.onBreakpoint);
+      this.sync();
     }
 
     disconnect() {
       document.removeEventListener("keydown", this.onKeydown);
       document.removeEventListener("turbo:before-visit", this.onVisit);
+      document.removeEventListener("folio:dialog-open", this.onDialog);
+      this.narrow.removeEventListener("change", this.onBreakpoint);
+    }
+
+    get isOpen() {
+      return document.body.classList.contains("nav-open");
     }
 
     toggle() {
-      document.body.classList.toggle("nav-open");
+      if (this.isOpen) this.close();
+      else this.open();
     }
 
-    close() {
+    open() {
+      document.body.classList.add("nav-open");
+      this.sync();
+      this.sidebarTarget.querySelector("a[href]")?.focus();
+    }
+
+    close(restoreFocus = true) {
+      if (!this.isOpen) return;
+      const hadFocus = this.sidebarTarget.contains(document.activeElement);
       document.body.classList.remove("nav-open");
+      this.sync();
+      if (restoreFocus && hadFocus) this.buttonTarget.focus();
+    }
+
+    sync() {
+      const open = this.isOpen;
+      this.buttonTarget.setAttribute("aria-expanded", String(open));
+      this.shellTarget.inert = open;
+    }
+
+    trapTab(event) {
+      const focusable = [
+        ...this.sidebarTarget.querySelectorAll("a[href], button, summary"),
+      ].filter((el) => el.offsetParent !== null);
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
   },
 );
@@ -219,6 +289,7 @@ Stimulus.register(
       this.selectedIndex = -1;
       this.results = [];
 
+      this.opener = null;
       this.onGlobalKeydown = this.handleGlobalKeydown.bind(this);
       document.addEventListener("keydown", this.onGlobalKeydown);
 
@@ -243,9 +314,9 @@ Stimulus.register(
     }
 
     open() {
-      document.body.classList.remove("nav-open");
-      this.modalTarget.classList.add("active");
-      document.body.style.overflow = "hidden";
+      if (this.modalTarget.open) return;
+      this.opener = document.activeElement;
+      openDialog(this.modalTarget);
       this.inputTarget.focus();
       this.selectedIndex = -1;
 
@@ -255,10 +326,17 @@ Stimulus.register(
     }
 
     close() {
-      this.modalTarget.classList.remove("active");
-      document.body.style.overflow = "";
+      closeDialog(this.modalTarget);
+    }
+
+    // Runs on every way out: Escape, backdrop, result click
+    closed() {
+      dialogClosed();
       this.inputTarget.value = "";
       this.bodyTarget.innerHTML = "";
+      clearTimeout(this.debounceTimeout);
+      if (this.opener?.isConnected) this.opener.focus();
+      this.opener = null;
     }
 
     backdropClick(event) {
@@ -269,10 +347,6 @@ Stimulus.register(
 
     handleKeydown(event) {
       switch (event.key) {
-        case "Escape":
-          event.preventDefault();
-          this.close();
-          break;
         case "ArrowDown":
           event.preventDefault();
           this.selectNext();
@@ -448,18 +522,18 @@ Stimulus.register(
     static targets = ["modal", "form", "button", "status", "file", "camera"];
 
     open() {
-      document.body.classList.remove("nav-open");
-      if (this.hasModalTarget) {
-        this.modalTarget.classList.add("active");
-        document.body.style.overflow = "hidden";
-      }
+      this.opener = document.activeElement;
+      openDialog(this.modalTarget);
     }
 
     close() {
-      if (this.hasModalTarget) {
-        this.modalTarget.classList.remove("active");
-        document.body.style.overflow = "";
-      }
+      closeDialog(this.modalTarget);
+    }
+
+    closed() {
+      dialogClosed();
+      if (this.opener?.isConnected) this.opener.focus();
+      this.opener = null;
     }
 
     backdropClick(event) {
@@ -764,13 +838,18 @@ Stimulus.register(
     static values = { documentId: String };
 
     openModal() {
-      this.modalTarget.classList.add("active");
-      document.body.style.overflow = "hidden";
+      this.opener = document.activeElement;
+      openDialog(this.modalTarget);
     }
 
     closeModal() {
-      this.modalTarget.classList.remove("active");
-      document.body.style.overflow = "";
+      closeDialog(this.modalTarget);
+    }
+
+    closed() {
+      dialogClosed();
+      if (this.opener?.isConnected) this.opener.focus();
+      this.opener = null;
     }
 
     backdropClick(event) {
@@ -1000,17 +1079,13 @@ if ("serviceWorker" in navigator) {
       <div class="upload-queue-list" data-dropzone-target="queueList"></div>
     </section>
 
-    <div
-      class="overlay"
+    <dialog
+      class="f-palette dialog"
+      aria-labelledby="upload-title"
       data-upload-modal-target="modal"
-      data-action="click->upload-modal#backdropClick"
+      data-action="click->upload-modal#backdropClick close->upload-modal#closed"
     >
-      <div
-        class="f-palette dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="upload-title"
-      >
+      <div class="dialog-inner">
         <div class="dialog-header">
           <h2 class="heading" id="upload-title">Upload a document</h2>
           <button
@@ -1036,6 +1111,7 @@ if ("serviceWorker" in navigator) {
               type="text"
               id="modal-title"
               name="title"
+              autofocus
               placeholder="Document title"
             />
           </div>
@@ -1089,20 +1165,16 @@ if ("serviceWorker" in navigator) {
           <p class="hint" data-upload-modal-target="status" role="status"></p>
         </form>
       </div>
-    </div>
+    </dialog>
 
-    <div
-      class="overlay overlay-top"
+    <dialog
+      class="f-palette dialog palette"
+      aria-label="Search documents"
       data-testid="command-palette"
       data-command-palette-target="modal"
-      data-action="click->command-palette#backdropClick"
+      data-action="click->command-palette#backdropClick close->command-palette#closed"
     >
-      <div
-        class="f-palette dialog palette"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search documents"
-      >
+      <div>
         <div class="palette-header">
           {{ icons::search() }}
           <input
@@ -1125,10 +1197,15 @@ if ("serviceWorker" in navigator) {
           <span><kbd class="f-kbd">&crarr;</kbd> Open</span>
         </div>
       </div>
-    </div>
+    </dialog>
 
     <div class="app">
-      <aside class="sidebar" id="sidebar" aria-label="Main">
+      <aside
+        class="sidebar"
+        id="sidebar"
+        aria-label="Main"
+        data-nav-target="sidebar"
+      >
         <a class="brand" href="/">
           <span class="brand-mark">{{ icons::mark() }}</span>
           <span class="brand-name">Folio</span>
@@ -1229,12 +1306,15 @@ if ("serviceWorker" in navigator) {
       </aside>
       <div class="scrim" data-action="click->nav#close"></div>
 
-      <div class="shell">
+      <div class="shell" data-nav-target="shell">
         <header class="topbar">
           <button
             type="button"
             class="f-btn f-btn-quiet icon-btn menu-btn"
             aria-label="Open menu"
+            aria-expanded="false"
+            aria-controls="sidebar"
+            data-nav-target="button"
             data-action="click->nav#toggle"
           >
             {{ icons::menu() }}

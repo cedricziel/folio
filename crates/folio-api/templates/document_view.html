@@ -111,8 +111,9 @@
                         </div>
                         <button type="button" class="f-btn f-btn-quiet" data-action="click->tags#openModal">Edit tags</button>
 
-                        <div class="overlay" data-tags-target="modal" data-action="click->tags#backdropClick">
-                            <div class="f-palette dialog" role="dialog" aria-modal="true" aria-labelledby="tags-title">
+                        <dialog class="f-palette dialog" aria-labelledby="tags-title" data-tags-target="modal"
+                                data-action="click->tags#backdropClick close->tags#closed">
+                            <div class="dialog-inner">
                                 <div class="dialog-header">
                                     <h2 class="heading" id="tags-title">Edit tags</h2>
                                     <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Close" data-action="click->tags#closeModal">{{ icons::close() }}</button>
@@ -139,7 +140,7 @@
                                     {% endfor %}
                                 </div>
                             </div>
-                        </div>
+                        </dialog>
                     </dd>
                 </dl>
             </section>
