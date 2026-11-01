@@ -131,13 +131,15 @@ pub fn authorization_server_metadata(base: &str) -> Value {
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
+        "authorization_response_iss_parameter_supported": true,
         "scopes_supported": SCOPES,
     })
 }
 
-pub fn protected_resource_metadata(base: &str) -> Value {
+/// RFC 9728 metadata for the resource served at `resource_path`.
+pub fn protected_resource_metadata(base: &str, resource_path: &str) -> Value {
     json!({
-        "resource": format!("{base}{}", RESOURCE_PATHS[0]),
+        "resource": format!("{base}{resource_path}"),
         "authorization_servers": [base],
         "scopes_supported": SCOPES,
         "bearer_methods_supported": ["header"],

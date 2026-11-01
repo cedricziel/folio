@@ -85,8 +85,15 @@ impl TokenValidator {
     /// The 401 response mandated by the MCP authorization spec.
     pub fn unauthorized(&self, headers: &HeaderMap) -> Response {
         let base = base_url(self.public_url.as_deref());
-        let mut challenge =
-            format!("Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource\"");
+        // The MCP document lives at the unsuffixed path for older clients.
+        let suffix = if self.resource_path == "/mcp" {
+            ""
+        } else {
+            self.resource_path.as_str()
+        };
+        let mut challenge = format!(
+            "Bearer resource_metadata=\"{base}/.well-known/oauth-protected-resource{suffix}\""
+        );
         if bearer_token(headers).is_some() {
             challenge.push_str(", error=\"invalid_token\"");
         }

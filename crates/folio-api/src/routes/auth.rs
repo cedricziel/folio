@@ -182,7 +182,7 @@ where
 }
 
 /// Router with all login, setup and OAuth endpoints.
-const EXEMPT_EXACT: [&str; 8] = [
+const EXEMPT_EXACT: [&str; 10] = [
     "/healthz",
     "/readyz",
     "/login",
@@ -191,6 +191,8 @@ const EXEMPT_EXACT: [&str; 8] = [
     "/api/openapi.json",
     "/api/docs",
     "/mcp",
+    "/manifest.webmanifest",
+    "/sw.js",
 ];
 const EXEMPT_PREFIX: [&str; 4] = ["/static/", "/oauth/", "/.well-known/", "/mcp/"];
 
@@ -239,6 +241,11 @@ pub async fn enforce_auth(
         );
         return response;
     }
+    if path == "/share" && request.method() == Method::POST {
+        // Accepting the upload before login would let anyone park files on
+        // disk, so ask the user to sign in and share again instead.
+        return render(ShareLoginTemplate, StatusCode::UNAUTHORIZED);
+    }
     let next_path = if request.method() == Method::GET {
         request
             .uri()
@@ -282,11 +289,15 @@ where
         .route("/.well-known/oauth-authorization-server", get(as_metadata))
         .route(
             "/.well-known/oauth-protected-resource",
-            get(resource_metadata),
+            get(mcp_resource_metadata),
         )
         .route(
             "/.well-known/oauth-protected-resource/mcp",
-            get(resource_metadata),
+            get(mcp_resource_metadata),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/api",
+            get(api_resource_metadata),
         )
         .route(
             "/oauth/register",
@@ -391,6 +402,10 @@ struct SetupTemplate {
 #[derive(Template)]
 #[template(path = "auth/setup_locked.html")]
 struct SetupLockedTemplate;
+
+#[derive(Template)]
+#[template(path = "auth/share_login.html")]
+struct ShareLoginTemplate;
 
 #[derive(Template)]
 #[template(path = "auth/login.html")]
@@ -678,8 +693,12 @@ async fn as_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<
     Json(authorization_server_metadata(&auth.base()))
 }
 
-async fn resource_metadata(State(auth): State<AuthState>, headers: HeaderMap) -> Json<Value> {
-    Json(protected_resource_metadata(&auth.base()))
+async fn mcp_resource_metadata(State(auth): State<AuthState>) -> Json<Value> {
+    Json(protected_resource_metadata(&auth.base(), "/mcp"))
+}
+
+async fn api_resource_metadata(State(auth): State<AuthState>) -> Json<Value> {
+    Json(protected_resource_metadata(&auth.base(), "/api"))
 }
 
 fn oauth_json(status: StatusCode, body: Value) -> Response {

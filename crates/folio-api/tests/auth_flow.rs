@@ -944,10 +944,14 @@ mod enforcement {
             "/api/openapi.json",
             "/api/docs",
             "/mcp",
+            "/manifest.webmanifest",
+            "/sw.js",
         ] {
             pages = pages.route(path, get(|| async { "ok" }));
         }
-        pages = pages.route("/api/tags", axum::routing::post(|| async { "created" }));
+        pages = pages
+            .route("/api/tags", axum::routing::post(|| async { "created" }))
+            .route("/share", axum::routing::post(|| async { "stored" }));
         App {
             router: auth_router(auth.clone())
                 .merge(pages)
@@ -1105,6 +1109,54 @@ mod enforcement {
         let app = guarded(false).await;
         assert_eq!(status(&app, "/").await, StatusCode::OK);
         assert_eq!(status(&app, "/api/documents").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn pwa_assets_are_public_and_anonymous_shares_are_not_accepted() {
+        let app = guarded(true).await;
+        setup_and_login(&app).await;
+        for path in ["/manifest.webmanifest", "/sw.js"] {
+            assert_eq!(status(&app, path).await, StatusCode::OK, "{path}");
+        }
+
+        let share = |cookie: &str| {
+            Request::post("/share")
+                .header(header::CONTENT_TYPE, "multipart/form-data; boundary=x")
+                .header(header::COOKIE, cookie)
+                .body(Body::from("--x--\r\n"))
+                .unwrap()
+        };
+        let anonymous = send(&app, share("")).await;
+        assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+        assert!(anonymous.body.contains("share again"));
+        assert!(anonymous.body.contains("/login"));
+    }
+
+    #[tokio::test]
+    async fn api_challenges_point_at_the_api_resource_metadata() {
+        let app = guarded(true).await;
+        let prm = send(
+            &app,
+            Request::get("/.well-known/oauth-protected-resource/api")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(prm.status, StatusCode::OK);
+        assert_eq!(prm.json()["resource"], format!("{BASE}/api"));
+        assert_eq!(prm.json()["authorization_servers"], json!([BASE]));
+
+        let denied = send(
+            &app,
+            Request::get("/api/documents").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert!(denied.headers[header::WWW_AUTHENTICATE]
+            .to_str()
+            .unwrap()
+            .contains(&format!(
+                "resource_metadata=\"{BASE}/.well-known/oauth-protected-resource/api\""
+            )));
     }
 
     /// Runs consent for an `/api` audience with the given scopes and returns the access token.
