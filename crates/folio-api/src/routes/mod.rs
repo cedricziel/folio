@@ -2,6 +2,7 @@
 
 mod assets;
 pub mod auth;
+mod error_pages;
 pub(crate) mod correspondents;
 pub(crate) mod document_types;
 pub(crate) mod documents;
@@ -60,8 +61,11 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         // Static files
         .merge(assets::router());
 
+    let html_errors = axum::middleware::from_fn_with_state(state.clone(), error_pages::html_errors);
+
     let router = crate::telemetry::instrument(routes)
         // Middleware
+        .layer(html_errors)
         .layer(enforcement)
         .layer(forward)
         .layer(CorsLayer::permissive())

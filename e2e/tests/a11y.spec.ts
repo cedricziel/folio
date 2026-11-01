@@ -47,16 +47,6 @@ const known: { rule: string; target: string; issue: string }[] = [
     target: "_mode",
     issue: "https://github.com/cedricziel/folio/issues/63",
   },
-  {
-    rule: "document-title",
-    target: "html",
-    issue: "https://github.com/cedricziel/folio/issues/60",
-  },
-  {
-    rule: "html-has-lang",
-    target: "html",
-    issue: "https://github.com/cedricziel/folio/issues/60",
-  },
 ];
 
 const isKnown = (rule: string, target: string) =>

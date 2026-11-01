@@ -183,3 +183,60 @@ async fn unreadable_files_say_so_instead_of_waiting_for_review() {
     assert!(page.contains("Folio couldn't read this file"));
     assert!(!page.contains("Reading"));
 }
+
+fn get_html(uri: &str) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .uri(uri)
+        .header(header::ACCEPT, "text/html,application/xhtml+xml")
+        .body(axum::body::Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn missing_pages_answer_with_html_in_the_app_shell() {
+    let h = harness().await;
+    for uri in [
+        "/documents/00000000-0000-0000-0000-000000000000",
+        "/does-not-exist",
+    ] {
+        let response = h.app.clone().oneshot(get_html(uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert!(response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html"));
+        let body = text(response).await;
+        assert!(body.contains("<title>Not found - Folio</title>"), "{uri}");
+        assert!(body.contains(r#"<html lang="en">"#));
+        assert!(body.contains("Browse"), "{uri} keeps the sidebar");
+        assert!(body.contains("Back to the inbox"));
+    }
+}
+
+#[tokio::test]
+async fn api_and_script_clients_keep_json_errors() {
+    let h = harness().await;
+
+    let api = h
+        .app
+        .clone()
+        .oneshot(get_html(
+            "/api/documents/00000000-0000-0000-0000-000000000000",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(api.status(), StatusCode::NOT_FOUND);
+    assert!(api.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .contains("json"));
+
+    let script = h
+        .app
+        .clone()
+        .oneshot(get("/documents/00000000-0000-0000-0000-000000000000"))
+        .await
+        .unwrap();
+    assert_eq!(script.status(), StatusCode::NOT_FOUND);
+    assert!(text(script).await.contains(r#""error""#));
+}
