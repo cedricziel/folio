@@ -36,7 +36,7 @@ The system SHALL embed the query, score every stored document embedding by cosin
 
 ### Requirement: Search in the web UI
 
-`GET /documents/search?q=<query>` SHALL return an HTML fragment with up to 10 results and each score shown as a percentage with one decimal place. When the query cannot be embedded, the system SHALL fall back to a case-insensitive substring match on document titles, scoring each match 100.0.
+`GET /documents/search?q=<query>` SHALL return an HTML fragment with up to 10 results ranked by similarity, each score shown as a percentage with one decimal place. When the query cannot be embedded, the system SHALL instead list every document whose title contains the query (case-insensitive), with no limit, scoring each 100.0.
 
 #### Scenario: Search with a working provider
 
