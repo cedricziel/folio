@@ -947,6 +947,323 @@
         }
       }
     },
+    "/api/sources": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "List ingestion sources",
+        "operationId": "listSources",
+        "responses": {
+          "200": {
+            "description": "Configured and managed sources with their latest run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SourceView"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Create an ingestion source",
+        "description": "Passwords are stored unencrypted in the database until Folio has a secret key.",
+        "operationId": "createSource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestionSourceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sources/{id}": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Get an ingestion source",
+        "operationId": "getSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Replace an ingestion source",
+        "description": "A password of `********` keeps the stored one.",
+        "operationId": "updateSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestionSourceInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Delete an ingestion source",
+        "operationId": "deleteSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The source was deleted"
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sources/{id}/test": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Check that a source can be reached",
+        "description": "Folders must be readable; mail accounts must accept the login and have the\nconfigured mailboxes. Nothing is imported.",
+        "operationId": "testSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The check ran; `ok` tells whether it passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceTestResult"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tags": {
       "get": {
         "tags": [
@@ -1218,6 +1535,391 @@
         }
       }
     },
+    "/api/workflows": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List all workflows",
+        "operationId": "listWorkflows",
+        "responses": {
+          "200": {
+            "description": "All workflows; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Workflow"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Create a workflow",
+        "operationId": "createWorkflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The created workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Get a workflow",
+        "operationId": "getWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workflow; webhook secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Replace a workflow",
+        "description": "All fields are replaced. A webhook `secret` of `********` keeps the stored one.",
+        "operationId": "updateWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated workflow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Delete a workflow and its run history",
+        "operationId": "deleteWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The workflow was deleted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/runs": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List a workflow's recent runs, newest first",
+        "operationId": "listWorkflowRuns",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of runs, newest first",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 200,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowRun"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/{id}/test": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Send a sample payload to the workflow's webhooks",
+        "description": "Delivers once, signed like a real delivery, without retries. Nothing is recorded in the run history.",
+        "operationId": "testWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery results; a failing receiver is reported here, not as an error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/events": {
       "get": {
         "tags": [
@@ -1348,6 +2050,8 @@
         "required": [
           "id",
           "title",
+          "ocr_status",
+          "embed_status",
           "created_at",
           "updated_at"
         ],
@@ -1380,6 +2084,10 @@
             "format": "uuid",
             "description": "Document type classification"
           },
+          "embed_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the embedding stage"
+          },
           "file_path": {
             "type": [
               "string",
@@ -1399,6 +2107,10 @@
             ],
             "description": "MIME type of the original document"
           },
+          "ocr_status": {
+            "$ref": "#/components/schemas/ProcessingStatus",
+            "description": "State of the OCR stage"
+          },
           "original_filename": {
             "type": [
               "string",
@@ -1414,6 +2126,10 @@
             "format": "int32",
             "description": "Number of pages in the document (for PDFs and multi-page images)",
             "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/DocumentSource",
+            "description": "How the document entered Folio"
           },
           "title": {
             "type": "string",
@@ -1527,6 +2243,26 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Background processing (thumbnails, OCR, embedding) finished",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "processed"
+                ]
+              }
+            }
           }
         ],
         "description": "Event types that can be broadcast to clients"
@@ -1549,6 +2285,45 @@
             "items": {
               "$ref": "#/components/schemas/Document"
             }
+          }
+        }
+      },
+      "DocumentSource": {
+        "type": "object",
+        "description": "The source of a document, with kind-specific metadata",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "email": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EmailOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FolderOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          },
+          "source_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the ingestion source that produced the document, if any"
           }
         }
       },
@@ -1577,6 +2352,138 @@
           }
         }
       },
+      "EmailConfig": {
+        "type": "object",
+        "description": "An IMAP account",
+        "required": [
+          "host",
+          "username"
+        ],
+        "properties": {
+          "accept_invalid_certs": {
+            "type": "boolean",
+            "description": "Accept self-signed certificates"
+          },
+          "after_import": {
+            "$ref": "#/components/schemas/MailAfterImport"
+          },
+          "allowed_content_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attachment content types to import; `image/*` style wildcards are allowed"
+          },
+          "criteria": {
+            "type": "string",
+            "description": "IMAP SEARCH criteria"
+          },
+          "host": {
+            "type": "string"
+          },
+          "mail_body": {
+            "$ref": "#/components/schemas/MailBody"
+          },
+          "mailboxes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "move_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Target mailbox for `after_import = move`"
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown as `********` by the API; send it back unchanged to keep the stored one"
+          },
+          "password_file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Read the password from this file (for Docker secrets); wins over `password`"
+          },
+          "poll_interval_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "security": {
+            "$ref": "#/components/schemas/MailSecurity"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "EmailOrigin": {
+        "type": "object",
+        "description": "The email an attachment (or the message itself) came from",
+        "required": [
+          "account",
+          "mailbox",
+          "message_id",
+          "from",
+          "to",
+          "subject"
+        ],
+        "properties": {
+          "account": {
+            "type": "string",
+            "description": "Name of the configured mail account"
+          },
+          "attachment_content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attachment_filename": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "from": {
+            "type": "string"
+          },
+          "mailbox": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ErrorResponse": {
         "type": "object",
         "description": "API error response",
@@ -1600,6 +2507,146 @@
         "type": "string",
         "format": "binary",
         "description": "Binary payload of a stored file"
+      },
+      "FolderAfterImport": {
+        "type": "string",
+        "description": "What to do with a consume-folder file once it was imported",
+        "enum": [
+          "delete",
+          "move"
+        ]
+      },
+      "FolderConfig": {
+        "type": "object",
+        "description": "A watched consume folder",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "after_import": {
+            "$ref": "#/components/schemas/FolderAfterImport"
+          },
+          "path": {
+            "type": "string"
+          },
+          "recursive": {
+            "type": "boolean"
+          },
+          "rescan_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Full scan interval; the file watcher usually reacts sooner",
+            "minimum": 0
+          },
+          "settle_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How long a file's size has to stay unchanged before it is imported",
+            "minimum": 0
+          },
+          "subfolders_as_tags": {
+            "type": "boolean",
+            "description": "Turn sub-folder names into tags: `Insurance/2025/x.pdf` gets `Insurance` and `2025`"
+          }
+        }
+      },
+      "FolderOrigin": {
+        "type": "object",
+        "description": "Where in a consume folder a file was found",
+        "required": [
+          "relative_path",
+          "original_filename"
+        ],
+        "properties": {
+          "original_filename": {
+            "type": "string"
+          },
+          "relative_path": {
+            "type": "string",
+            "description": "Path relative to the consume folder, using `/` separators"
+          }
+        }
+      },
+      "IngestionSourceInput": {
+        "type": "object",
+        "description": "Fields for creating or replacing a managed source",
+        "required": [
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MailAfterImport": {
+        "type": "string",
+        "description": "What to do with a mail once its attachments were imported",
+        "enum": [
+          "mark_read",
+          "move",
+          "delete"
+        ]
+      },
+      "MailBody": {
+        "type": "string",
+        "description": "Whether the mail itself becomes a document",
+        "enum": [
+          "none",
+          "eml"
+        ]
+      },
+      "MailSecurity": {
+        "type": "string",
+        "description": "How to reach the mail server",
+        "enum": [
+          "tls",
+          "plain"
+        ]
+      },
+      "NamedRef": {
+        "type": "object",
+        "description": "A related entity, by id and display name",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ProcessingStatus": {
+        "type": "string",
+        "description": "State of one pipeline stage for one document",
+        "enum": [
+          "pending",
+          "running",
+          "done",
+          "failed",
+          "skipped"
+        ]
+      },
+      "RunStatus": {
+        "type": "string",
+        "description": "Where a run is in its lifecycle",
+        "enum": [
+          "pending",
+          "succeeded",
+          "failed"
+        ]
       },
       "SearchRequest": {
         "type": "object",
@@ -1652,6 +2699,240 @@
           }
         }
       },
+      "SourceConditions": {
+        "type": "object",
+        "description": "Conditions on where a document came from; every set condition has to match",
+        "properties": {
+          "email_attachment_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob against the attachment file name"
+          },
+          "email_from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email_mailbox_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob against the mailbox name, for example `INBOX/Invoices`"
+          },
+          "email_subject": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "email_to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMatch",
+                "description": "Matches when any recipient matches"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "folder_path_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob against the folder-relative path, for example `Insurance/*`"
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceKind",
+                "description": "How the document arrived"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SourceConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FolderConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "folder"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EmailConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "email"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Kind-specific settings of a source"
+      },
+      "SourceKind": {
+        "type": "string",
+        "description": "How a document entered Folio",
+        "enum": [
+          "upload",
+          "api",
+          "folder",
+          "email",
+          "mcp",
+          "share"
+        ]
+      },
+      "SourceOrigin": {
+        "type": "string",
+        "description": "Where a source definition came from",
+        "enum": [
+          "config",
+          "managed"
+        ]
+      },
+      "SourceStatus": {
+        "type": "object",
+        "description": "How the latest run of a source went",
+        "required": [
+          "last_imported",
+          "last_skipped",
+          "last_failed"
+        ],
+        "properties": {
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the latest run failed; cleared by the next success"
+          },
+          "last_failed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_imported": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_skipped": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SourceTestResult": {
+        "type": "object",
+        "description": "Outcome of checking a source",
+        "required": [
+          "ok",
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "What was found, or why the check failed"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SourceView": {
+        "type": "object",
+        "description": "A source with its latest run",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "origin",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/SourceConfig",
+            "description": "Passwords are masked"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/SourceOrigin",
+            "description": "Sources from the server configuration are read-only"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "Tag": {
         "type": "object",
         "description": "A tag for categorizing documents",
@@ -1683,6 +2964,109 @@
             "description": "Tag name (unique)"
           }
         }
+      },
+      "TestDelivery": {
+        "type": "object",
+        "description": "Outcome of sending the sample payload to one webhook",
+        "required": [
+          "url",
+          "success",
+          "duration_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "HTTP status of the response, when one arrived",
+            "minimum": 0
+          },
+          "success": {
+            "type": "boolean",
+            "description": "The receiver answered with a 2xx status"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "TestResult": {
+        "type": "object",
+        "description": "Result of \"send test\"",
+        "required": [
+          "payload",
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TestDelivery"
+            },
+            "description": "One entry per webhook action, in order"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/WebhookPayload",
+            "description": "What was sent"
+          }
+        }
+      },
+      "TextMatch": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "`*` and `?` wildcards, case-insensitive, against the whole text",
+            "required": [
+              "glob"
+            ],
+            "properties": {
+              "glob": {
+                "type": "string",
+                "description": "`*` and `?` wildcards, case-insensitive, against the whole text"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Case-insensitive substring",
+            "required": [
+              "contains"
+            ],
+            "properties": {
+              "contains": {
+                "type": "string",
+                "description": "Case-insensitive substring"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Regular expression, searched anywhere in the text",
+            "required": [
+              "regex"
+            ],
+            "properties": {
+              "regex": {
+                "type": "string",
+                "description": "Regular expression, searched anywhere in the text"
+              }
+            }
+          }
+        ],
+        "description": "How to compare a piece of text"
       },
       "UpdateCorrespondentRequest": {
         "type": "object",
@@ -1747,6 +3131,487 @@
             "description": "Document title; defaults to the file name"
           }
         }
+      },
+      "WebhookDocument": {
+        "type": "object",
+        "description": "The document an event is about, as it was when the event happened",
+        "required": [
+          "id",
+          "title",
+          "tags",
+          "source",
+          "created_at",
+          "urls"
+        ],
+        "properties": {
+          "asn": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Archive serial number; always null until Folio supports serial numbers"
+          },
+          "correspondent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamedRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "document_type": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamedRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original filename"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "File size in bytes; null when no file is stored",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/DocumentSource",
+            "description": "How the document entered Folio, with folder or email details when known"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NamedRef"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "urls": {
+            "$ref": "#/components/schemas/WebhookUrls"
+          }
+        }
+      },
+      "WebhookMethod": {
+        "type": "string",
+        "description": "HTTP method used for webhook delivery",
+        "enum": [
+          "POST"
+        ]
+      },
+      "WebhookPayload": {
+        "type": "object",
+        "description": "Body of every webhook delivery",
+        "required": [
+          "event",
+          "version",
+          "occurred_at",
+          "document"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/WebhookDocument"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WorkflowTrigger",
+            "description": "Event name, for example `document.uploaded`"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Payload schema version",
+            "example": 1,
+            "minimum": 0
+          }
+        }
+      },
+      "WebhookUrls": {
+        "type": "object",
+        "description": "Links to the document, absolute so receivers can follow them",
+        "required": [
+          "api",
+          "web",
+          "download"
+        ],
+        "properties": {
+          "api": {
+            "type": "string",
+            "description": "JSON API resource",
+            "example": "http://folio.local:3000/api/documents/0b9c0c3e-0000-0000-0000-000000000000"
+          },
+          "download": {
+            "type": "string",
+            "description": "The original file"
+          },
+          "web": {
+            "type": "string",
+            "description": "Page in the web UI"
+          }
+        }
+      },
+      "Workflow": {
+        "type": "object",
+        "description": "A configured automation",
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "trigger",
+          "conditions",
+          "actions",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowAction"
+            }
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/WorkflowConditions"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkflowAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Send the event payload to an HTTP endpoint",
+            "required": [
+              "url",
+              "type"
+            ],
+            "properties": {
+              "headers": {
+                "type": "object",
+                "description": "Extra request headers; `X-Folio-*` headers cannot be overridden",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "method": {
+                "$ref": "#/components/schemas/WebhookMethod"
+              },
+              "secret": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Shared secret used to sign deliveries; unsigned when absent"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "webhook"
+                ]
+              },
+              "url": {
+                "type": "string",
+                "description": "Destination; only `http` and `https` are accepted"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Attach tags to the document",
+            "required": [
+              "tag_ids",
+              "type"
+            ],
+            "properties": {
+              "tag_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "add_tags"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Set the document's correspondent",
+            "required": [
+              "correspondent_id",
+              "type"
+            ],
+            "properties": {
+              "correspondent_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_correspondent"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Set the document's type",
+            "required": [
+              "document_type_id",
+              "type"
+            ],
+            "properties": {
+              "document_type_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "set_document_type"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Discard the file instead of importing it; only valid for `ingest.received`",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "skip_import"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A step a workflow performs, in order"
+      },
+      "WorkflowConditions": {
+        "type": "object",
+        "description": "Conditions a document must meet; every set condition has to match",
+        "properties": {
+          "correspondent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The document has this correspondent"
+          },
+          "document_type_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The document has this document type"
+          },
+          "filename_glob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Glob (`*` and `?`) matched case-insensitively against the original filename"
+          },
+          "mime_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MIME type, exact or with a wildcard subtype such as `image/*`"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConditions",
+            "description": "Where the document came from: folder path, email sender, subject, and so on"
+          },
+          "tag_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The document carries this tag"
+          }
+        }
+      },
+      "WorkflowInput": {
+        "type": "object",
+        "description": "Fields for creating or replacing a workflow",
+        "required": [
+          "name",
+          "trigger",
+          "actions"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowAction"
+            }
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/WorkflowConditions"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          }
+        }
+      },
+      "WorkflowRun": {
+        "type": "object",
+        "description": "One execution of a workflow for one event",
+        "required": [
+          "id",
+          "workflow_id",
+          "event",
+          "status",
+          "attempts",
+          "completed_actions",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "completed_actions": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many actions already finished, so a retry resumes where it stopped",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Not a foreign key: runs outlive the documents they were about"
+          },
+          "event": {
+            "$ref": "#/components/schemas/WorkflowTrigger"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Also sent as `X-Folio-Delivery`, so receivers can de-duplicate retries"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "HTTP status of the latest webhook response",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "workflow_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WorkflowTrigger": {
+        "type": "string",
+        "description": "Events a workflow can listen for",
+        "enum": [
+          "document.uploaded",
+          "document.processed",
+          "document.updated",
+          "document.deleted",
+          "ingest.received"
+        ]
       }
     }
   },
@@ -1770,6 +3635,14 @@
     {
       "name": "events",
       "description": "Real-time updates"
+    },
+    {
+      "name": "workflows",
+      "description": "Automations that react to document events, such as webhooks"
+    },
+    {
+      "name": "sources",
+      "description": "Consume folders and mailboxes that import documents automatically"
     }
   ]
 }

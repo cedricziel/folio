@@ -92,6 +92,9 @@
                     {% when None %}
                     {% endmatch %}
 
+                    <dt>Source</dt>
+                    <dd><span class="f-meta">{{ document.source.describe() }}</span></dd>
+
                     <dt>Tags</dt>
                     <dd data-controller="tags" data-tags-document-id-value="{{ document.id }}">
                         <div class="tag-list" data-tags-target="list">

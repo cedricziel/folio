@@ -20,6 +20,8 @@ public enum FolioError: Error, Equatable, LocalizedError {
     case server(status: Int, message: String?)
     case unreachable
     case unreadableResponse
+    case signInRequired
+    case signInFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -33,13 +35,23 @@ public enum FolioError: Error, Equatable, LocalizedError {
             "Couldn't reach the server."
         case .unreadableResponse:
             "Couldn't read the server's answer."
+        case .signInRequired:
+            "Sign in again to continue."
+        case let .signInFailed(message):
+            message
         }
     }
 }
 
-/// Auth is not part of the API yet. Once it is, a Keychain-backed provider plugs in here.
+/// Supplies the bearer token for API requests.
 public protocol BearerTokenProvider: Sendable {
     func token() async -> String?
+    /// Called after the server rejected `token`. Returns a fresh token to retry with, or nil to give up.
+    func refresh(rejecting token: String?) async -> String?
+}
+
+extension BearerTokenProvider {
+    public func refresh(rejecting token: String?) async -> String? { nil }
 }
 
 public struct NoToken: BearerTokenProvider {

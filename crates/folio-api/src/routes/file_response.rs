@@ -5,7 +5,7 @@
 
 use axum::{
     http::{header, HeaderValue},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 
 /// Types a browser may render inline; everything else is a download.
@@ -19,45 +19,8 @@ const INLINE_TYPES: [&str; 7] = [
     "image/heif",
 ];
 
-/// Builds a file response that cannot execute active content.
-///
-/// `force_attachment` makes explicit downloads attachments even for types that
-/// are safe to show inline.
-pub(crate) fn file_response(
-    mime: &str,
-    filename: Option<&str>,
-    force_attachment: bool,
-    data: Vec<u8>,
-) -> Response {
-    let essence = mime
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let inline = !force_attachment && INLINE_TYPES.contains(&essence.as_str());
-    let mut disposition = String::from(if inline { "inline" } else { "attachment" });
-    if let Some(name) = filename {
-        let safe: String = name
-            .chars()
-            .filter(|c| !c.is_control() && !matches!(c, '"' | '\\' | '/'))
-            .collect();
-        disposition.push_str(&format!("; filename=\"{safe}\""));
-    }
-    let mut response = data.into_response();
-    let headers = response.headers_mut();
-    if let Ok(v) = HeaderValue::from_str(mime) {
-        headers.insert(header::CONTENT_TYPE, v);
-    }
-    if let Ok(v) = HeaderValue::from_str(&disposition) {
-        headers.insert(header::CONTENT_DISPOSITION, v);
-    }
-    harden(&mut response);
-    response
-}
-
-/// Adds the sniffing and sandbox headers to a response that is not user data
-/// (generated thumbnails, placeholders).
+/// Adds the sniffing and sandbox headers. Applies to every file response,
+/// including generated ones.
 pub(crate) fn harden(response: &mut Response) {
     let headers = response.headers_mut();
     headers.insert(
@@ -68,4 +31,25 @@ pub(crate) fn harden(response: &mut Response) {
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static("default-src 'none'; sandbox"),
     );
+}
+
+/// Hardens a file response and sets `Content-Disposition`: inline for the
+/// allowlisted types, attachment for anything else.
+pub(crate) fn harden_inline(response: &mut Response, mime: &str) {
+    let essence = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let disposition = if INLINE_TYPES.contains(&essence.as_str()) {
+        "inline"
+    } else {
+        "attachment"
+    };
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static(disposition),
+    );
+    harden(response);
 }

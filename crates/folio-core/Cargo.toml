@@ -19,11 +19,25 @@ serde_json = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+# Logging
+tracing = { workspace = true }
+
 # Async traits
 async-trait = { workspace = true }
 
 # Async runtime (for broadcast channel)
 tokio = { workspace = true }
+
+bytes = { workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true }
+# Webhook URL validation
+url = "2"
+
+# Source conditions and content hashing
+regex = "1"
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }

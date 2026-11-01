@@ -3,7 +3,7 @@
 use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::header,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -11,14 +11,17 @@ use axum::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use folio_core::events::DocumentEvent;
-use folio_core::models::{Correspondent, CreateDocument, Document, DocumentType, UpdateDocument};
+use folio_core::models::{
+    Correspondent, Document, DocumentSource, DocumentType, SourceKind, UpdateDocument,
+};
+use folio_core::ports::{keys, DocumentStore, StoredObject};
+use folio_core::services::NewUpload;
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-use super::file_response::{file_response, harden};
+use super::file_response::{harden, harden_inline};
 use super::view::{self, Counts, DocumentRow, Nav, Sidebar, TagView};
 
 pub fn router() -> Router<AppState> {
@@ -280,6 +283,32 @@ async fn document_detail(
     })))
 }
 
+/// The first of `candidates` that exists; later ones are keys from before the
+/// object-key layout, kept so thumbnails survive until the layout migration ran.
+async fn first_object(store: &dyn DocumentStore, candidates: &[String]) -> Option<StoredObject> {
+    for key in candidates {
+        match store.get(key).await {
+            Ok(object) => return Some(object),
+            Err(folio_core::Error::NotFound { .. }) => {}
+            Err(e) => error!("Failed to read {key}: {e}"),
+        }
+    }
+    None
+}
+
+/// Stream a stored object as a response body
+fn stream_object(object: StoredObject, content_type: &str) -> Response {
+    let mut response = Response::builder().header(header::CONTENT_TYPE, content_type);
+    if let Some(size) = object.size {
+        response = response.header(header::CONTENT_LENGTH, size);
+    }
+    let mut response = response
+        .body(axum::body::Body::from_stream(object.stream))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    harden_inline(&mut response, content_type);
+    response
+}
+
 /// Document thumbnail (serves generated thumbnail or placeholder)
 async fn document_thumbnail(
     State(state): State<AppState>,
@@ -292,10 +321,13 @@ async fn document_thumbnail(
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
     // Try to serve generated thumbnail first
-    if state.thumbnail_service.exists(id).await {
-        if let Ok(data) = state.thumbnail_service.read(id).await {
-            return Ok(file_response("image/jpeg", None, false, data));
-        }
+    if let Some(object) = first_object(
+        state.store.as_ref(),
+        &[keys::thumbnail(id), keys::legacy::thumbnail(id)],
+    )
+    .await
+    {
+        return Ok(stream_object(object, "image/jpeg"));
     }
 
     // Fallback: try to serve the original image if it's an image
@@ -307,12 +339,11 @@ async fn document_thumbnail(
 
     if is_image {
         if let Some(ref file_path) = document.file_path {
-            let storage = folio_infra::FileStorage::new(&state.storage_path);
-            if let Ok(data) = storage.read(file_path).await {
+            if let Ok(object) = state.store.get(file_path).await {
                 let mime = document
                     .mime_type
                     .unwrap_or_else(|| "application/octet-stream".to_string());
-                return Ok(file_response(&mime, None, false, data));
+                return Ok(stream_object(object, &mime));
             }
         }
     }
@@ -373,10 +404,13 @@ async fn document_page_thumbnail(
     }
 
     // Try to serve generated page thumbnail
-    if state.thumbnail_service.page_exists(id, page).await {
-        if let Ok(data) = state.thumbnail_service.read_page(id, page).await {
-            return Ok(file_response("image/jpeg", None, false, data));
-        }
+    if let Some(object) = first_object(
+        state.store.as_ref(),
+        &[keys::page(id, page), keys::legacy::page(id, page)],
+    )
+    .await
+    {
+        return Ok(stream_object(object, "image/jpeg"));
     }
 
     // Fallback: return a placeholder SVG for the page
@@ -487,51 +521,20 @@ pub(super) async fn store_upload(
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
 
-    // Create document record (OCR will be done by background worker)
+    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
     let document = state
-        .document_repo
-        .create(CreateDocument {
-            title,
-            content: None,
-            original_filename: filename.clone(),
+        .importer
+        .import(NewUpload {
+            title: Some(title),
+            filename: filename.unwrap_or_else(|| "upload".to_string()),
             mime_type: Some(mime_type),
-            correspondent_id: None,
-            document_type_id: None,
+            data: file_data,
+            source: DocumentSource::of(SourceKind::Upload),
+            tag_ids: Vec::new(),
         })
         .await?;
 
-    // Store the file
-    let storage = folio_infra::FileStorage::new(&state.storage_path);
-    if let Some(fname) = filename {
-        if let Ok(file_path) = storage.store(document.id, &fname, &file_data).await {
-            let _ = state
-                .document_repo
-                .set_file_path(document.id, &file_path)
-                .await;
-        }
-    }
-
-    // Enqueue background job for thumbnail, OCR, and embedding
-    if let Err(e) = state
-        .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        })
-        .await
-    {
-        error!("Failed to enqueue document processing job: {}", e);
-    }
-
-    // Re-fetch to get updated document with file_path
-    let document = state
-        .document_repo
-        .find_by_id(document.id)
-        .await?
-        .unwrap_or(document);
-
-    state.event_broadcaster.send(DocumentEvent::Created {
-        document_id: document.id,
-    });
+    folio_infra::telemetry::metrics().documents_changed(1);
 
     Ok(document)
 }
@@ -559,10 +562,10 @@ async fn delete_document(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
+    // Delete the stored files first so a failure leaves the row to retry
+    super::documents::purge_document_files(&state, id).await?;
     state.document_repo.delete(id).await?;
-    state
-        .event_broadcaster
-        .send(DocumentEvent::Deleted { document_id: id });
+    folio_infra::telemetry::metrics().documents_changed(-1);
 
     Ok(Redirect::to("/").into_response())
 }
@@ -626,33 +629,12 @@ async fn search_documents(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Html<String>> {
-    // Try to generate embedding for query - fall back to a title search if AI is not available
-    let documents = match state.embedding_service.generate_embedding(&query.q).await {
-        Ok(query_embedding) => {
-            let search_results = state
-                .search_service
-                .search(&query_embedding, 10)
-                .await
-                .unwrap_or_default();
-
-            let mut documents = Vec::new();
-            for result in search_results {
-                if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await
-                {
-                    documents.push(document);
-                }
-            }
-            documents
+    let mut documents = Vec::new();
+    for result in state.search_documents(&query.q, 10).await? {
+        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
+            documents.push(document);
         }
-        Err(_) => {
-            let all_docs = state.document_repo.list(None).await.unwrap_or_default();
-            let query_lower = query.q.to_lowercase();
-            all_docs
-                .into_iter()
-                .filter(|doc| doc.title.to_lowercase().contains(&query_lower))
-                .collect()
-        }
-    };
+    }
 
     let template = SearchResultsTemplate {
         rows: view::rows(&state, documents).await?,

@@ -2,8 +2,10 @@
 
 mod auth_repo;
 mod document_repo;
+mod ingest_repo;
 mod search;
 mod settings_repo;
+mod workflow_repo;
 
 use std::str::FromStr;
 
@@ -15,8 +17,10 @@ pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
 };
+pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
 pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
+pub use workflow_repo::SqliteWorkflowRepository;
 
 /// Create a new SQLite connection pool
 pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {

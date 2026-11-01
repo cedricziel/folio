@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{Job, JobStatus, JobType};
+use super::{Job, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS};
 
 /// SQLite-backed job queue
 #[derive(Clone)]
@@ -34,6 +34,18 @@ impl SqliteJobQueue {
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
     ) -> Result<Uuid> {
+        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS)
+            .await
+    }
+
+    /// Enqueue a job with its own retry budget
+    #[instrument(skip(self))]
+    pub async fn enqueue_with_max_attempts(
+        &self,
+        job_type: JobType,
+        scheduled_at: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<Uuid> {
         let id = Uuid::new_v4();
         let now = Utc::now();
         let type_name = job_type.type_name();
@@ -43,12 +55,13 @@ impl SqliteJobQueue {
         sqlx::query(
             r#"
             INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at)
-            VALUES (?, ?, ?, 'pending', 0, 3, ?, ?, ?)
+            VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)
             "#,
         )
         .bind(id.to_string())
         .bind(type_name)
         .bind(&payload)
+        .bind(max_attempts)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .bind(scheduled_at.to_rfc3339())
@@ -61,7 +74,6 @@ impl SqliteJobQueue {
     }
 
     /// Dequeue the next available job
-    #[instrument(skip(self))]
     #[allow(clippy::type_complexity)]
     pub async fn dequeue(&self) -> Result<Option<Job>> {
         let now = Utc::now();

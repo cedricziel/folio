@@ -1,18 +1,29 @@
 //! Background job worker
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 use tokio::time::sleep;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, info_span, Instrument};
 
 use folio_core::events::{DocumentEvent, EventBroadcaster};
-use folio_core::ports::{DocumentRepository, EmbeddingService, OcrService, SearchService};
+use folio_core::models::{ProcessingStage, ProcessingStatus};
+use folio_core::ports::{
+    DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, SearchService,
+};
 
 use super::{JobQueue, JobType};
-use crate::storage::FileStorage;
+use crate::ai::chunker::{chunk_text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS};
+use crate::ai::PipelineContext;
+use crate::telemetry::metrics;
 use crate::thumbnail::ThumbnailService;
+use crate::workflow::{RunOutcome, WorkflowRunner};
+
+/// Chunks sent to the embedding provider per request
+const EMBED_BATCH_SIZE: usize = 16;
+
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Configuration for the job worker
 #[derive(Debug, Clone)]
@@ -45,10 +56,12 @@ pub struct Worker {
     ocr_service: Arc<dyn OcrService>,
     embedding_service: Arc<dyn EmbeddingService>,
     search_service: Arc<dyn SearchService>,
+    pipeline: Arc<PipelineContext>,
     thumbnail_service: Arc<ThumbnailService>,
-    storage: FileStorage,
+    store: Arc<dyn DocumentStore>,
     config: WorkerConfig,
     event_broadcaster: EventBroadcaster,
+    workflow_runner: Option<Arc<WorkflowRunner>>,
 }
 
 impl Worker {
@@ -60,8 +73,9 @@ impl Worker {
         ocr_service: Arc<dyn OcrService>,
         embedding_service: Arc<dyn EmbeddingService>,
         search_service: Arc<dyn SearchService>,
+        pipeline: Arc<PipelineContext>,
         thumbnail_service: Arc<ThumbnailService>,
-        storage_path: &str,
+        store: Arc<dyn DocumentStore>,
         config: WorkerConfig,
         event_broadcaster: EventBroadcaster,
     ) -> Self {
@@ -71,11 +85,19 @@ impl Worker {
             ocr_service,
             embedding_service,
             search_service,
+            pipeline,
             thumbnail_service,
-            storage: FileStorage::new(storage_path),
+            store,
             config,
             event_broadcaster,
+            workflow_runner: None,
         }
+    }
+
+    /// Let this worker execute workflow runs
+    pub fn with_workflow_runner(mut self, runner: Arc<WorkflowRunner>) -> Self {
+        self.workflow_runner = Some(runner);
+        self
     }
 
     /// Start the worker (runs until shutdown signal)
@@ -124,17 +146,39 @@ impl Worker {
                 Ok(Some(job)) => {
                     debug!("Processing job {}: {:?}", job.id, job.job_type.type_name());
 
-                    let result = self.process_job(&job.job_type).await;
+                    let type_name = job.job_type.type_name();
+                    let span = info_span!(
+                        "job",
+                        otel.name = %format!("job {type_name}"),
+                        otel.kind = "consumer",
+                        job.id = %job.id,
+                        job.r#type = type_name,
+                        job.attempt = job.attempts,
+                        document.id = job.job_type.document_id().map(tracing::field::display),
+                    );
+                    let started = Instant::now();
+                    let result = self
+                        .process_job(&job.job_type)
+                        .instrument(span.clone())
+                        .await;
+                    metrics().job_finished(type_name, result.is_ok(), started);
 
                     match result {
                         Ok(()) => {
-                            if let Err(e) = self.queue.complete(job.id).await {
+                            if let Err(e) =
+                                self.queue.complete(job.id).instrument(span.clone()).await
+                            {
                                 error!("Failed to mark job {} as complete: {}", job.id, e);
                             }
                         }
                         Err(e) => {
                             let error_msg = e.to_string();
-                            if let Err(e) = self.queue.fail(job.id, &error_msg, true).await {
+                            if let Err(e) = self
+                                .queue
+                                .fail(job.id, &error_msg, true)
+                                .instrument(span.clone())
+                                .await
+                            {
                                 error!("Failed to mark job {} as failed: {}", job.id, e);
                             }
                         }
@@ -160,37 +204,55 @@ impl Worker {
         }
     }
 
-    /// Find and re-queue orphaned documents (documents with no content and no active jobs)
-    async fn repair_orphaned_documents(
-        &self,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Get all documents
-        let documents = self.document_repo.list(None).await?;
+    /// Re-queue documents whose OCR or embedding stage is still pending but has no active job
+    ///
+    /// Driven by the per-stage status, never by whether `content` is set, so a
+    /// document with legitimately empty OCR output is not picked up again.
+    async fn repair_orphaned_documents(&self) -> Result<(), BoxError> {
         let mut repaired_count = 0;
 
-        for doc in documents {
-            // Skip documents that already have content
-            if doc.content.is_some() {
-                continue;
-            }
-
-            // Skip documents without a file path (nothing to process)
+        for doc in self
+            .document_repo
+            .list_pending(ProcessingStage::Ocr)
+            .await?
+        {
             if doc.file_path.is_none() {
                 continue;
             }
+            if self.has_active_job(doc.id).await? {
+                continue;
+            }
+            info!("Repairing orphaned document {} ({})", doc.id, doc.title);
+            self.queue
+                .enqueue(JobType::ProcessDocument {
+                    document_id: doc.id,
+                })
+                .await?;
+            repaired_count += 1;
+        }
 
-            // Check if there's already an active job for this document
-            let active_jobs = self.queue.find_active_jobs_for_document(doc.id).await?;
-
-            if active_jobs.is_empty() {
-                // No active jobs and no content - this document is orphaned, re-queue it
-                info!("Repairing orphaned document {} ({})", doc.id, doc.title);
+        for doc in self
+            .document_repo
+            .list_pending(ProcessingStage::Embed)
+            .await?
+        {
+            if doc.content.as_deref().is_some_and(|c| !c.is_empty()) {
+                if self.has_active_job(doc.id).await? {
+                    continue;
+                }
                 self.queue
-                    .enqueue(JobType::ProcessDocument {
+                    .enqueue(JobType::GenerateEmbedding {
                         document_id: doc.id,
                     })
                     .await?;
                 repaired_count += 1;
+            } else if doc.ocr_status != ProcessingStatus::Pending
+                && doc.ocr_status != ProcessingStatus::Running
+            {
+                // OCR is over and left no text, so there is nothing to embed.
+                self.document_repo
+                    .set_stage_status(doc.id, ProcessingStage::Embed, ProcessingStatus::Skipped)
+                    .await?;
             }
         }
 
@@ -201,8 +263,15 @@ impl Worker {
         Ok(())
     }
 
+    async fn has_active_job(&self, document_id: uuid::Uuid) -> Result<bool, BoxError> {
+        Ok(!self
+            .queue
+            .find_active_jobs_for_document(document_id)
+            .await?
+            .is_empty())
+    }
+
     /// Process a single job
-    #[instrument(skip(self))]
     async fn process_job(
         &self,
         job_type: &JobType,
@@ -216,6 +285,22 @@ impl Worker {
                 self.process_embedding(*document_id).await
             }
             JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
+            JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
+        }
+    }
+
+    /// Run a workflow; a retryable failure is reported as an error so the queue backs off
+    async fn execute_workflow_run(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let runner = self
+            .workflow_runner
+            .as_ref()
+            .ok_or("Workflow runner is not configured")?;
+        match runner.execute(run_id).await? {
+            RunOutcome::Retry => Err("Workflow action failed, will retry".into()),
+            RunOutcome::Succeeded | RunOutcome::Failed => Ok(()),
         }
     }
 
@@ -232,7 +317,7 @@ impl Worker {
 
         // Read the file
         let file_path = document.file_path.as_ref().ok_or("No file path")?;
-        let data = self.storage.read(file_path).await?;
+        let data = self.store.get_bytes(file_path).await?;
 
         let mime_type = document
             .mime_type
@@ -252,95 +337,186 @@ impl Worker {
         Ok(())
     }
 
-    /// Process OCR text extraction
-    async fn process_ocr(
+    /// Run a stage, marking it running first and failed if it errors
+    async fn track<T>(
         &self,
         document_id: uuid::Uuid,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        stage: ProcessingStage,
+        work: impl std::future::Future<Output = Result<T, BoxError>>,
+    ) -> Result<T, BoxError> {
+        self.document_repo
+            .set_stage_status(document_id, stage, ProcessingStatus::Running)
+            .await?;
+        match work.await {
+            Ok(value) => Ok(value),
+            Err(e) => {
+                if let Err(status_err) = self
+                    .document_repo
+                    .set_stage_status(document_id, stage, ProcessingStatus::Failed)
+                    .await
+                {
+                    error!("Failed to record {:?} failure: {}", stage, status_err);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Process OCR text extraction
+    async fn process_ocr(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
         let document = self
             .document_repo
             .find_by_id(document_id)
             .await?
             .ok_or("Document not found")?;
 
-        // Skip if already has content
-        if document.content.is_some() {
+        let set_status = |status| {
+            self.document_repo
+                .set_stage_status(document_id, ProcessingStage::Ocr, status)
+        };
+
+        if document.content.as_deref().is_some_and(|c| !c.is_empty()) {
             debug!("Document {} already has content, skipping OCR", document_id);
-            return Ok(());
+            set_status(ProcessingStatus::Done).await?;
+            return self.schedule_embedding(document_id, true).await;
         }
 
-        // Read the file
-        let file_path = document.file_path.as_ref().ok_or("No file path")?;
-        let data = self.storage.read(file_path).await?;
+        if self.pipeline.settings().await.ocr.provider == "none" {
+            set_status(ProcessingStatus::Skipped).await?;
+            return self.schedule_embedding(document_id, false).await;
+        }
 
-        let mime_type = document
-            .mime_type
-            .as_deref()
-            .unwrap_or("application/octet-stream");
+        let output = self
+            .track(document_id, ProcessingStage::Ocr, async {
+                let file_path = document.file_path.as_ref().ok_or("No file path")?;
+                let data = self.store.get_bytes(file_path).await?;
+                let mime_type = document
+                    .mime_type
+                    .as_deref()
+                    .unwrap_or("application/octet-stream");
+                Ok(self.ocr_service.extract(&data, mime_type).await?)
+            })
+            .await?;
 
-        // Extract text
-        let content = self.ocr_service.extract_text(&data, mime_type).await?;
+        // An empty result is a successful OCR: store "" so the document is not retried.
+        self.document_repo
+            .complete_ocr(document_id, &output.text)
+            .await?;
 
-        if !content.is_empty() {
-            // Update document with extracted content
-            self.document_repo
-                .update(
-                    document_id,
-                    folio_core::models::UpdateDocument {
-                        content: Some(content.clone()),
-                        ..Default::default()
-                    },
-                )
-                .await?;
+        info!(
+            "OCR finished for document {} (engine={}, {} chars, confidence={:?})",
+            document_id,
+            output.engine,
+            output.text.len(),
+            output.confidence
+        );
 
-            info!(
-                "Extracted text for document {} ({} chars)",
-                document_id,
-                content.len()
-            );
-
-            // Emit event
+        let has_text = !output.text.is_empty();
+        if has_text {
             self.event_broadcaster
                 .send(DocumentEvent::OcrComplete { document_id });
         }
+        self.schedule_embedding(document_id, has_text).await
+    }
 
+    /// End the embedding stage, the last step of the pipeline, and announce that processing finished
+    async fn finish_embed_stage(
+        &self,
+        document_id: uuid::Uuid,
+        status: ProcessingStatus,
+    ) -> Result<(), BoxError> {
+        self.document_repo
+            .set_stage_status(document_id, ProcessingStage::Embed, status)
+            .await?;
+        self.event_broadcaster
+            .send(DocumentEvent::Processed { document_id });
+        Ok(())
+    }
+
+    /// Queue the embedding stage, or mark it skipped when it cannot or should not run
+    async fn schedule_embedding(
+        &self,
+        document_id: uuid::Uuid,
+        has_text: bool,
+    ) -> Result<(), BoxError> {
+        let settings = self.pipeline.settings().await;
+        if has_text && settings.processing.auto_embed && settings.embeddings.provider != "none" {
+            self.document_repo
+                .set_stage_status(
+                    document_id,
+                    ProcessingStage::Embed,
+                    ProcessingStatus::Pending,
+                )
+                .await?;
+            self.queue
+                .enqueue(JobType::GenerateEmbedding { document_id })
+                .await?;
+        } else {
+            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+                .await?;
+        }
         Ok(())
     }
 
     /// Process embedding generation
-    async fn process_embedding(
-        &self,
-        document_id: uuid::Uuid,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn process_embedding(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
         let document = self
             .document_repo
             .find_by_id(document_id)
             .await?
             .ok_or("Document not found")?;
 
-        let content = document
-            .content
-            .as_ref()
-            .ok_or("No content for embedding")?;
-
-        if content.is_empty() {
+        let content = document.content.unwrap_or_default();
+        let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
+        if chunks.is_empty() {
+            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+                .await?;
             return Ok(());
         }
 
-        let embedding = self.embedding_service.generate_embedding(content).await?;
-        self.search_service
-            .store_embedding(document_id, &embedding)
-            .await?;
+        if self.pipeline.settings().await.embeddings.provider == "none" {
+            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+                .await?;
+            return Ok(());
+        }
 
-        info!("Generated embedding for document {}", document_id);
-        Ok(())
+        self.track(document_id, ProcessingStage::Embed, async {
+            let active_model = self.embedding_service.model_id().await?;
+            self.search_service.mark_stale_except(&active_model).await?;
+
+            let mut embedded = Vec::with_capacity(chunks.len());
+            let mut model = active_model;
+            for (batch_no, batch_texts) in chunks.chunks(EMBED_BATCH_SIZE).enumerate() {
+                let texts: Vec<&str> = batch_texts.iter().map(String::as_str).collect();
+                let batch = self.embedding_service.embed(&texts).await?;
+                model = batch.model;
+                for (i, (text, embedding)) in batch_texts.iter().zip(batch.vectors).enumerate() {
+                    embedded.push(EmbeddedChunk {
+                        index: (batch_no * EMBED_BATCH_SIZE + i) as u32,
+                        text: text.clone(),
+                        embedding,
+                    });
+                }
+            }
+
+            self.search_service
+                .store_chunks(document_id, &model, &embedded)
+                .await?;
+            self.finish_embed_stage(document_id, ProcessingStatus::Done)
+                .await?;
+            info!(
+                "Stored {} embedded chunks for document {} (model {})",
+                embedded.len(),
+                document_id,
+                model
+            );
+            Ok(())
+        })
+        .await
     }
 
-    /// Process a complete document (OCR, thumbnail, embedding)
-    async fn process_document(
-        &self,
-        document_id: uuid::Uuid,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Process a newly uploaded document: thumbnails, then queue the OCR stage
+    async fn process_document(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
         info!("Starting document processing for {}", document_id);
 
         let document = self
@@ -362,19 +538,33 @@ impl Worker {
             }
         };
 
-        info!("Reading file from: {}", file_path);
-        let data = self.storage.read(&file_path).await?;
-        info!("File read successfully, size: {} bytes", data.len());
-
         let mime_type = document
             .mime_type
             .as_deref()
             .unwrap_or("application/octet-stream");
 
+        // PDFs go through poppler, which needs a file: fetch them to disk once
+        // and reuse that copy for the page count and every page.
+        info!("Reading file from: {}", file_path);
+        let local_pdf = if mime_type == "application/pdf" {
+            Some(self.store.download_to_temp(&file_path).await?)
+        } else {
+            None
+        };
+        let data = match &local_pdf {
+            Some(local) => tokio::fs::read(local.path()).await?,
+            None => self.store.get_bytes(&file_path).await?,
+        };
+        info!("File read successfully, size: {} bytes", data.len());
+
         // Step 1: Generate thumbnail(s) and get page count for PDFs
-        let (thumbnail_ok, page_count) = if mime_type == "application/pdf" {
+        let (_, page_count) = if let Some(local_pdf) = &local_pdf {
             // Get page count
-            let count = match self.thumbnail_service.get_pdf_page_count(&data).await {
+            let count = match self
+                .thumbnail_service
+                .get_pdf_page_count(local_pdf.path())
+                .await
+            {
                 Ok(c) => c,
                 Err(e) => {
                     debug!("Failed to get PDF page count: {}", e);
@@ -394,7 +584,7 @@ impl Worker {
             for page in 1..=max_pages {
                 match self
                     .thumbnail_service
-                    .generate_page(document_id, &data, page)
+                    .generate_page(document_id, local_pdf.path(), page)
                     .await
                 {
                     Ok(_) => {
@@ -444,98 +634,289 @@ impl Worker {
             debug!("Document {} has {} pages", document_id, count);
         }
 
-        // Step 2: Extract text if needed
-        info!(
-            "Step 2: OCR - document has existing content: {}",
-            document.content.is_some()
-        );
-        let content = if document.content.is_none() {
-            info!(
-                "Calling OCR service for document {} (mime: {})",
-                document_id, mime_type
-            );
-            match self.ocr_service.extract_text(&data, mime_type).await {
-                Ok(text) if !text.is_empty() => {
-                    info!(
-                        "OCR successful for document {}, extracted {} characters",
-                        document_id,
-                        text.len()
-                    );
-                    // Update document with extracted content
-                    self.document_repo
-                        .update(
-                            document_id,
-                            folio_core::models::UpdateDocument {
-                                content: Some(text.clone()),
-                                ..Default::default()
-                            },
-                        )
-                        .await?;
-
-                    self.event_broadcaster
-                        .send(DocumentEvent::OcrComplete { document_id });
-
-                    Some(text)
-                }
-                Ok(_) => {
-                    info!("OCR returned empty text for document {}", document_id);
-                    None
-                }
-                Err(e) => {
-                    error!("OCR failed for document {}: {}", document_id, e);
-                    None
-                }
-            }
+        // Steps 2 and 3 run as their own jobs so each can be retried and
+        // tracked independently: OCR, then embedding.
+        let settings = self.pipeline.settings().await;
+        let has_text = document.content.as_deref().is_some_and(|c| !c.is_empty());
+        if has_text || settings.processing.auto_ocr {
+            self.document_repo
+                .set_stage_status(document_id, ProcessingStage::Ocr, ProcessingStatus::Pending)
+                .await?;
+            self.queue
+                .enqueue(JobType::ExtractText { document_id })
+                .await?;
         } else {
-            info!(
-                "Skipping OCR - document {} already has content",
-                document_id
-            );
-            document.content.clone()
-        };
-
-        // Step 3: Generate embedding if we have content
-        info!(
-            "Step 3: Embedding - have content: {}",
-            content.as_ref().map(|c| c.len()).unwrap_or(0)
-        );
-        if let Some(text) = content {
-            if !text.is_empty() {
-                info!(
-                    "Generating embedding for document {} ({} chars)",
-                    document_id,
-                    text.len()
-                );
-                match self.embedding_service.generate_embedding(&text).await {
-                    Ok(embedding) => {
-                        info!(
-                            "Embedding generated for document {}, dimension: {}",
-                            document_id,
-                            embedding.len()
-                        );
-                        self.search_service
-                            .store_embedding(document_id, &embedding)
-                            .await?;
-                        info!("Embedding stored for document {}", document_id);
-                    }
-                    Err(e) => {
-                        error!(
-                            "Embedding generation failed for document {}: {}",
-                            document_id, e
-                        );
-                    }
-                }
-            }
+            self.document_repo
+                .set_stage_status(document_id, ProcessingStage::Ocr, ProcessingStatus::Skipped)
+                .await?;
+            self.schedule_embedding(document_id, false).await?;
         }
 
         info!("Completed processing document {}", document_id);
 
-        // Emit final updated event if any processing happened
-        if thumbnail_ok {
-            self.event_broadcaster
-                .send(DocumentEvent::Updated { document_id });
-        }
-
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AiConfig;
+    use crate::database::{test_pool, SqliteDocumentRepository, SqliteSettingsRepository};
+    use crate::SqliteSearchService;
+    use async_trait::async_trait;
+    use folio_core::error::Result;
+    use folio_core::models::CreateDocument;
+    use folio_core::ports::{EmbeddingBatch, OcrOutput, SettingsRepository};
+
+    struct FixedOcr(&'static str);
+
+    #[async_trait]
+    impl OcrService for FixedOcr {
+        async fn extract(&self, _: &[u8], _: &str) -> Result<OcrOutput> {
+            Ok(OcrOutput::from_pages("fixed", vec![self.0.to_string()]))
+        }
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FixedEmbeddings;
+
+    #[async_trait]
+    impl EmbeddingService for FixedEmbeddings {
+        async fn embed(&self, texts: &[&str]) -> Result<EmbeddingBatch> {
+            Ok(EmbeddingBatch {
+                vectors: texts.iter().map(|_| vec![1.0, 0.0]).collect(),
+                model: "test:model".to_string(),
+                dimensions: 2,
+            })
+        }
+        async fn model_id(&self) -> Result<String> {
+            Ok("test:model".to_string())
+        }
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct Fixture {
+        worker: Worker,
+        repo: Arc<SqliteDocumentRepository>,
+        settings: Arc<SqliteSettingsRepository>,
+        search: Arc<SqliteSearchService>,
+        queue: JobQueue,
+        pipeline: Arc<PipelineContext>,
+        doc_id: uuid::Uuid,
+        storage: Arc<dyn DocumentStore>,
+        _dir: tempfile::TempDir,
+    }
+
+    async fn fixture(ocr_text: &'static str) -> Fixture {
+        let (pool, dir) = test_pool().await;
+        let repo = Arc::new(SqliteDocumentRepository::new(pool.clone()));
+        let settings = Arc::new(SqliteSettingsRepository::new(pool.clone()));
+        let search = Arc::new(SqliteSearchService::new(pool.clone()));
+        let queue = JobQueue::sqlite(pool.clone());
+        let pipeline = PipelineContext::new(
+            settings.clone(),
+            AiConfig {
+                provider: "local".into(),
+                openai_api_key: None,
+                anthropic_api_key: None,
+            },
+        );
+        let storage: Arc<dyn DocumentStore> =
+            Arc::new(crate::storage::ObjectStoreDocumentStore::in_memory());
+        let thumbnails = Arc::new(ThumbnailService::new(storage.clone()));
+        let doc = repo
+            .create(CreateDocument {
+                title: "scan".into(),
+                content: None,
+                original_filename: Some("scan.png".into()),
+                mime_type: Some("image/png".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let path = folio_core::ports::keys::original(doc.id);
+        storage
+            .put(&path, b"not a real png".as_slice().into())
+            .await
+            .unwrap();
+        repo.set_file_path(doc.id, &path).await.unwrap();
+
+        let worker = Worker::new(
+            queue.clone(),
+            repo.clone(),
+            Arc::new(FixedOcr(ocr_text)),
+            Arc::new(FixedEmbeddings),
+            search.clone(),
+            pipeline.clone(),
+            thumbnails,
+            storage.clone(),
+            WorkerConfig::default(),
+            EventBroadcaster::new(16),
+        );
+
+        Fixture {
+            worker,
+            repo,
+            settings,
+            search,
+            queue,
+            pipeline,
+            doc_id: doc.id,
+            storage,
+            _dir: dir,
+        }
+    }
+
+    async fn drain(f: &Fixture) {
+        while let Some(job) = f.queue.dequeue().await.unwrap() {
+            f.worker.process_job(&job.job_type).await.unwrap();
+            f.queue.complete(job.id).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_ocr_result_is_stored_and_not_requeued() {
+        let f = fixture("").await;
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        drain(&f).await;
+
+        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        assert_eq!(doc.content.as_deref(), Some(""));
+        assert_eq!(doc.ocr_status, ProcessingStatus::Done);
+        assert_eq!(doc.embed_status, ProcessingStatus::Skipped);
+
+        f.worker.repair_orphaned_documents().await.unwrap();
+        f.worker.repair_orphaned_documents().await.unwrap();
+        assert_eq!(f.queue.pending_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn repair_requeues_documents_that_were_never_processed() {
+        let f = fixture("x").await;
+        f.worker.repair_orphaned_documents().await.unwrap();
+        assert_eq!(f.queue.pending_count().await.unwrap(), 1);
+        f.worker.repair_orphaned_documents().await.unwrap();
+        assert_eq!(f.queue.pending_count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn ocr_then_embedding_run_in_sequence_and_store_model_tagged_chunks() {
+        let f = fixture("Invoice from ACME for services").await;
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        drain(&f).await;
+
+        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        assert_eq!(
+            doc.content.as_deref(),
+            Some("Invoice from ACME for services")
+        );
+        assert_eq!(doc.ocr_status, ProcessingStatus::Done);
+        assert_eq!(doc.embed_status, ProcessingStatus::Done);
+
+        let hits = f.search.search("test:model", &[1.0, 0.0], 5).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(f
+            .search
+            .search("other:model", &[1.0, 0.0], 5)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_flags_are_honoured() {
+        let f = fixture("some text").await;
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.settings
+            .set("processing.auto_embed", "false")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        drain(&f).await;
+
+        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        assert_eq!(doc.ocr_status, ProcessingStatus::Done);
+        assert_eq!(doc.embed_status, ProcessingStatus::Skipped);
+
+        f.settings
+            .set("processing.auto_ocr", "false")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        let doc2 = f
+            .repo
+            .create(CreateDocument {
+                title: "second".into(),
+                content: None,
+                original_filename: None,
+                mime_type: Some("image/png".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let path = folio_core::ports::keys::original(doc2.id);
+        f.storage.put(&path, b"x".as_slice().into()).await.unwrap();
+        f.repo.set_file_path(doc2.id, &path).await.unwrap();
+        f.worker
+            .process_job(&JobType::ProcessDocument {
+                document_id: doc2.id,
+            })
+            .await
+            .unwrap();
+        let doc2 = f.repo.find_by_id(doc2.id).await.unwrap().unwrap();
+        assert_eq!(doc2.ocr_status, ProcessingStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn failed_ocr_is_recorded_and_not_requeued_by_repair() {
+        let f = fixture("x").await;
+        f.repo
+            .set_file_path(f.doc_id, "missing/file.png")
+            .await
+            .unwrap();
+
+        assert!(f
+            .worker
+            .process_job(&JobType::ExtractText {
+                document_id: f.doc_id
+            })
+            .await
+            .is_err());
+
+        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        assert_eq!(doc.ocr_status, ProcessingStatus::Failed);
+        f.worker.repair_orphaned_documents().await.unwrap();
+        assert_eq!(f.queue.pending_count().await.unwrap(), 0);
     }
 }

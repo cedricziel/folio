@@ -142,6 +142,14 @@ async fn upload_returns_id_and_pending_status() {
 
     let out = call_ok(&client, "get_document", json!({"id": id})).await;
     assert_eq!(out["title"], "note.txt");
+
+    let stored = fx
+        .documents
+        .find_by_id(id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.source.kind, folio_core::models::SourceKind::Mcp);
 }
 
 #[tokio::test]

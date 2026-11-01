@@ -7,10 +7,11 @@ pub mod events;
 pub mod openapi;
 pub mod routes;
 pub mod state;
+pub mod telemetry;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use routes::{
     auth::{enforce_auth, router as auth_router, AuthState, RequireUser},
     create_router,
 };
-pub use state::AppState;
+pub use state::{AppState, IngestionState};

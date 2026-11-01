@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{Job, JobStatus, JobType};
+use super::{Job, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS};
 
 #[derive(Clone)]
 pub struct PostgresJobQueue {
@@ -82,6 +82,17 @@ impl PostgresJobQueue {
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
     ) -> Result<Uuid> {
+        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS)
+            .await
+    }
+
+    #[instrument(skip(self))]
+    pub async fn enqueue_with_max_attempts(
+        &self,
+        job_type: JobType,
+        scheduled_at: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<Uuid> {
         let id = Uuid::new_v4();
         let now = Utc::now();
         let type_name = job_type.type_name();
@@ -91,11 +102,12 @@ impl PostgresJobQueue {
         sqlx::query(
             "INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts,
                                created_at, updated_at, scheduled_at)
-             VALUES ($1, $2, $3::jsonb, 'pending', 0, 3, $4, $4, $5)",
+             VALUES ($1, $2, $3::jsonb, 'pending', 0, $4, $5, $5, $6)",
         )
         .bind(id)
         .bind(type_name)
         .bind(&payload)
+        .bind(max_attempts)
         .bind(now)
         .bind(scheduled_at)
         .execute(&self.pool)
@@ -106,7 +118,6 @@ impl PostgresJobQueue {
         Ok(id)
     }
 
-    #[instrument(skip(self))]
     pub async fn dequeue(&self) -> Result<Option<Job>> {
         let now = Utc::now();
 

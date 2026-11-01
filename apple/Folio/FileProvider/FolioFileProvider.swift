@@ -37,7 +37,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
                 else { return completionHandler(nil, NSFileProviderError(.noSuchItem)) }
                 completionHandler(FolioProviderItem(node), nil)
             } catch {
-                completionHandler(nil, error)
+                completionHandler(nil, error.providerError)
             }
         }
         return progress
@@ -59,7 +59,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
                 let url = try await service.downloadFile(for: document)
                 completionHandler(url, FolioProviderItem(node), nil)
             } catch {
-                completionHandler(nil, nil, error)
+                completionHandler(nil, nil, error.providerError)
             }
         }
         return progress
@@ -89,7 +89,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
                 let node = try await catalog.node(for: id)
                 completionHandler(node.map(FolioProviderItem.init), [], false, nil)
             } catch {
-                completionHandler(nil, [], false, error)
+                completionHandler(nil, [], false, error.providerError)
             }
         }
         return progress
@@ -157,7 +157,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.didEnumerate(nodes.map(FolioProviderItem.init))
                 observer.finishEnumerating(upTo: nil)
             } catch {
-                observer.finishEnumeratingWithError(error)
+                observer.finishEnumeratingWithError(error.providerError)
             }
         }
     }
@@ -172,7 +172,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
                 }
                 observer.finishEnumeratingChanges(upTo: newAnchor, moreComing: false)
             } catch {
-                observer.finishEnumeratingWithError(error)
+                observer.finishEnumeratingWithError(error.providerError)
             }
         }
     }
@@ -240,5 +240,12 @@ extension FolioItemID {
         } else {
             self.init(rawValue: providerIdentifier.rawValue)
         }
+    }
+}
+
+extension Error {
+    /// Files shows its sign-in prompt for `.notAuthenticated`.
+    var providerError: any Error {
+        (self as? FolioError) == .signInRequired ? NSFileProviderError(.notAuthenticated) : self
     }
 }

@@ -313,8 +313,8 @@ Stimulus.register(
         );
         if (response.ok) {
           const data = await response.json();
-          this.results = data;
-          this.renderResults(data, "Search results");
+          this.results = data.results;
+          this.renderResults(this.results, "Search results");
         } else {
           this.showRecentDocuments(query);
         }
@@ -1199,6 +1199,14 @@ if ("serviceWorker" in navigator) {
           >
             {{ icons::tag() }}
             <span class="side-label">Manage</span>
+          </a>
+          <a
+            class="side-link"
+            href="/workflows"
+            {% if sidebar.active == "workflows" %}aria-current="page"{% endif %}
+          >
+            {{ icons::refresh() }}
+            <span class="side-label">Workflows</span>
           </a>
           <a
             class="side-link"

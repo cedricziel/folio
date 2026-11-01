@@ -15,8 +15,7 @@ async fn event_stream_turns_a_new_document_into_turbo_streams() {
             content: None,
             original_filename: None,
             mime_type: None,
-            correspondent_id: None,
-            document_type_id: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -36,6 +35,7 @@ async fn event_stream_turns_a_new_document_into_turbo_streams() {
         &h.state,
         &folio_api::DocumentEvent::Deleted {
             document_id: doc.id,
+            snapshot: None,
         },
     )
     .await

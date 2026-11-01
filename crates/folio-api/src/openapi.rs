@@ -8,8 +8,10 @@ use axum::{response::Html, routing::get, Json, Router};
 use utoipa::{IntoResponses, OpenApi};
 use utoipa_scalar::Scalar;
 
+use folio_core::models::WebhookPayload;
+
 use crate::error::ErrorResponse;
-use crate::routes::{correspondents, document_types, documents, events, tags};
+use crate::routes::{correspondents, document_types, documents, events, sources, tags, workflows};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -43,14 +45,29 @@ use crate::routes::{correspondents, document_types, documents, events, tags};
         document_types::update_document_type,
         document_types::delete_document_type,
         events::sse_handler,
+        workflows::list_workflows,
+        workflows::get_workflow,
+        workflows::create_workflow,
+        workflows::update_workflow,
+        workflows::delete_workflow,
+        workflows::test_workflow,
+        workflows::list_runs,
+        sources::list_sources,
+        sources::get_source,
+        sources::create_source,
+        sources::update_source,
+        sources::delete_source,
+        sources::test_source,
     ),
-    components(schemas(ErrorResponse)),
+    components(schemas(ErrorResponse, WebhookPayload)),
     tags(
         (name = "documents", description = "Documents and their files"),
         (name = "tags", description = "Tags for categorizing documents"),
         (name = "correspondents", description = "Senders of documents"),
         (name = "document_types", description = "Document classifications"),
         (name = "events", description = "Real-time updates"),
+        (name = "workflows", description = "Automations that react to document events, such as webhooks"),
+        (name = "sources", description = "Consume folders and mailboxes that import documents automatically"),
     )
 )]
 struct ApiDoc;
