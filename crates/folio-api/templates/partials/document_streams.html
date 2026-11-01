@@ -1,0 +1,19 @@
+{% import "partials/counts.html" as counts %}
+{% match row %}
+{% when Some with (row) %}
+{% if prepend %}
+<turbo-stream action="remove" target="documents-empty"></turbo-stream>
+<turbo-stream action="prepend" target="documents-rows"><template>{% include "partials/document_row.html" %}</template></turbo-stream>
+{% else %}
+<turbo-stream action="replace" target="document-{{ row.id }}"><template>{% include "partials/document_row.html" %}</template></turbo-stream>
+{% endif %}
+{% when None %}
+{% endmatch %}
+{% match removed %}
+{% when Some with (id) %}
+<turbo-stream action="remove" target="document-{{ id }}"></turbo-stream>
+{% when None %}
+{% endmatch %}
+<turbo-stream action="replace" target="inbox-count"><template>{% call counts::inbox_badge(counts.inbox) %}</template></turbo-stream>
+<turbo-stream action="replace" target="all-count"><template>{% call counts::all_badge(counts.total) %}</template></turbo-stream>
+<turbo-stream action="replace" target="inbox-notice"><template>{% call counts::review_notice(counts.review, counts.first_review) %}</template></turbo-stream>

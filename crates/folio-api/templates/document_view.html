@@ -1,286 +1,157 @@
 {% extends "base.html" %}
+{% import "partials/icons.html" as icons %}
 
 {% block title %}{{ document.title }} - Folio{% endblock %}
 
 {% block content %}
-<div class="doc-view">
-    <nav class="doc-view-nav">
-        <a href="/" class="back-link">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M19 12H5M12 19l-7-7 7-7"/>
-            </svg>
-            Back to Documents
-        </a>
-    </nav>
+<article class="doc-view">
+    <header class="doc-head">
+        <a href="/" class="back-link">{% call icons::arrow_left() %} Inbox</a>
+        <div class="doc-head-row">
+            <div class="doc-head-text">
+                <h1 class="title">{{ document.title }}</h1>
+                <p class="f-meta">{{ facts }}</p>
+            </div>
+            <div class="doc-actions">
+                {% if document.file_path.is_some() %}
+                <a href="/api/documents/{{ document.id }}/download" class="f-btn" download>{% call icons::download() %} Download</a>
+                <form action="/documents/{{ document.id }}/reprocess" method="post" data-turbo="false">
+                    <button type="submit" class="f-btn f-btn-quiet">{% call icons::refresh() %} Read again</button>
+                </form>
+                {% endif %}
+                <form action="/documents/{{ document.id }}/delete" method="post"
+                      data-controller="confirm"
+                      data-confirm-message-value="Delete '{{ document.title }}'? This cannot be undone."
+                      data-action="submit->confirm#confirm">
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{% call icons::trash() %} Delete</button>
+                </form>
+            </div>
+        </div>
+    </header>
 
-    <div class="doc-view-layout">
-        <!-- Document Preview -->
-        <div class="doc-preview" data-controller="page-viewer" data-page-viewer-document-id-value="{{ document.id }}" data-page-viewer-page-count-value="{% match document.page_count %}{% when Some with (count) %}{{ count }}{% when None %}1{% endmatch %}">
-            <div class="doc-preview-frame">
-                <img src="/documents/{{ document.id }}/page/1/thumbnail" alt="{{ document.title }}" class="doc-preview-image" data-page-viewer-target="image" />
-                <div class="doc-preview-overlay">
-                    {% if document.file_path.is_some() %}
-                    <a href="/api/documents/{{ document.id }}/download" class="doc-download-btn" download>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg>
-                        Download Original
-                    </a>
-                    {% endif %}
-                </div>
+    <div class="doc-layout">
+        <section class="pages" aria-label="Pages"
+                 data-controller="page-viewer"
+                 data-page-viewer-document-id-value="{{ document.id }}"
+                 data-page-viewer-page-count-value="{{ pages.len() }}">
+            <div class="f-sheet page-sheet">
+                <img src="/documents/{{ document.id }}/page/1/thumbnail" alt="Page 1 of {{ document.title }}" data-page-viewer-target="image">
             </div>
             {% if show_page_nav %}
-            {% match document.page_count %}
-            {% when Some with (page_count) %}
-            <div class="doc-page-nav">
-                <button type="button" class="doc-page-nav-btn" data-action="click->page-viewer#prevPage" data-page-viewer-target="prevBtn" disabled>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="15 18 9 12 15 6"/>
-                    </svg>
-                </button>
-                <span class="doc-page-info">
-                    <span data-page-viewer-target="currentPage">1</span> / {{ page_count }}
-                </span>
-                <button type="button" class="doc-page-nav-btn" data-action="click->page-viewer#nextPage" data-page-viewer-target="nextBtn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="9 18 15 12 9 6"/>
-                    </svg>
-                </button>
+            <div class="page-nav">
+                <button type="button" class="f-btn f-btn-quiet" data-action="click->page-viewer#prevPage" data-page-viewer-target="prevBtn" disabled>Previous</button>
+                <span class="f-meta">Page <span data-page-viewer-target="currentPage">1</span> of {{ pages.len() }}</span>
+                <button type="button" class="f-btn f-btn-quiet" data-action="click->page-viewer#nextPage" data-page-viewer-target="nextBtn">Next</button>
             </div>
-            {% when None %}
-            {% endmatch %}
+            <div class="page-thumbs">
+                {% for p in pages %}
+                <button type="button" class="f-thumb page-thumb" aria-label="Page {{ p }}" aria-current="{% if loop.first %}true{% else %}false{% endif %}"
+                        data-page="{{ p }}" data-page-viewer-target="thumb" data-action="click->page-viewer#select">
+                    <img src="/documents/{{ document.id }}/page/{{ p }}/thumbnail" alt="" loading="lazy">
+                </button>
+                {% endfor %}
+            </div>
             {% endif %}
-        </div>
+        </section>
 
-        <!-- Document Details -->
-        <div class="doc-details">
-            <header class="doc-header">
-                <h1 class="doc-title">{{ document.title }}</h1>
-                <div class="doc-subtitle">
-                    {% match document.original_filename %}
-                    {% when Some with (filename) %}
-                    <span class="doc-filename">{{ filename }}</span>
-                    {% when None %}
-                    {% endmatch %}
-                </div>
-            </header>
-
-            <section class="doc-meta-section">
-                <h2 class="doc-section-title">Classification</h2>
-                <div class="doc-classification-grid">
-                    <div class="doc-classification-item">
-                        <label class="doc-classification-label">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                                <circle cx="12" cy="7" r="4"/>
-                            </svg>
-                            Correspondent
-                        </label>
-                        <form action="/documents/{{ document.id }}/correspondent" method="post" class="doc-classification-form" data-turbo="false">
-                            <select name="correspondent_id" class="doc-select" onchange="this.form.requestSubmit()">
-                                <option value="">None</option>
+        <aside class="doc-aside">
+            <section class="panel">
+                <h2 class="heading">Details</h2>
+                <dl class="f-meta-list">
+                    <dt>From</dt>
+                    <dd>
+                        <form action="/documents/{{ document.id }}/correspondent" method="post" data-turbo="false">
+                            <select name="correspondent_id" class="select" aria-label="From" onchange="this.form.requestSubmit()">
+                                <option value="">Not set</option>
                                 {% for c in all_correspondents %}
                                 <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
                                 {% endfor %}
                             </select>
                         </form>
-                    </div>
+                    </dd>
 
-                    <div class="doc-classification-item">
-                        <label class="doc-classification-label">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                                <polyline points="14 2 14 8 20 8"/>
-                            </svg>
-                            Document Type
-                        </label>
-                        <form action="/documents/{{ document.id }}/document_type" method="post" class="doc-classification-form" data-turbo="false">
-                            <select name="document_type_id" class="doc-select" onchange="this.form.requestSubmit()">
-                                <option value="">None</option>
+                    <dt>Type</dt>
+                    <dd>
+                        <form action="/documents/{{ document.id }}/document_type" method="post" data-turbo="false">
+                            <select name="document_type_id" class="select" aria-label="Type" onchange="this.form.requestSubmit()">
+                                <option value="">Not set</option>
                                 {% for dt in all_document_types %}
                                 <option value="{{ dt.id }}" {% match document_type %}{% when Some with (dtype) %}{% if dt.id == dtype.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ dt.name }}</option>
                                 {% endfor %}
                             </select>
                         </form>
-                    </div>
-                </div>
+                    </dd>
 
-                <div class="doc-tags-section" data-controller="tags" data-tags-document-id-value="{{ document.id }}">
-                    <label class="doc-classification-label">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-                            <line x1="7" y1="7" x2="7.01" y2="7"/>
-                        </svg>
-                        Tags
-                    </label>
-                    <div class="doc-tags-list" data-tags-target="list">
-                        {% if tags.is_empty() %}
-                        <span class="doc-tags-empty" data-tags-target="empty">No tags</span>
-                        {% else %}
-                        {% for tag in tags %}
-                        <span class="doc-tag" data-tag-id="{{ tag.id }}" {% match tag.color %}{% when Some with (color) %}style="background-color: {{ color }}; color: white;"{% when None %}{% endmatch %}>
-                            {{ tag.name }}
-                            <button type="button" class="doc-tag-remove" title="Remove tag" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
-                        </span>
-                        {% endfor %}
-                        {% endif %}
-                    </div>
-                    <button type="button" class="doc-btn-manage-tags" data-action="click->tags#openModal">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <line x1="12" y1="5" x2="12" y2="19"/>
-                            <line x1="5" y1="12" x2="19" y2="12"/>
-                        </svg>
-                        Manage Tags
-                    </button>
+                    <dt>Added</dt>
+                    <dd><span class="f-meta">{{ document.created_at.format("%Y-%m-%d") }}</span></dd>
 
-                    <!-- Tags Modal -->
-                    <div class="tags-modal" data-tags-target="modal" data-action="click->tags#backdropClick">
-                        <div class="tags-modal-content">
-                            <div class="tags-modal-header">
-                                <h3>Manage Tags</h3>
-                                <button type="button" class="tags-modal-close" data-action="click->tags#closeModal">&times;</button>
-                            </div>
-                            <div class="tags-modal-body">
-                                <div class="tags-modal-section">
-                                    <h4>Current Tags</h4>
-                                    <div class="tags-modal-current" data-tags-target="currentTags">
-                                        {% if tags.is_empty() %}
-                                        <span class="doc-tags-empty">No tags assigned</span>
-                                        {% else %}
-                                        {% for tag in tags %}
-                                        <span class="doc-tag" data-tag-id="{{ tag.id }}" {% match tag.color %}{% when Some with (color) %}style="background-color: {{ color }}; color: white;"{% when None %}{% endmatch %}>
-                                            {{ tag.name }}
-                                            <button type="button" class="doc-tag-remove" title="Remove tag" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
-                                        </span>
-                                        {% endfor %}
-                                        {% endif %}
-                                    </div>
+                    {% match document.original_filename %}
+                    {% when Some with (filename) %}
+                    <dt>File</dt>
+                    <dd><span class="f-meta">{{ filename }}</span></dd>
+                    {% when None %}
+                    {% endmatch %}
+
+                    <dt>Tags</dt>
+                    <dd data-controller="tags" data-tags-document-id-value="{{ document.id }}">
+                        <div class="tag-list" data-tags-target="list">
+                            {% if tags.is_empty() %}
+                            <span class="tags-empty" data-tags-target="empty">No tags</span>
+                            {% else %}
+                            {% for tag in tags %}
+                            <span class="f-tag f-tag-{{ tag.tone }}" data-tag-id="{{ tag.id }}">
+                                {{ tag.name }}
+                                <button type="button" class="tag-remove" aria-label="Remove tag {{ tag.name }}" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
+                            </span>
+                            {% endfor %}
+                            {% endif %}
+                        </div>
+                        <button type="button" class="f-btn f-btn-quiet" data-action="click->tags#openModal">Edit tags</button>
+
+                        <div class="overlay" data-tags-target="modal" data-action="click->tags#backdropClick">
+                            <div class="f-palette dialog" role="dialog" aria-modal="true" aria-labelledby="tags-title">
+                                <div class="dialog-header">
+                                    <h2 class="heading" id="tags-title">Edit tags</h2>
+                                    <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Close" data-action="click->tags#closeModal">{% call icons::close() %}</button>
                                 </div>
-                                <div class="tags-modal-section">
-                                    <h4>Available Tags</h4>
-                                    <div class="tags-modal-available" data-tags-target="availableTags">
-                                        {% for t in all_tags %}
-                                        <button type="button" class="tag-option" data-action="click->tags#addTag" data-tag-id="{{ t.id }}" data-tag-name="{{ t.name }}" {% match t.color %}{% when Some with (color) %}data-tag-color="{{ color }}"{% when None %}{% endmatch %}>
-                                            <span class="tag-option-dot" {% match t.color %}{% when Some with (color) %}style="background-color: {{ color }}"{% when None %}style="background-color: #64748b"{% endmatch %}></span>
-                                            {{ t.name }}
-                                        </button>
-                                        {% endfor %}
-                                    </div>
+                                <p class="f-label">On this document</p>
+                                <div class="tag-list" data-tags-target="currentTags">
+                                    {% if tags.is_empty() %}
+                                    <span class="tags-empty">No tags assigned</span>
+                                    {% else %}
+                                    {% for tag in tags %}
+                                    <span class="f-tag f-tag-{{ tag.tone }}" data-tag-id="{{ tag.id }}">
+                                        {{ tag.name }}
+                                        <button type="button" class="tag-remove" aria-label="Remove tag {{ tag.name }}" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
+                                    </span>
+                                    {% endfor %}
+                                    {% endif %}
+                                </div>
+                                <p class="f-label">Add a tag</p>
+                                <div class="tag-list" data-tags-target="availableTags">
+                                    {% for t in all_tags %}
+                                    <button type="button" class="f-tag f-tag-{{ t.tone }} tag-option" data-action="click->tags#addTag" data-tag-id="{{ t.id }}" data-tag-name="{{ t.name }}" data-tag-tone="{{ t.tone }}">+ {{ t.name }}</button>
+                                    {% else %}
+                                    <span class="tags-empty">No tags yet. <a href="/manage">Create one</a>.</span>
+                                    {% endfor %}
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </div>
+                    </dd>
+                </dl>
             </section>
 
-            <section class="doc-meta-section">
-                <h2 class="doc-section-title">Properties</h2>
-                <div class="doc-meta-grid">
-                    <div class="doc-meta-item">
-                        <span class="doc-meta-label">Document ID</span>
-                        <span class="doc-meta-value doc-meta-mono">{{ document.id }}</span>
-                    </div>
-
-                    {% match document.mime_type %}
-                    {% when Some with (mime) %}
-                    <div class="doc-meta-item">
-                        <span class="doc-meta-label">File Type</span>
-                        <span class="doc-meta-value">
-                            <span class="doc-type-badge">{{ mime }}</span>
-                        </span>
-                    </div>
-                    {% when None %}
-                    {% endmatch %}
-
-                    <div class="doc-meta-item">
-                        <span class="doc-meta-label">Created</span>
-                        <span class="doc-meta-value">{{ document.created_at.format("%B %d, %Y at %H:%M") }}</span>
-                    </div>
-
-                    <div class="doc-meta-item">
-                        <span class="doc-meta-label">Last Modified</span>
-                        <span class="doc-meta-value">{{ document.updated_at.format("%B %d, %Y at %H:%M") }}</span>
-                    </div>
-
-                    {% match document.page_count %}
-                    {% when Some with (count) %}
-                    <div class="doc-meta-item">
-                        <span class="doc-meta-label">Pages</span>
-                        <span class="doc-meta-value">{{ count }}</span>
-                    </div>
-                    {% when None %}
-                    {% endmatch %}
-                </div>
+            <section class="panel">
+                <h2 class="heading">Text Folio read</h2>
+                {% match document.content %}
+                {% when Some with (content) %}
+                <pre class="ocr">{{ content }}</pre>
+                {% when None %}
+                <p><span class="f-status f-status-pending">{{ reading }}</span></p>
+                <p class="hint">The text appears here once Folio has read the file.</p>
+                {% endmatch %}
             </section>
-
-            {% match document.content %}
-            {% when Some with (content) %}
-            <section class="doc-content-section">
-                <h2 class="doc-section-title">
-                    Extracted Content
-                    <span class="doc-content-length">{{ content.len() }} characters</span>
-                </h2>
-                <div class="doc-content-box">
-                    <pre class="doc-content-text">{{ content }}</pre>
-                </div>
-            </section>
-            {% when None %}
-            <section class="doc-content-section">
-                <h2 class="doc-section-title">Content</h2>
-                <div class="doc-content-empty">
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <circle cx="12" cy="12" r="10"/>
-                        <path d="M12 6v6l4 2"/>
-                    </svg>
-                    <p>Text extraction pending...</p>
-                    <span>Content will appear here once OCR processing is complete.</span>
-                </div>
-            </section>
-            {% endmatch %}
-
-            <section class="doc-actions-section">
-                <h2 class="doc-section-title">Actions</h2>
-                <div class="doc-actions-grid">
-                    {% if document.file_path.is_some() %}
-                    <a href="/api/documents/{{ document.id }}/download" class="doc-action-btn doc-action-primary" download>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg>
-                        Download
-                    </a>
-                    <form action="/documents/{{ document.id }}/reprocess" method="post" class="doc-action-form" data-turbo="false">
-                        <button type="submit" class="doc-action-btn doc-action-secondary">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M23 4v6h-6"/>
-                                <path d="M1 20v-6h6"/>
-                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                            </svg>
-                            Reprocess
-                        </button>
-                    </form>
-                    {% endif %}
-                    <form action="/documents/{{ document.id }}/delete" method="post"
-                          data-controller="confirm"
-                          data-confirm-message-value="Are you sure you want to delete '{{ document.title }}'? This action cannot be undone."
-                          data-action="submit->confirm#confirm"
-                          class="doc-action-form">
-                        <button type="submit" class="doc-action-btn doc-action-danger">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <polyline points="3 6 5 6 21 6"/>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                                <line x1="10" y1="11" x2="10" y2="17"/>
-                                <line x1="14" y1="11" x2="14" y2="17"/>
-                            </svg>
-                            Delete
-                        </button>
-                    </form>
-                </div>
-            </section>
-        </div>
+        </aside>
     </div>
-</div>
+</article>
 {% endblock %}

@@ -11,13 +11,14 @@ use axum::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use folio_core::models::{
-    Correspondent, CreateDocument, Document, DocumentType, Tag, UpdateDocument,
-};
+use folio_core::events::DocumentEvent;
+use folio_core::models::{Correspondent, CreateDocument, Document, DocumentType, UpdateDocument};
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+
+use super::view::{self, Counts, DocumentRow, Nav, Sidebar, TagView};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -48,73 +49,102 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
-    title: String,
-    documents: Vec<Document>,
-    correspondents: Vec<Correspondent>,
-    document_types: Vec<DocumentType>,
-    tags: Vec<Tag>,
-    filter_correspondent_id: Option<String>,
-    filter_document_type_id: Option<String>,
-    filter_tag_id: Option<String>,
+    sidebar: Sidebar,
+    heading: &'static str,
+    lede: &'static str,
+    view_all: bool,
+    active_filter: Option<String>,
+    rows: Vec<DocumentRow>,
+    total: usize,
+    review_count: usize,
+    first_review: String,
 }
 
-/// Query parameters for filtering documents
+/// Query parameters for the index page
 #[derive(Debug, serde::Deserialize, Default)]
 pub struct FilterQuery {
+    view: Option<String>,
     correspondent_id: Option<String>,
     document_type_id: Option<String>,
     tag_id: Option<String>,
 }
 
-/// Main index page
+fn parse_id(value: &Option<String>) -> Option<Uuid> {
+    value
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| Uuid::parse_str(s).ok())
+}
+
+/// Main index page: the inbox, or every document when a view or filter asks for it
 async fn index_page(
     State(state): State<AppState>,
-    Query(filter_query): Query<FilterQuery>,
+    Query(query): Query<FilterQuery>,
 ) -> ApiResult<Html<String>> {
-    use folio_core::models::DocumentFilter;
+    use folio_core::models::{DocumentFilter, DocumentStatus};
 
-    // Parse UUIDs from strings, treating empty strings as None
-    let correspondent_id = filter_query
-        .correspondent_id
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| Uuid::parse_str(s).ok());
-    let document_type_id = filter_query
-        .document_type_id
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| Uuid::parse_str(s).ok());
-    let tag_id = filter_query
-        .tag_id
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| Uuid::parse_str(s).ok());
+    let correspondent_id = parse_id(&query.correspondent_id);
+    let document_type_id = parse_id(&query.document_type_id);
+    let tag_id = parse_id(&query.tag_id);
+    let filtered = correspondent_id.is_some() || document_type_id.is_some() || tag_id.is_some();
+    let view_all = filtered || query.view.as_deref() == Some("all");
 
-    let filter = if correspondent_id.is_some() || document_type_id.is_some() || tag_id.is_some() {
-        Some(DocumentFilter {
-            correspondent_id,
-            document_type_id,
-            tag_ids: tag_id.map(|id| vec![id]),
-            ..Default::default()
+    let all = state.document_repo.list(None).await?;
+    let sidebar =
+        Sidebar::build(&state, if view_all { Nav::All } else { Nav::Inbox }, &all).await?;
+    let counts = Counts::from_documents(&all);
+
+    let active_filter = correspondent_id
+        .and_then(|id| sidebar.correspondents.iter().find(|c| c.id == id))
+        .map(|c| c.name.clone())
+        .or_else(|| {
+            document_type_id
+                .and_then(|id| sidebar.document_types.iter().find(|t| t.id == id))
+                .map(|t| t.name.clone())
         })
+        .or_else(|| {
+            tag_id
+                .and_then(|id| sidebar.tags.iter().find(|t| t.id == id))
+                .map(|t| t.name.clone())
+        });
+
+    let documents = if filtered {
+        state
+            .document_repo
+            .list(Some(DocumentFilter {
+                correspondent_id,
+                document_type_id,
+                tag_ids: tag_id.map(|id| vec![id]),
+                ..Default::default()
+            }))
+            .await?
+    } else if view_all {
+        all
     } else {
-        None
+        all.into_iter()
+            .filter(|d| d.status() != DocumentStatus::Filed)
+            .collect()
     };
 
-    let documents = state.document_repo.list(filter).await?;
-    let correspondents = state.correspondent_repo.list().await?;
-    let document_types = state.document_type_repo.list().await?;
-    let tags = state.tag_repo.list().await?;
+    let (heading, lede) = if view_all {
+        ("All documents", "Everything Folio holds, newest first.")
+    } else {
+        (
+            "Inbox",
+            "New files land here until you have had a look at them.",
+        )
+    };
 
     let template = IndexTemplate {
-        title: "Folio - Document Management".to_string(),
-        documents,
-        correspondents,
-        document_types,
-        tags,
-        filter_correspondent_id: correspondent_id.map(|id| id.to_string()),
-        filter_document_type_id: document_type_id.map(|id| id.to_string()),
-        filter_tag_id: tag_id.map(|id| id.to_string()),
+        sidebar,
+        heading,
+        lede,
+        view_all,
+        active_filter,
+        rows: view::rows(&state, documents).await?,
+        total: counts.total,
+        review_count: counts.review,
+        first_review: counts.first_review,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -126,14 +156,21 @@ async fn index_page(
 #[derive(Template)]
 #[template(path = "partials/documents_frame.html")]
 struct DocumentsFrameTemplate {
-    documents: Vec<Document>,
+    rows: Vec<DocumentRow>,
+    total: usize,
+    view_all: bool,
 }
 
 /// Documents list (for Turbo Frame)
 async fn documents_list(State(state): State<AppState>) -> ApiResult<Html<String>> {
     let documents = state.document_repo.list(None).await?;
+    let total = documents.len();
 
-    let template = DocumentsFrameTemplate { documents };
+    let template = DocumentsFrameTemplate {
+        rows: view::rows(&state, documents).await?,
+        total,
+        view_all: true,
+    };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
@@ -144,13 +181,17 @@ async fn documents_list(State(state): State<AppState>) -> ApiResult<Html<String>
 #[derive(Template)]
 #[template(path = "document_view.html")]
 struct DocumentViewTemplate {
+    sidebar: Sidebar,
     document: Document,
+    facts: String,
+    reading: String,
+    pages: Vec<u32>,
     correspondent: Option<Correspondent>,
     document_type: Option<DocumentType>,
-    tags: Vec<Tag>,
+    tags: Vec<TagView>,
     all_correspondents: Vec<Correspondent>,
     all_document_types: Vec<DocumentType>,
-    all_tags: Vec<Tag>,
+    all_tags: Vec<TagView>,
     show_page_nav: bool,
 }
 
@@ -184,16 +225,45 @@ async fn document_detail(
         None
     };
 
-    let tags = state.document_repo.get_tags(document.id).await?;
+    let tags: Vec<TagView> = state
+        .document_repo
+        .get_tags(document.id)
+        .await?
+        .iter()
+        .map(TagView::from)
+        .collect();
 
     // Fetch all options for editing
     let all_correspondents = state.correspondent_repo.list().await?;
     let all_document_types = state.document_type_repo.list().await?;
-    let all_tags = state.tag_repo.list().await?;
+    let all_tags: Vec<TagView> = state
+        .tag_repo
+        .list()
+        .await?
+        .iter()
+        .map(TagView::from)
+        .collect();
 
     let show_page_nav = document.page_count.map(|c| c > 1).unwrap_or(false);
+    let pages: Vec<u32> = (1..=document.page_count.unwrap_or(1).max(1)).collect();
+
+    let mut facts = Vec::new();
+    if let Some(count) = document.page_count {
+        facts.push(format!(
+            "{count} {}",
+            if count == 1 { "page" } else { "pages" }
+        ));
+    }
+    if let Some(mime) = &document.mime_type {
+        facts.push(mime.clone());
+    }
+    facts.push(format!("added {}", document.created_at.format("%Y-%m-%d")));
 
     let template = DocumentViewTemplate {
+        sidebar: Sidebar::load(&state, Nav::None).await?,
+        facts: facts.join(" · "),
+        reading: view::reading_label(document.page_count),
+        pages,
         document,
         correspondent,
         document_type,
@@ -315,19 +385,55 @@ async fn document_page_thumbnail(
     Ok(([(header::CONTENT_TYPE, "image/svg+xml")], placeholder).into_response())
 }
 
-/// Upload success template (Turbo Stream response)
+/// Turbo Streams that bring a list and the counters up to date
 #[derive(Template)]
-#[template(path = "partials/upload_success.html")]
-struct UploadSuccessTemplate {
-    document: Document,
-    documents: Vec<Document>,
+#[template(path = "partials/document_streams.html")]
+pub(super) struct DocumentStreams {
+    row: Option<DocumentRow>,
+    prepend: bool,
+    removed: Option<Uuid>,
+    counts: Counts,
 }
 
-/// Upload a document (returns Turbo Stream)
-async fn upload_document(
-    State(state): State<AppState>,
+impl DocumentStreams {
+    pub(super) async fn added(state: &AppState, document: Document) -> ApiResult<Self> {
+        Ok(Self {
+            row: Some(view::row(state, document).await?),
+            prepend: true,
+            removed: None,
+            counts: Counts::load(state).await?,
+        })
+    }
+
+    pub(super) async fn changed(state: &AppState, document: Document) -> ApiResult<Self> {
+        Ok(Self {
+            row: Some(view::row(state, document).await?),
+            prepend: false,
+            removed: None,
+            counts: Counts::load(state).await?,
+        })
+    }
+
+    pub(super) async fn removed(state: &AppState, id: Uuid) -> ApiResult<Self> {
+        Ok(Self {
+            row: None,
+            prepend: false,
+            removed: Some(id),
+            counts: Counts::load(state).await?,
+        })
+    }
+
+    pub(super) fn into_html(self) -> String {
+        self.render()
+            .unwrap_or_else(|e| format!("Error rendering streams: {}", e))
+    }
+}
+
+/// Read the uploaded file out of a multipart body, store it and queue processing
+pub(super) async fn store_upload(
+    state: &AppState,
     mut multipart: Multipart,
-) -> ApiResult<Response> {
+) -> ApiResult<Document> {
     debug!("Starting document upload (HTML)");
 
     let mut title: Option<String> = None;
@@ -415,29 +521,25 @@ async fn upload_document(
         .await?
         .unwrap_or(document);
 
-    // Fetch all documents for the list update
-    let documents = state.document_repo.list(None).await?;
+    state.event_broadcaster.send(DocumentEvent::Created {
+        document_id: document.id,
+    });
 
-    let template = UploadSuccessTemplate {
-        document,
-        documents,
-    };
+    Ok(document)
+}
 
-    let html = template
-        .render()
-        .unwrap_or_else(|e| format!("Error rendering upload success: {}", e));
+/// Upload a document (returns Turbo Stream)
+async fn upload_document(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> ApiResult<Response> {
+    let document = store_upload(&state, multipart).await?;
+    let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
 }
 
-/// Delete success template (Turbo Stream response)
-#[derive(Template)]
-#[template(path = "partials/delete_success.html")]
-struct DeleteSuccessTemplate {
-    document_id: Uuid,
-}
-
-/// Delete a document (returns Turbo Stream)
+/// Delete a document, then go back to the inbox
 async fn delete_document(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -449,16 +551,12 @@ async fn delete_document(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
-    // Delete the document
     state.document_repo.delete(id).await?;
+    state
+        .event_broadcaster
+        .send(DocumentEvent::Deleted { document_id: id });
 
-    let template = DeleteSuccessTemplate { document_id: id };
-
-    let html = template
-        .render()
-        .unwrap_or_else(|e| format!("Error rendering delete success: {}", e));
-
-    Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
+    Ok(Redirect::to("/").into_response())
 }
 
 /// Reprocess a document (re-run OCR, thumbnails, embeddings)
@@ -508,17 +606,11 @@ pub struct SearchQuery {
     q: String,
 }
 
-/// Search result with percentage score
-pub struct SearchResultView {
-    pub document: Document,
-    pub score_percent: String,
-}
-
 /// Search results template
 #[derive(Template)]
 #[template(path = "partials/search_results.html")]
 struct SearchResultsTemplate {
-    results: Vec<SearchResultView>,
+    rows: Vec<DocumentRow>,
 }
 
 /// Search documents (returns Turbo Frame)
@@ -526,45 +618,37 @@ async fn search_documents(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Html<String>> {
-    // Try to generate embedding for query - fall back to empty results if AI not available
-    let results = match state.embedding_service.generate_embedding(&query.q).await {
+    // Try to generate embedding for query - fall back to a title search if AI is not available
+    let documents = match state.embedding_service.generate_embedding(&query.q).await {
         Ok(query_embedding) => {
-            // Search for similar documents
             let search_results = state
                 .search_service
                 .search(&query_embedding, 10)
                 .await
                 .unwrap_or_default();
 
-            // Fetch full document details and format scores
-            let mut results = Vec::new();
+            let mut documents = Vec::new();
             for result in search_results {
                 if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await
                 {
-                    results.push(SearchResultView {
-                        document,
-                        score_percent: format!("{:.1}", result.score * 100.0),
-                    });
+                    documents.push(document);
                 }
             }
-            results
+            documents
         }
         Err(_) => {
-            // AI not configured - fall back to simple title search
             let all_docs = state.document_repo.list(None).await.unwrap_or_default();
             let query_lower = query.q.to_lowercase();
             all_docs
                 .into_iter()
                 .filter(|doc| doc.title.to_lowercase().contains(&query_lower))
-                .map(|document| SearchResultView {
-                    document,
-                    score_percent: "100.0".to_string(),
-                })
                 .collect()
         }
     };
 
-    let template = SearchResultsTemplate { results };
+    let template = SearchResultsTemplate {
+        rows: view::rows(&state, documents).await?,
+    };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering search results: {}", e)

@@ -8,6 +8,7 @@ mod manage;
 mod pages;
 mod settings;
 mod tags;
+mod view;
 
 use axum::{extract::DefaultBodyLimit, Router};
 use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};

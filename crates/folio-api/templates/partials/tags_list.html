@@ -1,3 +1,4 @@
+{% import "partials/icons.html" as icons %}
 <turbo-frame id="tags-list">
     <ul class="manage-list">
         {% if tags.is_empty() %}
@@ -5,51 +6,26 @@
         {% else %}
         {% for tag in tags %}
         <li class="manage-list-item" id="tag-{{ tag.id }}">
-            <span class="manage-item-name">
-                {% match tag.color %}
-                {% when Some with (color) %}
-                <span class="tag-color-dot" style="background-color: {{ color }}"></span>
-                {% when None %}
-                <span class="tag-color-dot" style="background-color: #64748b"></span>
-                {% endmatch %}
-                {{ tag.name }}
-            </span>
+            <span class="manage-item-name"><span class="f-tag f-tag-{{ tag.tone() }}">{{ tag.name }}</span></span>
             <div class="manage-item-actions">
-                <button type="button" class="manage-btn-edit"
-                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                    </svg>
-                </button>
+                <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename tag {{ tag.name }}"
+                        onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{% call icons::pencil() %}</button>
                 <form action="/manage/tags/{{ tag.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
                       data-confirm-message-value="Delete tag '{{ tag.name }}'?"
                       data-action="submit->confirm#confirm"
                       data-turbo-frame="tags-list">
-                    <button type="submit" class="manage-btn-delete">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <polyline points="3 6 5 6 21 6"/>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                        </svg>
-                    </button>
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger icon-btn" aria-label="Delete tag {{ tag.name }}">{% call icons::trash() %}</button>
                 </form>
             </div>
             <div class="manage-edit-form">
                 <form action="/manage/tags/{{ tag.id }}/update" method="post"
                       data-turbo-frame="tags-list">
-                    <div class="tag-form-row">
-                        <input type="text" name="name" value="{{ tag.name }}" required>
-                        {% match tag.color %}
-                        {% when Some with (color) %}
-                        <input type="color" name="color" value="{{ color }}" class="color-picker">
-                        {% when None %}
-                        <input type="color" name="color" value="#2563eb" class="color-picker">
-                        {% endmatch %}
-                    </div>
+                    <label class="sr-only" for="edit-tag-{{ tag.id }}">Name</label>
+                    <input class="input" id="edit-tag-{{ tag.id }}" type="text" name="name" value="{{ tag.name }}" required>
                     <div class="manage-edit-actions">
-                        <button type="submit" class="btn-small">Save</button>
-                        <button type="button" class="btn-small btn-secondary"
+                        <button type="submit" class="f-btn f-btn-primary">Save</button>
+                        <button type="button" class="f-btn f-btn-quiet"
                                 onclick="this.closest('.manage-edit-form').classList.remove('active')">Cancel</button>
                     </div>
                 </form>

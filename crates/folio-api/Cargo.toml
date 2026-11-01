@@ -36,3 +36,7 @@ tracing = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"
