@@ -24,6 +24,9 @@ tower-livereload = { workspace = true }
 askama = { workspace = true }
 askama_axum = { workspace = true }
 
+# Embedded static assets
+rust-embed = { workspace = true }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -41,5 +44,10 @@ tracing = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 
+# Async traits
+async-trait = { workspace = true }
+
 [dev-dependencies]
+http-body-util = "0.1"
 tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["test-util"] }

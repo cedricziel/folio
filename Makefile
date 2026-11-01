@@ -1,4 +1,4 @@
-.PHONY: build run test lint format clean dev setup openapi
+.PHONY: build run test lint format clean dev setup tokens assets openapi apple apple-test apple-tokens apple-project e2e
 
 # Default target
 all: build
@@ -30,6 +30,15 @@ lint:
 # Format code
 format:
 	cargo fmt --all
+
+# Regenerate static/tokens.css and static/components.css from design/
+tokens:
+	cargo run -p xtask -- tokens
+
+# Re-copy vendored scripts and fonts from npm into static/
+assets:
+	npm ci --prefix web
+	npm run vendor --prefix web
 
 # Regenerate openapi/openapi.json from the Rust code
 openapi:
@@ -64,3 +73,24 @@ migrate-new:
 # Check project (lint + test + format-check)
 check: lint format-check test
 	@echo "All checks passed!"
+
+# Apple app: test FolioKit, generate the Xcode project, build for macOS
+apple: apple-test apple-project
+	cd apple/Folio && xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio \
+		-destination 'platform=macOS' -skipPackagePluginValidation -skipMacroValidation \
+		CODE_SIGNING_ALLOWED=NO
+
+apple-test:
+	cd apple/FolioKit && xcrun swift test
+
+# Generate apple/Folio/Folio.xcodeproj from project.yml (requires `brew install xcodegen`)
+apple-project:
+	cd apple/Folio && xcodegen generate
+
+# Regenerate FolioTheme.swift and the color asset catalog from design/tokens.json
+apple-tokens:
+	cd apple/FolioKit && xcrun swift run folio-tokengen ../../design/tokens.json .
+
+# End-to-end tests (Playwright) against an ephemeral instance; rebuilds folio-app first
+e2e: build
+	cd e2e && npm ci && npx playwright install chromium && npx playwright test

@@ -55,7 +55,7 @@ enabled = true            # serve /mcp
 allowed_hosts = []        # extra Host headers to accept, e.g. ["folio.example.com"]
 ```
 
-The `mcp.enabled` setting stored in the database (`/settings`) takes precedence over `config.toml` and applies without a restart. `FOLIO_MCP_ENABLED` overrides the file.
+The `mcp.enabled` setting stored in the database (`/settings`) takes precedence over `config.toml` and applies without a restart. `FOLIO_MCP__ENABLED` overrides the file.
 
 By default only loopback `Host` headers are accepted, which protects a local server from DNS rebinding. List other hostnames in `allowed_hosts` when you reach Folio through a reverse proxy.
 

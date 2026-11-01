@@ -16,6 +16,8 @@ use folio_core::models::AiSettings;
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+use super::view::{Nav, Sidebar};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/settings", get(settings_page))
@@ -26,6 +28,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate {
+    sidebar: Sidebar,
     title: String,
     ai_settings: AiSettings,
 }
@@ -36,6 +39,7 @@ async fn settings_page(State(state): State<AppState>) -> ApiResult<Html<String>>
     let ai_settings = AiSettings::from_settings(&settings);
 
     let template = SettingsTemplate {
+        sidebar: Sidebar::load(&state, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
         ai_settings,
     };

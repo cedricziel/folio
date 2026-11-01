@@ -1,3 +1,6 @@
+# Optional: every value below is also the built-in default.
+# Environment variables override this file; see docs/configuration.md.
+
 [server]
 host = "127.0.0.1"
 port = 3000
@@ -12,9 +15,11 @@ path = "./data"
 # Provider: "openai", "anthropic", or "local"
 provider = "openai"
 # API keys are loaded from environment variables:
-# - FOLIO_AI_OPENAI_API_KEY
-# - FOLIO_AI_ANTHROPIC_API_KEY
+# - FOLIO_AI__OPENAI_API_KEY
+# - FOLIO_AI__ANTHROPIC_API_KEY
 
 [mcp]
-# Serve the MCP endpoint at /mcp (also controllable via the "mcp.enabled" setting)
+# Serve the MCP endpoint at /mcp (the "mcp.enabled" setting in the database overrides this)
 enabled = true
+# Extra Host headers to accept besides loopback, e.g. ["folio.example.com"]
+allowed_hosts = []
