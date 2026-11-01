@@ -26,7 +26,7 @@ tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
 tower-livereload = "0.9"
 
 # HTML templating (for HTMX responses)
-askama = "0.12"
+askama = "0.16"
 askama_axum = "0.4"
 
 # Database
