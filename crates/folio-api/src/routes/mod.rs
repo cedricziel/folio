@@ -6,6 +6,7 @@ mod documents;
 mod events;
 mod manage;
 mod pages;
+mod pwa;
 mod settings;
 mod tags;
 mod view;
@@ -24,6 +25,8 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/api", api_router())
         // Page routes (HTMX)
         .merge(pages::router())
+        // Manifest, service worker and share target
+        .merge(pwa::router())
         // Management routes (correspondents, document types, tags)
         .merge(manage::router())
         // Settings routes
