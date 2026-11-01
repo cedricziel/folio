@@ -170,6 +170,7 @@ pub(crate) async fn delete_document(
 ) -> ApiResult<Json<()>> {
     purge_document_files(&state, id).await?;
     state.document_repo.delete(id).await?;
+    folio_infra::telemetry::metrics().documents_changed(-1);
     Ok(Json(()))
 }
 
@@ -264,6 +265,8 @@ pub(crate) async fn upload_document(
             document_type_id: None,
         })
         .await?;
+
+    folio_infra::telemetry::metrics().documents_changed(1);
 
     // Store the file
     store_original(&state, document.id, file_data).await;

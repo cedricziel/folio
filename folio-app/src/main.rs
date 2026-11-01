@@ -7,12 +7,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tracing::info;
-use tracing_subscriber::FmtSubscriber;
 
 use folio_api::{create_router, AppState};
 use folio_core::{ports::HealthCheck, EventBroadcaster};
 use folio_infra::{
-    build_store, migrate_legacy_layout, Config, Database, DatabaseHealthCheck,
+    build_store, migrate_legacy_layout, telemetry, Config, Database, DatabaseHealthCheck,
     DynamicEmbeddingService, DynamicOcrService, ThumbnailService, Worker, WorkerConfig,
 };
 
@@ -30,10 +29,11 @@ async fn main() -> Result<()> {
         };
     }
 
-    // Initialize logging
-    FmtSubscriber::builder()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Initialize logging and, when OTEL_* variables ask for it, OTLP export
+    let telemetry = telemetry::init();
+    if telemetry.is_enabled() {
+        info!("OpenTelemetry export enabled");
+    }
 
     info!("Starting Folio...");
 
@@ -79,6 +79,9 @@ async fn main() -> Result<()> {
     migrate_legacy_layout(store.as_ref(), document_repo.as_ref())
         .await
         .context("Failed to migrate stored files to object keys")?;
+
+    let stored_documents = document_repo.list(None).await.map(|d| d.len()).unwrap_or(0);
+    telemetry::metrics().documents_changed(stored_documents as i64);
 
     // Create AI services (dynamic - reads from database settings with config.toml fallback)
     let ocr_service = Arc::new(DynamicOcrService::new(
@@ -167,6 +170,9 @@ async fn main() -> Result<()> {
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), worker_handle).await;
 
     info!("Folio shutdown complete");
+
+    // Flush pending spans, metrics and logs; the exporters block while sending.
+    let _ = tokio::task::spawn_blocking(move || telemetry.shutdown()).await;
     Ok(())
 }
 
