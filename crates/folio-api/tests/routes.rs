@@ -8,7 +8,10 @@ use axum::{
     Router,
 };
 use folio_api::{create_router, AppState};
-use folio_core::{models::CreateDocument, EventBroadcaster};
+use folio_core::{
+    models::{CreateDocument, CreateTag},
+    EventBroadcaster,
+};
 use folio_infra::{
     create_pool, run_migrations, Config, DynamicEmbeddingService, DynamicOcrService, JobQueue,
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
@@ -69,6 +72,15 @@ async fn test_app() -> TestApp {
 }
 
 async fn request(app: &TestApp, method: &str, uri: &str) -> (StatusCode, serde_json::Value) {
+    request_json(app, method, uri, None).await
+}
+
+async fn request_json(
+    app: &TestApp,
+    method: &str,
+    uri: &str,
+    body: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
     let response = app
         .router
         .clone()
@@ -76,7 +88,8 @@ async fn request(app: &TestApp, method: &str, uri: &str) -> (StatusCode, serde_j
             Request::builder()
                 .method(method)
                 .uri(uri)
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
                 .unwrap(),
         )
         .await
@@ -147,4 +160,28 @@ async fn nested_tag_route_matches() {
     .await;
 
     assert_eq!(status, StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn update_tag_clears_color_on_null_and_keeps_it_when_absent() {
+    let app = test_app().await;
+    let tag = app
+        .state
+        .tag_repo
+        .create(CreateTag {
+            name: "Tax".into(),
+            color: Some("#ff5733".into()),
+        })
+        .await
+        .unwrap();
+    let uri = format!("/api/tags/{}", tag.id);
+
+    let (status, body) = request_json(&app, "PUT", &uri, Some(r#"{"name":"Taxes"}"#)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["color"], "#ff5733");
+
+    let (status, body) = request_json(&app, "PUT", &uri, Some(r#"{"color":null}"#)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["color"].is_null());
+    assert_eq!(body["name"], "Taxes");
 }

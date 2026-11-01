@@ -103,8 +103,18 @@ pub(crate) async fn create_tag(
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateTagRequest {
     name: Option<String>,
+    /// Omit to keep the current color; send `null` to clear it
+    #[serde(default, deserialize_with = "deserialize_some")]
     #[schema(value_type = Option<String>)]
     color: Option<Option<String>>,
+}
+
+/// Distinguishes an explicit `null` (`Some(None)`) from a missing field (`None`).
+fn deserialize_some<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Update a tag

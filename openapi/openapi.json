@@ -1716,7 +1716,8 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Omit to keep the current color; send `null` to clear it"
           },
           "name": {
             "type": [
