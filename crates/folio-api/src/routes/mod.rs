@@ -16,7 +16,7 @@ mod view;
 pub use events::turbo_streams_for;
 
 use axum::{extract::DefaultBodyLimit, Router};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::cors::CorsLayer;
 
 pub use health::HealthChecks;
 
@@ -26,7 +26,7 @@ use crate::state::AppState;
 pub fn create_router(state: AppState) -> Router {
     let health = health::router(state.health_checks.clone());
 
-    let router = Router::new()
+    let routes = Router::new()
         // API routes
         .nest("/api", api_router())
         // OpenAPI spec and docs viewer
@@ -42,9 +42,10 @@ pub fn create_router(state: AppState) -> Router {
         // SSE events
         .merge(events::router())
         // Static files
-        .merge(assets::router())
+        .merge(assets::router());
+
+    let router = crate::telemetry::instrument(routes)
         // Middleware
-        .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))

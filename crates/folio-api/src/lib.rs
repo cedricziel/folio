@@ -7,6 +7,7 @@ pub mod events;
 pub mod openapi;
 pub mod routes;
 pub mod state;
+pub mod telemetry;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use routes::create_router;

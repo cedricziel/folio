@@ -40,6 +40,9 @@ thiserror = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-http = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
@@ -48,6 +51,8 @@ uuid = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+tracing-subscriber = { workspace = true }
 http-body-util = "0.1"
 tower = { workspace = true, features = ["util"] }
 tokio = { workspace = true, features = ["test-util"] }
