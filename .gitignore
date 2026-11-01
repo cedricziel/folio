@@ -31,4 +31,9 @@
 # SQLx offline mode
 .sqlx/
 *.db
-.claude/
+# Claude Code: track shared config, hooks, skills and commands; keep local state and worktrees out
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+!.claude/commands/

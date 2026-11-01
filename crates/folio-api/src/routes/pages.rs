@@ -27,21 +27,21 @@ pub fn router() -> Router<AppState> {
         .route("/documents/upload", post(upload_document))
         .route("/documents/search", get(search_documents))
         // Parameterized routes come last
-        .route("/documents/:id", get(document_detail))
-        .route("/documents/:id/thumbnail", get(document_thumbnail))
+        .route("/documents/{id}", get(document_detail))
+        .route("/documents/{id}/thumbnail", get(document_thumbnail))
         .route(
-            "/documents/:id/page/:page/thumbnail",
+            "/documents/{id}/page/{page}/thumbnail",
             get(document_page_thumbnail),
         )
-        .route("/documents/:id/delete", post(delete_document))
+        .route("/documents/{id}/delete", post(delete_document))
         .route(
-            "/documents/:id/correspondent",
+            "/documents/{id}/correspondent",
             post(set_document_correspondent),
         )
-        .route("/documents/:id/document_type", post(set_document_type))
-        .route("/documents/:id/tags", post(add_document_tag))
-        .route("/documents/:id/tags/:tag_id", post(remove_document_tag))
-        .route("/documents/:id/reprocess", post(reprocess_document))
+        .route("/documents/{id}/document_type", post(set_document_type))
+        .route("/documents/{id}/tags", post(add_document_tag))
+        .route("/documents/{id}/tags/{tag_id}", post(remove_document_tag))
+        .route("/documents/{id}/reprocess", post(reprocess_document))
 }
 
 /// Index page template

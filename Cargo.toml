@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2021"
 license = "AGPL-3.0-only"
 authors = ["Folio Contributors"]
@@ -20,17 +20,17 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 
 # Web framework
-axum = { version = "0.7", features = ["macros", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
-tower-livereload = "0.9"
+tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
+tower-livereload = "0.10"
 
 # HTML templating (for HTMX responses)
-askama = "0.12"
+askama = "0.16"
 askama_axum = "0.4"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -54,7 +54,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # HTTP client (for AI APIs)
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
+
+# OpenAPI
+utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
+utoipa-scalar = "0.4"
 
 # Image processing
 image = "0.25"

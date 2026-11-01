@@ -23,7 +23,7 @@ Use `xcrun swift …` and `xcrun xcodebuild …` rather than bare `swift`, so th
 
 ## How it fits together
 
-- **API client.** `FolioKit/Sources/FolioAPI/openapi.json` plus `openapi-generator-config.yaml` feed the swift-openapi-generator build plugin. The spec is a copy of the server's `openapi/openapi.json`; once that file is on `main`, replace the copy with a symlink to it. `LiveFolioService` wraps the client behind the `FolioService` protocol, which the view models and tests use. Uploads and downloads go through `URLSession` directly because the generated client cannot set per-part content types.
+- **API client.** `FolioKit/Sources/FolioAPI/openapi.json` plus `openapi-generator-config.yaml` feed the swift-openapi-generator build plugin. The spec is a symlink to the server's `openapi/openapi.json`. `LiveFolioService` wraps the client behind the `FolioService` protocol, which the view models and tests use. Uploads and downloads go through `URLSession` directly because the generated client cannot set per-part content types.
 - **Auth.** The API has none yet. `BearerTokenProvider` is wired into both the generated client and the raw requests, so a Keychain-backed provider can be added without touching callers.
 - **Design tokens.** `design/tokens.json` is the source. `make apple-tokens` regenerates `FolioTheme.swift` and the `Colors.xcassets` asset catalog; a test fails when the committed output drifts from the tokens.
 - **Share extension.** Reads the server address from the `group.com.cedricziel.folio` App Group, so both targets need a signing team with that group before it works on a device.

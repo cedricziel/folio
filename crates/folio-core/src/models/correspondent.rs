@@ -7,8 +7,10 @@ use super::Id;
 
 /// A correspondent (sender/source) of documents
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Correspondent {
     /// Unique identifier
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
 
     /// Correspondent name (unique)

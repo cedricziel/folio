@@ -7,8 +7,10 @@ use super::Id;
 
 /// A document type for classification (e.g., Invoice, Receipt, Contract)
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct DocumentType {
     /// Unique identifier
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
 
     /// Type name (unique)
