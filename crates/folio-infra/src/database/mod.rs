@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use sqlx::{PgPool, SqlitePool};
 
+use folio_auth::AuthStore;
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, SearchService,
     SettingsRepository, TagRepository, WorkflowRepository,
@@ -26,14 +27,14 @@ use crate::queue::JobQueue;
 
 pub use health::DatabaseHealthCheck;
 pub use postgres::{
-    PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
-    PostgresSearchService, PostgresSettingsRepository, PostgresTagRepository,
-    PostgresWorkflowRepository,
+    PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
+    PostgresDocumentTypeRepository, PostgresSearchService, PostgresSettingsRepository,
+    PostgresTagRepository, PostgresWorkflowRepository,
 };
 pub use sqlite::{
-    create_pool, run_migrations, SqliteCorrespondentRepository, SqliteDocumentRepository,
-    SqliteDocumentTypeRepository, SqliteSearchService, SqliteSettingsRepository,
-    SqliteTagRepository, SqliteWorkflowRepository,
+    create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteSearchService,
+    SqliteSettingsRepository, SqliteTagRepository, SqliteWorkflowRepository,
 };
 
 /// Supported database backends
@@ -95,6 +96,7 @@ pub struct Repositories {
     pub workflows: Arc<dyn WorkflowRepository>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
+    pub auth: Arc<dyn AuthStore>,
 }
 
 impl Database {
@@ -135,6 +137,7 @@ impl Database {
                 workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
                 search: Arc::new(SqliteSearchService::new(pool.clone())),
                 jobs: JobQueue::sqlite(pool.clone()),
+                auth: Arc::new(SqliteAuthStore::new(pool.clone())),
             },
             Self::Postgres(pool) => Repositories {
                 documents: Arc::new(PostgresDocumentRepository::new(pool.clone())),
@@ -145,6 +148,7 @@ impl Database {
                 workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
                 search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                 jobs: JobQueue::postgres(pool.clone()),
+                auth: Arc::new(PostgresAuthStore::new(pool.clone())),
             },
         }
     }

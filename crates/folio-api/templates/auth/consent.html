@@ -1,0 +1,17 @@
+{% extends "auth/layout.html" %}
+{% block title %}Allow access to Folio{% endblock %}
+{% block content %}
+<h1 class="auth-title">{{ headline }}</h1>
+<p class="auth-lede">You are signed in as {{ username }}. After you allow, this application is sent back to <span class="f-meta">{{ redirect_host }}</span>.</p>
+<ul class="auth-scopes">
+    {% for scope in scopes %}<li>{{ scope }}</li>{% endfor %}
+</ul>
+<div class="f-notice">Only continue if you started this connection yourself.</div>
+<form method="post" action="/oauth/authorize" class="auth-actions">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% for field in fields %}<input type="hidden" name="{{ field.0 }}" value="{{ field.1 }}">
+    {% endfor %}
+    <button class="f-btn f-btn-primary" type="submit" name="decision" value="allow">Allow</button>
+    <button class="f-btn f-btn-quiet" type="submit" name="decision" value="deny">Cancel</button>
+</form>
+{% endblock %}
