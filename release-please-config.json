@@ -5,7 +5,6 @@
       "release-type": "simple",
       "versioning": "prerelease",
       "prerelease": true,
-      "prerelease-type": "alpha",
       "package-name": "folio",
       "include-component-in-tag": false,
       "extra-files": [
