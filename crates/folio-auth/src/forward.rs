@@ -26,6 +26,8 @@ pub struct ForwardAuth {
     admin_group: Option<String>,
     admin_role: Option<String>,
     secret: Option<(HeaderName, String)>,
+    /// Lifetime of sessions created from forward-auth logins.
+    pub session_ttl_secs: i64,
     trusted: Vec<IpNet>,
 }
 
@@ -51,6 +53,7 @@ pub struct ForwardConfig {
     /// When set, the proxy must send this value in `secret_header`.
     pub shared_secret: Option<String>,
     pub secret_header: String,
+    pub session_ttl_secs: i64,
 }
 
 impl Default for ForwardConfig {
@@ -67,6 +70,7 @@ impl Default for ForwardConfig {
             admin_role: None,
             shared_secret: None,
             secret_header: "X-Folio-Proxy-Secret".into(),
+            session_ttl_secs: 12 * 3600,
         }
     }
 }
@@ -114,6 +118,7 @@ impl ForwardAuth {
             admin_group,
             admin_role,
             secret,
+            session_ttl_secs: config.session_ttl_secs,
             trusted,
         })
     }

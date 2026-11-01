@@ -139,6 +139,8 @@ pub struct ForwardAuthConfig {
     /// When set, the proxy must also send it in `secret_header`.
     pub shared_secret: Option<String>,
     pub secret_header: String,
+    /// Lifetime of sessions created by forward-auth logins, in seconds.
+    pub session_ttl_secs: u64,
 }
 
 impl Default for ForwardAuthConfig {
@@ -156,6 +158,7 @@ impl Default for ForwardAuthConfig {
             admin_role: None,
             shared_secret: None,
             secret_header: "X-Folio-Proxy-Secret".to_string(),
+            session_ttl_secs: 12 * 3600,
         }
     }
 }
@@ -196,6 +199,8 @@ pub struct McpConfig {
 pub enum ValueKind {
     Str,
     Port,
+    /// A non-negative whole number
+    Int,
     Bool,
     /// Comma-separated values
     List,
@@ -310,6 +315,12 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_AUTH__FORWARD__SECRET_HEADER",
         legacy_env: &[],
         kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.forward.session_ttl_secs",
+        env: "FOLIO_AUTH__FORWARD__SESSION_TTL_SECS",
+        legacy_env: &[],
+        kind: ValueKind::Int,
     },
     Setting {
         key: "database.url",
@@ -451,6 +462,11 @@ fn to_value(setting: &Setting, raw: String) -> Result<figment::value::Value, fig
             .parse::<u16>()
             .map(Value::from)
             .map_err(|_| invalid("a port number")),
+        ValueKind::Int => raw
+            .trim()
+            .parse::<u64>()
+            .map(Value::from)
+            .map_err(|_| invalid("a whole number")),
         ValueKind::List => {
             let items: Vec<&str> = raw
                 .split(',')
@@ -519,6 +535,7 @@ mod tests {
             let (sample, expected) = match setting.kind {
                 ValueKind::Str => ("sample-value", "sample-value"),
                 ValueKind::Port => ("4242", "4242"),
+                ValueKind::Int => ("4242", "4242"),
                 ValueKind::Bool => ("true", "true"),
                 ValueKind::List => ("a.example, b.example", r#"["a.example","b.example"]"#),
             };
@@ -540,6 +557,7 @@ mod tests {
                 let (sample, expected) = match setting.kind {
                     ValueKind::Str => ("legacy-value", "legacy-value"),
                     ValueKind::Port => ("4343", "4343"),
+                    ValueKind::Int => ("4343", "4343"),
                     ValueKind::Bool => ("true", "true"),
                     ValueKind::List => ("legacy.example", r#"["legacy.example"]"#),
                 };

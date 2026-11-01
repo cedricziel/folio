@@ -807,7 +807,9 @@ mod forward {
     }
 
     fn with_identity(uri: &str, user: &str, extra: &[(&str, &str)]) -> Request<Body> {
-        let mut b = Request::get(uri).header("Remote-User", user);
+        let mut b = Request::get(uri)
+            .header("Accept", "text/html")
+            .header("Remote-User", user);
         for (k, v) in extra {
             b = b.header(*k, *v);
         }
@@ -1199,6 +1201,90 @@ mod forward {
         assert_eq!(f.store.count_users().await.unwrap(), 1);
     }
 
+    async fn session_count(f: &Fwd) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap()
+    }
+
+    fn session_cookie(res: &Resp) -> String {
+        res.cookies()
+            .into_iter()
+            .find(|c| c.starts_with("folio_session="))
+            .expect("session cookie")
+    }
+
+    #[tokio::test]
+    async fn forward_sessions_are_short_lived_and_reused() {
+        let f = fwd_app(|_| {}).await;
+        let first = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let set_cookie = first
+            .headers
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .find(|c| c.starts_with("folio_session="))
+            .unwrap();
+        assert!(set_cookie.contains("Max-Age=43200"), "{set_cookie}");
+        let expires: i64 = sqlx::query_scalar("SELECT expires_at FROM sessions")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!((expires - now - 43200).abs() < 60, "{}", expires - now);
+
+        let cookie = session_cookie(&first);
+        for _ in 0..3 {
+            send_from(
+                &f.app,
+                TRUSTED,
+                with_identity("/", "alice", &[("Cookie", &cookie)]),
+            )
+            .await;
+        }
+        assert_eq!(session_count(&f).await, 1);
+    }
+
+    #[tokio::test]
+    async fn requests_that_are_not_page_loads_do_not_create_sessions() {
+        let f = fwd_app(|_| {}).await;
+        for _ in 0..16 {
+            let req = Request::get("/")
+                .header("Accept", "application/json")
+                .header("Remote-User", "alice")
+                .body(Body::empty())
+                .unwrap();
+            let res = send_from(&f.app, TRUSTED, req).await;
+            assert!(res.cookies().is_empty());
+        }
+        assert_eq!(session_count(&f).await, 0);
+    }
+
+    #[tokio::test]
+    async fn a_forward_session_ends_when_the_proxy_stops_vouching_for_the_user() {
+        let f = fwd_app(|_| {}).await;
+        let login = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let cookie = session_cookie(&login);
+        // Any other peer keeps working with the cookie alone.
+        let elsewhere = send_from(&f.app, UNTRUSTED, get_req("/", &cookie)).await;
+        assert_eq!(elsewhere.status, StatusCode::OK);
+
+        // The proxy now forwards the browser without an identity: signed out upstream.
+        let anonymous = Request::get("/")
+            .header("Cookie", &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let res = send_from(&f.app, TRUSTED, anonymous).await;
+        assert_eq!(res.status, StatusCode::SEE_OTHER);
+        assert_eq!(session_count(&f).await, 0);
+        let again = send_from(&f.app, UNTRUSTED, get_req("/", &cookie)).await;
+        assert_eq!(again.status, StatusCode::SEE_OTHER);
+    }
+
     #[tokio::test]
     async fn external_and_local_groups_are_separate_namespaces() {
         let f = fwd_app(|c| c.groups_header = "Remote-Groups".into()).await;
@@ -1255,6 +1341,7 @@ mod forward {
         let ignored = send_from(&f.app, TRUSTED, with_identity("/", "dave", &[])).await;
         assert_eq!(ignored.status, StatusCode::SEE_OTHER);
         let req = Request::get("/")
+            .header("Accept", "text/html")
             .header("X-Authentik-Username", "dave")
             .body(Body::empty())
             .unwrap();

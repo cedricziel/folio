@@ -248,6 +248,7 @@ async fn main() -> Result<()> {
             admin_role: forward.admin_role.clone(),
             shared_secret: forward.shared_secret.clone(),
             secret_header: forward.secret_header.clone(),
+            session_ttl_secs: i64::try_from(forward.session_ttl_secs).unwrap_or(i64::MAX / 4),
         })
         .map_err(|e| anyhow::anyhow!("invalid auth.forward configuration: {e}"))?;
         if forward.admin_group.is_some() && forward.groups_header.is_empty() {

@@ -104,9 +104,18 @@ Environment: `FOLIO_AUTH__FORWARD__ENABLED=true`,
   the user's external groups on every request. External groups and local
   groups are separate namespaces: an IdP group `admins` never matches a local
   group `admins`.
-- **Sessions.** A trusted request sets a normal session cookie. After that the
-  cookie works on its own, so API clients and MCP clients still use OAuth
-  tokens, which are not affected by the headers.
+- **Sessions.** A trusted page load (a request that accepts `text/html`) sets
+  a normal session cookie that lasts `session_ttl_secs` (12 hours by default,
+  shorter than the 14 days of a local login) and is reused on later requests.
+  Other cookieless requests, such as scripts that only send the headers, get
+  no session and are not logged in; API and MCP clients use OAuth tokens,
+  which the headers never affect.
+- **Logout.** Folio's own sign-out only deletes the session; the next request
+  through the proxy signs the user in again while the gateway session lives.
+  Sign out at the gateway. Once the gateway session ends, the proxy stops
+  sending the identity and Folio deletes the forward-auth session on the next
+  trusted request that arrives without it. Accounts that came from the gateway
+  have no local password, so they can only sign in through it.
 
 ### Pangolin
 
