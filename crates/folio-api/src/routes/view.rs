@@ -313,7 +313,7 @@ mod tests {
         let filed = Document::new(VaultId::new(), "c")
             .with_content("x")
             .with_document_type(Id::new_v4());
-        let mut unreadable = Document::new("d");
+        let mut unreadable = Document::new(VaultId::new(), "d");
         unreadable.ocr_status = ProcessingStatus::Failed;
         let review_id = review.id.to_string();
         let failed_id = unreadable.id.to_string();

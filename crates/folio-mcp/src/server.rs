@@ -667,7 +667,7 @@ impl FolioMcp {
             .await
             .map_err(resource_error)?;
         let names = self
-            .names()
+            .names(vault)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
         let doc = &detail.document;

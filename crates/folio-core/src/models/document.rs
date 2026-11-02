@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn unreadable_documents_are_failed_not_waiting_for_review() {
-        let mut doc = Document::new("scan");
+        let mut doc = Document::new(VaultId::new(), "scan");
         doc.ocr_status = ProcessingStatus::Failed;
         assert_eq!(doc.status(), DocumentStatus::Failed);
     }
