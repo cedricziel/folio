@@ -102,9 +102,15 @@ impl WorkflowEngine {
                         body
                     }
                 };
-                let run = WorkflowRun::new(workflow.id, trigger, Some(document_id), body)
-                    .with_actions(workflow.actions.clone())
-                    .with_source_event(outbox_event.id);
+                let run = WorkflowRun::new(
+                    workflow.vault_id,
+                    workflow.id,
+                    trigger,
+                    Some(document_id),
+                    body,
+                )
+                .with_actions(workflow.actions.clone())
+                .with_source_event(outbox_event.id);
                 Ok::<_, Error>(self.workflows.create_run(&run).await?.then_some(run))
             }
             .await;

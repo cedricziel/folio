@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Document, DocumentSource, Id, SourceConditions};
+use super::{Document, DocumentSource, Id, SourceConditions, VaultId};
 use crate::error::{Error, Result};
 
 /// Events a workflow can listen for
@@ -272,6 +272,8 @@ impl WorkflowAction {
 pub struct Workflow {
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
     pub name: String,
     pub enabled: bool,
     pub trigger: WorkflowTrigger,
@@ -413,6 +415,8 @@ pub struct WorkflowRun {
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub workflow_id: Id,
     pub event: WorkflowTrigger,
     /// Not a foreign key: runs outlive the documents they were about
@@ -446,6 +450,7 @@ pub struct WorkflowRun {
 
 impl WorkflowRun {
     pub fn new(
+        vault_id: VaultId,
         workflow_id: Id,
         event: WorkflowTrigger,
         document_id: Option<Id>,
@@ -453,6 +458,7 @@ impl WorkflowRun {
     ) -> Self {
         Self {
             id: Id::new_v4(),
+            vault_id,
             workflow_id,
             event,
             document_id,

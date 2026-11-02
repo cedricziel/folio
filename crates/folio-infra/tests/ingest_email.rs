@@ -629,6 +629,7 @@ async fn seed_processed(h: &Harness, suffix: &str) {
         .insert(
             h.vault,
             &LedgerEntry {
+                vault_id: h.vault,
                 key: format!("msg:{}:{suffix}", h.source_id),
                 source_id: h.source_id,
                 document_id: None,

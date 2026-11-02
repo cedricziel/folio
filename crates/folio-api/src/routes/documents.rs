@@ -97,6 +97,7 @@ impl ListDocumentsQuery {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DocumentTag {
     id: Uuid,
+    vault_id: Uuid,
     name: String,
     /// Hex color such as "#ff5733", when the tag has one
     color: Option<String>,
@@ -154,6 +155,7 @@ pub(super) async fn present(
                 .into_iter()
                 .map(|tag| DocumentTag {
                     id: tag.id,
+                    vault_id: tag.vault_id.0,
                     name: tag.name,
                     color: tag.color,
                 })

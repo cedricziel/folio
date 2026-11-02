@@ -47,6 +47,7 @@ fn parse_trigger(value: &str) -> Result<WorkflowTrigger> {
 fn workflow_from_row(row: &SqliteRow) -> Result<Workflow> {
     Ok(Workflow {
         id: parse_id(row.get("id"))?,
+        vault_id: VaultId(parse_id(row.get("vault_id"))?),
         name: row.get("name"),
         enabled: row.get::<i64, _>("enabled") != 0,
         trigger: parse_trigger(row.get("trigger_event"))?,
@@ -62,6 +63,7 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
     let finished_at: Option<&str> = row.get("finished_at");
     Ok(WorkflowRun {
         id: parse_id(row.get("id"))?,
+        vault_id: VaultId(parse_id(row.get("vault_id"))?),
         workflow_id: parse_id(row.get("workflow_id"))?,
         event: parse_trigger(row.get("event"))?,
         document_id: document_id.map(parse_id).transpose()?,
@@ -155,6 +157,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
         Ok(Workflow {
             id,
+            vault_id: vault,
             name: input.name,
             enabled: input.enabled,
             trigger: input.trigger,
@@ -209,6 +212,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
+        if self.locate(run.workflow_id).await? != Some(run.vault_id) {
+            return Err(Error::Validation(
+                "Workflow run belongs to a different vault".into(),
+            ));
+        }
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
@@ -248,11 +256,14 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self))]
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>> {
-        let row = sqlx::query("SELECT * FROM workflow_runs WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let row = sqlx::query(
+            "SELECT r.*, w.vault_id FROM workflow_runs r
+             JOIN workflows w ON w.id = r.workflow_id WHERE r.id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         row.as_ref().map(run_from_row).transpose()
     }
 
@@ -283,7 +294,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         limit: u32,
     ) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
-            "SELECT r.* FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
+            "SELECT r.*, w.vault_id FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
              WHERE r.workflow_id = ? AND w.vault_id = ? ORDER BY r.created_at DESC LIMIT ?",
         )
         .bind(workflow_id.to_string())

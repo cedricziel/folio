@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::Id;
+use super::{Id, VaultId};
 
 /// A tag for categorizing documents
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +12,9 @@ pub struct Tag {
     /// Unique identifier
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
+
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
 
     /// Tag name (unique)
     pub name: String,
@@ -25,9 +28,10 @@ pub struct Tag {
 
 impl Tag {
     /// Create a new tag with the given name
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(vault_id: VaultId, name: impl Into<String>) -> Self {
         Self {
             id: Id::new_v4(),
+            vault_id,
             name: name.into(),
             color: None,
             created_at: Utc::now(),
@@ -69,14 +73,14 @@ mod tests {
 
     #[test]
     fn tone_is_stable_and_in_the_palette() {
-        let tag = Tag::new("Insurance");
+        let tag = Tag::new(VaultId::new(), "Insurance");
         assert_eq!(tag.tone(), tag.tone());
         assert!(["sage", "slate", "clay", "ochre", "plum", "sky"].contains(&tag.tone()));
     }
 
     #[test]
     fn tone_does_not_depend_on_name_or_color() {
-        let tag = Tag::new("a");
+        let tag = Tag::new(VaultId::new(), "a");
         let mut other = tag.clone();
         other.name = "b".into();
         other.color = Some("#fff".into());

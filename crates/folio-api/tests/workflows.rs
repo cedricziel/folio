@@ -325,7 +325,13 @@ async fn lists_runs_newest_first() {
     let id: Uuid = created["id"].as_str().unwrap().parse().unwrap();
 
     for _ in 0..3 {
-        let run = WorkflowRun::new(id, WorkflowTrigger::DocumentUploaded, None, "{}".into());
+        let run = WorkflowRun::new(
+            created["vault_id"].as_str().unwrap().parse().unwrap(),
+            id,
+            WorkflowTrigger::DocumentUploaded,
+            None,
+            "{}".into(),
+        );
         app.state.workflow_repo.create_run(&run).await.unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }

@@ -3863,6 +3863,7 @@
         "description": "A correspondent (sender/source) of documents",
         "required": [
           "id",
+          "vault_id",
           "name",
           "created_at"
         ],
@@ -3880,6 +3881,10 @@
           "name": {
             "type": "string",
             "description": "Correspondent name (unique)"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -4361,6 +4366,7 @@
         "description": "A tag as shown on a document",
         "required": [
           "id",
+          "vault_id",
           "name"
         ],
         "properties": {
@@ -4377,6 +4383,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -4385,6 +4395,7 @@
         "description": "A document type for classification (e.g., Invoice, Receipt, Contract)",
         "required": [
           "id",
+          "vault_id",
           "name",
           "created_at"
         ],
@@ -4402,6 +4413,10 @@
           "name": {
             "type": "string",
             "description": "Type name (unique)"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5034,6 +5049,7 @@
         "description": "A source with its latest run",
         "required": [
           "id",
+          "vault_id",
           "name",
           "enabled",
           "origin",
@@ -5067,6 +5083,10 @@
                 "type": "null"
               }
             ]
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5075,6 +5095,7 @@
         "description": "A tag for categorizing documents",
         "required": [
           "id",
+          "vault_id",
           "name",
           "created_at"
         ],
@@ -5099,6 +5120,10 @@
           "name": {
             "type": "string",
             "description": "Tag name (unique)"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5463,6 +5488,7 @@
         "description": "A configured automation",
         "required": [
           "id",
+          "vault_id",
           "name",
           "enabled",
           "trigger",
@@ -5501,6 +5527,10 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5709,6 +5739,7 @@
         "description": "One execution of a workflow for one event",
         "required": [
           "id",
+          "vault_id",
           "workflow_id",
           "event",
           "status",
@@ -5772,6 +5803,10 @@
           },
           "status": {
             "$ref": "#/components/schemas/RunStatus"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
           },
           "workflow_id": {
             "type": "string",

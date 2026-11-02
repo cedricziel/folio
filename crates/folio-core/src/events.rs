@@ -13,10 +13,38 @@ use crate::models::{Document, DocumentSource, Id, NamedRef, Tag, VaultId};
 ///
 /// Workflows need it to evaluate conditions and build the payload after the
 /// row is gone. It never goes over SSE.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DeletedDocument {
     pub document: Document,
     pub tags: Vec<Tag>,
+}
+
+impl<'de> Deserialize<'de> for DeletedDocument {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Snapshot {
+            document: Document,
+            tags: Vec<serde_json::Value>,
+        }
+        let snapshot = Snapshot::deserialize(deserializer)?;
+        let tags = snapshot
+            .tags
+            .into_iter()
+            .map(|mut tag| {
+                // Older stored snapshots omitted tag ownership; the captured document supplies it.
+                if let Some(fields) = tag.as_object_mut() {
+                    fields.entry("vault_id").or_insert_with(|| {
+                        serde_json::Value::String(snapshot.document.vault_id.to_string())
+                    });
+                }
+                serde_json::from_value(tag).map_err(serde::de::Error::custom)
+            })
+            .collect::<Result<Vec<Tag>, D::Error>>()?;
+        Ok(Self {
+            document: snapshot.document,
+            tags,
+        })
+    }
 }
 
 /// Event types that can be broadcast to clients
@@ -324,6 +352,23 @@ mod tests {
             .unwrap()
             .2
             .is_none());
+    }
+
+    #[test]
+    fn legacy_deleted_snapshot_inherits_tag_vault_from_document() {
+        let document = Document::new(VaultId::new(), "retained history");
+        let tag = Tag::new(document.vault_id, "archive");
+        let mut payload = serde_json::json!({
+            "document": document,
+            "tags": [tag]
+        });
+        payload["tags"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("vault_id");
+        let snapshot: DeletedDocument = serde_json::from_value(payload).unwrap();
+        assert_eq!(snapshot.tags[0].vault_id, document.vault_id);
+        assert_eq!(snapshot.tags[0].id, tag.id);
     }
 
     #[test]

@@ -38,6 +38,8 @@ pub fn router() -> Router<AppState> {
 pub struct SourceView {
     #[schema(value_type = uuid::Uuid)]
     pub id: Id,
+    #[schema(value_type = uuid::Uuid)]
+    pub vault_id: VaultId,
     pub name: String,
     pub enabled: bool,
     /// Sources from the server configuration are read-only
@@ -52,9 +54,14 @@ pub(crate) async fn view(
     state: &AppState,
     def: IngestionSourceDef,
 ) -> ApiResult<SourceView> {
+    let vault_id = match def.vault_id {
+        Some(vault) => vault,
+        None => state.vaults.default_vault(None).await?,
+    };
     let status = state.ingestion.managed.status(def.id).await?;
     Ok(SourceView {
         id: def.id,
+        vault_id,
         name: def.name,
         enabled: def.enabled,
         origin: def.origin,

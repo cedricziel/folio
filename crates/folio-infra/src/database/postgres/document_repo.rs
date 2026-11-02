@@ -181,6 +181,7 @@ struct DocumentTagRow {
 #[derive(sqlx::FromRow)]
 struct TagRow {
     id: Uuid,
+    vault_id: Uuid,
     name: String,
     color: Option<String>,
     created_at: DateTime<Utc>,
@@ -190,6 +191,7 @@ impl From<TagRow> for Tag {
     fn from(row: TagRow) -> Self {
         Tag {
             id: row.id,
+            vault_id: VaultId(row.vault_id),
             name: row.name,
             color: row.color,
             created_at: row.created_at,
@@ -200,6 +202,7 @@ impl From<TagRow> for Tag {
 #[derive(sqlx::FromRow)]
 struct NamedRow {
     id: Uuid,
+    vault_id: Uuid,
     name: String,
     created_at: DateTime<Utc>,
 }
@@ -208,6 +211,7 @@ impl From<NamedRow> for Correspondent {
     fn from(row: NamedRow) -> Self {
         Correspondent {
             id: row.id,
+            vault_id: VaultId(row.vault_id),
             name: row.name,
             created_at: row.created_at,
         }
@@ -218,6 +222,7 @@ impl From<NamedRow> for DocumentType {
     fn from(row: NamedRow) -> Self {
         DocumentType {
             id: row.id,
+            vault_id: VaultId(row.vault_id),
             name: row.name,
             created_at: row.created_at,
         }
@@ -564,6 +569,11 @@ impl DocumentRepository for PostgresDocumentRepository {
         claim: &folio_core::models::LedgerEntry,
         params: CreateDocument,
     ) -> Result<Document> {
+        if claim.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest claim belongs to a different vault".into(),
+            ));
+        }
         if claim.outcome != "claimed" {
             return Err(Error::Conflict("Ingest reservation is not claimed".into()));
         }
@@ -826,7 +836,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await?
             .ok_or_else(|| not_found("Document", id))?;
         let document: Document = row.try_into()?;
-        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
+        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.vault_id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
              WHERE dt.document_id = $1 AND t.vault_id = $2")
             .bind(id).bind(vault.0).fetch_all(&mut *tx).await.map_err(repo_err)?;
         let tags = tags.into_iter().map(Into::into).collect();
@@ -982,7 +992,7 @@ impl DocumentRepository for PostgresDocumentRepository {
 
     async fn get_tags(&self, vault: VaultId, document_id: Id) -> Result<Vec<Tag>> {
         let rows: Vec<TagRow> = sqlx::query_as(
-            "SELECT t.id, t.name, t.color, t.created_at
+            "SELECT t.id, t.vault_id, t.name, t.color, t.created_at
              FROM tags t
              INNER JOIN document_tags dt ON t.id = dt.tag_id
              INNER JOIN documents d ON d.id = dt.document_id
@@ -1009,7 +1019,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         // Legacy unbounded list callers can exceed the database's bind limit.
         for chunk in ids.chunks(500) {
             let mut qb = QueryBuilder::<Postgres>::new(
-                "SELECT dt.document_id, t.id, t.name, t.color, t.created_at
+                "SELECT dt.document_id, t.id, t.vault_id, t.name, t.color, t.created_at
                  FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
                  JOIN documents d ON d.id = dt.document_id
                  WHERE t.vault_id = d.vault_id AND d.deleted_at IS NULL AND d.vault_id = ",
@@ -1094,7 +1104,7 @@ impl PostgresTagRepository {
 impl TagRepository for PostgresTagRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Tag>> {
         let row: Option<TagRow> = sqlx::query_as(
-            "SELECT id, name, color, created_at FROM tags WHERE id = $1 AND vault_id = $2",
+            "SELECT id, vault_id, name, color, created_at FROM tags WHERE id = $1 AND vault_id = $2",
         )
         .bind(id)
         .bind(vault.0)
@@ -1106,7 +1116,7 @@ impl TagRepository for PostgresTagRepository {
 
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Tag>> {
         let row: Option<TagRow> = sqlx::query_as(
-            "SELECT id, name, color, created_at FROM tags WHERE name = $1 AND vault_id = $2",
+            "SELECT id, vault_id, name, color, created_at FROM tags WHERE name = $1 AND vault_id = $2",
         )
         .bind(name)
         .bind(vault.0)
@@ -1118,7 +1128,7 @@ impl TagRepository for PostgresTagRepository {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<Tag>> {
         let rows: Vec<TagRow> = sqlx::query_as(
-            "SELECT id, name, color, created_at FROM tags WHERE vault_id = $1 ORDER BY name",
+            "SELECT id, vault_id, name, color, created_at FROM tags WHERE vault_id = $1 ORDER BY name",
         )
         .bind(vault.0)
         .fetch_all(&self.pool)
@@ -1145,6 +1155,7 @@ impl TagRepository for PostgresTagRepository {
 
         Ok(Tag {
             id,
+            vault_id: vault,
             name: params.name,
             color: params.color,
             created_at: now,
@@ -1171,6 +1182,7 @@ impl TagRepository for PostgresTagRepository {
 
         Ok(Tag {
             id,
+            vault_id: vault,
             name,
             color,
             created_at: existing.created_at,
@@ -1207,7 +1219,7 @@ impl PostgresCorrespondentRepository {
 impl CorrespondentRepository for PostgresCorrespondentRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>> {
         let row: Option<NamedRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM correspondents WHERE id = $1 AND vault_id = $2",
+            "SELECT id, vault_id, name, created_at FROM correspondents WHERE id = $1 AND vault_id = $2",
         )
         .bind(id)
         .bind(vault.0)
@@ -1219,7 +1231,7 @@ impl CorrespondentRepository for PostgresCorrespondentRepository {
 
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Correspondent>> {
         let row: Option<NamedRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM correspondents WHERE name = $1 AND vault_id = $2",
+            "SELECT id, vault_id, name, created_at FROM correspondents WHERE name = $1 AND vault_id = $2",
         )
         .bind(name)
         .bind(vault.0)
@@ -1231,7 +1243,7 @@ impl CorrespondentRepository for PostgresCorrespondentRepository {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<Correspondent>> {
         let rows: Vec<NamedRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM correspondents WHERE vault_id = $1 ORDER BY name",
+            "SELECT id, vault_id, name, created_at FROM correspondents WHERE vault_id = $1 ORDER BY name",
         )
         .bind(vault.0)
         .fetch_all(&self.pool)
@@ -1257,6 +1269,7 @@ impl CorrespondentRepository for PostgresCorrespondentRepository {
 
         Ok(Correspondent {
             id,
+            vault_id: vault,
             name: params.name,
             created_at: now,
         })
@@ -1285,6 +1298,7 @@ impl CorrespondentRepository for PostgresCorrespondentRepository {
 
         Ok(Correspondent {
             id,
+            vault_id: vault,
             name,
             created_at: existing.created_at,
         })
@@ -1320,7 +1334,7 @@ impl PostgresDocumentTypeRepository {
 impl DocumentTypeRepository for PostgresDocumentTypeRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>> {
         let row: Option<NamedRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM document_types WHERE id = $1 AND vault_id = $2",
+            "SELECT id, vault_id, name, created_at FROM document_types WHERE id = $1 AND vault_id = $2",
         )
         .bind(id)
         .bind(vault.0)
@@ -1332,7 +1346,7 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
 
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<DocumentType>> {
         let row: Option<NamedRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM document_types WHERE name = $1 AND vault_id = $2",
+            "SELECT id, vault_id, name, created_at FROM document_types WHERE name = $1 AND vault_id = $2",
         )
         .bind(name)
         .bind(vault.0)
@@ -1344,7 +1358,7 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<DocumentType>> {
         let rows: Vec<NamedRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM document_types WHERE vault_id = $1 ORDER BY name",
+            "SELECT id, vault_id, name, created_at FROM document_types WHERE vault_id = $1 ORDER BY name",
         )
         .bind(vault.0)
         .fetch_all(&self.pool)
@@ -1370,6 +1384,7 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
 
         Ok(DocumentType {
             id,
+            vault_id: vault,
             name: params.name,
             created_at: now,
         })
@@ -1398,6 +1413,7 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
 
         Ok(DocumentType {
             id,
+            vault_id: vault,
             name,
             created_at: existing.created_at,
         })

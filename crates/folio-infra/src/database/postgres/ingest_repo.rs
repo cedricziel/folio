@@ -214,6 +214,11 @@ impl PostgresIngestLedger {
 #[async_trait]
 impl IngestLedger for PostgresIngestLedger {
     async fn insert(&self, vault: VaultId, entry: &LedgerEntry) -> Result<bool> {
+        if entry.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest entry belongs to a different vault".into(),
+            ));
+        }
         let result = sqlx::query(
             "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -239,6 +244,7 @@ impl IngestLedger for PostgresIngestLedger {
             .await
             .map_err(repo_err)?;
         Ok(row.map(|row| LedgerEntry {
+            vault_id: VaultId(row.get("vault_id")),
             key: row.get("key"),
             source_id: row.get("source_id"),
             document_id: row.get("document_id"),
@@ -275,6 +281,11 @@ impl IngestLedger for PostgresIngestLedger {
         outcome: &str,
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool> {
+        if expected.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest entry belongs to a different vault".into(),
+            ));
+        }
         let result = sqlx::query(
             "UPDATE ingest_ledger SET outcome = $1, created_at = $2
              WHERE vault_id = $3 AND key = $4 AND source_id = $5
@@ -295,6 +306,11 @@ impl IngestLedger for PostgresIngestLedger {
     }
 
     async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool> {
+        if expected.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest entry belongs to a different vault".into(),
+            ));
+        }
         let result = sqlx::query(
             "DELETE FROM ingest_ledger
              WHERE vault_id = $1 AND key = $2 AND source_id = $3

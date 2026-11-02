@@ -67,7 +67,7 @@ private let documentJSON = """
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
      "ocr_status": "done", "embed_status": "skipped",
      "correspondent": null, "document_type": "Invoice",
-     "tags": [{"id": "99999999-8888-4777-8666-555555555555", "name": "Taxes", "color": "#ff5733"}],
+     "tags": [{"id": "99999999-8888-4777-8666-555555555555", "vault_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "name": "Taxes", "color": "#ff5733"}],
      "created_at": "2025-03-14T10:15:30.123456789Z", "updated_at": "2025-03-14T10:15:30Z"}
     """
 
@@ -241,7 +241,7 @@ private let documentJSON = """
             return .init(
                 body: Data(
                     """
-                    [{"id":"\(UUID())","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z"}]
+                    [{"id":"\(UUID())","vault_id":"\(vault)","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z"}]
                     """.utf8))
         }
 

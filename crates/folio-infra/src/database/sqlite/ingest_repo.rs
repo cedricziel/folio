@@ -229,6 +229,11 @@ impl SqliteIngestLedger {
 #[async_trait]
 impl IngestLedger for SqliteIngestLedger {
     async fn insert(&self, vault: VaultId, entry: &LedgerEntry) -> Result<bool> {
+        if entry.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest entry belongs to a different vault".into(),
+            ));
+        }
         let result = sqlx::query(
             "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -256,6 +261,7 @@ impl IngestLedger for SqliteIngestLedger {
         row.map(|row| {
             let document_id: Option<&str> = row.get("document_id");
             Ok(LedgerEntry {
+                vault_id: VaultId(parse_id(row.get("vault_id"))?),
                 key: row.get("key"),
                 source_id: parse_id(row.get("source_id"))?,
                 document_id: document_id.map(parse_id).transpose()?,
@@ -293,6 +299,11 @@ impl IngestLedger for SqliteIngestLedger {
         outcome: &str,
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool> {
+        if expected.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest entry belongs to a different vault".into(),
+            ));
+        }
         let result = sqlx::query(
             "UPDATE ingest_ledger SET outcome = ?, created_at = ?
              WHERE vault_id = ? AND key = ? AND source_id = ?
@@ -313,6 +324,11 @@ impl IngestLedger for SqliteIngestLedger {
     }
 
     async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool> {
+        if expected.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest entry belongs to a different vault".into(),
+            ));
+        }
         let result = sqlx::query(
             "DELETE FROM ingest_ledger
              WHERE vault_id = ? AND key = ? AND source_id = ?
