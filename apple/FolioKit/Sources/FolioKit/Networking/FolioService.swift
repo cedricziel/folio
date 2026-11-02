@@ -16,6 +16,8 @@ public protocol FolioService: Sendable {
     func restoreDocument(id: Document.ID) async throws -> Document
     /// Downloads the original file to a temporary location whose extension matches the file type.
     func downloadFile(for document: Document) async throws -> URL
+    /// Returns a bounded JPEG preview, or nil when the document or thumbnail is unavailable.
+    func thumbnail(id: Document.ID) async throws -> Data?
     func upload(_ file: UploadFile) async throws -> Document
     func tags() async throws -> [Tag]
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws

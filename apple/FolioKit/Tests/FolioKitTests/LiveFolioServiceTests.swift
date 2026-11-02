@@ -1,5 +1,7 @@
 import Foundation
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 
 @testable import FolioKit
 
@@ -71,6 +73,84 @@ private let documentJSON = """
 
 @Suite(.serialized) struct LiveFolioServiceTests {
     private let baseURL = URL(string: "https://folio.example.com")!
+
+    private func jpeg(width: Int = 2, height: Int = 2) throws -> Data {
+        let context = try #require(
+            CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ))
+        let image = try #require(context.makeImage())
+        let data = NSMutableData()
+        let destination = try #require(
+            CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        return data as Data
+    }
+
+    @Test func thumbnailUsesBearerAndVaultScope() async throws {
+        let vault = UUID(), id = UUID(), bytes = try jpeg()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/documents/\(id.uuidString.lowercased())/thumbnail")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(contentType: "image/jpeg", body: bytes)
+        }
+        #expect(try await makeService(token: FixedToken(value: "secret")).scoped(to: vault).thumbnail(id: id) == bytes)
+    }
+
+    @Test func thumbnailRefreshesRejectedBearerOnce() async throws {
+        actor Token: BearerTokenProvider {
+            var refreshes = 0
+            func token() -> String? { "old" }
+            func refresh(rejecting token: String?) -> String? {
+                #expect(token == "old")
+                refreshes += 1
+                return "fresh"
+            }
+        }
+        let token = Token(), bytes = try jpeg()
+        StubURLProtocol.handler = { request, _ in
+            request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh"
+                ? .init(contentType: "image/jpeg", body: bytes) : .init(status: 401)
+        }
+        #expect(try await makeService(token: token).thumbnail(id: UUID()) == bytes)
+        #expect(await token.refreshes == 1)
+    }
+
+    @Test func unavailableThumbnailReturnsNil() async throws {
+        StubURLProtocol.handler = { _, _ in .init(status: 404) }
+        #expect(try await makeService().thumbnail(id: UUID()) == nil)
+    }
+
+    @Test(arguments: [401, 403, 500]) func thumbnailAuthorizationAndStorageFailuresThrow(status: Int) async {
+        StubURLProtocol.handler = { _, _ in .init(status: status) }
+        let expected: FolioError = status == 401 ? .signInRequired : .server(status: status, message: nil)
+        await #expect(throws: expected) { try await makeService().thumbnail(id: UUID()) }
+    }
+
+    @Test func rejectsNonImageThumbnailResponses() async throws {
+        StubURLProtocol.handler = { _, _ in .init(contentType: "text/html", body: Data("login".utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
+    }
+
+    @Test func rejectsMalformedJPEGThumbnail() async throws {
+        StubURLProtocol.handler = { _, _ in .init(contentType: "image/jpeg", body: Data("not an image".utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
+    }
+
+    @Test func rejectsThumbnailByteOverflow() async throws {
+        StubURLProtocol.handler = { _, _ in .init(contentType: "image/jpeg", body: Data(repeating: 0, count: 2_097_153))
+        }
+        await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
+    }
+
+    @Test func rejectsThumbnailPixelOverflow() async throws {
+        let large = try jpeg(width: 2_001, height: 2_000)
+        StubURLProtocol.handler = { _, _ in .init(contentType: "image/jpeg", body: large) }
+        await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
+    }
 
     @Test func browseSendsTextFiltersCursorAndImmutableVault() async throws {
         let vault = UUID(), tag = UUID(), correspondent = UUID()

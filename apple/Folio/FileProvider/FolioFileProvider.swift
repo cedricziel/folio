@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 /// Folio as a location in Files and Finder.
 ///
 /// Read-only except for creating files in Inbox, which uploads them. Rename, move and delete are refused
-/// with a clean "unsupported" error. Thumbnails are not provided: the API has no thumbnail endpoint yet.
-final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
+/// with a clean "unsupported" error.
+final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFileProviderThumbnailing {
     private let domain: NSFileProviderDomain
     private let service: (any FolioService)?
     private let temporaryDirectory: (() throws -> URL)?
@@ -87,6 +87,45 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
                 completionHandler(nil, nil, error.providerError)
             }
         }
+        return progress
+    }
+
+    func fetchThumbnails(
+        for itemIdentifiers: [NSFileProviderItemIdentifier], requestedSize _: CGSize,
+        perThumbnailCompletionHandler: @escaping (NSFileProviderItemIdentifier, Data?, (any Error)?) -> Void,
+        completionHandler: @escaping ((any Error)?) -> Void
+    ) -> Progress {
+        let progress = Progress(totalUnitCount: Int64(itemIdentifiers.count))
+        let batch = ThumbnailBatch(
+            progress: progress, perThumbnail: perThumbnailCompletionHandler, completion: completionHandler)
+        let task = Task {
+            var source: (any FolioService)?
+            for identifier in itemIdentifiers {
+                do {
+                    try Task.checkCancellation()
+                    guard let item = FolioItemID(providerIdentifier: identifier) else {
+                        throw NSFileProviderError(.noSuchItem)
+                    }
+                    guard case let .document(documentID, folder) = item, let vaultID = folder.vaultID else {
+                        batch.deliver(identifier, data: nil, error: nil)
+                        continue
+                    }
+                    let service = try source ?? catalog().1
+                    source = service
+                    let data = try await service.scoped(to: vaultID).thumbnail(id: documentID)
+                    try Task.checkCancellation()
+                    batch.deliver(identifier, data: data, error: nil)
+                } catch {
+                    if Task.isCancelled {
+                        batch.finish(CancellationError().providerError)
+                        return
+                    }
+                    batch.deliver(identifier, data: nil, error: error.providerError)
+                }
+            }
+            batch.finish(nil)
+        }
+        batch.bind(task)
         return progress
     }
 
@@ -259,6 +298,55 @@ extension FolioItemID {
             self = .folder(.root)
         } else {
             self.init(rawValue: providerIdentifier.rawValue)
+        }
+    }
+}
+
+private final class ThumbnailBatch {
+    private let queue = DispatchQueue(label: "com.cedricziel.folio.thumbnail-callbacks")
+    private let progress: Progress
+    private let perThumbnail: (NSFileProviderItemIdentifier, Data?, (any Error)?) -> Void
+    private let completion: ((any Error)?) -> Void
+    private var finished = false
+
+    init(
+        progress: Progress,
+        perThumbnail: @escaping (NSFileProviderItemIdentifier, Data?, (any Error)?) -> Void,
+        completion: @escaping ((any Error)?) -> Void
+    ) {
+        self.progress = progress
+        self.perThumbnail = perThumbnail
+        self.completion = completion
+    }
+
+    func bind(_ task: Task<Void, Never>) {
+        queue.async {
+            guard !self.finished else { return }
+            self.progress.cancellationHandler = {
+                task.cancel()
+                self.finish(CancellationError().providerError)
+            }
+            if self.progress.isCancelled {
+                task.cancel()
+                self.finish(CancellationError().providerError)
+            }
+        }
+    }
+
+    func deliver(_ identifier: NSFileProviderItemIdentifier, data: Data?, error: (any Error)?) {
+        queue.async {
+            guard !self.finished, !self.progress.isCancelled else { return }
+            self.progress.completedUnitCount += 1
+            self.perThumbnail(identifier, data, error)
+        }
+    }
+
+    func finish(_ error: (any Error)?) {
+        queue.async {
+            guard !self.finished else { return }
+            self.finished = true
+            self.progress.cancellationHandler = nil
+            self.completion(self.progress.isCancelled ? CancellationError().providerError : error)
         }
     }
 }
