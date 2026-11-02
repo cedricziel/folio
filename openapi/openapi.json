@@ -1590,6 +1590,74 @@
         }
       }
     },
+    "/api/telemetry/config": {
+      "get": {
+        "tags": [
+          "telemetry"
+        ],
+        "operationId": "configuration",
+        "responses": {
+          "200": {
+            "description": "Client telemetry configuration without export credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Configuration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
+    },
+    "/api/telemetry/v1/{signal}": {
+      "post": {
+        "tags": [
+          "telemetry"
+        ],
+        "operationId": "export",
+        "parameters": [
+          {
+            "name": "signal",
+            "in": "path",
+            "description": "OTLP signal: traces, metrics or logs",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OTLP export response"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "404": {
+            "description": "Client export disabled or unsupported signal"
+          },
+          "408": {
+            "description": "Payload deadline exceeded"
+          },
+          "413": {
+            "description": "Payload exceeds one MiB"
+          },
+          "415": {
+            "description": "Unsupported content type or encoding"
+          },
+          "429": {
+            "description": "Export budget exceeded"
+          },
+          "502": {
+            "description": "Collector unavailable"
+          }
+        }
+      }
+    },
     "/api/workflows": {
       "get": {
         "tags": [
@@ -2014,6 +2082,29 @@
   },
   "components": {
     "schemas": {
+      "Configuration": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "endpoint",
+          "serviceNamespace",
+          "serviceVersion"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "serviceNamespace": {
+            "type": "string"
+          },
+          "serviceVersion": {
+            "type": "string"
+          }
+        }
+      },
       "Correspondent": {
         "type": "object",
         "description": "A correspondent (sender/source) of documents",
@@ -3758,6 +3849,10 @@
     }
   },
   "tags": [
+    {
+      "name": "telemetry",
+      "description": "Authenticated client OTLP export"
+    },
     {
       "name": "documents",
       "description": "Documents and their files"

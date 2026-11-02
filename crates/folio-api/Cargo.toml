@@ -11,6 +11,7 @@ folio-infra = { workspace = true }
 folio-auth = { workspace = true }
 
 # Async runtime
+reqwest = { workspace = true }
 tokio = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }

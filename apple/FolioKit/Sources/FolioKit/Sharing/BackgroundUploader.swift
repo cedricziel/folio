@@ -57,6 +57,15 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
         task.resume()
     }
 
+    public func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        TelemetryRedirectGuard().urlSession(
+            session, task: task, willPerformHTTPRedirection: response,
+            newRequest: request, completionHandler: completionHandler)
+    }
+
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError _: (any Error)?) {
         if let path = task.taskDescription {
             try? FileManager.default.removeItem(atPath: path)

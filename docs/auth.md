@@ -11,7 +11,8 @@ off. Exempt either way: `/healthz`, `/readyz`, `/static`, `/login`, `/login/code
 
 Bearer tokens for `/api` must carry `documents:read` for `GET`, `HEAD` and
 `OPTIONS` and `documents:write` for everything else; a token without the needed
-scope gets `403` with `error="insufficient_scope"`. Cookie-authenticated writes
+scope gets `403` with `error="insufficient_scope"`. Client telemetry POSTs under
+`/api/telemetry/` require `documents:read` because they do not modify documents. Cookie-authenticated writes
 must come from the same origin (`Sec-Fetch-Site`, or `Origin` on older browsers).
 
 ## First run

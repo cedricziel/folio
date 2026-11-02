@@ -130,16 +130,39 @@ impl TelemetryGuard {
 }
 
 fn resource() -> Resource {
+    static RESOURCE: std::sync::LazyLock<Resource> = std::sync::LazyLock::new(build_resource);
+    RESOURCE.clone()
+}
+
+fn build_resource() -> Resource {
     let builder = Resource::builder();
     let builder = if std::env::var_os("OTEL_SERVICE_NAME").is_none() {
         builder.with_service_name(DEFAULT_SERVICE_NAME)
     } else {
         builder
     };
-    builder
+    let resource = builder
+        .with_attribute(opentelemetry::KeyValue::new("service.namespace", "folio"))
         .with_attribute(opentelemetry::KeyValue::new(
             "service.version",
             env!("CARGO_PKG_VERSION"),
+        ))
+        .build();
+    if resource
+        .get(&opentelemetry::Key::new("service.instance.id"))
+        .is_some()
+    {
+        return resource;
+    }
+    Resource::builder_empty()
+        .with_attributes(
+            resource
+                .iter()
+                .map(|(key, value)| opentelemetry::KeyValue::new(key.clone(), value.clone())),
+        )
+        .with_attribute(opentelemetry::KeyValue::new(
+            "service.instance.id",
+            uuid::Uuid::new_v4().to_string(),
         ))
         .build()
 }
@@ -266,6 +289,24 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[test]
+    fn resource_identity_is_shared_across_signal_providers() {
+        let traces = resource();
+        let metrics = resource();
+        let logs = resource();
+        let key = opentelemetry::Key::new("service.instance.id");
+        assert_eq!(traces.get(&key), metrics.get(&key));
+        assert_eq!(traces.get(&key), logs.get(&key));
+        assert!(traces.get(&key).is_some());
+        assert_eq!(
+            traces
+                .get(&opentelemetry::Key::new("service.namespace"))
+                .unwrap()
+                .to_string(),
+            "folio"
+        );
+    }
 
     fn settings(vars: &[(&str, &str)]) -> Option<TelemetrySettings> {
         let vars: HashMap<_, _> = vars

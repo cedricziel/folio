@@ -71,6 +71,23 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.
 - Real OCR or embeddings: `FOLIO_AI_PROVIDER=local` skips them. Test those providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
+## Client telemetry
+
+Run `FOLIO_BIN=<new binary> npm run verify:telemetry --prefix e2e` to exercise
+an authenticated throwaway Folio and a local OTLP receiver. The verifier checks
+all three browser signals, W3C context, configuration authentication and
+server-only export credentials. It creates and cleans up its own ports,
+profiles, database and storage. `npm run test:telemetry --prefix e2e` covers
+browser disabled, outage and privacy cases without a Folio instance.
+
+Swift telemetry has an opt-in real-network smoke test. Against a separately
+started disposable Folio, set `FOLIO_TELEMETRY_SMOKE_URL` and a test-only
+`FOLIO_TELEMETRY_SMOKE_TOKEN`, then run
+`swift test --package-path apple/FolioKit --filter realRelaySmoke` alone. The
+test uses temporary preferences and reports only fresh trace and resource IDs.
+Never use the real app profile or a user account for this test. Verify those
+IDs in the chosen telemetry destination when validating a deployment.
+
 ## Apple navigation
 
 Run `xcrun swift test --package-path apple/FolioKit` for native changes. For list and detail loading, the focused suites are `DocumentListViewModelTests`, `DocumentListFailureTests`, and `DocumentDetailViewModelTests`. The detail suite covers cancellation followed by a successful retry. Run `xcrun swift-format lint` on changed Swift files.

@@ -13,13 +13,18 @@ public struct LiveFolioService: FolioService {
     private let session: URLSession
     private let downloadDirectory: URL?
     private let client: Client
+    private let telemetry: FolioTelemetry?
 
     public init(
         baseURL: URL,
         tokenProvider: any BearerTokenProvider = NoToken(),
-        session: URLSession = .shared,
+        session: URLSession? = nil,
+        telemetry: FolioTelemetry? = nil,
         downloadDirectory: URL? = nil
     ) {
+        let session =
+            session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
+        self.telemetry = telemetry
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
         self.session = session
@@ -39,7 +44,7 @@ public struct LiveFolioService: FolioService {
 
     public func documents(matching query: String) async throws -> [Document] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return try await call {
+        return try await call("documents.list") {
             if trimmed.isEmpty {
                 return try await client.listDocuments().ok.body.json.documents.map { try Document($0) }
             }
@@ -49,7 +54,7 @@ public struct LiveFolioService: FolioService {
     }
 
     public func documents(filter: DocumentFilter) async throws -> [Document] {
-        try await call {
+        try await call("documents.filter") {
             let query = Operations.ListDocuments.Input.Query(
                 correspondentId: filter.correspondentID?.uuidString.lowercased(),
                 documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
@@ -62,6 +67,10 @@ public struct LiveFolioService: FolioService {
 
     /// The server only offers this as a form post that redirects back to the document page.
     public func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
+        try await call("documents.addTag") { try await addTagRequest(tagID, to: documentID) }
+    }
+
+    private func addTagRequest(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
         var request = URLRequest(url: endpoint("api/documents/\(documentID.uuidString.lowercased())/tags"))
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
@@ -72,6 +81,10 @@ public struct LiveFolioService: FolioService {
 
     /// Also a form post, with the tag in the path.
     public func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
+        try await call("documents.removeTag") { try await removeTagRequest(tagID, from: documentID) }
+    }
+
+    private func removeTagRequest(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
         var request = URLRequest(
             url: endpoint(
                 "api/documents/\(documentID.uuidString.lowercased())/tags/\(tagID.uuidString.lowercased())"
@@ -83,13 +96,13 @@ public struct LiveFolioService: FolioService {
     }
 
     public func deleteDocument(id: Document.ID) async throws {
-        try await call {
+        try await call("documents.delete") {
             _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).noContent
         }
     }
 
     public func tags() async throws -> [Tag] {
-        try await call {
+        try await call("tags.list") {
             try await client.listTags().ok.body.json.map {
                 try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color)
             }
@@ -97,7 +110,7 @@ public struct LiveFolioService: FolioService {
     }
 
     public func correspondents() async throws -> [Correspondent] {
-        try await call {
+        try await call("correspondents.list") {
             try await client.listCorrespondents().ok.body.json.map {
                 try Correspondent(id: Self.uuid($0.id), name: $0.name)
             }
@@ -105,7 +118,7 @@ public struct LiveFolioService: FolioService {
     }
 
     public func documentTypes() async throws -> [DocumentType] {
-        try await call {
+        try await call("document_types.list") {
             try await client.listDocumentTypes().ok.body.json.map {
                 try DocumentType(id: Self.uuid($0.id), name: $0.name)
             }
@@ -113,6 +126,10 @@ public struct LiveFolioService: FolioService {
     }
 
     public func downloadFile(for document: Document) async throws -> URL {
+        try await call("documents.downloadFile") { try await downloadFileRequest(for: document) }
+    }
+
+    private func downloadFileRequest(for document: Document) async throws -> URL {
         let request = URLRequest(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
         let (temporary, response) = try await authorizedTransfer(request) { try await session.download(for: $0) }
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -138,6 +155,10 @@ public struct LiveFolioService: FolioService {
     }
 
     public func upload(_ file: UploadFile) async throws -> Document {
+        try await call("documents.upload") { try await uploadRequest(file) }
+    }
+
+    private func uploadRequest(_ file: UploadFile) async throws -> Document {
         var request = URLRequest(url: endpoint("api/documents/upload"))
         request.httpMethod = "POST"
         let form = MultipartForm(file: file)
@@ -215,7 +236,12 @@ public struct LiveFolioService: FolioService {
         }
     }
 
-    private func call<T>(_ work: () async throws -> T) async throws -> T {
+    private func call<T>(_ name: String, _ work: () async throws -> T) async throws -> T {
+        if let telemetry { return try await telemetry.operation(name) { try await mappedCall(work) } }
+        return try await mappedCall(work)
+    }
+
+    private func mappedCall<T>(_ work: () async throws -> T) async throws -> T {
         do {
             return try await work()
         } catch let error as FolioError {

@@ -2,6 +2,7 @@
 //!
 //! This crate provides the REST API and web interface using Axum.
 
+pub mod client_telemetry;
 pub mod error;
 pub mod events;
 pub mod extract;

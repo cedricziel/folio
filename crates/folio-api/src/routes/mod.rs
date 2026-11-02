@@ -102,6 +102,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
 /// API router for JSON endpoints
 fn api_router() -> Router<AppState> {
     Router::new()
+        .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
         .nest("/tags", tags::router())
         .nest("/correspondents", correspondents::router())
