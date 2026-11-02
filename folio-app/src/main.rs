@@ -276,7 +276,8 @@ async fn main() -> Result<()> {
         public_url,
         IngestionState::new(source_repo, ledger, configured_sources),
     )
-    .with_health_checks(health_checks);
+    .with_health_checks(health_checks)
+    .with_mcp_default(mcp_default);
 
     let mut auth = AuthState::new(auth_store.clone(), Some(config.server.base_url()))
         .with_required(config.auth.required);
@@ -365,8 +366,8 @@ async fn main() -> Result<()> {
         McpOptions {
             enabled_by_default: mcp_default,
             allowed_hosts: config.mcp.allowed_hosts.clone(),
-        },
             ..McpOptions::default()
+        },
     );
     let mcp = if config.auth.required {
         mcp.layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))

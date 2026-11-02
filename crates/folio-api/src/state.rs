@@ -51,6 +51,8 @@ pub struct AppState {
     /// The one path that stores a new document
     pub importer: Arc<dyn DocumentImporter>,
     pub ingestion: IngestionState,
+    /// Whether `/mcp` is served while the `mcp.enabled` setting is unset
+    pub mcp_default: bool,
 }
 
 impl IngestionState {
@@ -113,7 +115,14 @@ impl AppState {
             public_url,
             importer,
             ingestion,
+            mcp_default: false,
         }
+    }
+
+    /// What /settings shows for `mcp.enabled` until an admin saves a choice.
+    pub fn with_mcp_default(mut self, enabled: bool) -> Self {
+        self.mcp_default = enabled;
+        self
     }
 
     /// Register the readiness checks reported by `/readyz`.
