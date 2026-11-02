@@ -11,7 +11,6 @@ import URLSessionInstrumentation
 public final class FolioTelemetry: @unchecked Sendable {
     public static let shared = FolioTelemetry()
     private static let processID = UUID().uuidString.lowercased()
-    private static let resourceLock = NSLock()
     private static let contextInstalled: Void = {
         OpenTelemetryConcurrency.OpenTelemetry.registerDefaultConcurrencyContextManager()
     }()
@@ -23,14 +22,15 @@ public final class FolioTelemetry: @unchecked Sendable {
     private var configuredProvider: (any BearerTokenProvider)?
     private var lastConfiguration = Date.distantPast
     private var instrumentation: URLSessionInstrumentation?
-    private let defaults: UserDefaults
+    private let installationIdentity: InstallationIdentity
     private let session: URLSession
 
     public init(
         defaults: UserDefaults = UserDefaults(suiteName: SharedConfiguration.appGroup) ?? .standard,
-        session: URLSession? = nil
+        session: URLSession? = nil,
+        installationStore: any InstallationIDStore = KeychainInstallationIDStore()
     ) {
-        self.defaults = defaults
+        installationIdentity = InstallationIdentity(defaults: defaults, store: installationStore)
         self.session =
             session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
         _ = Self.contextInstalled
@@ -74,7 +74,13 @@ public final class FolioTelemetry: @unchecked Sendable {
             guard config.enabled, config.serviceNamespace == "folio", config.endpoint == "/api/telemetry" else {
                 return
             }
-            let resource = Self.resource(defaults: defaults)
+            guard let installation = installationIdentity.resolve() else {
+                lock.withLock {
+                    if generation == ticket { lastConfiguration = .distantPast }
+                }
+                return
+            }
+            let resource = Self.resource(installationID: installation)
             let next = TelemetryRuntime(baseURL: baseURL, transport: transport, resource: resource)
             let accepted = lock.withLock {
                 guard generation == ticket else { return false }
@@ -164,12 +170,7 @@ public final class FolioTelemetry: @unchecked Sendable {
         return TelemetryRequestPolicy.allows(request.url, origin: runtime.baseURL)
     }
 
-    static func resource(defaults: UserDefaults, version: String? = nil) -> Resource {
-        resourceLock.lock()
-        defer { resourceLock.unlock() }
-        let key = "folio.telemetry.installationID"
-        let installation = defaults.string(forKey: key).flatMap(UUID.init(uuidString:)) ?? UUID()
-        defaults.set(installation.uuidString.lowercased(), forKey: key)
+    static func resource(installationID: UUID, version: String? = nil) -> Resource {
         var system = utsname()
         uname(&system)
         var model = withUnsafeBytes(of: &system.machine) { bytes in
@@ -203,7 +204,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                     version ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
                         ?? "unknown"),
                 "service.instance.id": .string(processID),
-                "folio.installation.id": .string(installation.uuidString.lowercased()),
+                "folio.installation.id": .string(installationID.uuidString.lowercased()),
                 "os.type": .string("darwin"), "os.name": .string(os),
                 "os.version": .string(ProcessInfo.processInfo.operatingSystemVersionString),
                 "device.manufacturer": .string("Apple"), "device.model.identifier": .string(model),

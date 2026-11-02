@@ -102,8 +102,14 @@ All components use `service.namespace=folio`. Browser resources use
 `service.name=folio-web`; Apple clients use `folio-app`. Set the deployed server
 name with `OTEL_SERVICE_NAME=folio-server`. Each runtime gets a distinct
 `service.instance.id`. Client `folio.installation.id` values persist in local
-browser storage or shared app preferences. Restricted browser storage falls
-back to a runtime ID. Set a stable server installation ID through
+browser storage or the Apple Keychain. Apple clients share the Keychain UUID
+with extensions through the configured access group and migrate the existing
+UUID from shared preferences without changing it. The Keychain item does not
+sync through iCloud or move to another device in a backup. A resolved UUID stays
+cached for the process. If the Keychain is unavailable before an ID can be
+resolved, Apple telemetry waits until a later configuration attempt. It does
+not emit a replacement ID. Restricted browser storage falls back to a runtime
+ID. Set a stable server installation ID through
 `OTEL_RESOURCE_ATTRIBUTES=folio.installation.id=<random UUID>`.
 
 Browser resources describe the browser, OS and generic device class where
