@@ -335,7 +335,17 @@ function createTelemetry(config) {
   return { instrumentations, navigation };
 }
 
+function isSignInPage() {
+  return /^\/(?:login|setup)(?:\/|$)/.test(location.pathname);
+}
+
 async function configure() {
+  if (isSignInPage()) {
+    enabled = false;
+    for (const instrumentation of telemetry?.instrumentations ?? [])
+      instrumentation.disable();
+    return;
+  }
   if (starting) return starting;
   starting = (async () => {
     try {
@@ -346,6 +356,7 @@ async function configure() {
       });
       const config = response.ok ? await response.json() : {};
       enabled =
+        !isSignInPage() &&
         config.enabled === true &&
         config.endpoint === "/api/telemetry" &&
         config.serviceNamespace === "folio" &&

@@ -300,3 +300,14 @@ test("restricted browser storage and unavailable randomUUID still export anonymo
   );
   await expect(page.getByRole("heading", { name: "Folio" })).toBeVisible();
 });
+
+test("sign-in pages do not make unauthorized telemetry requests", async ({ page, receiver }) => {
+  await page.goto(`${receiver.origin}/login`);
+  await page.waitForLoadState("networkidle");
+  expect(receiver.requests.filter((request) => request.url.startsWith("/api/telemetry/"))).toHaveLength(0);
+  await page.evaluate(() => {
+    history.pushState({}, "", "/");
+    document.dispatchEvent(new Event("turbo:load"));
+  });
+  await expect.poll(() => receiver.captures.length).toBeGreaterThan(0);
+});
