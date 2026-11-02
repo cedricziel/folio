@@ -1910,6 +1910,14 @@ if ("serviceWorker" in navigator) {
             {{ icons::settings() }}
             <span class="side-label">Settings</span>
           </a>
+          <a class="side-link" href="/api/docs" data-turbo="false">
+            {{ icons::files() }}
+            <span class="side-label">API docs</span>
+          </a>
+          <a class="side-link" href="/settings/integrations">
+            {{ icons::refresh() }}
+            <span class="side-label">MCP server</span>
+          </a>
           <button
             type="button"
             class="side-link side-theme"

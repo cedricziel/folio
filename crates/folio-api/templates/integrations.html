@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Integrations - Folio{% endblock %}
+{% block head %}<meta name="turbo-cache-control" content="no-cache">{% endblock %}
+{% block content %}
+<section class="page" data-controller="integrations">
+  <header class="page-head">
+    <h1 class="title">Integrations</h1>
+    <p class="lede">Connect scripts and AI clients to your archive.</p>
+  </header>
+  <div class="security-stack">
+    <section class="panel settings-card" aria-labelledby="api-title">
+      <h2 class="heading" id="api-title">JSON API</h2>
+      <p class="hint">Use a personal token with the API audience and send it in the Authorization header as a Bearer token.</p>
+      <a class="f-btn f-btn-quiet" href="/api/docs">Open API docs</a>
+    </section>
+    <section class="panel settings-card" aria-labelledby="mcp-title">
+      <h2 class="heading" id="mcp-title">MCP server</h2>
+      {% if mcp_enabled %}
+      <div class="field">
+        <label for="mcp-url">MCP server URL</label>
+        <input class="input" id="mcp-url" value="{{ mcp_url }}" readonly>
+      </div>
+      <button class="f-btn f-btn-quiet" type="button" data-action="integrations#copyUrl">Copy URL</button>
+      <p class="hint">Add this URL to an MCP client and follow its OAuth sign-in flow. Clients that accept a Bearer token can use a personal token with the MCP audience.</p>
+      {% else %}
+      <p class="f-notice">MCP server is disabled.</p>
+      <p class="hint">An instance administrator can enable it in settings. OAuth and personal-token connections are unavailable while it is disabled.</p>
+      {% endif %}
+    </section>
+    <p class="hint" role="status" aria-live="polite" data-integrations-target="status"></p>
+    <section class="panel settings-card" aria-labelledby="tokens-title">
+      <h2 class="heading" id="tokens-title">Personal access tokens</h2>
+      {% if sidebar.user.is_some() %}
+      <p class="hint">Tokens inherit your vault access. Choose only the permissions your client needs. Write permission does not include read permission.</p>
+      <form id="token-create" data-action="submit->integrations#create" data-turbo="false">
+        <div class="field"><label for="token-name">Token name</label><input class="input" id="token-name" name="name" maxlength="64" required autocomplete="off"></div>
+        <div class="field"><label for="token-audience">Audience</label><select class="select" id="token-audience" name="audience"><option value="api">JSON API</option><option value="mcp">MCP</option></select></div>
+        <fieldset class="field"><legend>Permissions</legend>
+          <label><input type="checkbox" name="scopes" value="documents:read" checked> Read documents</label>
+          <label><input type="checkbox" name="scopes" value="documents:write"> Write documents</label>
+        </fieldset>
+        <div class="field"><label for="token-expiry">Expires in days</label><input class="input" id="token-expiry" name="expires_in_days" type="number" min="1" max="365" value="30" required></div>
+        <div class="form-actions"><button class="f-btn f-btn-primary" type="submit">Create token</button></div>
+      </form>
+      <div hidden data-integrations-target="secretPanel">
+        <h3 class="heading">Save your new token</h3>
+        <p class="hint">Copy and save this token now. Folio will not show it again.</p>
+        <div class="field"><label for="new-token">New token</label><input class="input" id="new-token" readonly autocomplete="off" data-integrations-target="secret"></div>
+        <div class="form-actions">
+          <button class="f-btn f-btn-quiet" type="button" data-action="integrations#copyToken">Copy token</button>
+          <button class="f-btn f-btn-quiet" type="button" data-action="integrations#clearSecret">I have saved it</button>
+        </div>
+      </div>
+      <h3 class="heading">Your tokens</h3>
+      <p class="hint" data-integrations-target="empty">Loading tokens…</p>
+      <ul class="security-stack" aria-label="Your tokens" data-integrations-target="list"></ul>
+      {% else %}
+      <p class="hint">Sign in to manage personal access tokens.</p>
+      <a class="f-btn f-btn-primary" href="/login">Sign in</a>
+      {% endif %}
+    </section>
+  </div>
+</section>
+<script type="module">
+import { Controller } from "@hotwired/stimulus";
+window.Stimulus.register("integrations", class extends Controller {
+  static targets = ["status", "secretPanel", "secret", "list", "empty"];
+
+  connect() {
+    this.clearBeforeCache = () => this.clearSecret();
+    document.addEventListener("turbo:before-cache", this.clearBeforeCache);
+    window.addEventListener("pagehide", this.clearBeforeCache);
+    if (this.hasListTarget) this.load();
+  }
+
+  disconnect() {
+    this.clearSecret();
+    document.removeEventListener("turbo:before-cache", this.clearBeforeCache);
+    window.removeEventListener("pagehide", this.clearBeforeCache);
+  }
+
+  clearSecret() {
+    if (!this.hasSecretTarget) return;
+    this.secretTarget.value = "";
+    this.secretPanelTarget.hidden = true;
+  }
+
+  async request(path = "", options = {}) {
+    const response = await fetch(`/api/auth/tokens${path}`, {
+      credentials: "same-origin", cache: "no-store", ...options,
+      headers: { "Content-Type": "application/json", ...options.headers },
+    });
+    if (!response.ok) {
+      const message = response.status === 401 ? "Sign in again to manage tokens." : "Could not update tokens. Check your permissions and try again.";
+      throw new Error(message);
+    }
+    return response.status === 204 ? null : response.json();
+  }
+
+  async load() {
+    try {
+      const tokens = await this.request();
+      if (!this.element.isConnected) return;
+      this.listTarget.replaceChildren();
+      this.emptyTarget.textContent = tokens.length ? "" : "No tokens yet.";
+      for (const token of tokens) {
+        const row = document.createElement("li");
+        row.className = "f-row";
+        const details = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = token.name;
+        const metadata = document.createElement("p");
+        metadata.className = "hint";
+        const date = value => new Date(value * 1000).toLocaleDateString();
+        const state = token.revoked_at ? "Revoked" : token.expires_at <= Date.now() / 1000 ? "Expired" : "Active";
+        metadata.textContent = `${token.prefix} · ${token.audience.toUpperCase()} · ${token.scopes.join(", ")} · Created ${date(token.created_at)} · Expires ${date(token.expires_at)} · ${state}`;
+        details.append(name, metadata);
+        row.append(details);
+        if (!token.revoked_at) {
+          const revoke = document.createElement("button");
+          revoke.type = "button";
+          revoke.className = "f-btn f-btn-danger";
+          revoke.textContent = "Revoke";
+          revoke.addEventListener("click", async () => {
+            revoke.disabled = true;
+            try {
+              await this.request(`/${encodeURIComponent(token.id)}`, { method: "DELETE" });
+              this.clearSecret();
+              this.statusTarget.textContent = "Token revoked.";
+              await this.load();
+            } catch (error) { this.statusTarget.textContent = error.message; revoke.disabled = false; }
+          });
+          row.append(revoke);
+        }
+        this.listTarget.append(row);
+      }
+    } catch (error) { this.emptyTarget.textContent = error.message; }
+  }
+
+  async create(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const scopes = data.getAll("scopes");
+    if (!scopes.length) { this.statusTarget.textContent = "Choose at least one permission."; return; }
+    this.clearSecret();
+    const submit = form.querySelector("button[type=submit]");
+    submit.disabled = true;
+    try {
+      const result = await this.request("", { method: "POST", body: JSON.stringify({
+        name: data.get("name").trim(), audience: data.get("audience"), scopes,
+        expires_in_days: Number(data.get("expires_in_days")),
+      }) });
+      if (!this.element.isConnected) return;
+      this.secretTarget.value = result.token;
+      this.secretPanelTarget.hidden = false;
+      this.secretTarget.focus();
+      this.statusTarget.textContent = "Token created. Save it now.";
+      await this.load();
+    } catch (error) { this.statusTarget.textContent = error.message; }
+    finally { submit.disabled = false; }
+  }
+
+  async copy(value) {
+    try { await navigator.clipboard.writeText(value); this.statusTarget.textContent = "Copied."; }
+    catch { this.statusTarget.textContent = "Copy failed. Select the field and copy it manually."; }
+  }
+  copyUrl() { this.copy(this.element.querySelector("#mcp-url").value); }
+  copyToken() { this.copy(this.secretTarget.value); }
+});
+</script>
+{% endblock %}

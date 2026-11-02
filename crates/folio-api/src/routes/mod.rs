@@ -10,6 +10,7 @@ mod error_pages;
 pub(crate) mod events;
 mod file_response;
 mod health;
+mod integrations;
 mod manage;
 mod mfa;
 mod oidc;
@@ -86,6 +87,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(manage::router())
         // Settings routes
         .merge(settings)
+        .merge(integrations::router())
         // Account and security
         .merge(security)
         .merge(tokens)
