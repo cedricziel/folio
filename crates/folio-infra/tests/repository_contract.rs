@@ -2159,6 +2159,108 @@ async fn exec(db: &Database, sqlite: &[&str], postgres: &[&str]) {
     }
 }
 
+async fn upload_finalization_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r
+        .vaults
+        .create("Upload finalization", None)
+        .await
+        .unwrap()
+        .id;
+    flush_outbox(&r).await;
+    let pending = r
+        .documents
+        .create_for_upload(vault, new_document("pending upload"))
+        .await
+        .unwrap();
+    assert!(flush_outbox(&r).await.is_empty());
+    let outside = r.vaults.instance_default().await.unwrap();
+    assert!(r
+        .documents
+        .finalize_upload(outside, pending.id, "wrong")
+        .await
+        .is_err());
+    assert!(flush_outbox(&r).await.is_empty());
+    exec(db,
+        &["CREATE TRIGGER refuse_upload_event BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &["CREATE FUNCTION refuse_upload_event() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+          "CREATE TRIGGER refuse_upload_event BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION refuse_upload_event()"],
+    ).await;
+    assert!(r
+        .documents
+        .finalize_upload(vault, pending.id, "original")
+        .await
+        .is_err());
+    assert!(r
+        .documents
+        .find_by_id(vault, pending.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .file_path
+        .is_none());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_upload_event"],
+        &[
+            "DROP TRIGGER refuse_upload_event ON outbox_events",
+            "DROP FUNCTION refuse_upload_event()",
+        ],
+    )
+    .await;
+    let (first, concurrent) = tokio::join!(
+        r.documents.finalize_upload(vault, pending.id, "original"),
+        r.documents.finalize_upload(vault, pending.id, "original"),
+    );
+    first.unwrap();
+    concurrent.unwrap();
+    let created = flush_outbox(&r).await;
+    assert_eq!(created.len(), 1);
+    assert!(
+        matches!(created[0].event, DocumentEvent::Created { document_id } if document_id == pending.id)
+    );
+    assert_eq!(
+        r.documents
+            .find_by_id(vault, pending.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .file_path
+            .as_deref(),
+        Some("original")
+    );
+    r.outbox
+        .prune(Utc::now() + Duration::days(1))
+        .await
+        .unwrap();
+    r.documents
+        .finalize_upload(vault, pending.id, "original")
+        .await
+        .unwrap();
+    assert!(
+        flush_outbox(&r).await.is_empty(),
+        "finalization remains idempotent after outbox pruning"
+    );
+    let direct = r
+        .documents
+        .create(vault, new_document("direct creation"))
+        .await
+        .unwrap();
+    let events = flush_outbox(&r).await;
+    assert_eq!(events.len(), 1);
+    assert!(
+        matches!(events[0].event, DocumentEvent::Created { document_id } if document_id == direct.id)
+    );
+    r.documents
+        .finalize_upload(vault, direct.id, "legacy-original")
+        .await
+        .unwrap();
+    assert!(
+        flush_outbox(&r).await.is_empty(),
+        "already-announced records never emit another Created"
+    );
+}
+
 async fn outbox_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
@@ -3206,6 +3308,7 @@ async fn run_contract(db: &Database) {
     concurrent_dequeue_contract(&repos).await;
     workflows_contract(&repos).await;
     ingestion_contract(&repos).await;
+    upload_finalization_contract(db).await;
     outbox_contract(db).await;
     run_atomicity_contract(db).await;
     auth_contract(&repos).await;

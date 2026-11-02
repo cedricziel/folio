@@ -1,7 +1,6 @@
 //! Shared setup for the ingestion tests: real SQLite, storage in a temp dir.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use folio_core::models::WorkflowRun;
 use folio_core::models::{
@@ -77,8 +76,7 @@ impl Harness {
             repos.document_types,
             Arc::new(StorageFileMetadata::new(store.clone())),
             "http://folio.test",
-        )
-        .with_file_wait(Duration::ZERO);
+        );
 
         Self {
             vault,

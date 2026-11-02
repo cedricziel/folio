@@ -156,19 +156,16 @@ impl Harness {
         let correspondents = repos.correspondents;
         let queue = repos.jobs;
 
-        let engine = Arc::new(
-            WorkflowEngine::new(
-                workflows.clone(),
-                documents.clone(),
-                correspondents.clone(),
-                repos.document_types,
-                Arc::new(StorageFileMetadata::new(Arc::new(
-                    ObjectStoreDocumentStore::in_memory(),
-                ))),
-                "http://folio.test",
-            )
-            .with_file_wait(Duration::ZERO),
-        );
+        let engine = Arc::new(WorkflowEngine::new(
+            workflows.clone(),
+            documents.clone(),
+            correspondents.clone(),
+            repos.document_types,
+            Arc::new(StorageFileMetadata::new(Arc::new(
+                ObjectStoreDocumentStore::in_memory(),
+            ))),
+            "http://folio.test",
+        ));
         let runner = WorkflowRunner::new(
             workflows.clone(),
             repos.workflow_documents,
