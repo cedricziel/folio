@@ -119,7 +119,7 @@ struct InboxView: View {
 
     private var actions: InboxActions {
         InboxActions(
-            upload: canUpload ? { showFileImporter = true } : nil,
+            upload: canAcceptImport ? { showFileImporter = true } : nil,
             scan: scanAction,
             showInbox: { onNavigate(.inbox) },
             showAll: { onNavigate(.all) },
@@ -132,7 +132,7 @@ struct InboxView: View {
     }
 
     private var scanAction: (() -> Void)? {
-        guard canUpload else { return nil }
+        guard canAcceptImport else { return nil }
         #if os(iOS)
             return DocumentScanner.isSupported ? { showScanner = true } : nil
         #else
@@ -143,7 +143,7 @@ struct InboxView: View {
     private func handle(_ request: IntentRouter.Request) {
         switch request {
         case .scan:
-            guard canUpload else { return }
+            guard canAcceptImport else { return }
             if let scan = scanAction {
                 scan()
             } else {
@@ -151,7 +151,7 @@ struct InboxView: View {
                 showFileImporter = true
             }
         case .upload:
-            guard canUpload else { return }
+            guard canAcceptImport else { return }
             showFileImporter = true
         case .inbox:
             onNavigate(.inbox)
@@ -410,11 +410,11 @@ struct InboxView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                 .help("Upload files (\u{2318}O)")
-                .disabled(!canUpload)
+                .disabled(!canAcceptImport)
             PhotosPicker(selection: $photoSelection, matching: .images) {
                 Label("Photos", systemImage: "photo")
             }
-            .disabled(!canUpload)
+            .disabled(!canAcceptImport)
             Menu("Server", systemImage: "gearshape") {
                 Text(serverURL.absoluteString)
                 Button("Sign out", action: onSignOut)
@@ -432,7 +432,7 @@ struct InboxView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(FolioTheme.Spacing.space4)
-            .disabled(!canUpload || !DocumentScanner.isSupported)
+            .disabled(!canAcceptImport || !DocumentScanner.isSupported)
         }
     #endif
 
@@ -446,7 +446,7 @@ struct InboxView: View {
     }
 
     private var canAcceptImport: Bool {
-        guard canUpload, !isImporting, pendingUploads == nil else { return false }
+        guard canUpload, !isImporting, pendingUploads == nil, scannedPages == nil, !showScanner else { return false }
         if case .uploading = uploads.state { return false }
         return true
     }

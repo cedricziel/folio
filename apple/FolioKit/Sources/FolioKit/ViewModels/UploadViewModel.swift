@@ -12,6 +12,12 @@ public final class UploadViewModel {
 
     public private(set) var state = State.idle
 
+    private var batch: [UploadFile] = []
+    private var batchService: (any FolioService)?
+    private var completed = 0
+
+    public var hasStarted: Bool { batchService != nil }
+
     private let service: any FolioService
     private let onUploaded: () -> Void
     public let destination: VaultDestinationViewModel?
@@ -25,26 +31,37 @@ public final class UploadViewModel {
         self.destination = destination
     }
 
-    /// Uploads one file at a time and stops at the first failure.
+    /// Uploads sequentially; retrying the same failed batch resumes in its original vault.
     public func upload(_ files: [UploadFile]) async {
         guard !files.isEmpty, !isUploading else { return }
-        guard destination?.canUpload != false else {
-            state = .failed(message: "Choose a vault you can upload to.", uploaded: 0)
-            return
+        let retrying: Bool
+        if case .failed = state {
+            retrying = batch == files && batchService != nil
+        } else {
+            retrying = false
         }
-        let service = destination?.service ?? service
-        var done = 0
-        do {
-            for file in files {
-                state = .uploading(done: done, total: files.count)
-                _ = try await service.upload(file)
-                done += 1
+        if !retrying {
+            guard destination?.canUpload != false else {
+                state = .failed(message: "Choose a vault you can upload to.", uploaded: 0)
+                return
             }
-            state = .finished(count: done)
-        } catch {
-            state = .failed(message: error.localizedDescription, uploaded: done)
+            batch = files
+            batchService = destination?.service ?? service
+            completed = 0
         }
-        if done > 0 {
+        guard let service = batchService else { return }
+        let previouslyCompleted = completed
+        do {
+            for file in files.dropFirst(completed) {
+                state = .uploading(done: completed, total: files.count)
+                _ = try await service.upload(file)
+                completed += 1
+            }
+            state = .finished(count: completed)
+        } catch {
+            state = .failed(message: error.localizedDescription, uploaded: completed)
+        }
+        if completed > previouslyCompleted {
             onUploaded()
         }
     }
@@ -57,6 +74,10 @@ public final class UploadViewModel {
     }
 
     public func dismiss() {
+        guard !isUploading else { return }
         state = .idle
+        batch = []
+        batchService = nil
+        completed = 0
     }
 }
