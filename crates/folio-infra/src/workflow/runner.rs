@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use folio_core::error::Error;
 use folio_core::models::{
     validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
+    WorkflowTrigger,
 };
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
 
@@ -88,22 +89,23 @@ impl WorkflowRunner {
             return Ok(RunOutcome::Failed);
         };
 
-        if let Some(document_id) = run.document_id {
-            if self.documents.locate_trashed(document_id).await?.is_some() {
-                self.finish(
-                    &mut run,
-                    RunStatus::Failed,
-                    Some("Document is in trash".into()),
-                )
-                .await?;
-                return Ok(RunOutcome::Failed);
-            }
-        }
-
         run.attempts += 1;
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();
         for (index, action) in actions.iter().enumerate().skip(skip) {
+            if run.event != WorkflowTrigger::DocumentDeleted {
+                if let Some(document_id) = run.document_id {
+                    if self.documents.locate(document_id).await? != Some(vault) {
+                        self.finish(
+                            &mut run,
+                            RunStatus::Failed,
+                            Some("Document is no longer active in the workflow's vault".into()),
+                        )
+                        .await?;
+                        return Ok(RunOutcome::Failed);
+                    }
+                }
+            }
             match self.perform(vault, index, action, &run).await {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;

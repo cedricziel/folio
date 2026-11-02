@@ -110,29 +110,46 @@ pub struct WorkflowConditions {
 impl WorkflowConditions {
     /// Whether the document satisfies every set condition
     pub fn matches(&self, document: &Document, tag_ids: &[Id]) -> bool {
-        if !self.matches_file(
+        self.matches_metadata(
             document.mime_type.as_deref(),
             document.original_filename.as_deref(),
             &document.source,
-        ) {
-            return false;
-        }
-        if let Some(tag_id) = self.tag_id {
-            if !tag_ids.contains(&tag_id) {
-                return false;
-            }
-        }
-        if let Some(id) = self.correspondent_id {
-            if document.correspondent_id != Some(id) {
-                return false;
-            }
-        }
-        if let Some(id) = self.document_type_id {
-            if document.document_type_id != Some(id) {
-                return false;
-            }
-        }
-        true
+            tag_ids,
+            document.correspondent_id,
+            document.document_type_id,
+        )
+    }
+
+    /// Whether the event-time metadata satisfies every set condition.
+    pub fn matches_snapshot(&self, snapshot: &crate::EventSnapshot) -> bool {
+        let tag_ids: Vec<_> = snapshot.tags.iter().map(|tag| tag.id).collect();
+        self.matches_metadata(
+            snapshot.mime_type.as_deref(),
+            snapshot.original_filename.as_deref(),
+            &snapshot.source,
+            &tag_ids,
+            snapshot.correspondent_id,
+            snapshot.document_type_id,
+        )
+    }
+
+    fn matches_metadata(
+        &self,
+        mime: Option<&str>,
+        filename: Option<&str>,
+        source: &DocumentSource,
+        tag_ids: &[Id],
+        correspondent_id: Option<Id>,
+        document_type_id: Option<Id>,
+    ) -> bool {
+        self.matches_file(mime, filename, source)
+            && self.tag_id.is_none_or(|id| tag_ids.contains(&id))
+            && self
+                .correspondent_id
+                .is_none_or(|id| correspondent_id == Some(id))
+            && self
+                .document_type_id
+                .is_none_or(|id| document_type_id == Some(id))
     }
 
     /// Whether a file that is not imported yet satisfies the conditions

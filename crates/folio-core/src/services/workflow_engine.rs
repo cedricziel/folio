@@ -3,14 +3,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tracing::{debug, error};
 
 use crate::error::{Error, Result};
-use crate::events::{DocumentEvent, EventOrigin, OutboxEvent};
-use crate::models::{
-    Document, Id, Tag, VaultId, WebhookDocument, WebhookPayload, WorkflowRun, WorkflowTrigger,
-};
+use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
+use crate::models::{WebhookDocument, WebhookPayload, WorkflowRun, WorkflowTrigger};
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
     WorkflowRepository,
@@ -31,11 +29,6 @@ pub struct WorkflowEngine {
     document_types: Arc<dyn DocumentTypeRepository>,
     files: Arc<dyn FileMetadata>,
     public_url: String,
-}
-
-struct EventContext {
-    document: Document,
-    tags: Vec<Tag>,
 }
 
 impl WorkflowEngine {
@@ -82,39 +75,29 @@ impl WorkflowEngine {
             return Ok(Vec::new());
         };
         let document_id = event.document_id();
-        let vault = match event {
-            DocumentEvent::Deleted { snapshot, .. } => {
-                snapshot.as_ref().map(|s| s.document.vault_id)
-            }
-            _ => self.documents.locate(document_id).await?,
-        };
-        let Some(vault) = vault else {
-            debug!("Document {document_id} is gone, skipping {trigger:?}");
-            return Ok(Vec::new());
-        };
-        let candidates = self.workflows.list_enabled(vault, trigger).await?;
-        if candidates.is_empty() {
+        let ctx = self.load_context(outbox_event).await?;
+        let vault = ctx.vault_id;
+        if !matches!(event, DocumentEvent::Deleted { .. })
+            && self.documents.locate(document_id).await? != Some(vault)
+        {
+            debug!("Event {} document {document_id} is no longer active in its originating vault; skipping", outbox_event.id);
             return Ok(Vec::new());
         }
-
-        let Some(ctx) = self.load_context(vault, event).await? else {
-            debug!("Document {document_id} is gone, skipping {trigger:?}");
-            return Ok(Vec::new());
-        };
-        let tag_ids: Vec<Id> = ctx.tags.iter().map(|t| t.id).collect();
-
+        let candidates = self.workflows.list_enabled(vault, trigger).await?;
         let mut payload_json: Option<String> = None;
         let mut runs = Vec::new();
         let mut first_error: Option<Error> = None;
         for workflow in candidates {
-            if !workflow.conditions.matches(&ctx.document, &tag_ids) {
+            if !workflow.conditions.matches_snapshot(&ctx) {
                 continue;
             }
             let outcome = async {
                 let body = match &payload_json {
                     Some(body) => body.clone(),
                     None => {
-                        let body = self.build_payload(vault, trigger, &ctx).await?;
+                        let body = self
+                            .build_payload(trigger, &ctx, outbox_event.created_at)
+                            .await?;
                         payload_json = Some(body.clone());
                         body
                     }
@@ -144,63 +127,55 @@ impl WorkflowEngine {
         }
     }
 
-    async fn load_context(
-        &self,
-        vault: VaultId,
-        event: &DocumentEvent,
-    ) -> Result<Option<EventContext>> {
-        if let DocumentEvent::Deleted { snapshot, .. } = event {
-            return Ok(snapshot.as_ref().map(|s| EventContext {
-                document: s.document.clone(),
-                tags: s.tags.clone(),
-            }));
+    async fn load_context(&self, event: &OutboxEvent) -> Result<EventSnapshot> {
+        if let Some(context) = &event.context {
+            if context.document_id == event.event.document_id() {
+                return Ok(context.as_ref().clone());
+            }
+        } else if let DocumentEvent::Deleted {
+            document_id,
+            snapshot: Some(snapshot),
+        } = &event.event
+        {
+            if snapshot.document.id == *document_id {
+                let mut context = EventSnapshot::from(snapshot.as_ref());
+                if let Some(id) = context.correspondent_id {
+                    context.correspondent_name = self
+                        .correspondents
+                        .find_by_id(context.vault_id, id)
+                        .await?
+                        .map(|entry| entry.name);
+                }
+                if let Some(id) = context.document_type_id {
+                    context.document_type_name = self
+                        .document_types
+                        .find_by_id(context.vault_id, id)
+                        .await?
+                        .map(|entry| entry.name);
+                }
+                return Ok(context);
+            }
         }
-
-        let id = event.document_id();
-        let document = self.documents.find_by_id(vault, id).await?;
-
-        match document {
-            Some(document) => Ok(Some(EventContext {
-                tags: self.documents.get_tags(vault, id).await?,
-                document,
-            })),
-            None => Ok(None),
-        }
+        Err(Error::Repository(format!("Cannot deliver outbox event {} ({}): historical document/vault context is missing or invalid; its original metadata cannot be reconstructed", event.id, event.event.event_type())))
     }
 
     async fn build_payload(
         &self,
-        vault: VaultId,
         trigger: WorkflowTrigger,
-        ctx: &EventContext,
+        ctx: &EventSnapshot,
+        occurred_at: DateTime<Utc>,
     ) -> Result<String> {
-        let doc = &ctx.document;
-        let correspondent = match doc.correspondent_id {
-            Some(id) => self.correspondents.find_by_id(vault, id).await?,
-            None => None,
-        };
-        let document_type = match doc.document_type_id {
-            Some(id) => self.document_types.find_by_id(vault, id).await?,
-            None => None,
-        };
-        let size = match &doc.file_path {
+        let size = match &ctx.file_path {
             Some(path) => self.files.size(path).await,
             None => None,
         };
         let payload = WebhookPayload::new(
             trigger,
-            Utc::now(),
-            WebhookDocument::from_parts(
-                doc,
-                &ctx.tags,
-                correspondent.as_ref(),
-                document_type.as_ref(),
-                size,
-                &self.public_url,
-            ),
+            occurred_at,
+            WebhookDocument::from_snapshot(ctx, size, &self.public_url),
         );
         serde_json::to_string(&payload)
-            .map_err(|e| crate::error::Error::Repository(format!("Failed to encode payload: {e}")))
+            .map_err(|e| Error::Repository(format!("Failed to encode payload: {e}")))
     }
 }
 
