@@ -204,3 +204,12 @@ container can connect to the temporary macOS app through
 Linux, then use a temporary harness that removes only the host-platform skip in
 `visual.spec.ts`. Keep the same tour fixtures, viewport, masks, and screenshot
 paths. Recheck without updating snapshots, and remove the container and harness.
+
+## Verify bounded MCP originals
+
+Run `RUSTC_WRAPPER= cargo test -p folio-core ports::storage::tests --lib`
+for oversized metadata rejected before reading, missing or understated sizes,
+and successful collection at the exact byte limit. The instrumented stream tests
+check that collection stops before consuming the rest of an oversized original.
+Run the MCP suite above for the small-file resource response and the oversized
+file error that points clients to the text resource.
