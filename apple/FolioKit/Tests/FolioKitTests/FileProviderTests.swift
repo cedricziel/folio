@@ -56,15 +56,15 @@ struct FolioCatalogTests {
         #expect(names == ["Inbox", "All documents", "Tags", "Correspondents", "Types"])
     }
 
-    @Test func inboxHoldsOnlyUnfiledReadDocuments() async throws {
+    @Test func inboxIncludesUploadsBeforeProcessingFinishes() async throws {
         let unfiled = document("Letter")
         let filed = document("Bill", person: personID)
         let reading = document("Scan", read: false)
         let catalog = FolioCatalog(service: MockFolioService(documents: [unfiled, filed, reading]))
         let inbox = try await catalog.children(of: .inbox)
-        #expect(inbox.map(\.name) == ["Letter"])
-        #expect(inbox[0].id == .document(unfiled.id, in: .inbox))
-        #expect(inbox[0].parent == .folder(.inbox))
+        #expect(Set(inbox.map(\.name)) == ["Letter", "Scan"])
+        #expect(inbox.contains { $0.id == .document(unfiled.id, in: .inbox) })
+        #expect(inbox.allSatisfy { $0.parent == .folder(.inbox) })
     }
 
     @Test func allDocumentsListsEverything() async throws {

@@ -81,6 +81,19 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: 'YES'
+  FolioProviderTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: ProviderTests
+      - path: FileProvider
+      - path: ../FolioKit/Tests/FolioKitTests/MockFolioService.swift
+    dependencies:
+      - package: FolioKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: 'YES'
+        SWIFT_VERSION: '5.0'
   FolioShare:
     type: app-extension
     supportedDestinations:
@@ -180,3 +193,4 @@ schemes:
     test:
       targets:
         - FolioAuthTests
+        - FolioProviderTests
