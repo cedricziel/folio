@@ -64,3 +64,27 @@ File Provider SHALL retrieve previews for vault-qualified document identifiers a
 - **WHEN** the caller cancels the returned progress
 - **THEN** pending network work is cancelled and completion reports cancellation once
 - **AND** no item callbacks occur after completion
+
+### Requirement: Nonblocking document row previews
+
+Apple document rows SHALL show available previews in the existing thumbnail area without delaying document opening. Loading, unavailable, and failed previews SHALL retain the paper placeholder without an alert.
+
+#### Scenario: Preview unavailable
+
+- **WHEN** a thumbnail is missing or its request fails authentication
+- **THEN** the row retains its placeholder and remains openable
+
+### Requirement: Workspace-scoped memory cache
+
+Thumbnail bytes SHALL be cached only in memory with a bounded byte budget. Cache ownership SHALL follow the signed-in workspace and selected vault; document revisions SHALL identify separate entries. Failed and unavailable results SHALL remain retryable.
+
+#### Scenario: Vault or document changes
+
+- **WHEN** the selected vault changes or the document revision changes
+- **THEN** an earlier cached preview cannot satisfy the new request
+
+#### Scenario: Concurrent callers cancel
+
+- **WHEN** multiple rows request the same preview
+- **THEN** they share one transfer
+- **AND** cancelling the last caller cancels that transfer

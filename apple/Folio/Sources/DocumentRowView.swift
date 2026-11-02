@@ -1,13 +1,40 @@
 import FolioKit
 import SwiftUI
 
+private struct ThumbnailCacheKey: EnvironmentKey {
+    static let defaultValue: ThumbnailCache? = nil
+}
+
+extension EnvironmentValues {
+    var thumbnailCache: ThumbnailCache? {
+        get { self[ThumbnailCacheKey.self] }
+        set { self[ThumbnailCacheKey.self] = newValue }
+    }
+}
+
 struct DocumentRowView: View {
+    @Environment(\.thumbnailCache) private var thumbnails
+    @State private var preview: Image?
+
+    private struct ThumbnailIdentity: Hashable {
+        let cache: ObjectIdentifier?
+        let id: UUID
+        let revision: Date
+    }
+
     let row: DocumentRow
 
     var body: some View {
         HStack(alignment: .top, spacing: FolioTheme.Spacing.space3) {
-            PaperThumbnail()
-                .frame(width: 44)
+            PaperThumbnail(showSymbol: preview == nil)
+                .overlay {
+                    if let preview {
+                        preview.resizable().scaledToFit()
+                    }
+                }
+                .frame(width: 44, height: 44 * 1.414)
+                .clipShape(RoundedRectangle(cornerRadius: FolioTheme.Radius.radiusSm))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: FolioTheme.Spacing.space1) {
                 Text(row.title)
                     .font(FolioTheme.Typography.heading)
@@ -39,18 +66,40 @@ struct DocumentRowView: View {
         }
         .padding(.vertical, FolioTheme.Spacing.space1)
         .accessibilityElement(children: .combine)
+        .task(
+            id: ThumbnailIdentity(
+                cache: thumbnails.map(ObjectIdentifier.init), id: row.id, revision: row.document.updatedAt)
+        ) {
+            preview = nil
+            guard let thumbnails else { return }
+            do {
+                guard let data = try await thumbnails.data(for: row.document) else { return }
+                try Task.checkCancellation()
+                #if os(iOS)
+                    if let image = UIImage(data: data) { preview = Image(uiImage: image) }
+                #else
+                    if let image = NSImage(data: data) { preview = Image(nsImage: image) }
+                #endif
+            } catch {
+                // Thumbnail failure must not block opening the original document.
+            }
+        }
     }
 }
 
-/// Folio has no thumbnail endpoint yet, so every document shows an A4-shaped sheet.
+/// The placeholder used while a preview is loading or unavailable.
 struct PaperThumbnail: View {
+    var showSymbol = true
+
     var body: some View {
         RoundedRectangle(cornerRadius: FolioTheme.Radius.radiusSm)
             .fill(Color.paperRaised)
             .aspectRatio(1 / 1.414, contentMode: .fit)
             .overlay {
-                Image(systemName: "doc.text")
-                    .foregroundStyle(Color.inkMuted)
+                if showSymbol {
+                    Image(systemName: "doc.text")
+                        .foregroundStyle(Color.inkMuted)
+                }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: FolioTheme.Radius.radiusSm)

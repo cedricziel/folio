@@ -195,9 +195,60 @@ actor MockFolioService: FolioService {
         return document
     }
 
-    func thumbnail(id _: Document.ID) async throws -> Data? {
+    private var thumbnailData: Data?
+    private var thumbnailGates: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    private var thumbnailStarted: CheckedContinuation<Void, Never>?
+    private var suspendThumbnailRequests = false
+    private(set) var cancelledThumbnailRequests = 0
+
+    func suspendThumbnails() { suspendThumbnailRequests = true }
+
+    func waitForThumbnailRequest() async {
+        guard thumbnailGates.isEmpty else { return }
+        await withCheckedContinuation { thumbnailStarted = $0 }
+    }
+
+    func releaseThumbnails() {
+        suspendThumbnailRequests = false
+        let gates = thumbnailGates
+        thumbnailGates.removeAll()
+        for gate in gates.values { gate.resume() }
+    }
+
+    private func cancelThumbnail(_ request: UUID) {
+        guard let gate = thumbnailGates.removeValue(forKey: request) else { return }
+        cancelledThumbnailRequests += 1
+        gate.resume(throwing: CancellationError())
+    }
+
+    private var thumbnailOutcomes: [Document.ID: Result<Data?, FolioError>] = [:]
+    private(set) var thumbnailRequests: [Document.ID] = []
+
+    func setThumbnail(_ data: Data?) { thumbnailData = data }
+
+    func setThumbnail(_ data: Data?, for id: Document.ID, error: FolioError? = nil) {
+        thumbnailOutcomes[id] = error.map { .failure($0) } ?? .success(data)
+    }
+
+    func thumbnail(id: Document.ID) async throws -> Data? {
+        try Task.checkCancellation()
+        thumbnailRequests.append(id)
+        if suspendThumbnailRequests {
+            let request = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (gate: CheckedContinuation<Void, any Error>) in
+                    thumbnailGates[request] = gate
+                    thumbnailStarted?.resume()
+                    thumbnailStarted = nil
+                }
+            } onCancel: {
+                Task { await self.cancelThumbnail(request) }
+            }
+        }
+        try Task.checkCancellation()
+        if let result = thumbnailOutcomes[id] { return try result.get() }
         if let failure { throw failure }
-        return nil
+        return thumbnailData
     }
 
     func downloadFile(for document: Document) async throws -> URL {
