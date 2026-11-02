@@ -61,6 +61,22 @@ Lint changed Swift files with `xcrun swift-format lint --strict`. A package test
 
 `DownloadTests` passes the fixture PDF through `fetchContents`, opens it with PDFKit, reopens it, and verifies that missing server contents produce `noSuchItem`. `ProviderErrorTests` covers supported error domains. For device-only failures, filter Console for subsystem `com.cedricziel.folio.fileprovider` and category `transfer`; reproduce one open and inspect the phase, HTTP status, and mapped error code. These diagnostics exclude filenames, credentials, and response bodies. Callback tests do not establish that a reported device failure is fixed.
 
+## Verify vault selection
+
+Run `cargo test -p folio-api --test vaults` for discovery, explicit request scope,
+role enforcement, revoked membership, scoped redirects, and CSRF protection.
+Run the isolated Playwright fixture with `e2e/tests/vaults.spec.ts` for desktop
+and mobile navigation, independent upload destinations, viewer controls, and
+late search responses after switching vaults. Use the fixture's temporary
+database and server, never an existing archive.
+
+The Apple package suite covers immutable scoped services, independent upload
+destinations, and external document links. File Provider tests must cover stable
+vault-qualified identifiers, scoped downloads and Inbox uploads, read-only
+capabilities, membership revocation, and transient failures that retain entries.
+Run both the package suite and native provider tests above after these changes.
+These tests do not establish system integration in Files or Finder.
+
 ## Verify MCP changes
 
 Run `RUSTC_WRAPPER= cargo test -p folio-mcp` for protocol, tool, HTTP, and OAuth
