@@ -8,6 +8,7 @@ mod document_review;
 mod document_type;
 mod file_identity;
 mod ingest;
+mod ingest_identity;
 mod metadata;
 mod saved_view;
 mod settings;
@@ -32,6 +33,7 @@ pub use ingest::{
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
     SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
+pub use ingest_identity::IngestItemKey;
 pub use metadata::{MetadataKind, MetadataValue};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
