@@ -90,6 +90,7 @@ pub async fn harness_with(
     let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
     let state = AppState::new(
         repos.documents,
+        repos.entries,
         repos.tags,
         repos.correspondents,
         repos.document_types,
