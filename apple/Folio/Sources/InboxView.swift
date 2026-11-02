@@ -23,6 +23,8 @@ struct InboxView: View {
 
     @State private var uploads: UploadViewModel
     @State private var showFileImporter = false
+    @State private var isDropTargeted = false
+    @State private var isImporting = false
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var pendingDelete: Document?
     @State private var showScanner = false
@@ -203,6 +205,18 @@ struct InboxView: View {
         .searchFocused($searchFocused)
         .refreshable { await list.load() }
         .overlay { placeholder }
+        .overlay {
+            if isDropTargeted && canAcceptImport {
+                ContentUnavailableView(
+                    "Drop files to upload", systemImage: "tray.and.arrow.down",
+                    description: Text("Images and PDFs.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.archiveTint)
+                .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: receiveDrop)
         .safeAreaInset(edge: .top, spacing: 0) { uploadNotice }
         .toolbar { toolbar }
         #if os(iOS)
@@ -238,13 +252,7 @@ struct InboxView: View {
             case let .failure(error):
                 problem = error.localizedDescription
             case let .success(urls):
-                Task {
-                    let loaded = await Self.readFiles(urls)
-                    if !loaded.failed.isEmpty {
-                        problem = "Couldn't read \(loaded.failed.joined(separator: ", "))."
-                    }
-                    reviewUploads(loaded.files)
-                }
+                importFiles(urls)
             }
         }
         .alert(
@@ -265,7 +273,12 @@ struct InboxView: View {
         .onChange(of: photoSelection) { _, items in
             guard !items.isEmpty else { return }
             photoSelection = []
-            Task { reviewUploads(await loadPhotos(items)) }
+            guard canAcceptImport else { return }
+            isImporting = true
+            Task {
+                reviewUploads(await loadPhotos(items))
+                isImporting = false
+            }
         }
         .confirmationDialog(
             "Move this document to Trash?",
@@ -352,7 +365,7 @@ struct InboxView: View {
             } description: {
                 Text(
                     list.searchText.isEmpty
-                        ? "Scan a letter or choose a file to file your first document."
+                        ? "Scan a letter, choose files, or drop images and PDFs here."
                         : "Try a different word."
                 )
             }
@@ -432,20 +445,51 @@ struct InboxView: View {
         pendingUploads = UploadBatch(files: files)
     }
 
-    /// Reads off the main actor so large files do not freeze the UI.
-    private nonisolated static func readFiles(_ urls: [URL]) async -> (files: [UploadFile], failed: [String]) {
-        await Task.detached {
-            var files: [UploadFile] = []
-            var failed: [String] = []
-            for url in urls {
-                if let file = try? UploadFile(contentsOf: url) {
-                    files.append(file)
-                } else {
-                    failed.append(url.lastPathComponent)
+    private var canAcceptImport: Bool {
+        guard canUpload, !isImporting, pendingUploads == nil else { return false }
+        if case .uploading = uploads.state { return false }
+        return true
+    }
+
+    private func receiveDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty, canAcceptImport else { return false }
+        isImporting = true
+        Task {
+            var urls: [URL] = []
+            var failed = false
+            for provider in providers {
+                let url: URL? = await withCheckedContinuation { continuation in
+                    _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                        continuation.resume(returning: data.flatMap { URL(dataRepresentation: $0, relativeTo: nil) })
+                    }
                 }
+                if let url { urls.append(url) } else { failed = true }
             }
-            return (files, failed)
-        }.value
+            await prepareFiles(urls)
+            if failed { problem = "Couldn't read some dropped files. Try choosing them with Choose files." }
+            isImporting = false
+        }
+        return true
+    }
+
+    private func importFiles(_ urls: [URL]) {
+        guard canAcceptImport else {
+            problem = "Wait for the current upload to finish, then try again."
+            return
+        }
+        isImporting = true
+        Task {
+            await prepareFiles(urls)
+            isImporting = false
+        }
+    }
+
+    private func prepareFiles(_ urls: [URL]) async {
+        let loaded = await UploadFile.readDocuments(urls)
+        if !loaded.failed.isEmpty {
+            problem = "Couldn't read \(loaded.failed.joined(separator: ", ")). Choose PDF or image files."
+        }
+        reviewUploads(loaded.files)
     }
 
     private func loadPhotos(_ items: [PhotosPickerItem]) async -> [UploadFile] {
