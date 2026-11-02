@@ -1,6 +1,6 @@
 ## Dependencies and delivery
 
-Worktree: `/private/tmp/folio-typed-metadata`, branch `codex/typed-metadata`.
+Worktree: `/private/tmp/folio-typed-metadata`. Validation PR #259 uses `codex/typed-metadata`; the next field-definition increment uses `codex/metadata-definitions`.
 Foundation chat: `01a19e17-80c0-7302-85f5-4eff22bc5608`.
 Versioning chat: `01a19e18-494a-76d0-9f6c-63df47f79bdd`.
 
