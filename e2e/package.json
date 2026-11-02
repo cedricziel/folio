@@ -4,6 +4,7 @@
   "description": "Playwright end-to-end tests for Folio, run against an ephemeral instance",
   "scripts": {
     "test": "playwright test",
+    "test:telemetry": "playwright test --config telemetry.config.ts",
     "report": "playwright show-report"
   },
   "devDependencies": {
