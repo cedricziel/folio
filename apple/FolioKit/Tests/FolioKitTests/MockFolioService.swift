@@ -22,6 +22,7 @@ actor MockFolioService: FolioService {
     private(set) var queries: [String] = []
     private(set) var uploads: [UploadFile] = []
     private(set) var deleted: [Document.ID] = []
+    private var trashedDocuments: [Document.ID: Document] = [:]
     private(set) var pings = 0
     private var documentGate: CheckedContinuation<[Document], Never>?
     private var documentStarted: CheckedContinuation<Void, Never>?
@@ -179,7 +180,19 @@ actor MockFolioService: FolioService {
             throw failure
         }
         deleted.append(id)
+        trashedDocuments[id] = documentList.first { $0.id == id }
         documentList.removeAll { $0.id == id }
+    }
+
+    func restoreDocument(id: Document.ID) async throws -> Document {
+        if let failure {
+            throw failure
+        }
+        guard let document = trashedDocuments.removeValue(forKey: id) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        documentList.append(document)
+        return document
     }
 
     func downloadFile(for document: Document) async throws -> URL {

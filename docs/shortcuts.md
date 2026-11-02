@@ -18,6 +18,8 @@ On Windows and Linux, read Cmd as Ctrl.
 | Edit details                    | `e`                 | -                           |
 | Edit tags                       | `t`                 | -                           |
 | Move the document to Trash             | `#`, `Cmd Backspace` | `Cmd Backspace`            |
+| Undo Move to Trash              | -                   | `Cmd Z` (Mac)               |
+| Redo Move to Trash              | -                   | `Cmd Shift Z` (Mac)         |
 | Lock Folio now                  | -                   | `Cmd Shift L` (App lock enabled) |
 | Show the shortcut list          | `?`                 | hold `Cmd` (iPad)           |
 

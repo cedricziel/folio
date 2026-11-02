@@ -21,6 +21,8 @@ struct InboxView: View {
         session.list
     }
 
+    @Environment(\.undoManager) private var undoManager
+    @State private var trashHistory: DocumentTrashHistory
     @State private var uploads: UploadViewModel
     @State private var showFileImporter = false
     @State private var isDropTargeted = false
@@ -56,6 +58,7 @@ struct InboxView: View {
         self.onNavigate = onNavigate
         self.onOpenDocument = onOpenDocument
         let list = session.list
+        _trashHistory = State(initialValue: DocumentTrashHistory(list: list))
         _uploads = State(
             initialValue: UploadViewModel(service: service) {
                 Task { await list.load(afterUpload: true) }
@@ -78,7 +81,10 @@ struct InboxView: View {
         // Keep loading alive when compact navigation hides the sidebar.
         .task(id: list.query) { await list.search(list.searchText) }
         .onChange(of: list.query) { pageTask?.cancel() }
-        .onDisappear { pageTask?.cancel() }
+        .onDisappear {
+            pageTask?.cancel()
+            trashHistory.invalidate()
+        }
         .focusedSceneValue(\.inboxActions, actions)
         .onChange(of: router.request, initial: true) { _, request in
             guard let request else { return }
@@ -120,12 +126,12 @@ struct InboxView: View {
 
     private var actions: InboxActions {
         InboxActions(
-            upload: canUpload ? { showFileImporter = true } : nil,
+            upload: canAcceptImport ? { showFileImporter = true } : nil,
             scan: scanAction,
             showInbox: { onNavigate(.inbox) },
             showAll: { onNavigate(.all) },
             find: { searchFocused = true },
-            deleteSelected: canEdit
+            deleteSelected: canEdit && !trashHistory.isWorking
                 ? session.selection.flatMap { list.document(for: $0) }.map { document in
                     { pendingDelete = document }
                 } : nil
@@ -133,7 +139,7 @@ struct InboxView: View {
     }
 
     private var scanAction: (() -> Void)? {
-        guard canUpload else { return nil }
+        guard canAcceptImport else { return nil }
         #if os(iOS)
             return DocumentScanner.isSupported ? { showScanner = true } : nil
         #else
@@ -144,7 +150,7 @@ struct InboxView: View {
     private func handle(_ request: IntentRouter.Request) {
         switch request {
         case .scan:
-            guard canUpload else { return }
+            guard canAcceptImport else { return }
             if let scan = scanAction {
                 scan()
             } else {
@@ -152,7 +158,7 @@ struct InboxView: View {
                 showFileImporter = true
             }
         case .upload:
-            guard canUpload else { return }
+            guard canAcceptImport else { return }
             showFileImporter = true
         case .inbox:
             onNavigate(.inbox)
@@ -301,8 +307,14 @@ struct InboxView: View {
             presenting: pendingDelete
         ) { document in
             Button("Move to Trash", role: .destructive) {
-                Task { await list.delete(document) }
+                Task {
+                    if await trashHistory.moveToTrash(document, undoManager: undoManager) {
+                        if session.selection == document.id { session.selection = nil }
+                        session.path.removeAll { $0 == document.id }
+                    }
+                }
             }
+            .disabled(trashHistory.isWorking)
             Button("Keep", role: .cancel) {}
         } message: { document in
             Text(
@@ -311,6 +323,9 @@ struct InboxView: View {
                 You can restore it from Trash in the web app.
                 """
             )
+            if undoManager != nil {
+                Text("You can also undo this action.")
+            }
         }
     }
 
@@ -418,11 +433,11 @@ struct InboxView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                 .help("Upload files (\u{2318}O)")
-                .disabled(!canUpload)
+                .disabled(!canAcceptImport)
             PhotosPicker(selection: $photoSelection, matching: .images) {
                 Label("Photos", systemImage: "photo")
             }
-            .disabled(!canUpload)
+            .disabled(!canAcceptImport)
             Menu("Server", systemImage: "gearshape") {
                 Text(serverURL.absoluteString)
                 Button("Sign out", action: onSignOut)
@@ -440,7 +455,7 @@ struct InboxView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(FolioTheme.Spacing.space4)
-            .disabled(!canUpload || !DocumentScanner.isSupported)
+            .disabled(!canAcceptImport || !DocumentScanner.isSupported)
         }
     #endif
 
@@ -454,7 +469,7 @@ struct InboxView: View {
     }
 
     private var canAcceptImport: Bool {
-        guard canUpload, !isImporting, pendingUploads == nil else { return false }
+        guard canUpload, !isImporting, pendingUploads == nil, scannedPages == nil, !showScanner else { return false }
         if case .uploading = uploads.state { return false }
         return true
     }

@@ -109,6 +109,23 @@ private let documentJSON = """
         #expect(document.tags.first?.name == "Taxes")
     }
 
+    @Test func restoringDocumentPostsToItsOriginalVault() async throws {
+        let vault = UUID()
+        let id = try #require(UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f"))
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "/api/documents/\(id.uuidString.lowercased())/restore")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(body: Data(documentJSON.utf8))
+        }
+
+        let document = try await makeService().scoped(to: vault).restoreDocument(id: id)
+
+        #expect(document.id == id)
+        #expect(document.title == "Jahresabrechnung 2025")
+        #expect(document.pageCount == 3)
+    }
+
     @Test func discoversVaultNamesRolesAndServerDefault() async throws {
         let id = UUID()
         StubURLProtocol.handler = { request, _ in

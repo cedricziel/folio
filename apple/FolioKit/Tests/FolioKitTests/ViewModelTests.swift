@@ -359,6 +359,59 @@ struct DocumentStatusTests {
         #expect(model.state == .failed(message: "Couldn't reach the server.", uploaded: 1))
     }
 
+    @Test func retryUploadsOnlyUnfinishedFiles() async {
+        let service = MockFolioService()
+        await service.setFailUploadsAfter(1)
+        var notifications = 0
+        let model = UploadViewModel(service: service) { notifications += 1 }
+        let files = [file("a.pdf"), file("b.pdf"), file("c.pdf")]
+        await model.upload(files)
+        await service.setFailUploadsAfter(nil)
+
+        await model.upload(files)
+
+        #expect(await service.uploads.map(\.filename) == ["a.pdf", "b.pdf", "c.pdf"])
+        #expect(model.state == .finished(count: 3))
+        #expect(notifications == 2)
+    }
+
+    @Test func retryKeepsTheOriginalVaultAfterDestinationChanges() async {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let shared = Vault(id: UUID(), name: "Household", role: .contributor)
+        let personalService = MockFolioService()
+        let sharedService = MockFolioService()
+        let catalog = VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id)
+        let source = MockFolioService(
+            vaults: catalog, vaultServices: [personal.id: personalService, shared.id: sharedService]
+        )
+        let destination = VaultDestinationViewModel(service: source, catalog: catalog)
+        let model = UploadViewModel(service: source, destination: destination) {}
+        let files = [file("a.pdf"), file("b.pdf")]
+        await personalService.setFailUploadsAfter(1)
+        await model.upload(files)
+        destination.selectVault(shared.id)
+        await personalService.setFailUploadsAfter(nil)
+
+        await model.upload(files)
+
+        #expect(await personalService.uploads.map(\.filename) == ["a.pdf", "b.pdf"])
+        #expect(await sharedService.uploads.isEmpty)
+        #expect(model.state == .finished(count: 2))
+    }
+
+    @Test func differentBatchDoesNotReusePartialProgress() async {
+        let service = MockFolioService()
+        await service.setFailUploadsAfter(1)
+        let model = UploadViewModel(service: service) {}
+        await model.upload([file("a.pdf"), file("b.pdf")])
+        await service.setFailUploadsAfter(nil)
+
+        await model.upload([file("c.pdf")])
+
+        #expect(await service.uploads.map(\.filename) == ["a.pdf", "c.pdf"])
+        #expect(model.state == .finished(count: 1))
+    }
+
     @Test func aSecondBatchWhileOneIsRunningIsIgnored() async {
         let service = MockFolioService()
         await service.setUploadDelay(.milliseconds(50))

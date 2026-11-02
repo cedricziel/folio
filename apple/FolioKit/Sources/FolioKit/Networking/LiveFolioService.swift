@@ -152,6 +152,12 @@ public struct LiveFolioService: FolioService {
         }
     }
 
+    public func restoreDocument(id: Document.ID) async throws -> Document {
+        try await call("documents.restore") {
+            try await Document(client.restoreDocument(path: .init(id: id.uuidString.lowercased())).ok.body.json)
+        }
+    }
+
     public func tags() async throws -> [Tag] {
         try await call("tags.list") {
             try await client.listTags().ok.body.json.map {

@@ -71,8 +71,10 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - Webhooks and workflows: start a local receiver (`python3 -m http.server`, or `nc -l`) on a free port, point the webhook at `http://127.0.0.1:<port>`, run the trigger (upload), and check the receiver log.
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.
 - Classification forms: on a throwaway document with existing correspondent and type, submit malformed and missing fields to both `/documents/:id/{correspondent,document_type}` and `/api/documents/:id/{correspondent,document_type}`. Expect 400 with both associations preserved. Explicit empty fields clear only the selected association, and valid IDs assign it. Run `cargo test -p folio-api --test routes classification_forms_reject` plus the vault-isolation tests.
+- Modal uploads: run `FOLIO_BIN=<new binary> npm test --prefix e2e -- upload-failures.spec.ts keyboard.spec.ts`. The tests cover accepted uploads, server rejection, transport failure, retained title/file inputs, retry, status announcements, and dialog keyboard navigation. The fixture starts and removes its own instance.
 - Recovery-code privacy: run `npm test --prefix e2e -- recovery-cache.spec.ts` with the new `FOLIO_BIN`. The test creates an isolated owner and authenticator, checks that acknowledged recovery codes leave no Turbo snapshot, retains HTTP `no-store`, and exercises Back/Forward navigation and link focus. Both throwaway instances are removed afterward.
 - Pipeline startup configuration: run the smoke test with `FOLIO_VERIFY_OCR_PROVIDER=none FOLIO_VERIFY_AUTO_OCR=false FOLIO_VERIFY_AUTO_EMBED=false`. On the fresh database, `/settings` must select `none` and leave both processing checkboxes unchecked; uploads must finish with skipped OCR and embeddings. The scripts pass these test options through the scrubbed environment.
+- Search palette: run `FOLIO_BIN=<new binary> npm test --prefix e2e -- search-races.spec.ts keyboard.spec.ts`. The browser tests delay JSON completion across recent/search requests and closing/reopening, then check that only current results render. They distinguish successful empty results from unavailable search, recent fallback matches, and fallback failure. Include the palette in the screenshot and axe tour.
 - OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; a PDF with an existing text layer bypasses the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
 - Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
@@ -107,8 +109,8 @@ disposable instance. The motion suite checks dialog focus restoration, toast
 dismissal, drawer backdrops, and one-time streamed row fades with reduced motion
 on and off. Replacements and duplicate row insertions must not replay the fade.
 
-The Apple package tests cover upload and deletion animation signals separately
-from ordinary reloads. In an isolated simulator, check upload notice appearance
+The Apple package tests cover upload, trash, undo, and redo animation signals
+separately from ordinary reloads and failed or invisible changes. In an isolated simulator, check upload notice appearance
 and dismissal, new rows, and confirmed deletion with Reduce Motion on and off.
 Keep native navigation and immediate privacy locking unchanged.
 

@@ -3,8 +3,9 @@
 use crate::vault::filters;
 use askama::Template;
 use axum::{
-    extract::{Query, State},
-    http::header,
+    extract::{Query, Request, State},
+    http::{header, StatusCode},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
@@ -19,9 +20,10 @@ use crate::error::ApiResult;
 use crate::state::AppState;
 use crate::vault::DefaultVault;
 
+use super::auth::AuthState;
 use super::view::{Nav, Sidebar};
 
-pub fn router() -> Router<AppState> {
+pub fn router(auth: AuthState) -> Router<AppState> {
     Router::new()
         .route("/settings", get(settings_page))
         .route("/settings/ai", post(save_ai_settings))
@@ -29,6 +31,31 @@ pub fn router() -> Router<AppState> {
         .route("/settings/processing/test", post(test_processing_settings))
         .route("/settings/processing/reembed", post(reembed_all))
         .route("/settings/mcp", post(save_mcp_settings))
+        .route_layer(middleware::from_fn_with_state(auth, require_admin))
+}
+
+async fn require_admin(State(auth): State<AuthState>, request: Request, next: Next) -> Response {
+    if !auth.required {
+        return next.run(request).await;
+    }
+    match auth.current_user(request.headers()).await {
+        Some(user) if user.is_owner || user.is_admin => next.run(request).await,
+        _ => StatusCode::FORBIDDEN.into_response(),
+    }
+}
+
+struct CredentialPresence {
+    openai_configured: bool,
+    anthropic_configured: bool,
+}
+
+impl From<&AiSettings> for CredentialPresence {
+    fn from(settings: &AiSettings) -> Self {
+        Self {
+            openai_configured: !settings.openai_api_key.is_empty(),
+            anthropic_configured: !settings.anthropic_api_key.is_empty(),
+        }
+    }
 }
 
 /// A provider choice in a `<select>`
@@ -52,7 +79,7 @@ fn options(ids: Vec<&'static str>, current: &str) -> Vec<ProviderOption> {
 struct SettingsTemplate {
     sidebar: Sidebar,
     title: String,
-    ai_settings: AiSettings,
+    credentials: CredentialPresence,
     processing: PipelineSettings,
     ocr_providers: Vec<ProviderOption>,
     embedding_providers: Vec<ProviderOption>,
@@ -76,7 +103,8 @@ async fn settings_page(
     Query(query): Query<SettingsQuery>,
 ) -> ApiResult<Html<String>> {
     let settings = state.settings_repo.list().await?;
-    let processing = (*state.pipeline.settings().await).clone();
+    let mut processing = (*state.pipeline.settings().await).clone();
+    processing.ai = AiSettings::default();
     let mcp_enabled = settings
         .iter()
         .find(|s| s.key == MCP_ENABLED)
@@ -93,7 +121,7 @@ async fn settings_page(
     let template = SettingsTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
-        ai_settings: AiSettings::from_settings(&settings),
+        credentials: CredentialPresence::from(&AiSettings::from_settings(&settings)),
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),
         embedding_providers: options(
             state.pipeline.embedding_providers(),
@@ -114,13 +142,15 @@ async fn settings_page(
 pub struct AiSettingsForm {
     openai_api_key: String,
     anthropic_api_key: String,
+    clear_openai_api_key: Option<String>,
+    clear_anthropic_api_key: Option<String>,
 }
 
 /// Settings saved template (Turbo Stream response)
 #[derive(Template)]
 #[template(path = "partials/settings_saved.html")]
 struct SettingsSavedTemplate {
-    ai_settings: AiSettings,
+    credentials: CredentialPresence,
 }
 
 /// Save AI credentials
@@ -128,22 +158,36 @@ async fn save_ai_settings(
     State(state): State<AppState>,
     Form(form): Form<AiSettingsForm>,
 ) -> ApiResult<Response> {
-    let ai_settings = AiSettings {
-        openai_api_key: form.openai_api_key,
-        anthropic_api_key: form.anthropic_api_key,
-    };
-
-    state
-        .settings_repo
-        .set_many(&ai_settings.to_settings())
-        .await?;
+    let mut updates = Vec::new();
+    for (key, value, clear) in [
+        (
+            "ai.openai_api_key",
+            form.openai_api_key,
+            form.clear_openai_api_key,
+        ),
+        (
+            "ai.anthropic_api_key",
+            form.anthropic_api_key,
+            form.clear_anthropic_api_key,
+        ),
+    ] {
+        if clear.is_some() {
+            updates.push((key.to_string(), String::new()));
+        } else if !value.trim().is_empty() {
+            updates.push((key.to_string(), value));
+        }
+    }
+    state.settings_repo.set_many(&updates).await?;
     state.pipeline.invalidate().await;
 
     info!("AI credentials saved");
 
-    let html = SettingsSavedTemplate { ai_settings }
-        .render()
-        .unwrap_or_else(|e| format!("Error rendering settings saved: {}", e));
+    let settings = state.settings_repo.list().await?;
+    let html = SettingsSavedTemplate {
+        credentials: CredentialPresence::from(&AiSettings::from_settings(&settings)),
+    }
+    .render()
+    .unwrap_or_else(|e| format!("Error rendering settings saved: {}", e));
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
 }
