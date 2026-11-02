@@ -92,7 +92,7 @@ impl WorkflowRunner {
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();
         for (index, action) in actions.iter().enumerate().skip(skip) {
-            match self.perform(vault, action, &run).await {
+            match self.perform(vault, index, action, &run).await {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);
@@ -150,6 +150,7 @@ impl WorkflowRunner {
     async fn perform(
         &self,
         vault: VaultId,
+        action_index: usize,
         action: &WorkflowAction,
         run: &WorkflowRun,
     ) -> Result<Option<u16>, ActionFailure> {
@@ -172,7 +173,8 @@ impl WorkflowRunner {
                         headers,
                         secret: secret.as_deref(),
                         event: run.event,
-                        delivery_id: run.id,
+                        run_id: run.id,
+                        action_index,
                         body: &run.payload,
                     })
                     .await;

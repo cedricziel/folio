@@ -301,7 +301,8 @@ pub(crate) async fn send_test(
         .map_err(|e| ApiError::internal(format!("Failed to encode payload: {e}")))?;
 
     let mut deliveries = Vec::new();
-    for action in &workflow.actions {
+    let run_id = Uuid::new_v4();
+    for (action_index, action) in workflow.actions.iter().enumerate() {
         let WorkflowAction::Webhook {
             url,
             headers,
@@ -317,7 +318,8 @@ pub(crate) async fn send_test(
                 headers,
                 secret: secret.as_deref(),
                 event: workflow.trigger,
-                delivery_id: Uuid::new_v4(),
+                run_id,
+                action_index,
                 body: &body,
             })
             .await;

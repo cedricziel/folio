@@ -79,11 +79,14 @@ Each delivery is a `POST` with these headers:
 | `Content-Type`        | `application/json`                                             |
 | `User-Agent`          | `Folio-Webhooks/<version>`                                     |
 | `X-Folio-Event`       | The event name                                                 |
-| `X-Folio-Delivery`    | UUID of the run, identical across retries (use it to de-duplicate) |
+| `X-Folio-Delivery`    | UUID of this run/action pair, identical across retries (use it to de-duplicate) |
+| `X-Folio-Run`         | UUID of the workflow run, shared by all its actions             |
 | `X-Folio-Timestamp`   | Unix time in seconds, fresh on every attempt                   |
 | `X-Folio-Signature`   | `sha256=<hex>`, only when the workflow has a secret            |
 
 Custom headers from the workflow are added too; they cannot replace the `X-Folio-*` ones.
+
+De-duplicate by `X-Folio-Delivery`: distinct actions have distinct IDs even when they target the same receiver. Retries of an action retain its ID across process restarts. Use `X-Folio-Run` to correlate actions with a workflow run. Receivers that previously treated the delivery ID as a run ID must use the new run header for that lookup. Delivery IDs also change for pending runs created before this update. Let those runs finish before upgrading if your receiver needs deduplication across the transition.
 
 ### Verifying the signature
 

@@ -33,8 +33,9 @@ pub struct WebhookRequest<'a> {
     pub headers: &'a BTreeMap<String, String>,
     pub secret: Option<&'a str>,
     pub event: WorkflowTrigger,
-    /// Identical across retries of the same run
-    pub delivery_id: Id,
+    pub run_id: Id,
+    /// Position in the run's persisted action snapshot.
+    pub action_index: usize,
     pub body: &'a str,
 }
 
@@ -123,7 +124,18 @@ impl WebhookClient {
         );
         headers.insert(
             "x-folio-delivery",
-            HeaderValue::from_str(&request.delivery_id.to_string()).expect("UUIDs are ASCII"),
+            HeaderValue::from_str(
+                &Id::new_v5(
+                    &request.run_id,
+                    &(request.action_index as u64).to_be_bytes(),
+                )
+                .to_string(),
+            )
+            .expect("UUIDs are ASCII"),
+        );
+        headers.insert(
+            "x-folio-run",
+            HeaderValue::from_str(&request.run_id.to_string()).expect("UUIDs are ASCII"),
         );
         headers.remove("x-folio-signature");
         if let Some(secret) = request.secret.filter(|s| !s.is_empty()) {
