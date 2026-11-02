@@ -7,5 +7,5 @@
 ## 2. Verification
 
 - [x] 2.1 Run isolated IMAP integration tests with Docker required, `make format`, and focused folio-infra lint.
-- [ ] 2.2 Run `make lint` and `make test` after integration.
-- [ ] 2.3 Validate the OpenSpec change, archive it as the final commit, and validate the resulting spec.
+- [x] 2.2 Run `make lint` and `make test` after integration.
+- [x] 2.3 Validate the OpenSpec change, archive it as the final commit, and validate the resulting spec.
