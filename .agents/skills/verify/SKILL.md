@@ -205,6 +205,8 @@ For grouped workflow conditions, run `cargo test -p folio-core --features openap
 and `cargo test -p folio-api --test workflows --test openapi`. These cover nested
 all/any/none matching, depth and size limits, historical snapshots, legacy JSON,
 recursive schema references, and preserving API-created groups through HTML edits.
+The core suite also verifies trigger registration, duplicate and unknown selections,
+condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
 
 Run `cargo test -p folio-infra --test workflows` and
