@@ -214,8 +214,8 @@ async fn main() -> Result<()> {
     let dispatcher = Arc::new(OutboxDispatcher::new(
         outbox.clone(),
         vec![
-            workflow_engine,
             Arc::new(BroadcastConsumer(event_broadcaster.clone())),
+            workflow_engine,
         ],
         DispatcherConfig::default(),
     ));
