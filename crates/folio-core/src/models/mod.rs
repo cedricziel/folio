@@ -5,6 +5,7 @@ mod document;
 mod document_page;
 mod document_type;
 mod ingest;
+mod metadata;
 mod settings;
 mod source;
 mod tag;
@@ -24,6 +25,7 @@ pub use ingest::{
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
     SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
+pub use metadata::{MetadataKind, MetadataValue};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
 };
