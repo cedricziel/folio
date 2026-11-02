@@ -76,6 +76,13 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; a PDF with an existing text layer bypasses the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
 - Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
+## Document tags
+
+Run `FOLIO_BIN=<new binary> npm test --prefix e2e -- tags.spec.ts` against the
+disposable instance. The tests add quoted and attribute-like tag names, check
+literal text and accessible remove labels in both displays, and remove the tag
+through the dialog. Include the document screen in the screenshot and axe tour.
+
 ## Client telemetry
 
 Run `FOLIO_BIN=<new binary> npm run verify:telemetry --prefix e2e` to exercise
