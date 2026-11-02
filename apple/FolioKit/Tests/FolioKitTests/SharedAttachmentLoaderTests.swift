@@ -51,7 +51,7 @@ struct SharedAttachmentLoaderTests {
             files: result.files, service: MockFolioService(),
             background: ShareViewModelTests.RecordingUploader()
         )
-        #expect(model.title == (expected as NSString).deletingPathExtension)
+        #expect(model.title == expected)
     }
 
     @Test func mixedSelectionRetainsSuccessAndNamedFailureButBlocksUpload() async throws {
