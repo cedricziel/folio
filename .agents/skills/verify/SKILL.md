@@ -271,6 +271,26 @@ and invalid-identifier handling, empty batches, and cancellation that stops the
 network transfer and completes the batch once. Run the isolated package and
 macOS provider commands above; these tests do not register a provider domain.
 
+`ThumbnailCacheTests` covers revision invalidation, workspace isolation, retry,
+cancellation, and eviction. `WorkspaceTests` verifies cache replacement on vault
+selection. Run them with the isolated package command above.
+
+`apple/ThumbnailTests/project.yml` builds the production document row with a mock
+service. Generate its project outside the checkout and run the `Fixture` scheme
+on macOS and a fresh iPhone simulator, using the isolation and 180-second test
+timeouts described under Apple inbox navigation. The test captures placeholder
+and preview screenshots, then opens rows with PDF/image previews, missing
+thumbnails, and authentication failures. Inspect the retained screenshots for
+preview visibility and uncropped content. It uses no account, keychain, server,
+or File Provider domain. Remove its simulator and temporary build on every exit.
+If the macOS UI runner exits before connecting to XCTest, report that failure
+separately. The standalone fixture can be checked with native UI automation:
+launch with `--without-thumbnails` for the placeholder baseline, relaunch without
+it, inspect the previews, and click each row to verify its `Opened:` label. This
+verifies row interaction without claiming that the XCTest runner passed.
+The Apple workflow also runs the iPhone fixture in the `Thumbnail UI` job and
+retains its result bundle, including screenshot attachments, for seven days.
+
 ## Verify document repository changes
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`

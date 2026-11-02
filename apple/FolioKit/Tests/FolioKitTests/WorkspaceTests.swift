@@ -7,6 +7,22 @@ import Testing
     private let personal = Vault(id: UUID(), name: "Personal", role: .owner)
     private let shared = Vault(id: UUID(), name: "Household", role: .viewer)
 
+    @Test func switchingVaultsDiscardsThumbnailBytes() async throws {
+        let first = MockFolioService(), second = MockFolioService()
+        await first.setThumbnail(Data([1]))
+        await second.setThumbnail(Data([2]))
+        let root = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: first, shared.id: second]
+        )
+        let workspace = WorkspaceViewModel(service: root)
+        let document = Document(title: "Same identifier")
+        await workspace.loadVaults()
+        #expect(try await workspace.thumbnails?.data(for: document) == Data([1]))
+        workspace.selectVault(shared.id)
+        #expect(try await workspace.thumbnails?.data(for: document) == Data([2]))
+    }
+
     @Test func scopedExternalLinkOpensItsVaultAndDocument() async {
         let document = Document(title: "Shared letter")
         let source = MockFolioService(

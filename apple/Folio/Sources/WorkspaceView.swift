@@ -57,6 +57,7 @@ struct WorkspaceView: View {
                     onOpenDocument: { workspace.open($0, vaultID: $1) }
                 )
                 .id("\(vaultID.uuidString)-\(workspace.destination.rawValue)")
+                .environment(\.thumbnailCache, workspace.thumbnails)
             } else if let error = workspace.discoveryError {
                 ContentUnavailableView {
                     Label("Couldn't load vaults", systemImage: "exclamationmark.triangle")

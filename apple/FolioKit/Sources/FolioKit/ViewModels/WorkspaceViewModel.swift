@@ -43,6 +43,7 @@ public final class WorkspaceViewModel {
     public private(set) var isReady = false
     public private(set) var discoveryError: String?
     public private(set) var navigationError: String?
+    public private(set) var thumbnails: ThumbnailCache?
     private let rootService: any FolioService
     private var inbox: DocumentBrowserSession
     private var all: DocumentBrowserSession
@@ -97,6 +98,7 @@ public final class WorkspaceViewModel {
     }
 
     private func resetBrowsers() {
+        thumbnails = selectedVaultID.map { ThumbnailCache(service: service, vaultID: $0) }
         inbox = DocumentBrowserSession(service: service, destination: .inbox)
         all = DocumentBrowserSession(service: service, destination: .all)
     }
