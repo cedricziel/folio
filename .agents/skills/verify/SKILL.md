@@ -166,6 +166,8 @@ They cover competing source claims, owner success/failure/cancellation, missing
 originals, and retained trash. Folder tests use temporary inputs; IMAP tests use
 loopback fixtures or disposable GreenMail containers. Never point these suites
 at an existing watched folder or mailbox.
+The IMAP suite also covers reused UIDs after UIDVALIDITY or account changes,
+missing UIDVALIDITY, and compatibility with existing message ledger keys.
 Run the repository contract above with `FOLIO_REQUIRE_DOCKER=1` to verify atomic
 claim replacement on both SQLite and PostgreSQL. A skipped container test does
 not verify PostgreSQL behavior.

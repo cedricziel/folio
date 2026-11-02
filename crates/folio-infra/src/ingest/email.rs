@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use mail_parser::MessageParser;
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
@@ -230,8 +231,12 @@ impl EmailSource {
             .map_err(|(e, _)| imap_err("login", e))
     }
 
-    async fn search(&self, session: &mut ImapSession, mailbox: &str) -> Result<BTreeSet<u32>> {
-        session
+    async fn search(
+        &self,
+        session: &mut ImapSession,
+        mailbox: &str,
+    ) -> Result<(Option<u32>, BTreeSet<u32>)> {
+        let selected = session
             .select(mailbox)
             .await
             .map_err(|e| imap_err(&format!("select {mailbox}"), e))?;
@@ -239,11 +244,29 @@ impl EmailSource {
             .uid_search(&self.config.criteria)
             .await
             .map_err(|e| imap_err("search", e))?;
-        Ok(uids.into_iter().collect())
+        Ok((selected.uid_validity, uids.into_iter().collect()))
     }
 
     fn message_key(&self, message_id: &str) -> String {
         format!("msg:{}:{message_id}", self.id)
+    }
+
+    fn uid_key(&self, mailbox: &str, validity: u32, uid: u32) -> Result<String> {
+        let identity = serde_json::to_vec(&(
+            self.id,
+            &self.config.host,
+            self.config.port,
+            &self.config.username,
+            self.config.security,
+            mailbox,
+            validity,
+            uid,
+        ))
+        .map_err(|e| imap_err("message identity", e))?;
+        Ok(format!(
+            "imap-uid:v1:{}",
+            hex::encode(Sha256::digest(identity))
+        ))
     }
 
     async fn fetch_raw(session: &mut ImapSession, uid: u32) -> Result<Option<Vec<u8>>> {
@@ -312,7 +335,8 @@ impl EmailSource {
         sink: &dyn IngestSink,
         report: &mut PollReport,
     ) -> Result<()> {
-        for uid in self.search(session, mailbox).await? {
+        let (validity, uids) = self.search(session, mailbox).await?;
+        for uid in uids {
             let Some(raw) = Self::fetch_raw(session, uid).await? else {
                 continue;
             };
@@ -321,12 +345,17 @@ impl EmailSource {
                 report.failed += 1;
                 continue;
             };
-            let key = self.message_key(
-                &mail
-                    .message_id
-                    .clone()
-                    .unwrap_or_else(|| format!("{mailbox}/{uid}")),
-            );
+            let key = match mail.message_id.as_deref() {
+                Some(message_id) => self.message_key(message_id),
+                None => {
+                    let Some(validity) = validity.filter(|v| *v != 0) else {
+                        warn!("Message {uid} in {mailbox} has no Message-ID or usable UIDVALIDITY, leaving it alone");
+                        report.failed += 1;
+                        continue;
+                    };
+                    self.uid_key(mailbox, validity, uid)?
+                }
+            };
 
             let already_done = self.ledger.find(self.vault()?, &key).await?.is_some();
             if !already_done {
@@ -409,7 +438,8 @@ impl IngestionSource for EmailSource {
         let mut session = self.connect().await?;
         let mut parts = Vec::new();
         for mailbox in &self.config.mailboxes {
-            let count = self.search(&mut session, mailbox).await?.len();
+            let (_, uids) = self.search(&mut session, mailbox).await?;
+            let count = uids.len();
             parts.push(format!("{count} matching in {mailbox}"));
         }
         let _ = session.logout().await;

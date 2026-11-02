@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use common::{container_or_skip, ingest::Harness};
 use folio_core::error::Result;
 use folio_core::models::{
-    Document, EmailConfig, Id, IngestItem, IngestOutcome, MailAfterImport, MailBody, MailSecurity,
-    SourceConditions, SourceKind, TextMatch, VaultId,
+    Document, EmailConfig, Id, IngestItem, IngestOutcome, LedgerEntry, MailAfterImport, MailBody,
+    MailSecurity, SourceConditions, SourceKind, TextMatch, VaultId,
 };
 use folio_core::ports::{IngestSink, IngestionSource};
 use folio_infra::EmailSource;
@@ -509,4 +509,180 @@ async fn rejected_uid_move_never_falls_back_to_copy_or_expunge() {
         cleanup_state("MOVE UIDPLUS", MailAfterImport::Move, Some("UID MOVE")).await,
         unchanged_mailbox()
     );
+}
+
+fn identity_config(port: u16) -> EmailConfig {
+    serde_json::from_value(serde_json::json!({
+        "host": "127.0.0.1", "port": port, "security": "plain",
+        "username": "fixture", "password": "fixture", "mail_body": "eml",
+        "after_import": "delete",
+    }))
+    .unwrap()
+}
+
+fn identity_source(h: &Harness, config: EmailConfig) -> EmailSource {
+    EmailSource::new(
+        h.source_id,
+        "fixture",
+        config,
+        h.ledger.clone(),
+        Some(h.vault),
+    )
+}
+
+fn no_id_mail(body: &str) -> String {
+    format!("From: a@example.test\r\nSubject: No ID\r\n\r\n{body}\r\n")
+}
+
+#[tokio::test]
+async fn reused_uid_after_uidvalidity_reset_imports_the_new_message() {
+    let mailbox = imap::ImapMailbox::with_messages(
+        "UIDPLUS",
+        None,
+        vec![
+            (Some(1), no_id_mail("old")),
+            (Some(2), no_id_mail("new")),
+            (Some(2), no_id_mail("new")),
+        ],
+    )
+    .await;
+    let h = Harness::new().await;
+    let source = identity_source(&h, identity_config(mailbox.port));
+    let sink = Collect::default();
+
+    assert_eq!(source.poll(&sink).await.unwrap().imported, 1);
+    assert_eq!(source.poll(&sink).await.unwrap().imported, 1);
+    assert_eq!(source.poll(&sink).await.unwrap().imported, 0);
+
+    assert_eq!(sink.0.lock().unwrap().len(), 2);
+    assert!(mailbox.states().await.iter().all(|s| !s.imported_present));
+}
+
+#[tokio::test]
+async fn changing_account_under_the_same_source_imports_its_reused_uid() {
+    let mailbox = imap::ImapMailbox::with_messages(
+        "UIDPLUS",
+        None,
+        vec![
+            (Some(1), no_id_mail("account one")),
+            (Some(1), no_id_mail("account two")),
+        ],
+    )
+    .await;
+    let h = Harness::new().await;
+    let config = identity_config(mailbox.port);
+    let sink = Collect::default();
+    assert_eq!(
+        identity_source(&h, config.clone())
+            .poll(&sink)
+            .await
+            .unwrap()
+            .imported,
+        1
+    );
+    let mut other_account = config;
+    other_account.username = "other-fixture".into();
+
+    assert_eq!(
+        identity_source(&h, other_account)
+            .poll(&sink)
+            .await
+            .unwrap()
+            .imported,
+        1
+    );
+
+    assert_eq!(sink.0.lock().unwrap().len(), 2);
+    assert!(mailbox.states().await.iter().all(|s| !s.imported_present));
+}
+
+#[tokio::test]
+async fn missing_uidvalidity_leaves_no_id_message_untouched_for_retry() {
+    let mailbox = imap::ImapMailbox::with_messages(
+        "UIDPLUS",
+        None,
+        vec![
+            (None, no_id_mail("document")),
+            (Some(1), no_id_mail("document")),
+        ],
+    )
+    .await;
+    let h = Harness::new().await;
+    let source = identity_source(&h, identity_config(mailbox.port));
+    let sink = Collect::default();
+
+    let first = source.poll(&sink).await.unwrap();
+    assert_eq!(first.failed, 1);
+    assert_eq!(first.imported, 0);
+    assert!(sink.0.lock().unwrap().is_empty());
+    assert_eq!(source.poll(&sink).await.unwrap().imported, 1);
+
+    let states = mailbox.states().await;
+    assert_eq!(states[0], unchanged_mailbox());
+    assert!(!states[1].imported_present);
+}
+
+async fn seed_processed(h: &Harness, suffix: &str) {
+    h.ledger
+        .insert(
+            h.vault,
+            &LedgerEntry {
+                key: format!("msg:{}:{suffix}", h.source_id),
+                source_id: h.source_id,
+                document_id: None,
+                outcome: "processed".into(),
+                created_at: chrono::Utc::now(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn legacy_message_id_entry_still_suppresses_import_without_uidvalidity() {
+    let mailbox = imap::ImapMailbox::with_messages(
+        "UIDPLUS",
+        None,
+        vec![(
+            None,
+            "From: a@example.test\r\nMessage-ID: <imported@example.test>\r\n\r\nDocument\r\n"
+                .into(),
+        )],
+    )
+    .await;
+    let h = Harness::new().await;
+    seed_processed(&h, "imported@example.test").await;
+    let sink = Collect::default();
+
+    let report = identity_source(&h, identity_config(mailbox.port))
+        .poll(&sink)
+        .await
+        .unwrap();
+
+    assert_eq!(report.imported, 0);
+    assert_eq!(report.failed, 0);
+    assert!(sink.0.lock().unwrap().is_empty());
+    assert!(!mailbox.state().await.imported_present);
+}
+
+#[tokio::test]
+async fn legacy_mailbox_uid_entry_does_not_suppress_a_new_message() {
+    let mailbox = imap::ImapMailbox::with_messages(
+        "UIDPLUS",
+        None,
+        vec![(Some(1), no_id_mail("new document"))],
+    )
+    .await;
+    let h = Harness::new().await;
+    seed_processed(&h, "INBOX/7").await;
+    let sink = Collect::default();
+
+    let report = identity_source(&h, identity_config(mailbox.port))
+        .poll(&sink)
+        .await
+        .unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    assert!(!mailbox.state().await.imported_present);
 }
