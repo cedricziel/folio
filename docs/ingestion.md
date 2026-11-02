@@ -99,7 +99,7 @@ On versions before the scoped IMAP cleanup fix, use **Mark Read** or disable the
 
 ## De-duplication
 
-Every file and attachment is hashed (SHA-256) before it is imported. Content that was imported before, from any source, is skipped and counted as skipped, so a re-dropped file or a forwarded mail does not create a second document. If you delete the document, the same content can be imported again.
+Every file and attachment is hashed (SHA-256) before it is imported. Content that was imported before, from any source, is skipped and counted as skipped, so a re-dropped file or a forwarded mail does not create a second document. Documents in Trash remain deduplicated. After you delete a document forever, the same content can be imported again.
 
 ## Rules
 

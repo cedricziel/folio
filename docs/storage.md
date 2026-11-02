@@ -15,7 +15,15 @@ filesystem paths.
 | `documents/{id}/thumb.jpg` | First-page thumbnail (also page 1 in the viewer) |
 | `documents/{id}/pages/{n}.jpg` | Page previews for pages 2 and up |
 
-Deleting a document deletes every object under `documents/{id}/`.
+Moving a document to Trash keeps every object under `documents/{id}/`. Trash has
+no automatic expiry. Choose **Restore** in the web Trash page to return a document
+to your archive, or **Delete forever** to request permanent deletion.
+
+Permanent deletion records the request before a background worker removes the
+object prefix. The database row remains in Trash as **Deleting permanently**
+until storage cleanup succeeds. Failed cleanup is retried; it does not return a
+document with missing files to the archive. Restore is unavailable once permanent
+deletion has been requested.
 
 ## Local
 

@@ -145,3 +145,28 @@ sequentially. Use `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` consist
 for the Rust run and a task-specific `CARGO_TARGET_DIR`; remove that target after
 verification before starting the Apple build. These settings omit debug symbols,
 not tests.
+
+## Verify document trash
+
+Run `cargo test -p folio-api --test trash --test vaults --test live` for default
+soft deletion, retained originals, restore, explicit purge, permissions, and
+vault-scoped events. Run `cargo test -p folio-infra --lib queue::worker::tests`
+for cleanup retries, indefinite retention, and processing races. The repository
+contract above also verifies transactional purge enqueueing on both databases.
+
+Build `folio-app`, then run `cd e2e && npx playwright test trash.spec.ts documents.spec.ts shortcuts.spec.ts`.
+The setup script starts an instance in a temporary directory with its own port,
+database, storage, and test configuration; teardown removes it. Do not set
+`E2E_BASE_URL` to an existing user instance. Verify that Move to Trash preserves
+the document, Restore returns it, and Delete forever requires confirmation and
+eventually removes its pending row. No automatic retention expiry is supported.
+Include `vaults.spec.ts` and the API `vaults` suite when library selection changes:
+Trash links, forms, event refreshes, and redirects must retain the selected vault,
+and viewer/contributor restrictions must also apply to trashed documents.
+
+For Linux visual checks on macOS, a disposable pinned Playwright browser-server
+container can connect to the temporary macOS app through
+`PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>`. Verify the remote browser reports
+Linux, then use a temporary harness that removes only the host-platform skip in
+`visual.spec.ts`. Keep the same tour fixtures, viewport, masks, and screenshot
+paths. Recheck without updating snapshots, and remove the container and harness.

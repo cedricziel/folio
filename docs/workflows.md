@@ -11,7 +11,7 @@ A workflow has a trigger, optional conditions (all must match), and ordered acti
 | `document.uploaded`  | A document is created. Once per document and workflow.                     |
 | `document.processed` | The background pipeline reached its last stage (embedding done or skipped). Not sent when a stage fails for good. Once per document and workflow. |
 | `document.updated`   | Title, correspondent, document type, or tags changed.                      |
-| `document.deleted`   | A document was deleted. Only webhook actions can run for it.               |
+| `document.deleted`   | A document was permanently deleted. Only webhook actions can run for it.               |
 | `ingest.received`    | A file or email attachment was found by an ingestion source, before it is imported. Only `skip_import` runs. See [ingestion](ingestion.md). |
 
 `uploaded` and `processed` never repeat for the same document, even if it is reprocessed. Changes made by a workflow's own actions do not trigger `document.updated` workflows.
@@ -66,7 +66,7 @@ Every webhook body is JSON with this shape (`version` is the schema version; the
 }
 ```
 
-Adding optional fields keeps `version` at 1. Removing or re-typing a field means a new version. `asn` is reserved and always `null` for now. `source` says how the document arrived (`upload`, `api`, `folder`, `email`, ...); for folders and mail it carries the details described in [ingestion](ingestion.md). For `document.deleted` the document is described as it was before deletion, and the links no longer resolve.
+Adding optional fields keeps `version` at 1. Removing or re-typing a field means a new version. `asn` is reserved and always `null` for now. `source` says how the document arrived (`upload`, `api`, `folder`, `email`, ...); for folders and mail it carries the details described in [ingestion](ingestion.md). Moving to Trash and restoring do not trigger `document.deleted`. For `document.deleted` the document is described as it was before deletion, and the links no longer resolve.
 
 The links use `server.public_url` from `config.toml` (default `http://<host>:<port>`). Set it if receivers reach Folio under another address.
 
