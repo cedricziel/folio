@@ -396,18 +396,15 @@ async fn main() -> Result<()> {
             ..McpOptions::default()
         },
     );
-    let mcp = if config.auth.required {
-        mcp.layer(axum::middleware::from_fn_with_state(
+    let mcp = mcp
+        .layer(axum::middleware::from_fn_with_state(
             auth_store.clone(),
             folio_mcp::bridge_auth_context,
         ))
         .layer(axum::middleware::from_fn_with_state(
-            auth.validator("/mcp"),
+            auth.validator("/mcp").with_required(config.auth.required),
             folio_auth::require_bearer,
-        ))
-    } else {
-        mcp
-    };
+        ));
     let app = create_router(state, auth.clone()).merge(mcp);
 
     // Start server

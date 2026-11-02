@@ -254,6 +254,9 @@ archives and that retained SQL migrations still preserve existing rows.
 Before a PR, also run `RUSTC_WRAPPER= make format`, `RUSTC_WRAPPER= make lint`, and
 `RUSTC_WRAPPER= make test`. An empty wrapper bypasses a local sccache service when
 the sandbox cannot access it.
+Coordinate one Cargo build across delegated checks. Concurrent package-specific
+commands share the build lock and can compile different dependency feature sets.
+Use the workspace suite when several crates change.
 
 ## Verify document thumbnails
 
@@ -343,3 +346,28 @@ and successful collection at the exact byte limit. The instrumented stream tests
 check that collection stops before consuming the rest of an oversized original.
 Run the MCP suite above for the small-file resource response and the oversized
 file error that points clients to the text resource.
+
+## Verify integration access
+
+Run `RUSTC_WRAPPER= cargo test -p folio-infra --test personal_tokens` for hashed
+credential storage, owner isolation, audience, expiry, and revocation. Set
+`FOLIO_REQUIRE_DOCKER=1` to require the disposable PostgreSQL contract instead
+of allowing its explicit infrastructure skip.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test personal_tokens` for
+session-only management, explicit bearer precedence, and optional-auth scopes.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test integrations` for navigation
+and configured connection URLs. Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`
+to regenerate and validate the API contract.
+Run `RUSTC_WRAPPER= cargo test -p folio-mcp --test oauth` for token revocation,
+live vault roles, and legacy session ownership. Session tests must negotiate
+`2025-06-18`; newer MCP protocol versions can use stateless transport and miss
+replay regressions.
+
+Build `folio-app`, then run `npx playwright test integrations.spec.ts` from
+`e2e/` against its disposable fixture. It covers desktop and mobile shortcuts,
+creation, clipboard copy, reload redaction, revocation, and rejected revoked
+credentials. Never supply an existing archive as `E2E_BASE_URL`.
+On macOS, sandbox restrictions can block system networking initialization,
+loopback listeners, or the Docker socket. Rerun with those capabilities while
+retaining temporary data and test credentials. Record a skipped backend as
+unverified.

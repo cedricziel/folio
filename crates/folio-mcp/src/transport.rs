@@ -1,5 +1,6 @@
 //! Streamable HTTP and stdio transports
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     Router,
 };
+use folio_core::models::{UserId, VaultId, VaultRole};
 use folio_core::ports::SettingsRepository;
 use folio_core::services::{LibraryService, VaultService};
 use rmcp::transport::streamable_http_server::{
@@ -83,6 +85,129 @@ async fn enabled_gate(State(gate): State<Gate>, req: Request, next: Next) -> Res
     }
 }
 
+const SESSION_BINDING_IDLE: Duration = Duration::from_secs(24 * 60 * 60);
+const MAX_SESSION_BINDINGS: usize = 4096;
+
+#[derive(Clone, PartialEq, Eq)]
+struct SessionOwner {
+    subject: Option<String>,
+    client: Option<String>,
+    personal_token: Option<String>,
+    audience: Option<String>,
+    scopes: Vec<String>,
+    vault: VaultId,
+    role: VaultRole,
+}
+
+#[derive(Clone)]
+struct SessionGuard {
+    vaults: Arc<VaultService>,
+    bindings: Arc<Mutex<HashMap<String, (SessionOwner, Instant)>>>,
+}
+
+impl SessionGuard {
+    async fn owner(
+        &self,
+        context: Option<folio_auth::AuthContext>,
+        auth: Option<crate::McpAuth>,
+    ) -> Result<SessionOwner, StatusCode> {
+        let context = context.as_ref();
+        let auth = auth.as_ref();
+        let subject = context
+            .map(|ctx| ctx.user_id.clone())
+            .or_else(|| auth.and_then(|auth| auth.subject.clone()));
+        let mut scopes: Vec<_> = context
+            .map(|ctx| ctx.scopes.clone())
+            .or_else(|| auth.map(|auth| auth.scopes.iter().cloned().collect()))
+            .unwrap_or_default();
+        scopes.sort();
+        scopes.dedup();
+        let user = subject.as_deref().map(UserId::from);
+        let vault = self
+            .vaults
+            .default_vault(user.as_ref())
+            .await
+            .map_err(|_| StatusCode::FORBIDDEN)?;
+        let role = self
+            .vaults
+            .list(user.as_ref())
+            .await
+            .map_err(|_| StatusCode::FORBIDDEN)?
+            .into_iter()
+            .find(|(item, _)| item.id == vault)
+            .map(|(_, role)| role)
+            .ok_or(StatusCode::FORBIDDEN)?;
+        Ok(SessionOwner {
+            subject,
+            client: context.map(|ctx| ctx.client_id.clone()),
+            personal_token: context.and_then(|ctx| ctx.personal_token_id.clone()),
+            audience: context.map(|ctx| ctx.audience.clone()),
+            scopes,
+            vault,
+            role,
+        })
+    }
+}
+
+async fn bind_session(State(guard): State<SessionGuard>, request: Request, next: Next) -> Response {
+    let context = request
+        .extensions()
+        .get::<folio_auth::AuthContext>()
+        .cloned();
+    let auth = request.extensions().get::<crate::McpAuth>().cloned();
+    let owner = match guard.owner(context, auth).await {
+        Ok(owner) => owner,
+        Err(status) => return status.into_response(),
+    };
+    let mut headers = request.headers().get_all("mcp-session-id").iter();
+    let session = match headers.next() {
+        Some(value) => match value.to_str() {
+            Ok(value) => Some(value.to_string()),
+            Err(_) => return StatusCode::NOT_FOUND.into_response(),
+        },
+        None => None,
+    };
+    if headers.next().is_some() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    {
+        let mut bindings = guard.bindings.lock().unwrap();
+        bindings.retain(|_, (_, at)| at.elapsed() < SESSION_BINDING_IDLE);
+        if let Some(id) = &session {
+            match bindings.get_mut(id) {
+                Some((bound, at)) if *bound == owner => *at = Instant::now(),
+                _ => return StatusCode::NOT_FOUND.into_response(),
+            }
+        }
+    }
+    let delete = request.method() == axum::http::Method::DELETE;
+    let response = next.run(request).await;
+    if response.status().is_success() {
+        let mut bindings = guard.bindings.lock().unwrap();
+        if let Some(id) = session.filter(|_| delete) {
+            bindings.remove(&id);
+        } else if let Some(id) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+        {
+            if !bindings.contains_key(id) && bindings.len() >= MAX_SESSION_BINDINGS {
+                if let Some(oldest) = bindings
+                    .iter()
+                    .min_by_key(|(_, (_, at))| *at)
+                    .map(|(id, _)| id.clone())
+                {
+                    bindings.remove(&oldest);
+                }
+            }
+            bindings
+                .entry(id.to_string())
+                .or_insert_with(|| (owner, Instant::now()));
+        }
+    }
+    response
+}
+
 /// Router serving the MCP endpoint at `/mcp`
 ///
 /// Authentication is not built in: wrap the returned router in an auth layer
@@ -98,6 +223,10 @@ pub fn router(
         StreamableHttpServerConfig::default().with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES);
     config.allowed_hosts.extend(options.allowed_hosts);
 
+    let guard = SessionGuard {
+        vaults: vaults.clone(),
+        bindings: Arc::default(),
+    };
     let service = StreamableHttpService::new(
         move || Ok(FolioMcp::new(library.clone(), vaults.clone())),
         Arc::new(LocalSessionManager::default()),
@@ -112,6 +241,7 @@ pub fn router(
     };
     Router::new()
         .nest_service("/mcp", service)
+        .layer(middleware::from_fn_with_state(guard, bind_session))
         .layer(middleware::from_fn_with_state(gate, enabled_gate))
 }
 

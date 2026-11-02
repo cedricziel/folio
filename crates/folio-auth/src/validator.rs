@@ -41,6 +41,7 @@ pub struct TokenValidator {
     store: Arc<dyn AuthStore>,
     public_url: Option<String>,
     resource_path: String,
+    required: bool,
 }
 
 impl TokenValidator {
@@ -53,13 +54,52 @@ impl TokenValidator {
             store,
             public_url,
             resource_path: resource_path.into(),
+            required: true,
         }
+    }
+
+    /// Allows anonymous requests without Authorization while still validating explicit credentials.
+    pub fn with_required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
     }
 
     /// Returns the caller, or `None` when the token is absent, unknown,
     /// expired or issued for a different audience.
     pub async fn validate(&self, headers: &HeaderMap) -> Option<AuthContext> {
         let token = bearer_token(headers)?;
+        if token.starts_with("folio_pat_") {
+            let record = self
+                .store
+                .find_personal_token(&hash_token(token))
+                .await
+                .map_err(|e| tracing::error!("personal token lookup failed: {e}"))
+                .ok()??;
+            let audience = format!(
+                "{}{}",
+                base_url(self.public_url.as_deref()),
+                self.resource_path
+            );
+            if record.revoked_at.is_some()
+                || record.expires_at <= now()
+                || !ct_eq(&record.audience, &audience)
+                || self
+                    .store
+                    .find_user_by_id(&record.user_id)
+                    .await
+                    .ok()?
+                    .is_none()
+            {
+                return None;
+            }
+            return Some(AuthContext {
+                personal_token_id: Some(record.id),
+                user_id: record.user_id,
+                client_id: String::new(),
+                scopes: record.scopes,
+                audience: record.audience,
+            });
+        }
         let record = self
             .store
             .find_access_token(&hash_token(token))
@@ -75,6 +115,7 @@ impl TokenValidator {
             return None;
         }
         Some(AuthContext {
+            personal_token_id: None,
             user_id: record.user_id,
             client_id: record.client_id,
             scopes: record.scopes,
@@ -103,7 +144,11 @@ impl TokenValidator {
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let mut values = headers.get_all(header::AUTHORIZATION).iter();
+    let value = values.next()?.to_str().ok()?;
+    if values.next().is_some() {
+        return None;
+    }
     let (scheme, token) = value.split_once(' ')?;
     (scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()).then(|| token.trim())
 }
@@ -116,6 +161,9 @@ pub async fn require_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if !validator.required && !request.headers().contains_key(header::AUTHORIZATION) {
+        return next.run(request).await;
+    }
     match validator.validate(request.headers()).await {
         Some(context) => {
             request.extensions_mut().insert(context);

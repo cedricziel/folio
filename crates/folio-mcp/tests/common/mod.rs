@@ -16,7 +16,7 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RunningService, ServiceError};
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Embeddings are unavailable in tests, so search exercises the literal path
 struct NoEmbeddings;
@@ -119,6 +119,7 @@ impl SearchService for FakeSearch {
 struct CountingTags {
     inner: Arc<dyn TagRepository>,
     lists: Arc<AtomicUsize>,
+    delete_after_list: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -139,7 +140,13 @@ impl TagRepository for CountingTags {
     }
     async fn list(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Tag>> {
         self.lists.fetch_add(1, Ordering::SeqCst);
-        self.inner.list(vault).await
+        let tags = self.inner.list(vault).await?;
+        if self.delete_after_list.swap(false, Ordering::SeqCst) {
+            for tag in &tags {
+                self.inner.delete(vault, tag.id).await?;
+            }
+        }
+        Ok(tags)
     }
     async fn create(
         &self,
@@ -201,6 +208,7 @@ pub struct Fixture {
     pub auth: Arc<dyn folio_auth::AuthStore>,
     /// Number of times the tags table was listed in full
     pub tag_lists: Arc<AtomicUsize>,
+    pub delete_tags_after_next_list: Arc<AtomicBool>,
     pub documents: Arc<dyn DocumentRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     _dir: tempfile::TempDir,
@@ -243,9 +251,11 @@ impl Fixture {
         ));
 
         let tag_lists = Arc::new(AtomicUsize::new(0));
+        let delete_tags_after_next_list = Arc::new(AtomicBool::new(false));
         let tags = Arc::new(CountingTags {
             inner: repos.tags,
             lists: tag_lists.clone(),
+            delete_after_list: delete_tags_after_next_list.clone(),
         });
         let library = Arc::new(LibraryService::new(
             repos.documents.clone(),
@@ -266,6 +276,7 @@ impl Fixture {
             auth: repos.auth,
             library,
             tag_lists,
+            delete_tags_after_next_list,
             documents: repos.documents,
             settings: repos.settings,
             _dir: dir,

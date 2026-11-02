@@ -10,6 +10,129 @@
     "version": "0.7.0"
   },
   "paths": {
+    "/api/auth/tokens": {
+      "get": {
+        "tags": [
+          "authentication"
+        ],
+        "operationId": "listPersonalTokens",
+        "responses": {
+          "200": {
+            "description": "Owned token metadata, including revoked and expired credentials. Secrets are never returned. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PersonalTokenMetadata"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A signed-in account session is required; bearer credentials are rejected even with a session cookie"
+          },
+          "403": {
+            "description": "Cross-origin mutation rejected"
+          },
+          "500": {
+            "description": "Credential storage failed"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "authentication"
+        ],
+        "operationId": "createPersonalToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePersonalTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Token secret shown once. Audience is api or mcp, scopes are explicit documents:read and/or documents:write, expiry is 1–365 days. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedPersonalToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name, audience, scopes, expiry, or JSON"
+          },
+          "401": {
+            "description": "A signed-in account session is required; bearer credentials are rejected even with a session cookie"
+          },
+          "403": {
+            "description": "Cross-origin mutation rejected"
+          },
+          "500": {
+            "description": "Credential storage failed"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
+      }
+    },
+    "/api/auth/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "authentication"
+        ],
+        "operationId": "revokePersonalToken",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Owned credential ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Credential revoked immediately, including subsequent MCP requests. Cache-Control: no-store."
+          },
+          "401": {
+            "description": "A signed-in account session is required; bearer credentials are rejected even with a session cookie"
+          },
+          "403": {
+            "description": "Cross-origin mutation rejected"
+          },
+          "404": {
+            "description": "Credential does not exist or belongs to another account"
+          },
+          "500": {
+            "description": "Credential storage failed"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
+      }
+    },
     "/api/correspondents": {
       "get": {
         "tags": [
@@ -42,8 +165,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -58,7 +184,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -108,8 +242,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -134,7 +271,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/correspondents/{id}": {
@@ -176,8 +321,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -199,7 +347,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -259,8 +415,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -292,7 +451,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -325,8 +492,11 @@
           "204": {
             "description": "The correspondent was deleted"
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -348,7 +518,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/document_types": {
@@ -383,8 +561,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -399,7 +580,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -449,8 +638,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -475,7 +667,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/document_types/{id}": {
@@ -517,8 +717,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -540,7 +743,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -600,8 +811,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -633,7 +847,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -666,8 +888,11 @@
           "200": {
             "description": "The document type was deleted"
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -689,7 +914,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents": {
@@ -786,8 +1019,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -802,7 +1038,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -852,8 +1096,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -868,7 +1115,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/browse": {
@@ -1006,7 +1261,7 @@
             "description": "Sign-in required"
           },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1028,7 +1283,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/search": {
@@ -1080,8 +1343,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -1096,7 +1362,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -1136,8 +1410,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -1152,7 +1429,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/trash": {
@@ -1186,8 +1471,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -1202,7 +1490,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/upload": {
@@ -1254,8 +1550,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -1280,7 +1579,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}": {
@@ -1322,8 +1629,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1345,7 +1655,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -1378,8 +1696,11 @@
           "204": {
             "description": "The document was moved to trash"
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1401,7 +1722,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}/download": {
@@ -1443,8 +1772,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1466,7 +1798,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}/purge": {
@@ -1500,8 +1840,11 @@
           "202": {
             "description": "Permanent deletion queued; retries continue until files and metadata are removed"
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1523,7 +1866,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}/restore": {
@@ -1564,8 +1915,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1597,7 +1951,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}/thumbnail": {
@@ -1643,7 +2005,7 @@
             "description": "Missing or invalid authentication for the API resource"
           },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1665,7 +2027,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/sources": {
@@ -1700,8 +2070,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -1716,7 +2089,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -1767,8 +2148,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -1783,7 +2167,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/sources/{id}": {
@@ -1825,8 +2217,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1848,7 +2243,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -1909,8 +2312,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1932,7 +2338,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -1975,8 +2389,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1998,7 +2415,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/sources/{id}/test": {
@@ -2041,8 +2466,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2064,7 +2492,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/tags": {
@@ -2099,8 +2535,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -2115,7 +2554,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2165,8 +2612,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -2191,7 +2641,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/tags/{id}": {
@@ -2233,8 +2691,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2256,7 +2717,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -2316,8 +2785,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2349,7 +2821,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -2382,8 +2862,11 @@
           "204": {
             "description": "The tag was deleted"
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2405,7 +2888,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/telemetry/config": {
@@ -2427,8 +2918,19 @@
           },
           "401": {
             "description": "Authentication required"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/telemetry/v1/{signal}": {
@@ -2455,6 +2957,9 @@
           "401": {
             "description": "Authentication required"
           },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
           "404": {
             "description": "Client export disabled or unsupported signal"
           },
@@ -2473,7 +2978,15 @@
           "502": {
             "description": "Collector unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/vaults": {
@@ -2492,8 +3005,22 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/vaults/{vault_id}/documents": {
@@ -2631,6 +3158,9 @@
           "401": {
             "description": "Sign-in required"
           },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
           "404": {
             "description": "The resource does not exist",
             "content": {
@@ -2651,7 +3181,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/workflows": {
@@ -2686,8 +3224,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -2702,7 +3243,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2752,8 +3301,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
@@ -2768,7 +3320,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/workflows/{id}": {
@@ -2810,8 +3370,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2833,7 +3396,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "put": {
         "tags": [
@@ -2894,8 +3465,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2917,7 +3491,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -2950,8 +3532,11 @@
           "204": {
             "description": "The workflow was deleted"
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2973,7 +3558,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/workflows/{id}/runs": {
@@ -3031,8 +3624,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -3054,7 +3650,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/workflows/{id}/test": {
@@ -3107,8 +3711,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -3130,7 +3737,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/events": {
@@ -3175,13 +3790,21 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The vault or resource is not visible"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          }
+        ]
       }
     }
   },
@@ -3316,6 +3939,37 @@
           }
         }
       },
+      "CreatePersonalTokenRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "audience",
+          "scopes",
+          "expires_in_days"
+        ],
+        "properties": {
+          "audience": {
+            "type": "string",
+            "pattern": "^(api|mcp)$"
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 365,
+            "minimum": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateTagRequest": {
         "type": "object",
         "description": "Request body for creating a tag",
@@ -3333,6 +3987,24 @@
             "type": "string"
           }
         }
+      },
+      "CreatedPersonalToken": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PersonalTokenMetadata"
+          },
+          {
+            "type": "object",
+            "required": [
+              "token"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              }
+            }
+          }
+        ]
       },
       "Document": {
         "type": "object",
@@ -4042,6 +4714,54 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "PersonalTokenMetadata": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "audience",
+          "scopes",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "audience": {
+            "type": "string",
+            "pattern": "^(api|mcp)$"
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -5070,9 +5790,27 @@
           "ingest.received"
         ]
       }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+        "description": "OAuth access token or personal access token for this server's /api audience. Personal tokens support document, vocabulary, and vault-discovery endpoints only. Personal tokens use explicit documents:read and documents:write scopes; write does not imply read. Current vault permissions also apply. MCP requires a separate /mcp audience token. Explicit bearer credentials take precedence over session cookies."
+      },
+      "sessionAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-folio_session",
+        "description": "Signed-in browser session. Local HTTP deployments use folio_session. Session mutations require same-origin protection. Personal token management requires a session and rejects bearer credentials."
+      }
     }
   },
   "tags": [
+    {
+      "name": "authentication",
+      "description": "Session-only personal access token management"
+    },
     {
       "name": "telemetry",
       "description": "Authenticated client OTLP export"

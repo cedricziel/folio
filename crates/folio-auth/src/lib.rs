@@ -23,7 +23,7 @@ pub mod validator;
 pub use forward::{ForwardAuth, ForwardConfig};
 pub use model::{
     AccessToken, AuthCode, AuthContext, ConnectedClient, Group, GroupSource, OAuthClient,
-    OidcLogin, PasskeyRecord, RefreshToken, Session, TotpRecord, User, SCOPES,
+    OidcLogin, PasskeyRecord, PersonalToken, RefreshToken, Session, TotpRecord, User, SCOPES,
 };
 pub use store::{AuthError, AuthStore};
 pub use validator::{base_url, require_bearer, TokenValidator};

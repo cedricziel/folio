@@ -10,6 +10,7 @@ mod error_pages;
 pub(crate) mod events;
 mod file_response;
 mod health;
+mod integrations;
 mod manage;
 mod mfa;
 mod oidc;
@@ -21,6 +22,7 @@ mod settings;
 mod source_pages;
 pub(crate) mod sources;
 pub(crate) mod tags;
+pub(crate) mod tokens;
 pub(crate) mod trash;
 pub(crate) mod vaults;
 mod view;
@@ -68,6 +70,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     );
     let security = security::router(auth.clone());
     let settings = settings::router(auth.clone());
+    let tokens = tokens::router(auth.clone());
     let auth_routes = auth::router(auth);
 
     let routes = Router::new()
@@ -84,8 +87,10 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(manage::router())
         // Settings routes
         .merge(settings)
+        .merge(integrations::router())
         // Account and security
         .merge(security)
+        .merge(tokens)
         // Workflow pages
         .merge(workflow_pages::router())
         // Source pages

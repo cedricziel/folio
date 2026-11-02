@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::model::{
     AccessToken, AuthCode, ConnectedClient, Group, OAuthClient, OidcLogin, PasskeyRecord,
-    RefreshToken, Session, TotpRecord, User,
+    PersonalToken, RefreshToken, Session, TotpRecord, User,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +66,21 @@ pub trait AuthStore: Send + Sync {
     async fn insert_code(&self, code: AuthCode) -> Result<(), AuthError>;
     /// Atomically removes and returns the code, making it single-use.
     async fn take_code(&self, code_hash: &str) -> Result<Option<AuthCode>, AuthError>;
+
+    async fn insert_personal_token(&self, token: PersonalToken) -> Result<(), AuthError>;
+    async fn find_personal_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<PersonalToken>, AuthError>;
+    /// All credentials owned by the user, newest first, including revoked ones.
+    async fn list_personal_tokens(&self, user_id: &str) -> Result<Vec<PersonalToken>, AuthError>;
+    /// Revokes only the owner's credential. Returns false when it does not exist.
+    async fn revoke_personal_token(
+        &self,
+        user_id: &str,
+        id: &str,
+        at: i64,
+    ) -> Result<bool, AuthError>;
 
     async fn insert_access_token(&self, token: AccessToken) -> Result<(), AuthError>;
     async fn find_access_token(&self, token_hash: &str) -> Result<Option<AccessToken>, AuthError>;

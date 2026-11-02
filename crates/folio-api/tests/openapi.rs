@@ -84,3 +84,30 @@ async fn docs_page_loads_the_vendored_viewer_without_a_cdn() {
     assert!(html.contains("/static/vendor/scalar.js"));
     assert!(!html.contains("https://"), "{html}");
 }
+
+#[test]
+fn documents_describe_bearer_auth_and_token_management_requires_session() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    assert_eq!(
+        spec["components"]["securitySchemes"]["bearerAuth"]["scheme"],
+        "bearer"
+    );
+    assert_eq!(
+        spec["components"]["securitySchemes"]["sessionAuth"]["in"],
+        "cookie"
+    );
+    assert_eq!(
+        spec["paths"]["/api/documents"]["get"]["security"],
+        serde_json::json!([
+            {"sessionAuth": []}, {"bearerAuth": []}
+        ])
+    );
+    assert_eq!(
+        spec["paths"]["/api/auth/tokens"]["post"]["security"],
+        serde_json::json!([
+            {"sessionAuth": []}
+        ])
+    );
+    assert!(spec["paths"]["/api/auth/tokens"]["post"]["responses"]["201"].is_object());
+    assert!(spec["paths"]["/api/auth/tokens/{id}"]["delete"]["responses"]["404"].is_object());
+}

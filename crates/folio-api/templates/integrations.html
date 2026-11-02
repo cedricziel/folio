@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Integrations - Folio{% endblock %}
+{% block head %}<meta name="turbo-cache-control" content="no-cache">{% endblock %}
+{% block content %}
+<section class="page" data-controller="integrations">
+  <header class="page-head">
+    <h1 class="title">Integrations</h1>
+    <p class="lede">Connect scripts and AI clients to your archive.</p>
+  </header>
+  <div class="security-stack">
+    <section class="panel settings-card" aria-labelledby="api-title">
+      <h2 class="heading" id="api-title">JSON API</h2>
+      <p class="hint">Use a personal token with the API audience and send it in the Authorization header as a Bearer token.</p>
+      <a class="f-btn f-btn-quiet" href="/api/docs">Open API docs</a>
+    </section>
+    <section class="panel settings-card" aria-labelledby="mcp-title">
+      <h2 class="heading" id="mcp-title">MCP server</h2>
+      {% if mcp_enabled %}
+      <div class="field">
+        <label for="mcp-url">MCP server URL</label>
+        <input class="input" id="mcp-url" value="{{ mcp_url }}" readonly>
+      </div>
+      <button class="f-btn f-btn-quiet" type="button" data-action="integrations#copyUrl">Copy URL</button>
+      <p class="hint">Add this URL to an MCP client and follow its OAuth sign-in flow. Clients that accept a Bearer token can use a personal token with the MCP audience.</p>
+      {% else %}
+      <p class="f-notice">MCP server is disabled.</p>
+      <p class="hint">An instance administrator can enable it in settings. OAuth and personal-token connections are unavailable while it is disabled.</p>
+      {% endif %}
+    </section>
+    <p class="hint" role="status" aria-live="polite" data-integrations-target="status"></p>
+    <section class="panel settings-card" aria-labelledby="tokens-title">
+      <h2 class="heading" id="tokens-title">Personal access tokens</h2>
+      {% if sidebar.user.is_some() %}
+      <p class="hint">Tokens inherit your vault access. Choose only the permissions your client needs. Write permission does not include read permission.</p>
+      <form id="token-create" data-action="submit->integrations#create" data-turbo="false">
+        <div class="field"><label for="token-name">Token name</label><input class="input" id="token-name" name="name" maxlength="64" required autocomplete="off"></div>
+        <div class="field"><label for="token-audience">Audience</label><select class="select" id="token-audience" name="audience"><option value="api">JSON API</option><option value="mcp">MCP</option></select></div>
+        <fieldset class="field"><legend>Permissions</legend>
+          <label><input type="checkbox" name="scopes" value="documents:read" checked> Read documents</label>
+          <label><input type="checkbox" name="scopes" value="documents:write"> Write documents</label>
+        </fieldset>
+        <div class="field"><label for="token-expiry">Expires in days</label><input class="input" id="token-expiry" name="expires_in_days" type="number" min="1" max="365" value="30" required></div>
+        <div class="form-actions"><button class="f-btn f-btn-primary" type="submit">Create token</button></div>
+      </form>
+      <div hidden data-integrations-target="secretPanel">
+        <h3 class="heading">Save your new token</h3>
+        <p class="hint">Copy and save this token now. Folio will not show it again.</p>
+        <div class="field"><label for="new-token">New token</label><input class="input" id="new-token" readonly autocomplete="off" data-integrations-target="secret"></div>
+        <div class="form-actions">
+          <button class="f-btn f-btn-quiet" type="button" data-action="integrations#copyToken">Copy token</button>
+          <button class="f-btn f-btn-quiet" type="button" data-action="integrations#clearSecret">I have saved it</button>
+        </div>
+      </div>
+      <h3 class="heading">Your tokens</h3>
+      <p class="hint" data-integrations-target="empty">Loading tokens…</p>
+      <ul class="security-stack" aria-label="Your tokens" data-integrations-target="list"></ul>
+      {% else %}
+      <p class="hint">Sign in to manage personal access tokens.</p>
+      <a class="f-btn f-btn-primary" href="/login">Sign in</a>
+      {% endif %}
+    </section>
+  </div>
+</section>
+
+{% endblock %}
