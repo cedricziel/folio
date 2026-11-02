@@ -5,9 +5,9 @@ import SwiftUI
 /// AI suggestions (From, Type, Date, Amount, tags) are not part of the API yet.
 struct ScanReviewView: View {
     @State var model: ScanReviewViewModel
-    let onFinished: () -> Void
+    let onFinished: (Bool) -> Void
 
-    init(model: ScanReviewViewModel, onFinished: @escaping () -> Void) {
+    init(model: ScanReviewViewModel, onFinished: @escaping (Bool) -> Void) {
         _model = State(initialValue: model)
         self.onFinished = onFinished
     }
@@ -65,7 +65,7 @@ struct ScanReviewView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Discard", action: onFinished)
+                    Button("Discard") { onFinished(false) }
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -73,7 +73,7 @@ struct ScanReviewView: View {
                     Task {
                         await model.fileIt()
                         if model.state == .filed {
-                            onFinished()
+                            onFinished(true)
                         }
                     }
                 } label: {

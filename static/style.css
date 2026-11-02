@@ -840,12 +840,31 @@ dialog.dialog {
   padding: 0;
   color: var(--ink);
   overflow-y: auto;
+  opacity: 0;
+  transition:
+    opacity 200ms ease-out,
+    display 200ms allow-discrete,
+    overlay 200ms allow-discrete;
 }
 dialog.dialog[open] {
-  animation: fade-in 200ms ease-out;
+  opacity: 1;
 }
 dialog.dialog::backdrop {
   background: color-mix(in srgb, var(--ink) 40%, transparent);
+  opacity: 0;
+  transition:
+    opacity 200ms ease-out,
+    display 200ms allow-discrete,
+    overlay 200ms allow-discrete;
+}
+dialog.dialog[open]::backdrop {
+  opacity: 1;
+}
+@starting-style {
+  dialog.dialog[open],
+  dialog.dialog[open]::backdrop {
+    opacity: 0;
+  }
 }
 .dialog-inner {
   padding: var(--space-4);
@@ -1088,6 +1107,10 @@ dialog.palette {
 .toast-error {
   background: var(--danger-tint);
 }
+.toast.is-dismissing {
+  pointer-events: none;
+  animation: fade-out 200ms ease-out forwards;
+}
 .toast-error .toast-message::before {
   content: "Error: ";
   font-weight: 600;
@@ -1096,6 +1119,11 @@ dialog.palette {
 
 @keyframes fade-in {
   from {
+    opacity: 0;
+  }
+}
+@keyframes fade-out {
+  to {
     opacity: 0;
   }
 }
@@ -1122,12 +1150,24 @@ dialog.palette {
     visibility: visible;
     transition-delay: 0s;
   }
-  .nav-open .scrim {
+  .scrim {
     display: block;
     position: fixed;
     inset: 0;
     z-index: 20;
     background: color-mix(in srgb, var(--ink) 40%, transparent);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+      opacity 200ms ease-out,
+      visibility 0s linear 200ms;
+  }
+  .nav-open .scrim {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
   }
   .menu-btn {
     display: inline-flex;
@@ -1213,7 +1253,8 @@ dialog.palette {
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
-  *::after {
+  *::after,
+  *::backdrop {
     animation: none !important;
     transition: none !important;
   }

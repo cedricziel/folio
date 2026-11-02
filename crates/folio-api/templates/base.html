@@ -46,6 +46,23 @@ import { Application, Controller } from "@hotwired/stimulus";
 
 window.Stimulus = Application.start();
 
+document.addEventListener("turbo:before-stream-render", (event) => {
+  const stream = event.target;
+  if (stream.action !== "prepend" || stream.target !== "documents-rows") return;
+  const id = stream.templateContent.firstElementChild?.id;
+  if (!id) return;
+  const render = event.detail.render;
+  event.detail.render = async (element) => {
+    const existed = document.getElementById(id);
+    await render(element);
+    if (existed || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    document.getElementById(id)?.animate(
+      [{ opacity: 0 }, { opacity: 1 }],
+      { duration: 200, easing: "ease-out" },
+    );
+  };
+});
+
 // Native <dialog> gives focus placement, a focus trap, Escape and a backdrop.
 // The inner panel carries the padding, so a click that lands on the dialog
 // element itself is a click on the backdrop.
@@ -153,13 +170,19 @@ Stimulus.register(
                     <span class="toast-message">${escapeHtml(message)}</span>
                     <button type="button" class="f-btn f-btn-quiet toast-close" aria-label="Dismiss">Dismiss</button>
                 `;
+      const dismiss = () => {
+        if (toast.classList.contains("is-dismissing")) return;
+        toast.classList.add("is-dismissing");
+        Promise.allSettled(toast.getAnimations().map((animation) => animation.finished))
+          .then(() => toast.remove());
+      };
       toast
         .querySelector("button")
-        .addEventListener("click", () => toast.remove());
+        .addEventListener("click", dismiss);
       this.containerTarget.appendChild(toast);
 
       if (duration > 0) {
-        setTimeout(() => toast.remove(), duration);
+        setTimeout(dismiss, duration);
       }
     }
   },

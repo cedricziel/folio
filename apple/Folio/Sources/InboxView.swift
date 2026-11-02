@@ -32,6 +32,7 @@ struct InboxView: View {
     @State private var scannedPages: ScannedPages?
     @State private var pendingUploads: UploadBatch?
     @State private var pageTask: Task<Void, Never>?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
     private let router = IntentRouter.shared
 
@@ -57,7 +58,7 @@ struct InboxView: View {
         let list = session.list
         _uploads = State(
             initialValue: UploadViewModel(service: service) {
-                Task { await list.load() }
+                Task { await list.load(afterUpload: true) }
             }
         )
     }
@@ -165,6 +166,7 @@ struct InboxView: View {
         return List(selection: documentSelection) {
             ForEach(list.rows) { row in
                 documentLink(row)
+                    .transition(.opacity)
                     .tag(row.id)
                     .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
                     .listRowSeparatorTint(.rule)
@@ -197,6 +199,7 @@ struct InboxView: View {
                 .listRowBackground(Color.paper)
             }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: list.rowChangeRevision)
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.paper)
@@ -217,7 +220,12 @@ struct InboxView: View {
             }
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: receiveDrop)
-        .safeAreaInset(edge: .top, spacing: 0) { uploadNotice }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if uploads.state != .idle {
+                uploadNotice.transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: uploads.state != .idle)
         .toolbar { toolbar }
         #if os(iOS)
             .safeAreaInset(edge: .bottom) { scanButton }
@@ -236,9 +244,9 @@ struct InboxView: View {
                 model: ScanReviewViewModel(
                     pages: scan.images, service: service, destination: makeUploadDestination()
                 ),
-                onFinished: {
+                onFinished: { filed in
                     scannedPages = nil
-                    Task { await list.load() }
+                    Task { await list.load(afterUpload: filed) }
                 }
             )
         }
@@ -440,7 +448,7 @@ struct InboxView: View {
         guard !files.isEmpty else { return }
         let list = session.list
         uploads = UploadViewModel(service: service, destination: makeUploadDestination()) {
-            Task { await list.load() }
+            Task { await list.load(afterUpload: true) }
         }
         pendingUploads = UploadBatch(files: files)
     }

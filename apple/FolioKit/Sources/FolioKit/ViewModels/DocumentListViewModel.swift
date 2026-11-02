@@ -41,6 +41,8 @@ public final class DocumentListViewModel {
 
     public private(set) var phase = Phase.idle
     public private(set) var rows: [DocumentRow] = []
+    /// Changes only for visible insertions after uploads and confirmed deletions.
+    public private(set) var rowChangeRevision = 0
     public private(set) var correspondents: [Correspondent.ID: String] = [:]
     public private(set) var documentTypes: [DocumentType.ID: String] = [:]
     public var searchText = ""
@@ -96,11 +98,12 @@ public final class DocumentListViewModel {
         document.documentTypeID.flatMap { documentTypes[$0] }
     }
 
-    public func load() async {
+    /// Reloads the current query; upload completion marks newly inserted rows for presentation.
+    public func load(afterUpload: Bool = false) async {
         let request = query
         let ticket = begin(request)
         async let lookups: Void = loadLookups()
-        await fetch(request, ticket: ticket)
+        await fetch(request, ticket: ticket, afterUpload: afterUpload)
         await lookups
         if isCurrent(ticket) { rebuildRows() }
     }
@@ -164,11 +167,13 @@ public final class DocumentListViewModel {
     public func delete(_ document: Document) async {
         do {
             try await service.deleteDocument(id: document.id)
+            let wasVisible = rows.contains { $0.id == document.id }
             documents.removeAll { $0.id == document.id }
             if resolvedDocument?.id == document.id { resolvedDocument = nil }
             if lookupID == document.id { latestLookup += 1 }
             lookupError = (document.id, "This document is no longer available.")
             rebuildRows()
+            if wasVisible { rowChangeRevision += 1 }
         } catch {
             actionError = error.localizedDescription
         }
@@ -193,15 +198,19 @@ public final class DocumentListViewModel {
         !Task.isCancelled && ticket == latestFetch
     }
 
-    private func fetch(_ request: DocumentBrowseQuery, ticket: Int) async {
+    private func fetch(_ request: DocumentBrowseQuery, ticket: Int, afterUpload: Bool = false) async {
         do {
             let page = try await readPage(request, cursor: nil, ticket: ticket, knownIDs: [])
             guard isCurrent(ticket) else { return }
+            let previousIDs = Set(rows.map(\.id))
             documents = page.documents
             nextCursor = page.nextCursor
             loadedVaultID = page.vaultID
             phase = .loaded
             rebuildRows()
+            if afterUpload && rows.contains(where: { !previousIDs.contains($0.id) }) {
+                rowChangeRevision += 1
+            }
         } catch {
             guard isCurrent(ticket) else { return }
             phase = .failed(error.localizedDescription)
