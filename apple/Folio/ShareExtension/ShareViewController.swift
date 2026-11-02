@@ -1,60 +1,35 @@
 import FolioKit
 import SwiftUI
-import UniformTypeIdentifiers
-
-/// Shared by the iOS and macOS share extensions: turns the shared attachments into files to upload.
-enum ShareItems {
-    static let accepted: [UTType] = [.pdf, .image, .data]
-
-    @MainActor static func files(from context: NSExtensionContext?) async -> [UploadFile] {
-        let providers = (context?.inputItems as? [NSExtensionItem])?.flatMap { $0.attachments ?? [] } ?? []
-        var files: [UploadFile] = []
-        for provider in providers {
-            if let file = try? await load(provider) {
-                files.append(file)
-            }
-        }
-        return files
-    }
-
-    @MainActor private static func load(_ provider: NSItemProvider) async throws -> UploadFile? {
-        guard
-            let type = accepted.first(where: { provider.hasItemConformingToTypeIdentifier($0.identifier) })
-        else { return nil }
-        let url = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, any Error>) in
-            _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
-                guard let url else { return continuation.resume(throwing: error ?? FolioError.unreadableResponse) }
-                // The provided file is deleted when this handler returns, so copy it first.
-                let copy = FileManager.default.temporaryDirectory
-                    .appending(path: "\(UUID().uuidString)-\(url.lastPathComponent)")
-                do {
-                    try FileManager.default.copyItem(at: url, to: copy)
-                    continuation.resume(returning: copy)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-        defer { try? FileManager.default.removeItem(at: url) }
-        var file = try UploadFile(contentsOf: url)
-        if let suggested = provider.suggestedName, !url.pathExtension.isEmpty,
-            !suggested.hasSuffix(".\(url.pathExtension)")
-        {
-            file.filename = "\(suggested).\(url.pathExtension)"
-        }
-        return file
-    }
-}
 
 struct ShareRoot: View {
     let context: NSExtensionContext?
     @State private var model: ShareViewModel?
     @State private var loaded = false
+    @State private var attachments: SharedAttachmentLoader.Result?
+    @State private var attempt = 0
 
     var body: some View {
         Group {
             if let model {
                 ShareView(model: model) { context?.completeRequest(returningItems: nil) }
+            } else if loaded, let attachments, !attachments.canUpload {
+                VStack(alignment: .leading, spacing: FolioTheme.Spacing.space3) {
+                    Text(attachments.files.isEmpty ? "No readable attachments" : "Some attachments could not be read")
+                        .font(FolioTheme.Typography.heading)
+                    Text("Nothing has been uploaded. Retry or cancel and share the files again.")
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
+                            ForEach(Array(attachments.failures.enumerated()), id: \.offset) { _, failure in
+                                Text("\(failure.name): \(failure.message)")
+                            }
+                        }
+                    }
+                    HStack {
+                        Button("Cancel", role: .cancel) { context?.completeRequest(returningItems: nil) }
+                        Button("Retry") { attempt += 1 }
+                    }
+                }
+                .padding(FolioTheme.Spacing.space6)
             } else if loaded {
                 VStack(spacing: FolioTheme.Spacing.space3) {
                     Text("Open Folio and enter your server address first.")
@@ -69,9 +44,12 @@ struct ShareRoot: View {
                     .padding(FolioTheme.Spacing.space6)
             }
         }
-        .task {
-            let files = await ShareItems.files(from: context)
-            model = files.isEmpty ? nil : await buildModel(files)
+        .task(id: attempt) {
+            loaded = false
+            let providers = (context?.inputItems as? [NSExtensionItem])?.flatMap { $0.attachments ?? [] } ?? []
+            let result = await SharedAttachmentLoader.load(providers)
+            attachments = result
+            model = result.canUpload ? await buildModel(result.files) : nil
             loaded = true
         }
     }
