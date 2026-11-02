@@ -31,96 +31,57 @@ final class TestInstallationIDStore: InstallationIDStore, @unchecked Sendable {
 }
 
 struct InstallationIDTests {
-    private let legacyKey = "folio.telemetry.installationID"
-
-    private func defaults() throws -> (String, UserDefaults) {
-        let suite = "folio-installation-test-\(UUID())"
-        return (suite, try #require(UserDefaults(suiteName: suite)))
-    }
-
-    @Test func migratesLegacyUUIDToSharedKeychainWithoutChangingIdentity() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
-        let legacy = UUID()
-        preferences.set(legacy.uuidString, forKey: legacyKey)
-        let store = TestInstallationIDStore()
-        let identity = InstallationIdentity(defaults: preferences, store: store)
-        #expect(identity.resolve() == legacy)
-        #expect(try store.load() == legacy)
-        #expect(preferences.string(forKey: legacyKey) == nil)
-        #expect(InstallationIdentity(defaults: preferences, store: store).resolve() == legacy)
-    }
-
-    @Test func existingKeychainUUIDWinsOverLegacyPreferences() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
+    @Test func existingKeychainUUIDIsReused() throws {
         let existing = UUID()
-        preferences.set(UUID().uuidString, forKey: legacyKey)
         let store = TestInstallationIDStore(existing)
-        #expect(InstallationIdentity(defaults: preferences, store: store).resolve() == existing)
+        #expect(InstallationIdentity(store: store).resolve() == existing)
         #expect(try store.load() == existing)
-        #expect(preferences.string(forKey: legacyKey) == nil)
     }
 
     @Test func newInstallationPersistsBeforeExposingItsUUID() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
         let store = TestInstallationIDStore()
-        let first = try #require(InstallationIdentity(defaults: preferences, store: store).resolve())
+        let first = try #require(InstallationIdentity(store: store).resolve())
         #expect(try store.load() == first)
-        #expect(InstallationIdentity(defaults: preferences, store: store).resolve() == first)
-        #expect(preferences.string(forKey: legacyKey) == nil)
+        #expect(InstallationIdentity(store: store).resolve() == first)
     }
 
-    @Test func lockedKeychainDefersTelemetryAndPreservesLegacyMigration() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
-        let legacy = UUID()
-        preferences.set(legacy.uuidString, forKey: legacyKey)
-        let store = TestInstallationIDStore()
+    @Test func lockedKeychainDefersTelemetryUntilIdentityCanBeRead() throws {
+        let existing = UUID()
+        let store = TestInstallationIDStore(existing)
         store.readUnavailable = true
-        let identity = InstallationIdentity(defaults: preferences, store: store)
+        let identity = InstallationIdentity(store: store)
         #expect(identity.resolve() == nil)
-        #expect(preferences.string(forKey: legacyKey) == legacy.uuidString)
         store.readUnavailable = false
-        #expect(identity.resolve() == legacy)
-        #expect(try store.load() == legacy)
+        #expect(identity.resolve() == existing)
+        #expect(try store.load() == existing)
     }
 
-    @Test func failedMigrationWriteKeepsLegacyUUIDForRetry() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
-        let legacy = UUID()
-        preferences.set(legacy.uuidString, forKey: legacyKey)
+    @Test func failedWriteDefersTelemetryUntilIdentityCanBePersisted() throws {
         let store = TestInstallationIDStore()
         store.writeUnavailable = true
-        let identity = InstallationIdentity(defaults: preferences, store: store)
+        let identity = InstallationIdentity(store: store)
         #expect(identity.resolve() == nil)
         #expect(try store.load() == nil)
-        #expect(preferences.string(forKey: legacyKey) == legacy.uuidString)
         store.writeUnavailable = false
-        #expect(identity.resolve() == legacy)
+        let persisted = try #require(identity.resolve())
+        #expect(try store.load() == persisted)
     }
 
     @Test func cachedIdentitySurvivesTemporaryKeychainLock() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
         let existing = UUID()
         let store = TestInstallationIDStore(existing)
-        let identity = InstallationIdentity(defaults: preferences, store: store)
+        let identity = InstallationIdentity(store: store)
         #expect(identity.resolve() == existing)
         store.readUnavailable = true
         #expect(identity.resolve() == existing)
-        #expect(InstallationIdentity(defaults: preferences, store: store).resolve() == nil)
+        #expect(InstallationIdentity(store: store).resolve() == nil)
     }
 
     @Test func concurrentProcessInsertionKeepsTheWinningKeychainUUID() throws {
-        let (suite, preferences) = try defaults()
-        defer { preferences.removePersistentDomain(forName: suite) }
         let store = TestInstallationIDStore()
         let winner = UUID()
         store.competingID = winner
-        #expect(InstallationIdentity(defaults: preferences, store: store).resolve() == winner)
+        #expect(InstallationIdentity(store: store).resolve() == winner)
         #expect(try store.load() == winner)
     }
 }
