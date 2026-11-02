@@ -286,6 +286,24 @@ impl IngestLedger for SqliteIngestLedger {
         Ok(())
     }
 
+    async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM ingest_ledger
+             WHERE vault_id = ? AND key = ? AND source_id = ?
+               AND document_id IS ? AND outcome = ? AND created_at = ?",
+        )
+        .bind(vault.to_string())
+        .bind(&expected.key)
+        .bind(expected.source_id.to_string())
+        .bind(expected.document_id.map(|id| id.to_string()))
+        .bind(&expected.outcome)
+        .bind(expected.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn delete(&self, vault: VaultId, key: &str) -> Result<()> {
         sqlx::query("DELETE FROM ingest_ledger WHERE vault_id = ? AND key = ?")
             .bind(vault.to_string())

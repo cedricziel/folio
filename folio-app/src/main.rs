@@ -157,6 +157,7 @@ async fn main() -> Result<()> {
     let configured_sources = config.ingest.definitions();
     let ingest_pipeline = Arc::new(IngestPipeline::new(
         document_repo.clone(),
+        store.clone(),
         tag_repo.clone(),
         workflow_repo.clone(),
         ledger.clone(),

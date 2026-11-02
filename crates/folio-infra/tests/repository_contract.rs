@@ -1313,9 +1313,14 @@ async fn ingestion_contract(r: &Repositories) {
         (stored.outcome.as_str(), stored.document_id),
         ("imported", Some(doc.id))
     );
-    r.ledger.delete(vault, "hash:abc").await.unwrap();
+    assert!(r.ledger.delete_if_matches(vault, &stored).await.unwrap());
     assert!(r.ledger.find(vault, "hash:abc").await.unwrap().is_none());
     assert!(r.ledger.insert(vault, &entry).await.unwrap());
+    assert!(!r.ledger.delete_if_matches(vault, &stored).await.unwrap());
+    let pending = r.ledger.find(vault, "hash:abc").await.unwrap().unwrap();
+    assert_eq!(pending.outcome, "claimed");
+    assert!(r.ledger.delete_if_matches(vault, &pending).await.unwrap());
+    assert!(r.ledger.find(vault, "hash:abc").await.unwrap().is_none());
 }
 
 async fn auth_contract(r: &Repositories) {

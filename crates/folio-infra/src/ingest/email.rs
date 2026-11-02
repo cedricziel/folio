@@ -334,6 +334,10 @@ impl EmailSource {
                 for item in mail.items {
                     match sink.ingest(self.id, item).await {
                         Ok(IngestOutcome::Imported(_)) => report.imported += 1,
+                        Ok(IngestOutcome::Busy) => {
+                            all_ok = false;
+                            report.recheck_in = Some(Duration::from_secs(2));
+                        }
                         Ok(_) => report.skipped += 1,
                         Err(e) => {
                             warn!("Importing from message {uid} failed: {e}");

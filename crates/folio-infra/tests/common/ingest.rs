@@ -10,7 +10,8 @@ use folio_core::models::{
 };
 use folio_core::ports::DocumentStore;
 use folio_core::ports::{
-    DocumentRepository, IngestLedger, OutboxStore, VaultIngest, WorkflowRepository,
+    DocumentImporter, DocumentRepository, IngestLedger, OutboxStore, VaultIngest,
+    WorkflowRepository,
 };
 use folio_core::services::{Importer, IngestPipeline, WorkflowEngine};
 use folio_core::DocumentEvent;
@@ -37,6 +38,12 @@ impl Drop for Harness {
 
 impl Harness {
     pub async fn new() -> Self {
+        Self::with_importer(|importer| importer).await
+    }
+
+    pub async fn with_importer(
+        wrap: impl FnOnce(Arc<dyn DocumentImporter>) -> Arc<dyn DocumentImporter>,
+    ) -> Self {
         let dir = std::env::temp_dir().join(format!("folio-ingest-{}", Id::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let database = Database::connect(&format!("sqlite:{}/test.db?mode=rwc", dir.display()))
@@ -53,14 +60,15 @@ impl Harness {
         let ledger = repos.ledger;
         let pipeline = Arc::new(IngestPipeline::new(
             documents.clone(),
+            store.clone(),
             repos.tags,
             workflows.clone(),
             ledger.clone(),
-            Arc::new(Importer::new(
+            wrap(Arc::new(Importer::new(
                 documents.clone(),
                 store.clone(),
                 Arc::new(queue.clone()),
-            )),
+            ))),
         ));
         let engine = WorkflowEngine::new(
             workflows.clone(),

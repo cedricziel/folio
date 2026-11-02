@@ -98,5 +98,7 @@ pub trait IngestLedger: Send + Sync {
         outcome: &str,
         document_id: Option<Id>,
     ) -> Result<()>;
+    /// Delete only the unchanged entry; returns false when it changed or disappeared.
+    async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool>;
     async fn delete(&self, vault: VaultId, key: &str) -> Result<()>;
 }

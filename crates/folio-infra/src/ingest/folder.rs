@@ -309,8 +309,13 @@ impl IngestionSource for FolderSource {
 
         let (ready, waiting) = self.settle_files(found);
         let mut report = PollReport::default();
+        let mut busy = false;
         for file in ready {
             match self.handle(&file, sink).await {
+                Ok(IngestOutcome::Busy) => {
+                    debug!("{} is busy in the ingest pipeline", file.path.display());
+                    busy = true;
+                }
                 Ok(IngestOutcome::Skipped { rule }) => {
                     debug!("{} skipped by rule '{rule}'", file.path.display());
                     report.skipped += 1;
@@ -335,7 +340,7 @@ impl IngestionSource for FolderSource {
                 }
             }
         }
-        if waiting {
+        if waiting || busy {
             report.recheck_in =
                 Some((self.settle / 2).clamp(Duration::from_millis(100), Duration::from_secs(2)));
         }
