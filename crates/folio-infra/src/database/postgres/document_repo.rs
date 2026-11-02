@@ -270,6 +270,45 @@ impl PostgresDocumentRepository {
     }
 }
 
+/// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
+fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) {
+    if let Some(id) = filter.correspondent_id {
+        qb.push(" AND correspondent_id = ").push_bind(id);
+    }
+    if let Some(id) = filter.document_type_id {
+        qb.push(" AND document_type_id = ").push_bind(id);
+    }
+    if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
+        // Duplicates would make the distinct count below unreachable
+        tag_ids.sort();
+        tag_ids.dedup();
+        qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
+        let mut sep = qb.separated(", ");
+        for tag_id in &tag_ids {
+            sep.push_bind(*tag_id);
+        }
+        qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
+            .push_bind(tag_ids.len() as i64)
+            .push(")");
+    }
+    if let Some(query) = filter.search_query {
+        for term in query.split_whitespace() {
+            let pattern = format!("%{}%", escape_like(term));
+            qb.push(" AND (title ILIKE ")
+                .push_bind(pattern.clone())
+                .push(" ESCAPE '\\' OR content ILIKE ")
+                .push_bind(pattern)
+                .push(" ESCAPE '\\')");
+        }
+    }
+    if let Some(after) = filter.created_after {
+        qb.push(" AND created_at >= ").push_bind(after);
+    }
+    if let Some(before) = filter.created_before {
+        qb.push(" AND created_at < ").push_bind(before);
+    }
+}
+
 #[async_trait]
 impl DocumentRepository for PostgresDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
@@ -403,41 +442,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         qb.push_bind(vault.0);
 
         if let Some(filter) = filter {
-            if let Some(id) = filter.correspondent_id {
-                qb.push(" AND correspondent_id = ").push_bind(id);
-            }
-            if let Some(id) = filter.document_type_id {
-                qb.push(" AND document_type_id = ").push_bind(id);
-            }
-            if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
-                // Duplicates would make the distinct count below unreachable
-                tag_ids.sort();
-                tag_ids.dedup();
-                qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
-                let mut sep = qb.separated(", ");
-                for tag_id in &tag_ids {
-                    sep.push_bind(*tag_id);
-                }
-                qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
-                    .push_bind(tag_ids.len() as i64)
-                    .push(")");
-            }
-            if let Some(query) = filter.search_query {
-                for term in query.split_whitespace() {
-                    let pattern = format!("%{}%", escape_like(term));
-                    qb.push(" AND (title ILIKE ")
-                        .push_bind(pattern.clone())
-                        .push(" ESCAPE '\\' OR content ILIKE ")
-                        .push_bind(pattern)
-                        .push(" ESCAPE '\\')");
-                }
-            }
-            if let Some(after) = filter.created_after {
-                qb.push(" AND created_at >= ").push_bind(after);
-            }
-            if let Some(before) = filter.created_before {
-                qb.push(" AND created_at < ").push_bind(before);
-            }
+            push_filter(&mut qb, filter);
         }
 
         qb.push(" ORDER BY created_at DESC");
@@ -449,6 +454,20 @@ impl DocumentRepository for PostgresDocumentRepository {
             .map_err(repo_err)?;
 
         rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
+        let mut qb = QueryBuilder::<Postgres>::new("SELECT id FROM documents WHERE vault_id = ");
+        qb.push_bind(vault.0);
+        if let Some(filter) = filter {
+            push_filter(&mut qb, filter);
+        }
+        qb.push(" ORDER BY created_at DESC");
+
+        qb.build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)
     }
 
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {

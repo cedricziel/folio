@@ -152,8 +152,11 @@ impl LibraryService {
             .filter(|t| !t.is_empty());
 
         let mut tag_ids = Vec::new();
-        for name in &query.tags {
-            tag_ids.push(self.find_tag(vault, name).await?.id);
+        if !query.tags.is_empty() {
+            let known = self.tags.list(vault).await?;
+            for name in &query.tags {
+                tag_ids.push(find_by_name(&known, name, |t| &t.name, "tag")?.id);
+            }
         }
         let correspondent_id = match &query.correspondent {
             Some(name) => Some(self.find_correspondent(vault, name).await?.id),
@@ -178,10 +181,9 @@ impl LibraryService {
         if let Some(text) = text {
             let allowed: HashSet<Id> = self
                 .documents
-                .list(vault, Some(metadata_filter.clone()))
+                .list_ids(vault, Some(metadata_filter.clone()))
                 .await?
                 .into_iter()
-                .map(|d| d.id)
                 .collect();
 
             // Semantic search is best effort: it needs a configured AI provider
@@ -200,7 +202,7 @@ impl LibraryService {
             // the slots that are left
             let literal = self
                 .documents
-                .list(
+                .list_ids(
                     vault,
                     Some(DocumentFilter {
                         search_query: Some(text.to_string()),
@@ -209,10 +211,11 @@ impl LibraryService {
                 )
                 .await?;
             let mut seen = HashSet::new();
-            for doc in literal {
-                seen.insert(doc.id);
-                let score = scores.get(&doc.id).copied();
-                hits.push((doc, score));
+            for id in literal.into_iter().take(limit) {
+                seen.insert(id);
+                if let Some(doc) = self.documents.find_by_id(vault, id).await? {
+                    hits.push((doc, scores.get(&id).copied()));
+                }
             }
             for s in semantic {
                 if seen.insert(s.document.id) {
@@ -220,8 +223,16 @@ impl LibraryService {
                 }
             }
         } else {
-            for doc in self.documents.list(vault, Some(metadata_filter)).await? {
-                hits.push((doc, None));
+            for id in self
+                .documents
+                .list_ids(vault, Some(metadata_filter))
+                .await?
+                .into_iter()
+                .take(limit)
+            {
+                if let Some(doc) = self.documents.find_by_id(vault, id).await? {
+                    hits.push((doc, None));
+                }
             }
         }
 
@@ -462,12 +473,6 @@ impl LibraryService {
         Ok(all.into_iter().find(|t| t.name.eq_ignore_ascii_case(name)))
     }
 
-    async fn find_tag(&self, vault: VaultId, name: &str) -> Result<Tag> {
-        self.lookup_tag(vault, name)
-            .await?
-            .ok_or_else(|| unknown("tag", name))
-    }
-
     async fn find_correspondent(&self, vault: VaultId, name: &str) -> Result<Correspondent> {
         self.lookup_correspondent(vault, name)
             .await?
@@ -531,6 +536,20 @@ impl LibraryService {
             }
         }
     }
+}
+
+/// The entry named `name`, ignoring case, from a list read once by the caller
+fn find_by_name<'a, T>(
+    known: &'a [T],
+    name: &str,
+    name_of: impl Fn(&T) -> &str,
+    kind: &str,
+) -> Result<&'a T> {
+    let name = name.trim();
+    known
+        .iter()
+        .find(|item| name_of(item).eq_ignore_ascii_case(name))
+        .ok_or_else(|| unknown(kind, name))
 }
 
 fn unknown(kind: &str, name: &str) -> Error {

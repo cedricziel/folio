@@ -264,6 +264,47 @@ impl TryFrom<DocumentTypeRow> for DocumentType {
     }
 }
 
+/// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
+fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) {
+    if let Some(id) = filter.correspondent_id {
+        qb.push(" AND correspondent_id = ")
+            .push_bind(id.to_string());
+    }
+    if let Some(id) = filter.document_type_id {
+        qb.push(" AND document_type_id = ")
+            .push_bind(id.to_string());
+    }
+    if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
+        // Duplicates would make the distinct count below unreachable
+        tag_ids.sort();
+        tag_ids.dedup();
+        qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
+        let mut sep = qb.separated(", ");
+        for tag_id in &tag_ids {
+            sep.push_bind(tag_id.to_string());
+        }
+        qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
+            .push_bind(tag_ids.len() as i64)
+            .push(")");
+    }
+    if let Some(query) = filter.search_query {
+        for term in query.split_whitespace() {
+            let pattern = format!("%{}%", escape_like(term));
+            qb.push(" AND (title LIKE ")
+                .push_bind(pattern.clone())
+                .push(" ESCAPE '\\' OR content LIKE ")
+                .push_bind(pattern)
+                .push(" ESCAPE '\\')");
+        }
+    }
+    if let Some(after) = filter.created_after {
+        qb.push(" AND created_at >= ").push_bind(after.to_rfc3339());
+    }
+    if let Some(before) = filter.created_before {
+        qb.push(" AND created_at < ").push_bind(before.to_rfc3339());
+    }
+}
+
 #[async_trait]
 impl DocumentRepository for SqliteDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
@@ -432,43 +473,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         qb.push_bind(vault.to_string());
 
         if let Some(filter) = filter {
-            if let Some(id) = filter.correspondent_id {
-                qb.push(" AND correspondent_id = ")
-                    .push_bind(id.to_string());
-            }
-            if let Some(id) = filter.document_type_id {
-                qb.push(" AND document_type_id = ")
-                    .push_bind(id.to_string());
-            }
-            if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
-                // Duplicates would make the distinct count below unreachable
-                tag_ids.sort();
-                tag_ids.dedup();
-                qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
-                let mut sep = qb.separated(", ");
-                for tag_id in &tag_ids {
-                    sep.push_bind(tag_id.to_string());
-                }
-                qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
-                    .push_bind(tag_ids.len() as i64)
-                    .push(")");
-            }
-            if let Some(query) = filter.search_query {
-                for term in query.split_whitespace() {
-                    let pattern = format!("%{}%", escape_like(term));
-                    qb.push(" AND (title LIKE ")
-                        .push_bind(pattern.clone())
-                        .push(" ESCAPE '\\' OR content LIKE ")
-                        .push_bind(pattern)
-                        .push(" ESCAPE '\\')");
-                }
-            }
-            if let Some(after) = filter.created_after {
-                qb.push(" AND created_at >= ").push_bind(after.to_rfc3339());
-            }
-            if let Some(before) = filter.created_before {
-                qb.push(" AND created_at < ").push_bind(before.to_rfc3339());
-            }
+            push_filter(&mut qb, filter);
         }
 
         qb.push(" ORDER BY created_at DESC");
@@ -480,6 +485,22 @@ impl DocumentRepository for SqliteDocumentRepository {
             .map_err(map_sqlx_error)?;
 
         rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
+        let mut qb = QueryBuilder::<Sqlite>::new("SELECT id FROM documents WHERE vault_id = ");
+        qb.push_bind(vault.to_string());
+        if let Some(filter) = filter {
+            push_filter(&mut qb, filter);
+        }
+        qb.push(" ORDER BY created_at DESC");
+
+        let ids: Vec<String> = qb
+            .build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        ids.iter().map(|id| parse_uuid(id)).collect()
     }
 
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {

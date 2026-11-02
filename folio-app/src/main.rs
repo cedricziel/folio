@@ -284,7 +284,8 @@ async fn main() -> Result<()> {
         vault_service.clone(),
         repos.access,
     )
-    .with_health_checks(health_checks);
+    .with_health_checks(health_checks)
+    .with_mcp_default(mcp_default);
 
     let mut auth = AuthState::new(auth_store.clone(), Some(config.server.base_url()))
         .with_required(config.auth.required);
@@ -374,6 +375,7 @@ async fn main() -> Result<()> {
         McpOptions {
             enabled_by_default: mcp_default,
             allowed_hosts: config.mcp.allowed_hosts.clone(),
+            ..McpOptions::default()
         },
     );
     let mcp = if config.auth.required {

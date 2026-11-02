@@ -27,6 +27,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/processing", post(save_processing_settings))
         .route("/settings/processing/test", post(test_processing_settings))
         .route("/settings/processing/reembed", post(reembed_all))
+        .route("/settings/mcp", post(save_mcp_settings))
 }
 
 /// A provider choice in a `<select>`
@@ -55,7 +56,11 @@ struct SettingsTemplate {
     ocr_providers: Vec<ProviderOption>,
     embedding_providers: Vec<ProviderOption>,
     notice: String,
+    mcp_enabled: bool,
 }
+
+/// Database key behind the MCP toggle; `folio-mcp` reads the same row
+const MCP_ENABLED: &str = "mcp.enabled";
 
 #[derive(Debug, Deserialize)]
 struct SettingsQuery {
@@ -71,9 +76,15 @@ async fn settings_page(
 ) -> ApiResult<Html<String>> {
     let settings = state.settings_repo.list().await?;
     let processing = PipelineSettings::from_settings(&settings);
+    let mcp_enabled = settings
+        .iter()
+        .find(|s| s.key == MCP_ENABLED)
+        .map(|s| s.value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(state.mcp_default);
 
     let notice = match (query.reembedded, query.saved) {
         (Some(n), _) => format!("Queued {n} documents for re-embedding."),
+        (None, Some(section)) if section == "mcp" => "MCP setting saved.".to_string(),
         (None, Some(_)) => "Processing settings saved.".to_string(),
         _ => String::new(),
     };
@@ -89,6 +100,7 @@ async fn settings_page(
         ),
         processing,
         notice,
+        mcp_enabled,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -300,4 +312,28 @@ async fn reembed_all(
 
     info!("Queued {} documents for re-embedding", ids.len());
     Ok(Redirect::to(&format!("/settings?reembedded={}", ids.len())).into_response())
+}
+
+/// MCP section form data
+#[derive(Debug, Deserialize)]
+pub struct McpForm {
+    mcp_enabled: Option<String>,
+}
+
+/// Turn the MCP endpoint on or off; applies within seconds, without a restart
+async fn save_mcp_settings(
+    State(state): State<AppState>,
+    Form(form): Form<McpForm>,
+) -> ApiResult<Response> {
+    let enabled = form.mcp_enabled.is_some();
+    state
+        .settings_repo
+        .set(MCP_ENABLED, if enabled { "true" } else { "false" })
+        .await?;
+
+    info!(
+        "MCP endpoint {}",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    Ok(Redirect::to("/settings?saved=mcp").into_response())
 }

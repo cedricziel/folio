@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn deleted_snapshot_survives_the_outbox_payload() {
-        let document = Document::new("gone");
+        let document = Document::new(crate::models::VaultId::new(), "gone");
         let id = document.id;
         let event = DocumentEvent::Deleted {
             document_id: id,

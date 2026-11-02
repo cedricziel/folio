@@ -57,7 +57,7 @@ The `date` returned and filtered on is the date a document was added to Folio.
 allowed_hosts = []        # extra Host headers to accept, e.g. ["folio.example.com"]
 ```
 
-The `mcp.enabled` setting stored in the database takes precedence over `config.toml` and applies without a restart. `FOLIO_MCP__ENABLED` overrides the file.
+The `/settings` page exposes the `mcp.enabled` toggle. Its value is cached and refreshed when settings change. The setting stored in the database takes precedence over `config.toml` and applies without a restart. `FOLIO_MCP__ENABLED` overrides the file.
 
 By default only loopback `Host` headers are accepted, which protects a local server from DNS rebinding. List other hostnames in `allowed_hosts` when you reach Folio through a reverse proxy.
 
@@ -68,3 +68,5 @@ By default only loopback `Host` headers are accepted, which protects a local ser
 Read tools need the `documents:read` scope and write tools `documents:write`; clients get both unless the user narrows them. The validated caller reaches the tools as a `folio_mcp::McpAuth` request extension. stdio has no authentication: the client is a local process you started.
 
 With `auth.required = false` the endpoint is open and Folio logs a warning at startup; do not expose that beyond localhost.
+
+Processing status reports active work first. Once no jobs are active, the most recently finished job determines whether processing completed or failed. A successful reprocess clears an earlier failure. Failed file storage removes the newly created document record.
