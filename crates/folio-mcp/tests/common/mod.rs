@@ -5,9 +5,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use folio_core::models::{CreateDocument, Document};
+use folio_core::models::{CreateDocument, CreateTag, Document, Id, Tag, UpdateTag};
 use folio_core::ports::{
     DocumentRepository, EmbeddingBatch, EmbeddingService, SearchService, SettingsRepository,
+    TagRepository,
 };
 use folio_core::services::LibraryService;
 use folio_infra::{Database, ObjectStoreDocumentStore};
@@ -15,6 +16,7 @@ use rmcp::model::{CallToolRequestParams, CallToolResult};
 use rmcp::service::{RunningService, ServiceError};
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Embeddings are unavailable in tests, so search exercises the literal path
 struct NoEmbeddings;
@@ -107,8 +109,39 @@ impl SearchService for FakeSearch {
     }
 }
 
+/// Tag repository that counts how often the whole table is listed
+struct CountingTags {
+    inner: Arc<dyn TagRepository>,
+    lists: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl TagRepository for CountingTags {
+    async fn find_by_id(&self, id: Id) -> folio_core::Result<Option<Tag>> {
+        self.inner.find_by_id(id).await
+    }
+    async fn find_by_name(&self, name: &str) -> folio_core::Result<Option<Tag>> {
+        self.inner.find_by_name(name).await
+    }
+    async fn list(&self) -> folio_core::Result<Vec<Tag>> {
+        self.lists.fetch_add(1, Ordering::SeqCst);
+        self.inner.list().await
+    }
+    async fn create(&self, params: CreateTag) -> folio_core::Result<Tag> {
+        self.inner.create(params).await
+    }
+    async fn update(&self, id: Id, params: UpdateTag) -> folio_core::Result<Tag> {
+        self.inner.update(id, params).await
+    }
+    async fn delete(&self, id: Id) -> folio_core::Result<()> {
+        self.inner.delete(id).await
+    }
+}
+
 pub struct Fixture {
     pub library: Arc<LibraryService>,
+    /// Number of times the tags table was listed in full
+    pub tag_lists: Arc<AtomicUsize>,
     pub documents: Arc<dyn DocumentRepository>,
     pub settings: Arc<dyn SettingsRepository>,
     _dir: tempfile::TempDir,
@@ -132,9 +165,14 @@ impl Fixture {
 
         let storage = ObjectStoreDocumentStore::in_memory();
 
+        let tag_lists = Arc::new(AtomicUsize::new(0));
+        let tags = Arc::new(CountingTags {
+            inner: repos.tags,
+            lists: tag_lists.clone(),
+        });
         let library = Arc::new(LibraryService::new(
             repos.documents.clone(),
-            repos.tags,
+            tags,
             repos.correspondents,
             repos.document_types,
             embeddings,
@@ -145,6 +183,7 @@ impl Fixture {
 
         Self {
             library,
+            tag_lists,
             documents: repos.documents,
             settings: repos.settings,
             _dir: dir,

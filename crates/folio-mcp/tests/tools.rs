@@ -56,6 +56,30 @@ async fn search_filters_by_tag_and_rejects_unknown_tag() {
 }
 
 #[tokio::test]
+async fn search_reads_the_tag_table_once_however_many_tags_are_named() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Invoice", "pay soon").await;
+    let client = fx.in_process_client().await;
+    call_ok(
+        &client,
+        "add_tags",
+        json!({"id": doc.id.to_string(), "tags": ["a", "b", "c"]}),
+    )
+    .await;
+    fx.tag_lists.store(0, std::sync::atomic::Ordering::SeqCst);
+
+    let out = call_ok(
+        &client,
+        "search_documents",
+        json!({"query": "invoice", "tags": ["a", "b", "c"]}),
+    )
+    .await;
+
+    assert_eq!(out["results"].as_array().unwrap().len(), 1);
+    assert_eq!(fx.tag_lists.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn update_document_changes_fields() {
     let fx = Fixture::new().await;
     let doc = fx.insert("Scan 001", "some text").await;

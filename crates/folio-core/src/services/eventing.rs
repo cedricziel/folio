@@ -40,6 +40,10 @@ impl DocumentRepository for EventingDocumentRepository {
         self.inner.list(filter).await
     }
 
+    async fn list_ids(&self, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
+        self.inner.list_ids(filter).await
+    }
+
     async fn create(&self, params: CreateDocument) -> Result<Document> {
         let document = self.inner.create(params).await?;
         self.events.send(DocumentEvent::Created {

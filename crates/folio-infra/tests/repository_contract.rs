@@ -557,6 +557,27 @@ async fn document_filter_contract(r: &Repositories) {
     })
     .await;
     assert!(future.is_empty());
+
+    // list_ids applies the same filter and order as list
+    for filter in [
+        DocumentFilter::default(),
+        DocumentFilter {
+            tag_ids: Some(vec![home.id]),
+            search_query: Some("march".into()),
+            ..Default::default()
+        },
+        DocumentFilter {
+            created_after: Some(Utc::now() + Duration::days(1)),
+            ..Default::default()
+        },
+    ] {
+        let listed = ids(list(filter.clone()).await);
+        assert_eq!(
+            r.documents.list_ids(Some(filter)).await.unwrap(),
+            listed,
+            "list_ids agrees with list"
+        );
+    }
 }
 
 async fn settings_contract(r: &Repositories) {
