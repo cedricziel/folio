@@ -201,6 +201,12 @@ Outbox context regressions in the repository contract cover immutable metadata
 and taxonomy names, transaction rollback, scoped worker events, delete snapshots,
 and payload size independent of OCR content. Run `cargo test -p folio-core events::tests`
 and `cargo test -p folio-infra --test vault_outbox_upgrade` for wire compatibility.
+For grouped workflow conditions, run `cargo test -p folio-core --features openapi --lib`
+and `cargo test -p folio-api --test workflows --test openapi`. These cover nested
+all/any/none matching, depth and size limits, historical snapshots, legacy JSON,
+recursive schema references, and preserving API-created groups through HTML edits.
+The API fixture uses temporary SQLite state and loopback webhook receivers.
+
 Run `cargo test -p folio-infra --test workflows` and
 `cargo test -p folio-api --test vaults --test live` for immutable event delivery.
 These regressions delay metadata, rename taxonomy, move documents before dispatch
