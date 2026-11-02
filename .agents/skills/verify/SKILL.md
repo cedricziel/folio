@@ -463,3 +463,14 @@ The core suite also covers trusted event lineage: nested clearing and restoratio
 cancellation, concurrent scopes, detached tasks, actor independence, and envelope
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
+
+## Verify document dates
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_dates`
+with the isolated build settings above. The SQLite and PostgreSQL contracts
+cover historical calendar dates, unchanged import time, omission and clearing,
+actor attribution, no-op suppression, and rollback when outbox insertion fails.
+They verify one generic update shares the date event's mutation and correlation.
+Run `cargo test -p folio-api --test document_dates --test openapi --test vaults`
+for JSON validation, scoped web redirects, and viewer permission enforcement.
+These fixtures use disposable databases and in-process requests.

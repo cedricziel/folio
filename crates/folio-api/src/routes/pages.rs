@@ -47,6 +47,7 @@ pub fn router() -> Router<AppState> {
             post(set_document_correspondent),
         )
         .route("/documents/{id}/document_type", post(set_document_type))
+        .route("/documents/{id}/date", post(set_document_date))
         .route("/documents/{id}/tags", post(add_document_tag))
         .route("/documents/{id}/tags/{tag_id}", post(remove_document_tag))
         .route("/documents/{id}/reprocess", post(reprocess_document))
@@ -755,4 +756,43 @@ async fn remove_document_tag(
         .await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentDateForm {
+    document_date: Option<String>,
+    clear: Option<bool>,
+}
+
+async fn set_document_date(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<DocumentDateForm>,
+) -> ApiResult<Response> {
+    let value = if form.clear == Some(true) {
+        None
+    } else {
+        let raw = form
+            .document_date
+            .ok_or_else(|| crate::error::ApiError::bad_request("Missing document_date"))?;
+        if raw.is_empty() {
+            None
+        } else {
+            Some(raw.parse().map_err(crate::error::ApiError::bad_request)?)
+        }
+    };
+    state
+        .document_repo
+        .update(
+            vault,
+            id,
+            UpdateDocument {
+                document_date: Some(value),
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Redirect::to(&crate::vault::url(&format!("/documents/{id}"))).into_response())
 }

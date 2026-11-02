@@ -40,6 +40,7 @@ use crate::routes::{
         crate::routes::browse::browse_default,
         crate::routes::browse::browse_vault,
         documents::get_document,
+        documents::update_document_date,
         documents::create_document,
         documents::delete_document,
         crate::routes::trash::list,

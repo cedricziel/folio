@@ -418,6 +418,7 @@ async fn documents_contract(r: &Repositories) {
             vault,
             second.id,
             UpdateDocument {
+                document_date: None,
                 title: Some("renamed".into()),
                 content: Some("extracted text".into()),
                 correspondent_id: Some(None),
@@ -2736,6 +2737,7 @@ async fn outbox_contract(db: &Database) {
             vault,
             doc.id,
             UpdateDocument {
+                document_date: None,
                 title: Some("renamed".into()),
                 ..Default::default()
             },

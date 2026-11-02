@@ -152,6 +152,15 @@ actor MockFolioService: FolioService {
         return try await DocumentPage(vaultID: pageVaultID, documents: documents(matching: query.text))
     }
 
+    func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
+        if let failure { throw failure }
+        guard let index = documentList.firstIndex(where: { $0.id == id }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        documentList[index].documentDate = date
+        return documentList[index]
+    }
+
     func document(id: Document.ID) async throws -> Document {
         if let failure { throw failure }
         guard let document = documentList.first(where: { $0.id == id }) else {

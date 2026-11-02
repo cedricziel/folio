@@ -86,7 +86,19 @@
                         </form>
                     </dd>
 
-                    <dt>Added</dt>
+                    <dt>Document date</dt>
+                    <dd>
+                        {% if document|can_edit_document %}
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">
+                            <input type="date" name="document_date" class="input" aria-label="Document date" min="0001-01-01" max="9999-12-31" value="{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}{% endmatch %}">
+                            <button type="submit" class="f-btn f-btn-quiet">Save date</button>
+                            <button type="submit" class="f-btn f-btn-quiet" name="clear" value="true">Clear date</button>
+                        </form>
+                        {% else %}
+                        <span class="f-meta">{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}Not set{% endmatch %}</span>
+                        {% endif %}
+                    </dd>
+                    <dt>Imported</dt>
                     <dd><span class="f-meta">{{ document.created_at.format("%Y-%m-%d") }}</span></dd>
 
                     {% match document.original_filename %}
