@@ -23,6 +23,8 @@ public final class DocumentDetailViewModel {
     public let document: Document
     public private(set) var preview = Preview.loading
     public let metadata: [MetadataField]
+    /// The document as Spotlight and Shortcuts know it.
+    public let summary: DocumentSummary
 
     private let service: any FolioService
 
@@ -31,6 +33,7 @@ public final class DocumentDetailViewModel {
     ) {
         self.document = document
         self.service = service
+        summary = DocumentSummary(document, correspondent: correspondent, documentType: type)
         var fields = [
             MetadataField(label: "From", value: correspondent ?? "Not set", isRecord: false),
             MetadataField(label: "Type", value: type ?? "Not set", isRecord: false),

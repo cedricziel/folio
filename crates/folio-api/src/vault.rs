@@ -24,6 +24,12 @@ use crate::routes::auth::{is_exempt, AuthState};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DefaultVault(pub VaultId);
 
+/// The signed-in user behind a request, `None` when authentication is off
+///
+/// Recorded as `uploaded_by` on documents the request creates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Uploader(pub Option<UserId>);
+
 /// State of [`resolve_default_vault`]
 #[derive(Clone)]
 pub struct VaultResolver {
@@ -62,6 +68,9 @@ pub async fn resolve_default_vault(
     {
         Ok(vault) => {
             request.extensions_mut().insert(DefaultVault(vault));
+            request
+                .extensions_mut()
+                .insert(Uploader(who.map(|(id, _)| id)));
             next.run(request).await
         }
         Err(e) => {
@@ -79,6 +88,18 @@ impl<S: Send + Sync> FromRequestParts<S> for DefaultVault {
             .extensions
             .get::<DefaultVault>()
             .copied()
+            .ok_or(StatusCode::UNAUTHORIZED)
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for Uploader {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<Uploader>()
+            .cloned()
             .ok_or(StatusCode::UNAUTHORIZED)
     }
 }

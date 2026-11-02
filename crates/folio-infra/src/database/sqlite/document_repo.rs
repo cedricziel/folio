@@ -97,9 +97,9 @@ async fn require_entry(
     vault: VaultId,
     id: Id,
 ) -> Result<()> {
-    let found: Option<(i64,)> = sqlx::query_as(&format!(
+    let found: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT 1 FROM {table} WHERE id = ? AND vault_id = ?"
-    ))
+    )))
     .bind(id.to_string())
     .bind(vault.to_string())
     .fetch_optional(conn)
@@ -252,9 +252,9 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let doc: DocumentRow = sqlx::query_as(&format!(
+        let doc: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
-        ))
+        )))
         .bind(id.to_string())
         .bind(from.to_string())
         .fetch_optional(&mut *tx)
@@ -378,9 +378,9 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
-        let row: Option<DocumentRow> = sqlx::query_as(&format!(
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
-        ))
+        )))
         .bind(id.to_string())
         .bind(vault.to_string())
         .fetch_optional(&self.pool)
@@ -680,9 +680,9 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {
-        let rows: Vec<DocumentRow> = sqlx::query_as(&format!(
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents ORDER BY created_at DESC"
-        ))
+        )))
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -694,9 +694,9 @@ impl DocumentRepository for SqliteDocumentRepository {
             ProcessingStage::Ocr => "ocr_status",
             ProcessingStage::Embed => "embed_status",
         };
-        let rows: Vec<DocumentRow> = sqlx::query_as(&format!(
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents WHERE {column} = 'pending' ORDER BY created_at"
-        ))
+        )))
         .fetch_all(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -804,18 +804,18 @@ async fn remap_by_name(
     id: Option<&str>,
 ) -> Result<Option<String>> {
     let Some(id) = id else { return Ok(None) };
-    let name: Option<(String,)> = sqlx::query_as(&format!(
+    let name: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT name FROM {table} WHERE id = ? AND vault_id = ?"
-    ))
+    )))
     .bind(id)
     .bind(from.to_string())
     .fetch_optional(&mut *conn)
     .await
     .map_err(map_sqlx_error)?;
     let Some((name,)) = name else { return Ok(None) };
-    let existing: Option<(String,)> = sqlx::query_as(&format!(
+    let existing: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT id FROM {table} WHERE vault_id = ? AND name = ?"
-    ))
+    )))
     .bind(to.to_string())
     .bind(&name)
     .fetch_optional(&mut *conn)
@@ -825,9 +825,9 @@ async fn remap_by_name(
         return Ok(Some(existing));
     }
     let new_id = Id::new_v4().to_string();
-    sqlx::query(&format!(
+    sqlx::query(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {table} (id, vault_id, name, created_at) VALUES (?, ?, ?, ?)"
-    ))
+    )))
     .bind(&new_id)
     .bind(to.to_string())
     .bind(&name)

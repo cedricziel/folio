@@ -1,10 +1,6 @@
 //! Document Type API routes
 
-use axum::{
-    extract::{Path, State},
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -12,6 +8,7 @@ use uuid::Uuid;
 use folio_core::models::{CreateDocumentType, DocumentType, UpdateDocumentType};
 
 use crate::error::{ApiError, ApiResult};
+use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
 use crate::vault::DefaultVault;
@@ -62,7 +59,7 @@ pub(crate) async fn list_document_types(
 pub(crate) async fn get_document_type(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<DocumentType>> {
     let document_type = state
         .document_type_repo
@@ -96,7 +93,7 @@ pub struct CreateDocumentTypeRequest {
 pub(crate) async fn create_document_type(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Json(req): Json<CreateDocumentTypeRequest>,
+    ApiJson(req): ApiJson<CreateDocumentTypeRequest>,
 ) -> ApiResult<Json<DocumentType>> {
     let document_type = state
         .document_type_repo
@@ -131,8 +128,8 @@ pub struct UpdateDocumentTypeRequest {
 pub(crate) async fn update_document_type(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<UpdateDocumentTypeRequest>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(req): ApiJson<UpdateDocumentTypeRequest>,
 ) -> ApiResult<Json<DocumentType>> {
     let document_type = state
         .document_type_repo
@@ -158,8 +155,8 @@ pub(crate) async fn update_document_type(
 pub(crate) async fn delete_document_type(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<()>> {
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<StatusCode> {
     state.document_type_repo.delete(vault, id).await?;
-    Ok(Json(()))
+    Ok(StatusCode::NO_CONTENT)
 }

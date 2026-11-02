@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use folio_core::models::{Correspondent, Document, DocumentStatus, DocumentType, Id, Tag};
+use folio_core::models::{Correspondent, Document, DocumentStatus, DocumentType, Id, Tag, VaultId};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -32,8 +32,64 @@ impl Nav {
     }
 }
 
+tokio::task_local! {
+    /// The signed-in user of the request being handled, set by `enforce_auth`
+    /// so page handlers need no extractor of their own.
+    pub static CURRENT_USER: SidebarUser;
+}
+
+/// The signed-in user as the sidebar shows them
+#[derive(Debug, Clone)]
+pub struct SidebarUser {
+    pub name: String,
+    pub initials: String,
+    /// "Owner", "Admin" or empty
+    pub role: &'static str,
+    pub csrf: String,
+}
+
+impl SidebarUser {
+    pub fn new(user: &folio_auth::User, csrf: String) -> Self {
+        let name = user
+            .display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&user.username)
+            .to_string();
+        let role = if user.is_owner {
+            "Owner"
+        } else if user.is_admin {
+            "Admin"
+        } else {
+            ""
+        };
+        Self {
+            initials: initials(&name),
+            name,
+            role,
+            csrf,
+        }
+    }
+}
+
+/// Up to two uppercase letters: the first letters of the first two words
+fn initials(name: &str) -> String {
+    let mut letters: Vec<char> = name
+        .split(|c: char| !c.is_alphanumeric())
+        .filter_map(|w| w.chars().next())
+        .take(2)
+        .flat_map(char::to_uppercase)
+        .collect();
+    if letters.is_empty() {
+        letters.push('?');
+    }
+    letters.into_iter().collect()
+}
+
 /// Data the sidebar needs on every page
 pub struct Sidebar {
+    pub user: Option<SidebarUser>,
     pub active: &'static str,
     pub inbox_count: usize,
     pub total_count: usize,
@@ -43,14 +99,20 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
-    pub async fn load(state: &AppState, nav: Nav) -> ApiResult<Self> {
+    pub async fn load(state: &AppState, vault: VaultId, nav: Nav) -> ApiResult<Self> {
         let documents = state.document_repo.list(vault, None).await?;
-        Self::build(state, nav, &documents).await
+        Self::build(state, vault, nav, &documents).await
     }
 
     /// Like `load`, for pages that already fetched every document
-    pub async fn build(state: &AppState, nav: Nav, documents: &[Document]) -> ApiResult<Self> {
+    pub async fn build(
+        state: &AppState,
+        vault: VaultId,
+        nav: Nav,
+        documents: &[Document],
+    ) -> ApiResult<Self> {
         Ok(Self {
+            user: CURRENT_USER.try_with(Clone::clone).ok(),
             active: nav.as_str(),
             inbox_count: inbox_count(documents),
             total_count: documents.len(),
@@ -81,23 +143,30 @@ pub struct Counts {
     pub total: usize,
     pub review: usize,
     pub first_review: String,
+    pub failed: usize,
+    pub first_failed: String,
 }
 
 impl Counts {
     pub fn from_documents(documents: &[Document]) -> Self {
-        let mut review = documents
-            .iter()
-            .filter(|d| d.status() == DocumentStatus::NeedsReview);
-        let first_review = review.next().map(|d| d.id.to_string());
+        let with_status = |status| documents.iter().filter(move |d| d.status() == status);
+        let first_id = |status| {
+            with_status(status)
+                .next()
+                .map(|d| d.id.to_string())
+                .unwrap_or_default()
+        };
         Self {
             inbox: inbox_count(documents),
             total: documents.len(),
-            review: first_review.is_some() as usize + review.count(),
-            first_review: first_review.unwrap_or_default(),
+            review: with_status(DocumentStatus::NeedsReview).count(),
+            first_review: first_id(DocumentStatus::NeedsReview),
+            failed: with_status(DocumentStatus::Failed).count(),
+            first_failed: first_id(DocumentStatus::Failed),
         }
     }
 
-    pub async fn load(state: &AppState) -> ApiResult<Self> {
+    pub async fn load(state: &AppState, vault: VaultId) -> ApiResult<Self> {
         Ok(Self::from_documents(
             &state.document_repo.list(vault, None).await?,
         ))
@@ -150,6 +219,10 @@ impl DocumentRow {
 
     pub fn needs_review(&self) -> bool {
         self.status == DocumentStatus::NeedsReview
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.status == DocumentStatus::Failed
     }
 
     /// "From · Type", skipping whichever is not set
@@ -230,6 +303,7 @@ fn row_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use folio_core::models::ProcessingStatus;
     use folio_core::models::VaultId;
 
     #[test]
@@ -239,12 +313,17 @@ mod tests {
         let filed = Document::new(VaultId::new(), "c")
             .with_content("x")
             .with_document_type(Id::new_v4());
+        let mut unreadable = Document::new("d");
+        unreadable.ocr_status = ProcessingStatus::Failed;
         let review_id = review.id.to_string();
-        let counts = Counts::from_documents(&[processing, review, filed]);
-        assert_eq!(counts.inbox, 2);
-        assert_eq!(counts.total, 3);
+        let failed_id = unreadable.id.to_string();
+        let counts = Counts::from_documents(&[processing, review, filed, unreadable]);
+        assert_eq!(counts.inbox, 3);
+        assert_eq!(counts.total, 4);
         assert_eq!(counts.review, 1);
         assert_eq!(counts.first_review, review_id);
+        assert_eq!(counts.failed, 1);
+        assert_eq!(counts.first_failed, failed_id);
     }
 
     fn row(from: Option<&str>, doc_type: Option<&str>, pages: Option<u32>) -> DocumentRow {
@@ -276,5 +355,13 @@ mod tests {
         assert_eq!(row(None, None, Some(3)).reading_label(), "Reading 3 pages…");
         assert_eq!(row(None, None, Some(1)).reading_label(), "Reading 1 page…");
         assert_eq!(row(None, None, None).reading_label(), "Reading…");
+    }
+
+    #[test]
+    fn initials_take_two_words_or_one_letter() {
+        assert_eq!(initials("ada lovelace"), "AL");
+        assert_eq!(initials("ada"), "A");
+        assert_eq!(initials("ada.king-lovelace"), "AK");
+        assert_eq!(initials("--"), "?");
     }
 }

@@ -114,12 +114,12 @@ impl VaultRepository for PostgresVaultRepository {
             DateTime<Utc>,
             DateTime<Utc>,
             i32,
-        )> = sqlx::query_as(&format!(
+        )> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.name, v.created_by, v.created_at, v.updated_at, MAX({ROLE_RANK})
                  FROM vaults v JOIN vault_members m ON m.vault_id = v.id
                  WHERE {APPLIES_TO_USER}
                  GROUP BY v.id ORDER BY v.name, v.id"
-        ))
+        )))
         .bind(user.as_str())
         .fetch_all(&self.pool)
         .await
@@ -295,11 +295,13 @@ impl MembershipRepository for PostgresVaultRepository {
             Principal::User(u) => ("user_id", u.as_str(), "users", "User"),
             Principal::Group(g) => ("group_id", g.0.as_str(), "auth_groups", "Group"),
         };
-        let known: Option<(i32,)> = sqlx::query_as(&format!("SELECT 1 FROM {table} WHERE id = $1"))
-            .bind(subject)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db)?;
+        let known: Option<(i32,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT 1 FROM {table} WHERE id = $1"
+        )))
+        .bind(subject)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
         if known.is_none() {
             return Err(Error::NotFound {
                 entity_type: entity,
@@ -309,14 +311,14 @@ impl MembershipRepository for PostgresVaultRepository {
         if matches!(principal, Principal::User(_)) && new_role != VaultRole::Owner {
             guard_last_owner(&mut tx, vault, subject).await?;
         }
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO vault_members
                  (vault_id, principal_type, {column}, role, granted_by, granted_at)
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (vault_id, {column}) WHERE {column} IS NOT NULL
              DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by,
                            granted_at = excluded.granted_at"
-        ))
+        )))
         .bind(vault.0)
         .bind(if column == "user_id" { "user" } else { "group" })
         .bind(subject)
@@ -339,9 +341,9 @@ impl MembershipRepository for PostgresVaultRepository {
         if matches!(principal, Principal::User(_)) {
             guard_last_owner(&mut tx, vault, subject).await?;
         }
-        let removed = sqlx::query(&format!(
+        let removed = sqlx::query(sqlx::AssertSqlSafe(format!(
             "DELETE FROM vault_members WHERE vault_id = $1 AND {column} = $2"
-        ))
+        )))
         .bind(vault.0)
         .bind(subject)
         .execute(&mut *tx)
@@ -499,10 +501,10 @@ impl AuditLog for PostgresVaultRepository {
 #[async_trait]
 impl AccessPolicy for PostgresVaultRepository {
     async fn effective_role(&self, user: &UserId, vault: VaultId) -> Result<Option<VaultRole>> {
-        let (rank,): (Option<i32>,) = sqlx::query_as(&format!(
+        let (rank,): (Option<i32>,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT MAX({ROLE_RANK}) FROM vault_members m
              WHERE m.vault_id = $2 AND {APPLIES_TO_USER}"
-        ))
+        )))
         .bind(user.as_str())
         .bind(vault.0)
         .fetch_one(&self.pool)

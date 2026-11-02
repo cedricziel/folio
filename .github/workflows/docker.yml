@@ -19,8 +19,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: docker-${{ github.ref }}-${{ inputs.tag }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: docker-${{ github.ref }}-${{ inputs.tag || 'edge' }}
+  cancel-in-progress: ${{ !inputs.tag }}
 
 env:
   IMAGE: ghcr.io/cedricziel/folio
@@ -53,6 +53,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image for smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: folio:smoke
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: Check the PDF fallback in the image
+        run: scripts/check-image-pdf-fallback.sh folio:smoke
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         id: build
         with:

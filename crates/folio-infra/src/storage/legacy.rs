@@ -71,7 +71,9 @@ async fn migrate_document(
             if !store.exists(&new_key).await? {
                 store.copy(legacy, &new_key).await?;
             }
-            documents.set_file_path(id, &new_key).await?;
+            documents
+                .set_file_path(document.vault_id, id, &new_key)
+                .await?;
             changed = true;
         }
     }

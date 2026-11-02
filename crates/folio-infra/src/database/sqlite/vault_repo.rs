@@ -114,12 +114,12 @@ impl VaultRepository for SqliteVaultRepository {
 
     async fn list_for_user(&self, user: &UserId) -> Result<Vec<(Vault, VaultRole)>> {
         let rows: Vec<(String, String, Option<String>, String, String, i64)> =
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT v.id, v.name, v.created_by, v.created_at, v.updated_at, MAX({ROLE_RANK})
                  FROM vaults v JOIN vault_members m ON m.vault_id = v.id
                  WHERE {APPLIES_TO_USER}
                  GROUP BY v.id ORDER BY v.name, v.id"
-            ))
+            )))
             .bind(user.as_str())
             .fetch_all(&self.pool)
             .await
@@ -309,12 +309,13 @@ impl MembershipRepository for SqliteVaultRepository {
         } else {
             "auth_groups"
         };
-        let known: Option<(i64,)> =
-            sqlx::query_as(&format!("SELECT 1 FROM {subject_table} WHERE id = $1"))
-                .bind(subject)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db)?;
+        let known: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT 1 FROM {subject_table} WHERE id = $1"
+        )))
+        .bind(subject)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
         if known.is_none() {
             return Err(Error::NotFound {
                 entity_type: if column == "user_id" { "User" } else { "Group" },
@@ -326,14 +327,14 @@ impl MembershipRepository for SqliteVaultRepository {
                 guard_last_owner(&mut tx, vault, subject).await?;
             }
         }
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO vault_members
                  (vault_id, principal_type, {column}, role, granted_by, granted_at)
              VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (vault_id, {column}) WHERE {column} IS NOT NULL
              DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by,
                            granted_at = excluded.granted_at"
-        ))
+        )))
         .bind(vault.to_string())
         .bind(if column == "user_id" { "user" } else { "group" })
         .bind(subject)
@@ -355,9 +356,9 @@ impl MembershipRepository for SqliteVaultRepository {
         if let Principal::User(_) = principal {
             guard_last_owner(&mut tx, vault, subject).await?;
         }
-        let removed = sqlx::query(&format!(
+        let removed = sqlx::query(sqlx::AssertSqlSafe(format!(
             "DELETE FROM vault_members WHERE vault_id = $1 AND {column} = $2"
-        ))
+        )))
         .bind(vault.to_string())
         .bind(subject)
         .execute(&mut *tx)
@@ -511,10 +512,10 @@ impl AuditLog for SqliteVaultRepository {
 #[async_trait]
 impl AccessPolicy for SqliteVaultRepository {
     async fn effective_role(&self, user: &UserId, vault: VaultId) -> Result<Option<VaultRole>> {
-        let (rank,): (Option<i64>,) = sqlx::query_as(&format!(
+        let (rank,): (Option<i64>,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT MAX({ROLE_RANK}) FROM vault_members m
              WHERE m.vault_id = $2 AND {APPLIES_TO_USER}"
-        ))
+        )))
         .bind(user.as_str())
         .bind(vault.to_string())
         .fetch_one(&self.pool)

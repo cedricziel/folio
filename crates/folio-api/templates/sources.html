@@ -1,18 +1,21 @@
 {% extends "base.html" %}
+{% import "partials/icons.html" as icons %}
 
 {% block title %}{{ title }}{% endblock %}
 
 {% block content %}
 <section class="page">
     <header class="page-head">
-        <h1 class="title">Sources</h1>
-        <div class="form-actions">
-            <a href="/settings/sources/new?kind=folder" class="f-btn f-btn-primary">Add folder</a>
-            <a href="/settings/sources/new?kind=email" class="f-btn f-btn-primary">Add mail account</a>
-            <a href="/settings" class="f-btn f-btn-quiet">Back to settings</a>
+        <a href="/settings" class="back-link">{{ icons::arrow_left() }} Settings</a>
+        <div class="page-head-row">
+            <h1 class="title">Sources</h1>
+            <div class="head-actions">
+                <a href="/settings/sources/new?kind=email" class="f-btn">Add mail account</a>
+                <a href="/settings/sources/new?kind=folder" class="f-btn f-btn-primary">Add folder</a>
+            </div>
         </div>
+        <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="/workflows">Workflows</a>.</p>
     </header>
-    <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="/workflows">Workflows</a>.</p>
 
     {% match notice %}
     {% when Some with (n) %}
@@ -27,8 +30,8 @@
     {% else %}
     <div class="f-list">
         {% for row in rows %}
-        <div class="f-row">
-            <div>
+        <div class="f-row f-row-plain">
+            <div class="row-main">
                 {% if row.read_only %}
                 <span class="f-row-title">{{ row.name }}</span>
                 {% else %}

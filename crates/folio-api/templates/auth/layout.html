@@ -1,15 +1,24 @@
-<!DOCTYPE html>
+{% import "partials/icons.html" as icons %}<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
     <title>{% block title %}Folio{% endblock %}</title>
+    <link rel="stylesheet" href="/static/fonts/fonts.css">
+    <link rel="stylesheet" href="/static/tokens.css">
+    <link rel="stylesheet" href="/static/components.css">
     <link rel="stylesheet" href="/auth/theme.css">
+    <script>
+        (function () {
+            var theme = localStorage.getItem("folio-theme");
+            if (theme) document.documentElement.dataset.theme = theme;
+        })();
+    </script>
 </head>
 <body>
     <main class="auth-page">
-        <p class="auth-brand">Folio</p>
+        <p class="auth-brand"><span class="auth-mark">{{ icons::mark() }}</span> Folio</p>
         <section class="f-sheet auth-card">
             {% block content %}{% endblock %}
         </section>

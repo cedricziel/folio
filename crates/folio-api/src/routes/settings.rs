@@ -78,7 +78,7 @@ async fn settings_page(
     };
 
     let template = SettingsTemplate {
-        sidebar: Sidebar::load(&state, Nav::Settings).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
         ai_settings: processing.ai.clone(),
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),

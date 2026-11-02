@@ -1,3 +1,4 @@
+import CoreSpotlight
 import FolioKit
 import PhotosUI
 import SwiftUI
@@ -17,6 +18,8 @@ struct InboxView: View {
     @State private var showScanner = false
     @State private var problem: String?
     @State private var scannedPages: ScannedPages?
+    @FocusState private var searchFocused: Bool
+    private let router = IntentRouter.shared
 
     init(serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void) {
         self.serverURL = serverURL
@@ -52,6 +55,59 @@ struct InboxView: View {
                 )
             }
         }
+        .focusedSceneValue(\.inboxActions, actions)
+        .onChange(of: router.request, initial: true) { _, request in
+            guard let request else { return }
+            router.clear()
+            handle(request)
+        }
+        .onContinueUserActivity(CSSearchableItemActionType) { activity in
+            let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
+            if let id = identifier.flatMap({ UUID(uuidString: String($0.suffix(36))) }) {
+                handle(.document(id))
+            }
+        }
+    }
+
+    private var actions: InboxActions {
+        InboxActions(
+            upload: { showFileImporter = true },
+            scan: scanAction,
+            showInbox: { list.scope = .inbox },
+            showAll: { list.scope = .all },
+            find: { searchFocused = true },
+            deleteSelected: list.rows.first(where: { $0.id == selection }).map { row in
+                { pendingDelete = row.document }
+            }
+        )
+    }
+
+    private var scanAction: (() -> Void)? {
+        #if os(iOS)
+            DocumentScanner.isSupported ? { showScanner = true } : nil
+        #else
+            nil
+        #endif
+    }
+
+    private func handle(_ request: IntentRouter.Request) {
+        switch request {
+        case .scan:
+            if let scan = scanAction {
+                scan()
+            } else {
+                // Macs and simulators have no scanner, so scanning falls back to choosing a file.
+                showFileImporter = true
+            }
+        case .upload:
+            showFileImporter = true
+        case .inbox:
+            list.scope = .inbox
+        case let .document(id):
+            list.scope = .all
+            list.searchText = ""
+            selection = id
+        }
     }
 
     private var sidebar: some View {
@@ -71,8 +127,9 @@ struct InboxView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.paper)
-        .navigationTitle("Inbox")
+        .navigationTitle(list.scope == .inbox ? "Inbox" : "All documents")
         .searchable(text: $list.searchText, prompt: "Search documents")
+        .searchFocused($searchFocused)
         .task(id: list.searchText) { await list.search(list.searchText) }
         .refreshable { await list.load() }
         .overlay { placeholder }
@@ -221,6 +278,7 @@ struct InboxView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
+                .help("Upload files (\u{2318}O)")
             PhotosPicker(selection: $photoSelection, matching: .images) {
                 Label("Photos", systemImage: "photo")
             }

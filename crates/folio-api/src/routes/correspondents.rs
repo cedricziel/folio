@@ -1,10 +1,6 @@
 //! Correspondent API routes
 
-use axum::{
-    extract::{Path, State},
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use serde::Deserialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -12,6 +8,7 @@ use uuid::Uuid;
 use folio_core::models::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 
 use crate::error::{ApiError, ApiResult};
+use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
 use crate::vault::DefaultVault;
@@ -62,7 +59,7 @@ pub(crate) async fn list_correspondents(
 pub(crate) async fn get_correspondent(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<Correspondent>> {
     let correspondent = state
         .correspondent_repo
@@ -96,7 +93,7 @@ pub struct CreateCorrespondentRequest {
 pub(crate) async fn create_correspondent(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Json(req): Json<CreateCorrespondentRequest>,
+    ApiJson(req): ApiJson<CreateCorrespondentRequest>,
 ) -> ApiResult<Json<Correspondent>> {
     let correspondent = state
         .correspondent_repo
@@ -131,8 +128,8 @@ pub struct UpdateCorrespondentRequest {
 pub(crate) async fn update_correspondent(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<UpdateCorrespondentRequest>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(req): ApiJson<UpdateCorrespondentRequest>,
 ) -> ApiResult<Json<Correspondent>> {
     let correspondent = state
         .correspondent_repo
@@ -150,7 +147,7 @@ pub(crate) async fn update_correspondent(
     tag = "correspondents",
     params(("id" = Uuid, Path, description = "Correspondent ID")),
     responses(
-        (status = 200, description = "The correspondent was deleted"),
+        (status = 204, description = "The correspondent was deleted"),
         NotFound,
         InternalError,
     )
@@ -158,8 +155,8 @@ pub(crate) async fn update_correspondent(
 pub(crate) async fn delete_correspondent(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<()>> {
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<StatusCode> {
     state.correspondent_repo.delete(vault, id).await?;
-    Ok(Json(()))
+    Ok(StatusCode::NO_CONTENT)
 }

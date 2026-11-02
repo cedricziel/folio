@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0-alpha.1"
+version = "0.2.0"
 edition = "2021"
 license = "AGPL-3.0-only"
 authors = ["Folio Contributors"]
@@ -67,7 +67,6 @@ reqwest = { version = "0.13", features = ["json"] }
 
 # OpenAPI
 utoipa = { version = "6", features = ["uuid", "chrono", "axum_extras"] }
-utoipa-scalar = "0.4"
 
 # Object storage
 object_store = { version = "0.14", default-features = false, features = ["fs", "aws"] }

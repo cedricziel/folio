@@ -4,7 +4,7 @@
 {% block title %}{{ document.title }} - Folio{% endblock %}
 
 {% block content %}
-<article class="doc-view">
+<article class="doc-view" data-hotkey-document="{{ document.id }}" data-hotkey-title="{{ document.title }}">
     <header class="doc-head">
         <a href="/" class="back-link">{{ icons::arrow_left() }} Inbox</a>
         <div class="doc-head-row">
@@ -16,7 +16,7 @@
                 {% if document.file_path.is_some() %}
                 <a href="/api/documents/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
                 <form action="/documents/{{ document.id }}/reprocess" method="post" data-turbo="false">
-                    <button type="submit" class="f-btn f-btn-quiet">{{ icons::refresh() }} Read again</button>
+                    <button type="submit" class="f-btn {% if failed %}f-btn-primary{% else %}f-btn-quiet{% endif %}">{{ icons::refresh() }} Read again</button>
                 </form>
                 {% endif %}
                 <form action="/documents/{{ document.id }}/delete" method="post"
@@ -61,7 +61,7 @@
                     <dt>From</dt>
                     <dd>
                         <form action="/documents/{{ document.id }}/correspondent" method="post" data-turbo="false">
-                            <select name="correspondent_id" class="select" aria-label="From" onchange="this.form.requestSubmit()">
+                            <select name="correspondent_id" class="select" aria-label="From" data-hotkey="edit" onchange="this.form.requestSubmit()">
                                 <option value="">Not set</option>
                                 {% for c in all_correspondents %}
                                 <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
@@ -109,10 +109,11 @@
                             {% endfor %}
                             {% endif %}
                         </div>
-                        <button type="button" class="f-btn f-btn-quiet" data-action="click->tags#openModal">Edit tags</button>
+                        <button type="button" class="f-btn f-btn-quiet" title="Edit tags (t)" aria-keyshortcuts="t" data-hotkey="tag" data-action="click->tags#openModal">Edit tags</button>
 
-                        <div class="overlay" data-tags-target="modal" data-action="click->tags#backdropClick">
-                            <div class="f-palette dialog" role="dialog" aria-modal="true" aria-labelledby="tags-title">
+                        <dialog class="f-palette dialog" aria-labelledby="tags-title" data-tags-target="modal"
+                                data-action="click->tags#backdropClick close->tags#closed">
+                            <div class="dialog-inner">
                                 <div class="dialog-header">
                                     <h2 class="heading" id="tags-title">Edit tags</h2>
                                     <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Close" data-action="click->tags#closeModal">{{ icons::close() }}</button>
@@ -139,7 +140,7 @@
                                     {% endfor %}
                                 </div>
                             </div>
-                        </div>
+                        </dialog>
                     </dd>
                 </dl>
             </section>
@@ -150,8 +151,14 @@
                 {% when Some with (content) %}
                 <pre class="ocr">{{ content }}</pre>
                 {% when None %}
+                {% if failed %}
+                <div class="f-notice f-notice-danger" role="status">
+                    <p>Folio couldn't read this file. It may be damaged or in a format Folio doesn't know. Read it again, or delete it.</p>
+                </div>
+                {% else %}
                 <p><span class="f-status f-status-pending">{{ reading }}</span></p>
                 <p class="hint">The text appears here once Folio has read the file.</p>
+                {% endif %}
                 {% endmatch %}
             </section>
         </aside>

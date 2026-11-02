@@ -13,6 +13,7 @@ folio-auth = { workspace = true }
 # Async runtime
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+chrono = { workspace = true }
 futures = { workspace = true }
 
 # Web framework
@@ -34,7 +35,6 @@ serde_json = { workspace = true }
 
 # OpenAPI
 utoipa = { workspace = true }
-utoipa-scalar = { workspace = true }
 
 # Error handling
 thiserror = { workspace = true }
@@ -53,6 +53,8 @@ url = "2"
 async-trait = { workspace = true }
 
 [dev-dependencies]
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+reqwest = { workspace = true }
 sqlx = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-subscriber = { workspace = true }

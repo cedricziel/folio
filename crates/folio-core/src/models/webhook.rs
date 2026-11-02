@@ -6,7 +6,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Correspondent, Document, DocumentSource, DocumentType, Id, Tag, WorkflowTrigger};
+use super::{
+    Correspondent, Document, DocumentSource, DocumentType, Id, Tag, VaultId, WorkflowTrigger,
+};
 
 /// Current payload version
 pub const PAYLOAD_VERSION: u32 = 1;

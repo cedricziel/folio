@@ -29,6 +29,8 @@ pub struct User {
 pub const NO_PASSWORD: &str = "!";
 pub const SOURCE_LOCAL: &str = "local";
 pub const SOURCE_FORWARD: &str = "forward";
+/// Prefix of `auth_source` for OpenID Connect users; the issuer follows.
+pub const SOURCE_OIDC_PREFIX: &str = "oidc:";
 
 /// Groups live in two namespaces so an IdP group `admins` never matches a
 /// local group `admins`.
@@ -66,6 +68,19 @@ pub struct Group {
 pub struct Session {
     pub id_hash: String,
     pub user_id: String,
+    pub expires_at: i64,
+}
+
+/// An OpenID Connect authorization request in flight. Only hashes of the
+/// state and of the browser-binding token are stored.
+#[derive(Debug, Clone)]
+pub struct OidcLogin {
+    pub state_hash: String,
+    pub browser_hash: String,
+    pub nonce: String,
+    pub pkce_verifier: String,
+    /// Where to send the user after login, already sanitised.
+    pub next: String,
     pub expires_at: i64,
 }
 

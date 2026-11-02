@@ -2,13 +2,14 @@
 
 use axum::{
     body::Body,
-    extract::{Multipart, Path, Query, State},
-    http::header,
+    extract::{Multipart, Path, RawQuery, State},
+    http::{header, StatusCode},
     routing::{get, post},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error};
+use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -17,10 +18,12 @@ use axum::response::{IntoResponse, Redirect, Response};
 use folio_core::models::{
     CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
 };
-use folio_core::services::{NewUpload, SearchServiceFacade};
+use folio_core::services::SearchServiceFacade;
 
+use super::pages::store_upload;
 use crate::error::{ApiError, ApiResult};
-use crate::openapi::{BadRequest, InternalError, NotFound};
+use crate::extract::{ApiJson, ApiPath, ApiQuery};
+use crate::openapi::{BadRequest, InternalError, NotFound, PayloadTooLarge};
 use crate::state::AppState;
 use crate::vault::DefaultVault;
 
@@ -37,25 +40,131 @@ pub fn router() -> Router<AppState> {
         .route("/search", get(search_documents_get).post(search_documents))
 }
 
-/// Query parameters for listing documents
-#[derive(Debug, Deserialize, IntoParams)]
+/// Query parameters for listing documents. Only documents the filters all match are returned.
+///
+/// Parsed by hand in the handler because `tag_id` repeats.
+#[derive(Debug, IntoParams)]
 #[into_params(parameter_in = Query)]
+#[allow(dead_code)]
 pub struct ListDocumentsQuery {
     /// Only return documents from this correspondent
     correspondent_id: Option<Uuid>,
     /// Only return documents of this type
     document_type_id: Option<Uuid>,
+    /// Only return documents that carry every one of these tags; repeat the parameter for several
+    #[param(style = Form, explode)]
+    tag_id: Option<Vec<Uuid>>,
+    /// Only return documents created at or after this instant (RFC 3339)
+    created_after: Option<DateTime<Utc>>,
+    /// Only return documents created before this instant (RFC 3339)
+    created_before: Option<DateTime<Utc>>,
+}
+
+impl ListDocumentsQuery {
+    fn filter(raw: Option<&str>) -> ApiResult<Option<DocumentFilter>> {
+        fn parse<T: std::str::FromStr>(name: &str, value: &str) -> ApiResult<T> {
+            value
+                .parse()
+                .map_err(|_| ApiError::bad_request(format!("Invalid value for {name}")))
+        }
+
+        let mut filter = DocumentFilter::default();
+        let mut any = false;
+        for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
+            any = true;
+            match key.as_ref() {
+                "correspondent_id" => filter.correspondent_id = Some(parse(&key, &value)?),
+                "document_type_id" => filter.document_type_id = Some(parse(&key, &value)?),
+                "tag_id" => filter
+                    .tag_ids
+                    .get_or_insert_with(Vec::new)
+                    .push(parse(&key, &value)?),
+                "created_after" => filter.created_after = Some(parse(&key, &value)?),
+                "created_before" => filter.created_before = Some(parse(&key, &value)?),
+                _ => any = false,
+            }
+        }
+        Ok(any.then_some(filter))
+    }
+}
+
+/// A tag as shown on a document
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DocumentTag {
+    id: Uuid,
+    name: String,
+    /// Hex color such as "#ff5733", when the tag has one
+    color: Option<String>,
+}
+
+/// A document together with the names behind its ids
+#[derive(Debug, Serialize, ToSchema)]
+pub struct DocumentView {
+    #[serde(flatten)]
+    #[schema(inline = false)]
+    document: Document,
+    /// Name of the correspondent, when one is set
+    correspondent: Option<String>,
+    /// Name of the document type, when one is set
+    document_type: Option<String>,
+    tags: Vec<DocumentTag>,
 }
 
 /// Response for document list
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DocumentListResponse {
-    documents: Vec<Document>,
+    documents: Vec<DocumentView>,
     /// Number of documents returned
     count: usize,
 }
 
-/// List documents, optionally filtered by correspondent or document type
+async fn present(state: &AppState, documents: Vec<Document>) -> ApiResult<Vec<DocumentView>> {
+    let correspondents: HashMap<_, _> = state
+        .correspondent_repo
+        .list()
+        .await?
+        .into_iter()
+        .map(|c| (c.id, c.name))
+        .collect();
+    let types: HashMap<_, _> = state
+        .document_type_repo
+        .list()
+        .await?
+        .into_iter()
+        .map(|t| (t.id, t.name))
+        .collect();
+
+    futures::future::try_join_all(documents.into_iter().map(|document| {
+        let correspondents = &correspondents;
+        let types = &types;
+        async move {
+            let tags = state
+                .document_repo
+                .get_tags(document.id)
+                .await?
+                .into_iter()
+                .map(|t| DocumentTag {
+                    id: t.id,
+                    name: t.name,
+                    color: t.color,
+                })
+                .collect();
+            Ok::<_, ApiError>(DocumentView {
+                correspondent: document
+                    .correspondent_id
+                    .and_then(|id| correspondents.get(&id).cloned()),
+                document_type: document
+                    .document_type_id
+                    .and_then(|id| types.get(&id).cloned()),
+                tags,
+                document,
+            })
+        }
+    }))
+    .await
+}
+
+/// List documents, newest first, with their tags and the names of their correspondent and type
 #[utoipa::path(
     get,
     path = "/api/documents",
@@ -64,25 +173,17 @@ pub struct DocumentListResponse {
     params(ListDocumentsQuery),
     responses(
         (status = 200, description = "Matching documents", body = DocumentListResponse),
+        BadRequest,
         InternalError,
     )
 )]
 pub(crate) async fn list_documents(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Query(query): Query<ListDocumentsQuery>,
+    RawQuery(query): RawQuery,
 ) -> ApiResult<Json<DocumentListResponse>> {
-    let filter = if query.correspondent_id.is_some() || query.document_type_id.is_some() {
-        Some(DocumentFilter {
-            correspondent_id: query.correspondent_id,
-            document_type_id: query.document_type_id,
-            ..Default::default()
-        })
-    } else {
-        None
-    };
-
-    let documents = state.document_repo.list(vault, filter).await?;
+    let filter = ListDocumentsQuery::filter(query.as_deref())?;
+    let documents = present(&state, state.document_repo.list(filter).await?).await?;
     let count = documents.len();
 
     Ok(Json(DocumentListResponse { documents, count }))
@@ -96,7 +197,7 @@ pub(crate) async fn list_documents(
     tag = "documents",
     params(("id" = Uuid, Path, description = "Document ID")),
     responses(
-        (status = 200, description = "The document", body = Document),
+        (status = 200, description = "The document", body = DocumentView),
         NotFound,
         InternalError,
     )
@@ -104,15 +205,16 @@ pub(crate) async fn list_documents(
 pub(crate) async fn get_document(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<Document>> {
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<Json<DocumentView>> {
     let document = state
         .document_repo
         .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
+    let view = present(&state, vec![document]).await?.remove(0);
 
-    Ok(Json(document))
+    Ok(Json(view))
 }
 
 /// Request body for creating a document
@@ -140,7 +242,7 @@ pub struct CreateDocumentRequest {
 pub(crate) async fn create_document(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Json(req): Json<CreateDocumentRequest>,
+    ApiJson(req): ApiJson<CreateDocumentRequest>,
 ) -> ApiResult<Json<Document>> {
     let document = state
         .document_repo
@@ -168,7 +270,7 @@ pub(crate) async fn create_document(
     tag = "documents",
     params(("id" = Uuid, Path, description = "Document ID")),
     responses(
-        (status = 200, description = "The document was deleted"),
+        (status = 204, description = "The document was deleted"),
         NotFound,
         InternalError,
     )
@@ -176,12 +278,12 @@ pub(crate) async fn create_document(
 pub(crate) async fn delete_document(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<()>> {
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<StatusCode> {
     purge_document_files(&state, id).await?;
     state.document_repo.delete(vault, id).await?;
     folio_infra::telemetry::metrics().documents_changed(-1);
-    Ok(Json(()))
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Multipart form accepted by the upload endpoint
@@ -205,75 +307,16 @@ pub struct UploadDocumentRequest {
     responses(
         (status = 200, description = "The created document", body = Document),
         BadRequest,
+        PayloadTooLarge,
         InternalError,
     )
 )]
 pub(crate) async fn upload_document(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> ApiResult<Json<Document>> {
-    debug!("Starting document upload");
-
-    let mut title: Option<String> = None;
-    let mut file_data: Option<Vec<u8>> = None;
-    let mut filename: Option<String> = None;
-    let mut mime_type: Option<String> = None;
-
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        error!("Multipart error: {}", e);
-        ApiError::bad_request(format!("Invalid multipart data: {}", e))
-    })? {
-        let name = field.name().unwrap_or("").to_string();
-        debug!("Processing field: {}", name);
-
-        match name.as_str() {
-            "title" => {
-                title = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::bad_request(format!("Invalid title: {}", e)))?,
-                );
-            }
-            "file" => {
-                filename = field.file_name().map(|s| s.to_string());
-                mime_type = field.content_type().map(|s| s.to_string());
-                file_data = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| ApiError::bad_request(format!("Failed to read file: {}", e)))?
-                        .to_vec(),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    let file_data = file_data.ok_or_else(|| ApiError::bad_request("No file provided in upload"))?;
-    let title = title
-        .or_else(|| filename.clone())
-        .unwrap_or_else(|| "Untitled".to_string());
-    let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
-
-    let document = state
-        .importer
-        .import(
-            vault,
-            NewUpload {
-                title: Some(title),
-                filename: filename.unwrap_or_else(|| "upload".to_string()),
-                mime_type: Some(mime_type),
-                data: file_data,
-                source: DocumentSource::of(SourceKind::Api),
-                tag_ids: Vec::new(),
-            },
-        )
-        .await?;
-
-    folio_infra::telemetry::metrics().documents_changed(1);
-
+    let document = store_upload(&state, multipart, SourceKind::Api).await?;
     Ok(Json(document))
 }
 
@@ -352,7 +395,7 @@ async fn semantic_search(
 )]
 pub(crate) async fn search_documents(
     State(state): State<AppState>,
-    Json(req): Json<SearchRequest>,
+    ApiJson(req): ApiJson<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
     let results = semantic_search(&state, &req.query, req.limit).await?;
 
@@ -373,7 +416,7 @@ pub(crate) async fn search_documents(
 )]
 pub(crate) async fn search_documents_get(
     State(state): State<AppState>,
-    Query(params): Query<SearchQueryParams>,
+    ApiQuery(params): ApiQuery<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
     let results = semantic_search(&state, &params.q, params.limit).await?;
 
@@ -403,7 +446,7 @@ pub struct FileContent(Vec<u8>);
 pub(crate) async fn download_document(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Response> {
     let document = state
         .document_repo

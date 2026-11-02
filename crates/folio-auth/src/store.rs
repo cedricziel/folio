@@ -2,7 +2,9 @@
 
 use async_trait::async_trait;
 
-use crate::model::{AccessToken, AuthCode, Group, OAuthClient, RefreshToken, Session, User};
+use crate::model::{
+    AccessToken, AuthCode, Group, OAuthClient, OidcLogin, RefreshToken, Session, User,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -48,6 +50,9 @@ pub trait AuthStore: Send + Sync {
     async fn create_session(&self, session: Session) -> Result<(), AuthError>;
     async fn find_session(&self, id_hash: &str) -> Result<Option<Session>, AuthError>;
     async fn delete_session(&self, id_hash: &str) -> Result<(), AuthError>;
+    /// Remembers the OpenID Connect ID token that created the session.
+    async fn set_session_id_token(&self, id_hash: &str, id_token: &str) -> Result<(), AuthError>;
+    async fn session_id_token(&self, id_hash: &str) -> Result<Option<String>, AuthError>;
 
     async fn insert_client(&self, client: OAuthClient) -> Result<(), AuthError>;
     async fn find_client(&self, client_id: &str) -> Result<Option<OAuthClient>, AuthError>;
@@ -75,6 +80,10 @@ pub trait AuthStore: Send + Sync {
     /// Revokes the grant of an access or refresh token issued to `client_id`.
     /// Unknown tokens and tokens of other clients are ignored.
     async fn revoke_token(&self, token_hash: &str, client_id: &str) -> Result<(), AuthError>;
+
+    async fn insert_oidc_login(&self, login: OidcLogin) -> Result<(), AuthError>;
+    /// Atomically removes and returns the login, making the callback single-use.
+    async fn take_oidc_login(&self, state_hash: &str) -> Result<Option<OidcLogin>, AuthError>;
 
     /// Removes expired codes, tokens and sessions.
     async fn purge_expired(&self, now: i64) -> Result<(), AuthError>;

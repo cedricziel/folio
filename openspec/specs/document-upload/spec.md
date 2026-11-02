@@ -102,23 +102,23 @@ The system SHALL list documents newest first. `GET /api/documents` SHALL return 
 
 #### Scenario: Filter on the home page
 
-- **WHEN** a user opens `/` with a `correspondent_id` or `document_type_id` query parameter
+- **WHEN** a user opens `/` with a `correspondent_id`, `document_type_id` or `tag_id` query parameter
 - **THEN** the page lists only matching documents
 - **AND** empty or malformed IDs are ignored
 
 #### Scenario: Several filters on the home page
 
-- **WHEN** a user opens `/` with both `correspondent_id` and `document_type_id`
-- **THEN** only the correspondent filter applies
+- **WHEN** a user opens `/` with several of `correspondent_id`, `document_type_id` and `tag_id`
+- **THEN** only documents matching all of them are listed
 
 #### Scenario: Tag filter on the home page
 
 - **WHEN** a user opens `/` with a `tag_id` query parameter
-- **THEN** the parameter is accepted but ignored, and all documents are listed
+- **THEN** only documents carrying that tag are listed
 
 ### Requirement: Deleting a document
 
-The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. Deleting a document SHALL also remove its tag assignments, its stored embedding and every stored object of the document, including thumbnails, page previews and files from the earlier layout (`<document id>/` and `thumbnails/`).
+The system SHALL delete a document at `POST /documents/:id/delete` and respond with a Turbo Stream. `DELETE /api/documents/:id` SHALL respond with 204 and no body. Deleting a document SHALL also remove its tag assignments, its stored embedding and every stored object of the document, including thumbnails, page previews and files from the earlier layout (`<document id>/` and `thumbnails/`). A background job that is running for the document when it is deleted SHALL NOT leave thumbnails, page previews or embeddings behind.
 
 #### Scenario: Delete an existing document
 

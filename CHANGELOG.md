@@ -1,5 +1,179 @@
 # Changelog
 
+## [0.2.0](https://github.com/cedricziel/folio/compare/v0.1.1...v0.2.0) (2026-11-01)
+
+
+### Features
+
+* **apple:** link the deployment guide from onboarding ([6b1e5f9](https://github.com/cedricziel/folio/commit/6b1e5f96686af3e97266ca82364ff2c34262fdc3))
+
+
+### Bug Fixes
+
+* **api:** resolve API and worker backlog issues ([#94](https://github.com/cedricziel/folio/issues/94)) ([f0fc77e](https://github.com/cedricziel/folio/commit/f0fc77e1c1104861ab652cf7020d2cd40213c5af))
+* **config:** let the shipped config follow auth for MCP ([70c2337](https://github.com/cedricziel/folio/commit/70c2337d3b6c587532fc24f5b724355fc1e98826))
+* **config:** let the shipped config follow auth for MCP ([#96](https://github.com/cedricziel/folio/issues/96)) ([3f90966](https://github.com/cedricziel/folio/commit/3f909660584a87d1f4c51948d0bbf891f369e778))
+* **docker:** install ghostscript and allow the PDF coder for the ImageMagick fallback ([18ace36](https://github.com/cedricziel/folio/commit/18ace3657e8fb4f51fc14e9eb4888dee982b2cf2))
+* **docker:** make the PDF fallback work in the image ([#98](https://github.com/cedricziel/folio/issues/98)) ([0f5fe7a](https://github.com/cedricziel/folio/commit/0f5fe7a55e2787adbe5581efee523aa58d75b45f))
+
+## [0.1.1](https://github.com/cedricziel/folio/compare/v0.1.0...v0.1.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* **apple:** take app and build versions from the build settings ([#87](https://github.com/cedricziel/folio/issues/87)) ([42d4819](https://github.com/cedricziel/folio/commit/42d481982e6bc28f2ded0eb525a39c5957864359))
+
+## [0.1.0](https://github.com/cedricziel/folio/compare/v0.1.0-alpha.2...v0.1.0) (2026-11-01)
+
+
+### Features
+
+* **api:** include tags and filters in the document list API ([#83](https://github.com/cedricziel/folio/issues/83)) ([839115c](https://github.com/cedricziel/folio/commit/839115ceeb2840c4a203bbb4536af98e6276ed3e))
+* **api:** include tags and names in documents and filter the list by tag and date ([e29d70d](https://github.com/cedricziel/folio/commit/e29d70dc5fa625e24aa2fdbc9e32ef65fcee1e6e))
+* **apple:** read tags from the API and filter documents on the server ([da3a6e3](https://github.com/cedricziel/folio/commit/da3a6e392d854f93427eec5315ae4ff1e70b8867))
+
+
+### Bug Fixes
+
+* **apple:** declare the File Provider document group ([bcb113b](https://github.com/cedricziel/folio/commit/bcb113b63c0ea48662d4d3dfe5cd1840cd2caacc))
+* **apple:** declare the File Provider document group ([#74](https://github.com/cedricziel/folio/issues/74)) ([7253c60](https://github.com/cedricziel/folio/commit/7253c604b1263b4487395a9b2404e4ca51622bd3))
+* **apple:** derive build numbers from the UTC build time ([2ce54c5](https://github.com/cedricziel/folio/commit/2ce54c5d9657ef8c859ef7208e4678aa090f39d9))
+* **apple:** tell gym the macOS build targets the macosx SDK ([0e0fbfd](https://github.com/cedricziel/folio/commit/0e0fbfdb79161235af694acc06ab6e6020e6ac8b))
+* **apple:** tell gym the macOS build targets the macosx SDK ([#75](https://github.com/cedricziel/folio/issues/75)) ([6a90528](https://github.com/cedricziel/folio/commit/6a90528428ba8daaa583a015a5d27678a937e130))
+* **apple:** use the commit count as the build number ([52ac2de](https://github.com/cedricziel/folio/commit/52ac2defbe2f3fec60041105bb9f375eefe294ef))
+* **apple:** use the commit count as the build number ([#85](https://github.com/cedricziel/folio/issues/85)) ([478a6f5](https://github.com/cedricziel/folio/commit/478a6f5eaae4ecfe1626bd389642061d570c1c80))
+* **web:** address the UX review findings ([#77](https://github.com/cedricziel/folio/issues/77)) ([340b3fc](https://github.com/cedricziel/folio/commit/340b3fc81f5f57b3761440f9541dab96b181aeea))
+* **web:** neutral generated placeholders, tidy palette dates and list meta ([46157ca](https://github.com/cedricziel/folio/commit/46157caca78d1879bb08db9e915fe85b26e70183))
+
+## [0.1.0-alpha.2](https://github.com/cedricziel/folio/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-11-01)
+
+
+### Features
+
+* add a workflow engine with signed webhooks ([#22](https://github.com/cedricziel/folio/issues/22)) ([cf28f10](https://github.com/cedricziel/folio/commit/cf28f10ae532922c4925958944ea6f24fae84902))
+* **api:** add /healthz and /readyz probes and a container healthcheck ([#33](https://github.com/cedricziel/folio/issues/33)) ([c145374](https://github.com/cedricziel/folio/commit/c145374fbae9831a780a20ea6023cfc002f38ab4))
+* **api:** expose workflows, test deliveries, and runs over the JSON API ([3268765](https://github.com/cedricziel/folio/commit/32687650c1f4d76257fa33e7f4abe3783093eca7))
+* **api:** manage ingestion sources in the API and a Sources settings page ([1ab28b8](https://github.com/cedricziel/folio/commit/1ab28b88b9cd73950995718bc4e78573e0a702a8))
+* **api:** serve unauthenticated /healthz and /readyz probes ([7574d98](https://github.com/cedricziel/folio/commit/7574d98ac9d079cb3ca93e12e9f15bb69620fe2a))
+* **api:** stream downloads and thumbnails from the store and purge objects on delete ([8cd0789](https://github.com/cedricziel/folio/commit/8cd0789579a98f2a4020125167c2a7ebf7d2e7fb))
+* **api:** trace and measure HTTP requests with semantic-convention attributes ([61c9371](https://github.com/cedricziel/folio/commit/61c93712f361bcf6bb19f687fca90c984ac05114))
+* **app:** add healthcheck subcommand ([80255bc](https://github.com/cedricziel/folio/commit/80255bc2fa898818b5b6df61f838dcea27b7a934))
+* **apple:** add App Intents and entities for documents, tags, correspondents and types ([319d1be](https://github.com/cedricziel/folio/commit/319d1be1a9b96b263cf60a49399571723b508b03))
+* **apple:** add App Intents for Shortcuts and Siri ([#68](https://github.com/cedricziel/folio/issues/68)) ([7a3e181](https://github.com/cedricziel/folio/commit/7a3e1812168dd29652d642cb018a86bf8b89101e))
+* **apple:** add DocumentCatalog for Shortcuts and Siri ([59c346d](https://github.com/cedricziel/folio/commit/59c346d5c6600a6b2ceb4c40e09e08668af2b07e))
+* **apple:** add keyboard commands, an inbox scope and intent routing ([bf5ccdf](https://github.com/cedricziel/folio/commit/bf5ccdf166bb49a82c9879985a2e84178ddc9db2))
+* **apple:** add removeTag to the Folio service ([1d4366c](https://github.com/cedricziel/folio/commit/1d4366c418c368a7c41b152c2627525f9ceb2ef1))
+* **apple:** add share and file provider extensions ([#30](https://github.com/cedricziel/folio/issues/30)) ([a43413f](https://github.com/cedricziel/folio/commit/a43413fe918aec6e713ccdc6133b78f540b294f6))
+* **apple:** add share and file provider extensions for iOS and macOS ([8b2914e](https://github.com/cedricziel/folio/commit/8b2914e9c15594c31e2c49c12e88bcb53593a5f6))
+* **apple:** declare Siri phrases and index viewed documents in Spotlight ([de1a88c](https://github.com/cedricziel/folio/commit/de1a88c095e666912f61df15f8df7dd7d4685d9a))
+* **apple:** scaffold native iOS and macOS app ([#25](https://github.com/cedricziel/folio/issues/25)) ([fb7c124](https://github.com/cedricziel/folio/commit/fb7c1247d488607866907a53133c018ff955ea2c))
+* **apple:** sign in with OAuth 2.1 and PKCE ([3e3fa20](https://github.com/cedricziel/folio/commit/3e3fa20e4c068dc4e4b24113f20d3a721065776f))
+* **apple:** sign in with OAuth 2.1 and PKCE ([#53](https://github.com/cedricziel/folio/issues/53)) ([3051cb4](https://github.com/cedricziel/folio/commit/3051cb4207877531703dde07e4612c4fe898e53c))
+* **app:** serve MCP over HTTP at /mcp and stdio via 'mcp --stdio' ([0616288](https://github.com/cedricziel/folio/commit/0616288b0a96bfc1bf851cf88b267b4007d72db9))
+* **app:** start telemetry on boot and flush it on shutdown ([2909ce4](https://github.com/cedricziel/folio/commit/2909ce4eca970cca85ce80edcec3fb03f3585b2a))
+* **app:** wire ingestion, record sources on uploads, and show them on documents ([c78f706](https://github.com/cedricziel/folio/commit/c78f7061cba30e89f30ff273c0f8d60aee049640))
+* **app:** wire the workflow engine, runner, and public URL setting ([d04cff8](https://github.com/cedricziel/folio/commit/d04cff87e37ddc02500ad3734feee4b336ef9e5e))
+* **auth:** add forward auth login with trusted proxies and groups ([#52](https://github.com/cedricziel/folio/issues/52)) ([e161a3d](https://github.com/cedricziel/folio/commit/e161a3dafc39de2373aee2b97ed71b96835af8e3))
+* **auth:** add forward auth tests, Postgres store and docs ([3dd5b43](https://github.com/cedricziel/folio/commit/3dd5b4324b75bf5186a47ff475b5ab6a57b42b9c))
+* **auth:** add forward auth, external users and groups ([59fa724](https://github.com/cedricziel/folio/commit/59fa724db70bc6b5714c07ddc4f03d1c5628d9c1))
+* **auth:** add the OpenID Connect relying party ([963cd59](https://github.com/cedricziel/folio/commit/963cd59cc6148fdf3071ef15d780fcd4666c9de1))
+* **auth:** keep the OIDC ID token with the session ([fc3fe8b](https://github.com/cedricziel/folio/commit/fc3fe8b8633dcc9aa24fac82eebb2c993ab3fabd))
+* **auth:** link forward-auth accounts by a stable id header when configured ([d3f2584](https://github.com/cedricziel/folio/commit/d3f258470e269ac366a75451dcf77b2bd3bcbba9))
+* **auth:** optionally require a shared secret from the forward-auth proxy ([c69a83f](https://github.com/cedricziel/folio/commit/c69a83f2810c309136096b9a25dbaf1dd638cdf0))
+* **auth:** require login for the web UI and API (auth.required) ([5100c70](https://github.com/cedricziel/folio/commit/5100c70b32adb2b4fcae5fbd491453a42fc7ff7d))
+* **auth:** sign in with OpenID Connect ([12fddec](https://github.com/cedricziel/folio/commit/12fddec1693a25b25456c2ab1c2604dea30b3476))
+* **auth:** sign in with OpenID Connect ([#54](https://github.com/cedricziel/folio/issues/54)) ([aecda2e](https://github.com/cedricziel/folio/commit/aecda2e6b9d1af02f952622e5f9ea0673aef0f58))
+* **auth:** store in-flight OIDC logins ([93155a8](https://github.com/cedricziel/folio/commit/93155a8bbfbbae21d152823820e9042e26af3aa6))
+* **config:** add auth.oidc settings ([1d641c9](https://github.com/cedricziel/folio/commit/1d641c90384b1eb47f161d66c06750f44abf64ad))
+* **core:** add library service for assistant-facing archive operations ([f5ea9c5](https://github.com/cedricziel/folio/commit/f5ea9c5bb862360db100ae6689c19252e7705b28))
+* **core:** add the DocumentStore port and object key layout ([3f49649](https://github.com/cedricziel/folio/commit/3f49649545ae8afef1bca7f36f1d4083348c1da1))
+* **core:** add the workflow engine ([1c2901a](https://github.com/cedricziel/folio/commit/1c2901aa36d87f38654fe0dee071652482982eb3))
+* **core:** add workflow domain model and ports ([90b8ac6](https://github.com/cedricziel/folio/commit/90b8ac6fec0bf8b65ad25e9613410427033dba67))
+* **core:** emit document lifecycle events from the repository ([5231368](https://github.com/cedricziel/folio/commit/5231368e9de310415d6988ff02979c8b150ae305))
+* **core:** model document sources, ingestion sources, and the import pipeline ([9fb897b](https://github.com/cedricziel/folio/commit/9fb897bb199fd2bd2ddad5f2ca56a57eada3459f))
+* **db:** add PostgreSQL adapters selected by the database URL scheme ([64d9d6b](https://github.com/cedricziel/folio/commit/64d9d6beef6216c4a0fc67730bb0f525f2ed4130))
+* **db:** support PostgreSQL alongside SQLite ([#38](https://github.com/cedricziel/folio/issues/38)) ([c9c95c6](https://github.com/cedricziel/folio/commit/c9c95c68c8ecc43b184a131a0370c87e0365a3cf))
+* **e2e:** add Playwright suite for the document lifecycle ([ee096b8](https://github.com/cedricziel/folio/commit/ee096b850b3a60c0ba4995fb1eb6c32189adc5c4))
+* **e2e:** add the verify skill and a Playwright e2e suite ([#36](https://github.com/cedricziel/folio/issues/36)) ([1144d24](https://github.com/cedricziel/folio/commit/1144d242344b4726e85a0a7d3a59867e572371e7))
+* **infra:** add HealthCheck port and database adapter ([cdfb54b](https://github.com/cedricziel/folio/commit/cdfb54b772928cc36e5fb487fb2224478064acde))
+* **infra:** add mcp configuration section ([19f74ee](https://github.com/cedricziel/folio/commit/19f74ee916916345fb7dd195f3d2975555187cc5))
+* **infra:** honour tag, text, and date filters when listing documents ([f526ae6](https://github.com/cedricziel/folio/commit/f526ae6096517834669348ec863307d49be45c9c))
+* **infra:** import attachments from IMAP mailboxes ([40c54f6](https://github.com/cedricziel/folio/commit/40c54f6a5481c42c8a76ad645b15b7f7d7454bf7))
+* **infra:** import files from a watched consume folder ([dd21da5](https://github.com/cedricziel/folio/commit/dd21da594a2067a3a17663d79d64640b3693531f))
+* **infra:** load ingestion sources from configuration and build adapters ([6837c3f](https://github.com/cedricziel/folio/commit/6837c3fdf280a12b636eb6d275aa13e3d78202b5))
+* **infra:** persist document sources and the ingestion ledger ([9e6e00d](https://github.com/cedricziel/folio/commit/9e6e00d72381b9a91f38b1b85290266023550aa6))
+* **infra:** persist workflows and deliver signed webhooks via the job queue ([9393bf0](https://github.com/cedricziel/folio/commit/9393bf0fa53d85611e26fdd5e73e513d3cd66e46))
+* **infra:** require every search term to match a document ([c44ec02](https://github.com/cedricziel/folio/commit/c44ec0204874c00f4621cc62765d9de75ed0b729))
+* **infra:** trace jobs, AI provider calls and storage operations ([c286dd7](https://github.com/cedricziel/folio/commit/c286dd7a545d06bea5adc77150b6c283002bb0a1))
+* ingest documents from a consume folder and IMAP mailboxes ([#45](https://github.com/cedricziel/folio/issues/45)) ([85171c0](https://github.com/cedricziel/folio/commit/85171c0cc453b31939468f262bcca96869b5c182))
+* **mcp:** add MCP server crate with archive tools and resources ([84c75ea](https://github.com/cedricziel/folio/commit/84c75ead11c778f6aef6ee0ffdbce9a3c30ab322))
+* **mcp:** add MCP server for AI assistants ([#31](https://github.com/cedricziel/folio/issues/31)) ([7c158bf](https://github.com/cedricziel/folio/commit/7c158bf18a9d4642f6f660b490633b0fafc8ded9))
+* **pipeline:** pluggable OCR and embedding providers ([#35](https://github.com/cedricziel/folio/issues/35)) ([324e8df](https://github.com/cedricziel/folio/commit/324e8df585a40675fce3e4049fdfdf3f2bf4e4ba))
+* **skill:** add a screen tour with screenshots and axe checks to verify ([e2a97a6](https://github.com/cedricziel/folio/commit/e2a97a61b6864de9b1313c6b192c3c9cbe873645))
+* **storage:** add a storage port with local and S3 adapters ([#43](https://github.com/cedricziel/folio/issues/43)) ([fba5375](https://github.com/cedricziel/folio/commit/fba5375b06e7367391a7e512ab3234da2e625750))
+* **storage:** add local and S3 document stores over object_store ([51d6016](https://github.com/cedricziel/folio/commit/51d601690b10896f590a00a9cd5a7f9880e57102))
+* **telemetry:** export traces, metrics and logs with OpenTelemetry ([#47](https://github.com/cedricziel/folio/issues/47)) ([509513e](https://github.com/cedricziel/folio/commit/509513e65c68375824924e2841174f8780bb6ef7))
+* **telemetry:** initialise OTLP export from the standard OTEL variables ([bcda36a](https://github.com/cedricziel/folio/commit/bcda36af567ffe23c424b3464a396d429badb78b))
+* **verify:** add scripts to run an ephemeral Folio instance ([a3cce68](https://github.com/cedricziel/folio/commit/a3cce68bbd09e025cb33aa342cf6e94149644007))
+* **web:** add a workflows page with create, edit, test, and run history ([211af76](https://github.com/cedricziel/folio/commit/211af769cf15f95596a251c4d697e3fbf4838274))
+* **web:** add keyboard shortcuts ([#67](https://github.com/cedricziel/folio/issues/67)) ([189e1b8](https://github.com/cedricziel/folio/commit/189e1b8d32b002bff4a2c84c84236213fc6ceb83))
+* **web:** add keyboard shortcuts with a help dialog and in-page delete confirm ([98ea0c3](https://github.com/cedricziel/folio/commit/98ea0c37f8a834c9e738eeab23473670e8b1ee52))
+* **web:** reskin the web UI with the Folio design system and ship it as a PWA ([#34](https://github.com/cedricziel/folio/issues/34)) ([988022e](https://github.com/cedricziel/folio/commit/988022ec0fd64942912ada11e6bb84d375a82e8e))
+
+
+### Bug Fixes
+
+* **api:** mask webhook header values, hide URL credentials, and use axum 0.8 routes ([d685906](https://github.com/cedricziel/folio/commit/d685906348efcea45831fbcbfd34415b2c42404f))
+* **api:** serve uploaded files with nosniff, a sandbox CSP and attachment for active types ([7e76361](https://github.com/cedricziel/folio/commit/7e7636132ea799deb2ae2642d12f598e7c491229)), closes [#48](https://github.com/cedricziel/folio/issues/48)
+* **apple:** add the app icon and export macOS builds as pkg ([#69](https://github.com/cedricziel/folio/issues/69)) ([92aa948](https://github.com/cedricziel/folio/commit/92aa948a07b06cbb733b5754ae40ddbf251afb47))
+* **apple:** add the app icon generated from the design mark ([171d1dd](https://github.com/cedricziel/folio/commit/171d1dd9c0682dd445a9ff715cdc4312e3f9d361))
+* **apple:** export macOS builds as a sandboxed installer pkg ([fcf67dd](https://github.com/cedricziel/folio/commit/fcf67ddd2f0f29090305f5a1e9ab4d391bdccfdf))
+* **apple:** harden downloads, search state, uploads and file picking ([93bcd6a](https://github.com/cedricziel/folio/commit/93bcd6af0fad3ebfd18b2edd1551746c7fddc94a))
+* **apple:** support all iPad orientations for multitasking ([0952631](https://github.com/cedricziel/folio/commit/09526319f7c9bc2799028fe99f90931e643801b7))
+* **apple:** support all iPad orientations for multitasking ([#57](https://github.com/cedricziel/folio/issues/57)) ([429b777](https://github.com/cedricziel/folio/commit/429b7778822f0cb7982bc55a2908d467fe5c3fd9))
+* **apple:** wire AppIcon into the Folio target ([b540226](https://github.com/cedricziel/folio/commit/b54022694dc4bbfcc6121a1181edbca41f398db7))
+* **auth:** add the RFC 9207 iss parameter to authorization responses ([2e68e9c](https://github.com/cedricziel/folio/commit/2e68e9c16ca505acd121897b67d7075f94b085f9))
+* **auth:** bind CSRF tokens to the session with an HMAC and use __Host- cookies over https ([8b9ff88](https://github.com/cedricziel/folio/commit/8b9ff888be251c1b27edc061b18bc542351c8d9f))
+* **auth:** bound dynamic client registration and purge unused clients periodically ([f10ef6c](https://github.com/cedricziel/folio/commit/f10ef6c7b7c952c8a79b2ea80b8d61f8c47f6efd))
+* **auth:** configurable group separator and a warning for catch-all trusted proxies ([44c1a40](https://github.com/cedricziel/folio/commit/44c1a4073d7fdb1c85a60d94fb5db5f12b7d6371))
+* **auth:** create the first external user atomically ([bc3a096](https://github.com/cedricziel/folio/commit/bc3a0968f269855bafa0c753f2fa0c1aea495236))
+* **auth:** delete the previous session on login ([000d2ff](https://github.com/cedricziel/folio/commit/000d2ff7c5ceeb0310b1c6e0ca3654d13ec45370))
+* **auth:** derive issuer and cookie flags from public_url only and require it when exposed ([e203120](https://github.com/cedricziel/folio/commit/e20312023b9e2a89289c8ecc305054a635bb93e9))
+* **auth:** enforce documents:read/write scopes on bearer tokens for /api ([4bd7850](https://github.com/cedricziel/folio/commit/4bd78502dc7cc449f90285486a09c0d73bc29006))
+* **auth:** forbid framing and caching of login, setup and consent pages ([004984c](https://github.com/cedricziel/folio/commit/004984cf254addd9e30e5599c589d2f42136289c))
+* **auth:** group tokens into grants; revoke the family on refresh reuse and revoke ([dc4dd1d](https://github.com/cedricziel/folio/commit/dc4dd1dfe50e40a104ef3cbc5667330d64c4157d))
+* **auth:** harden OIDC token validation and discovery ([8612301](https://github.com/cedricziel/folio/commit/86123019f8dc0a3fa8c46eabde49ef5f0718efdb))
+* **auth:** harden the authorization server and login ([#55](https://github.com/cedricziel/folio/issues/55)) ([19312ba](https://github.com/cedricziel/folio/commit/19312bab207e28442e907d69253476cf9afc1a75)), closes [#48](https://github.com/cedricziel/folio/issues/48)
+* **auth:** ignore forward headers on OAuth, MCP and bearer-token requests ([97e6215](https://github.com/cedricziel/folio/commit/97e621598ef6a91f266aab01cd5fb7078f25a3e6))
+* **auth:** ignore forwarded groups unless configured and add role-based admin ([d50b486](https://github.com/cedricziel/folio/commit/d50b48614fce39b2bcb8376ae9244112001de555))
+* **auth:** keep a permanent owner that group and role mappings cannot demote ([26ab192](https://github.com/cedricziel/folio/commit/26ab192021861c202d8e34b9bad3d4634bc2e658))
+* **auth:** keep PWA assets public, refuse anonymous shares, serve /api resource metadata ([72bb5a9](https://github.com/cedricziel/folio/commit/72bb5a99162015f87c1372bd063db18c06bec407))
+* **auth:** let concurrent first forward-auth requests share one account ([03451f7](https://github.com/cedricziel/folio/commit/03451f7941f5e6d65935b5ba120af3ee3752fd60))
+* **auth:** make first-user creation atomic on PostgreSQL ([67053e1](https://github.com/cedricziel/folio/commit/67053e17207907762a6b15b50f2445f6bd9a1539))
+* **auth:** move the owner migration to 20261101220000 to avoid version clashes ([4b77b2b](https://github.com/cedricziel/folio/commit/4b77b2b9ba977c8cac1bb4165d43e09e99b61b5e))
+* **auth:** purge expired auth data in the background ([44e3fef](https://github.com/cedricziel/folio/commit/44e3feff03ce99a9443d5f39019aad291cab84fc))
+* **auth:** rate limit OIDC starts, bind the cookie to the host and hint the provider at logout ([469533f](https://github.com/cedricziel/folio/commit/469533f9afb26a3b28efc07976338d9346975c34))
+* **auth:** reject cross-origin writes that rely on the session cookie ([926a882](https://github.com/cedricziel/folio/commit/926a88295621d81bb47c1699d372c8b88e5b3bed))
+* **auth:** reject requests that repeat a forward identity header ([cd3ea1a](https://github.com/cedricziel/folio/commit/cd3ea1a56a99171a71d8cf34fe0828d574289b8b))
+* **auth:** renumber the OIDC migrations after main's ingestion ([0693a2d](https://github.com/cedricziel/folio/commit/0693a2d534c4183371541d4aa550ba6eb07ec41a))
+* **auth:** renumber the owner migration past main's ingestion one and satisfy newer clippy ([7421ed2](https://github.com/cedricziel/folio/commit/7421ed27cd2c4358bffa61053783ee47593ddaf3))
+* **auth:** require a one-time setup token while no user exists ([25ac050](https://github.com/cedricziel/folio/commit/25ac05011b8edc24bd29e347eb252b32f46842c0))
+* **auth:** serialise external group syncs per user ([0f27067](https://github.com/cedricziel/folio/commit/0f27067d82f36d64640cf0f81275d6174e8bc6db))
+* **auth:** shorter, reused and revocable forward-auth sessions ([293fe2f](https://github.com/cedricziel/folio/commit/293fe2f0df222d94e5baaf1bdb67d8c5ee56bee4))
+* **auth:** strip every forward identity header from untrusted peers ([5271c46](https://github.com/cedricziel/folio/commit/5271c4638f14a077bb4067ccc8ea4e03fb2d1a0c))
+* **auth:** throttle failed logins, cap password length and concurrent hashing ([712c6b8](https://github.com/cedricziel/folio/commit/712c6b8064b6d19562a6bec0904cc245cb643090))
+* **config:** read nested settings from double-underscore env vars ([685f920](https://github.com/cedricziel/folio/commit/685f9200aa32036adcc9d58cce68915ffe0d0b13))
+* **config:** read nested settings from double-underscore env vars ([#26](https://github.com/cedricziel/folio/issues/26)) ([b6f24ab](https://github.com/cedricziel/folio/commit/b6f24abcd989934ac719ba2242aae1fb57afa774))
+* **db:** drop duplicate health module declaration after rebase ([551cf93](https://github.com/cedricziel/folio/commit/551cf9320e9f6b3fcf64cec37e69fc862e55d5a7))
+* **db:** give the OAuth grants migration a unique version ([72c1285](https://github.com/cedricziel/folio/commit/72c1285e437f9a8cc0fa96fb7666878daad9f557))
+* **infra:** dedupe once-per-document runs with a unique index ([b7488dd](https://github.com/cedricziel/folio/commit/b7488dd43da2f920e3404f7524d0a720e1735415))
+* **mcp:** disable the endpoint by default and warn when it is enabled ([cf44377](https://github.com/cedricziel/folio/commit/cf44377a0659f9d696f8b6e5854f0b65b3a0f8c0))
+* **mcp:** rank exact matches first, validate tag names before writing, and report server identity ([8502fe2](https://github.com/cedricziel/folio/commit/8502fe2716c5596cd877dfacf2f78076307a326f))
+* **pipeline:** adapt to sqlx 0.9 and clippy, simplify test outcome template ([02a3687](https://github.com/cedricziel/folio/commit/02a36875f8978d0b40e2e41163e35d6b86ca7476))
+* **search:** fall back to text matching and drive the badge from stage status ([21a80da](https://github.com/cedricziel/folio/commit/21a80da594993fabbe7fa483265d872e8e7b2ef3))
+* **skill:** poll page_count and export VERIFY_DIR ([034c89c](https://github.com/cedricziel/folio/commit/034c89c47277e15164ddd528d350b64e89908e53))
+* **web:** call macros with the askama 0.16 syntax ([4be80a8](https://github.com/cedricziel/folio/commit/4be80a8f1dd3344872b29309cd9b1db90ff4e1f2))
+
 ## [0.1.0-alpha.1](https://github.com/cedricziel/folio/compare/v0.1.0...v0.1.0-alpha.1) (2026-11-01)
 
 

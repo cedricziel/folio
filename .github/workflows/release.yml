@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -59,6 +63,16 @@ jobs:
       tag: ${{ needs.release-please.outputs.version }}
       latest: ${{ !contains(needs.release-please.outputs.version, '-') }}
 
+  testflight:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/apple.yml
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+    secrets: inherit
+
   binaries:
     name: binary (${{ matrix.target }})
     needs: release-please
@@ -72,7 +86,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-latest
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write

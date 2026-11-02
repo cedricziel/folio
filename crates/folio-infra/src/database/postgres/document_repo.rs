@@ -55,9 +55,9 @@ async fn require_entry(
     vault: VaultId,
     id: Id,
 ) -> Result<()> {
-    let found: Option<(i32,)> = sqlx::query_as(&format!(
+    let found: Option<(i32,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT 1 FROM {table} WHERE id = $1 AND vault_id = $2"
-    ))
+    )))
     .bind(id)
     .bind(vault.0)
     .fetch_optional(conn)
@@ -76,9 +76,9 @@ async fn remap_by_name(
     id: Option<Id>,
 ) -> Result<Option<Id>> {
     let Some(id) = id else { return Ok(None) };
-    let name: Option<(String,)> = sqlx::query_as(&format!(
+    let name: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "SELECT name FROM {table} WHERE id = $1 AND vault_id = $2"
-    ))
+    )))
     .bind(id)
     .bind(from.0)
     .fetch_optional(&mut *conn)
@@ -86,11 +86,11 @@ async fn remap_by_name(
     .map_err(repo_err)?;
     let Some((name,)) = name else { return Ok(None) };
     let new_id = Id::new_v4();
-    let (target,): (Id,) = sqlx::query_as(&format!(
+    let (target,): (Id,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "INSERT INTO {table} (id, vault_id, name, created_at) VALUES ($1, $2, $3, now())
          ON CONFLICT (vault_id, name) DO UPDATE SET name = excluded.name
          RETURNING id"
-    ))
+    )))
     .bind(new_id)
     .bind(to.0)
     .bind(&name)

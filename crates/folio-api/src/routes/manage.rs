@@ -93,7 +93,7 @@ async fn manage_page(
     let tags = state.tag_repo.list(vault).await?;
 
     let template = ManageTemplate {
-        sidebar: Sidebar::load(&state, Nav::Manage).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::Manage).await?,
         title: "Manage - Folio".to_string(),
         correspondents,
         document_types,

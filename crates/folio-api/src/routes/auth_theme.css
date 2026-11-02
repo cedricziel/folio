@@ -1,36 +1,19 @@
-:root {
-  --paper: #f6f6f2; --paper-raised: #ffffff; --paper-sunken: #ecede7;
-  --rule: #ddded6; --control-border: #80847d;
-  --ink: #1a1f1c; --ink-muted: #585e59; --ink-faint: #7a7f7a;
-  --archive: #1f6b5c; --archive-strong: #16574a; --on-archive: #ffffff; --archive-tint: #e2eee9;
-  --focus: var(--archive);
-  --danger: #ad3a26; --danger-tint: #f7e4df; --pending: #80570a; --pending-tint: #f6ecd5;
-  --tag-sage: #dcebdc; --tag-slate: #dfe4ec; --tag-clay: #f1ddd3; --tag-ochre: #efe3c4; --tag-plum: #eadcea; --tag-sky: #d8e9f0;
-  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
-  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 10px;
-  --shadow-sheet: 0 1px 2px rgba(26,31,28,0.06), 0 6px 16px rgba(26,31,28,0.06);
-  --shadow-pop: 0 12px 32px rgba(26,31,28,0.14), 0 2px 6px rgba(26,31,28,0.08);
-  --font-sans: "Geist", -apple-system, "SF Pro Text", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "SF Mono", ui-monospace, Menlo, monospace;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #131615; --paper-raised: #1b1f1d; --paper-sunken: #0e1110;
-    --rule: #2a2f2c; --control-border: #646a66;
-    --ink: #e8ebe7; --ink-muted: #a3a9a4; --ink-faint: #7c827e;
-    --archive: #72c4ad; --archive-strong: #8fd4c0; --on-archive: #0b1c17; --archive-tint: #1b2e28;
-    --danger: #f08b77; --danger-tint: #3a1f19; --pending: #e6b65e; --pending-tint: #372c15;
-    --shadow-sheet: 0 1px 2px rgba(0,0,0,0.4), 0 6px 16px rgba(0,0,0,0.3);
-  }
-}
+/* Layout for the sign-in, setup and consent pages. Colors, fonts and the f-*
+   building blocks come from tokens.css and components.css, like the app. */
 .auth-page { max-width: 420px; margin: 0 auto; padding: var(--space-12) var(--space-4); }
-.auth-brand { font-size: 16px; font-weight: 600; margin: 0 0 var(--space-6); }
+.auth-brand {
+  display: flex; align-items: center; justify-content: center; gap: var(--space-2);
+  margin: 0 0 var(--space-6); font-size: 16px; font-weight: 600;
+}
+.auth-mark { display: inline-flex; color: var(--archive); }
+.auth-mark .mark { width: 28px; height: 28px; }
 .auth-card { padding: var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); }
 .auth-title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
 .auth-lede { margin: 0; color: var(--ink-muted); }
 .auth-form { display: flex; flex-direction: column; gap: var(--space-2); }
+.auth-form label { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--ink); }
 .auth-form .f-btn { margin-top: var(--space-3); align-self: flex-start; }
-.auth-form .f-meta { margin: 0; }
+.auth-hint { margin: 0; font-size: 13px; line-height: 18px; color: var(--ink-muted); }
 .auth-scopes { margin: 0; padding-left: var(--space-6); }
 .auth-actions { display: flex; gap: var(--space-2); }
 .f-input {
@@ -39,4 +22,3 @@
   background: var(--paper-sunken); color: var(--ink); font: inherit; font-size: 14px;
 }
 .f-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

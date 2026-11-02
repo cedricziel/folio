@@ -80,7 +80,7 @@ pub struct FolderConfig {
 }
 
 /// An IMAP account
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct EmailConfig {
     pub host: String,
@@ -115,6 +115,27 @@ pub struct EmailConfig {
     /// Target mailbox for `after_import = move`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_to: Option<String>,
+}
+
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("security", &self.security)
+            .field("accept_invalid_certs", &self.accept_invalid_certs)
+            .field("username", &self.username)
+            .field("password", &crate::redact::Redacted(&self.password))
+            .field("password_file", &self.password_file)
+            .field("mailboxes", &self.mailboxes)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("criteria", &self.criteria)
+            .field("allowed_content_types", &self.allowed_content_types)
+            .field("mail_body", &self.mail_body)
+            .field("after_import", &self.after_import)
+            .field("move_to", &self.move_to)
+            .finish()
+    }
 }
 
 fn yes() -> bool {
@@ -323,6 +344,19 @@ pub struct LedgerEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn email_debug_output_hides_the_password() {
+        let cfg: SourceConfig = serde_json::from_str(
+            r#"{"type":"email","host":"imap.test","username":"u","password":"hunter2"}"#,
+        )
+        .unwrap();
+
+        let debug = format!("{cfg:?}");
+
+        assert!(!debug.contains("hunter2"), "{debug}");
+        assert!(debug.contains("imap.test"));
+    }
 
     #[test]
     fn email_defaults_apply_when_deserializing() {

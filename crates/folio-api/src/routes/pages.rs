@@ -12,7 +12,8 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use folio_core::models::{
-    Correspondent, Document, DocumentSource, DocumentType, SourceKind, UpdateDocument,
+    Correspondent, Document, DocumentSource, DocumentStatus, DocumentType, SourceKind,
+    UpdateDocument, UserId, VaultId,
 };
 use folio_core::ports::{keys, DocumentStore, StoredObject};
 use folio_core::services::NewUpload;
@@ -20,7 +21,7 @@ use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::vault::DefaultVault;
+use crate::vault::{DefaultVault, Uploader};
 
 use super::file_response::{harden, harden_inline};
 use super::view::{self, Counts, DocumentRow, Nav, Sidebar, TagView};
@@ -61,8 +62,7 @@ struct IndexTemplate {
     active_filter: Option<String>,
     rows: Vec<DocumentRow>,
     total: usize,
-    review_count: usize,
-    first_review: String,
+    counts: Counts,
 }
 
 /// Query parameters for the index page
@@ -87,7 +87,7 @@ async fn index_page(
     State(state): State<AppState>,
     Query(query): Query<FilterQuery>,
 ) -> ApiResult<Html<String>> {
-    use folio_core::models::{DocumentFilter, DocumentStatus};
+    use folio_core::models::DocumentFilter;
 
     let correspondent_id = parse_id(&query.correspondent_id);
     let document_type_id = parse_id(&query.document_type_id);
@@ -96,8 +96,13 @@ async fn index_page(
     let view_all = filtered || query.view.as_deref() == Some("all");
 
     let all = state.document_repo.list(vault, None).await?;
-    let sidebar =
-        Sidebar::build(&state, if view_all { Nav::All } else { Nav::Inbox }, &all).await?;
+    let sidebar = Sidebar::build(
+        &state,
+        vault,
+        if view_all { Nav::All } else { Nav::Inbox },
+        &all,
+    )
+    .await?;
     let counts = Counts::from_documents(&all);
 
     let active_filter = correspondent_id
@@ -152,8 +157,7 @@ async fn index_page(
         active_filter,
         rows: view::rows(&state, documents).await?,
         total: counts.total,
-        review_count: counts.review,
-        first_review: counts.first_review,
+        counts,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -197,6 +201,7 @@ struct DocumentViewTemplate {
     document: Document,
     facts: String,
     reading: String,
+    failed: bool,
     pages: Vec<u32>,
     correspondent: Option<Correspondent>,
     document_type: Option<DocumentType>,
@@ -261,21 +266,24 @@ async fn document_detail(
     let pages: Vec<u32> = (1..=document.page_count.unwrap_or(1).max(1)).collect();
 
     let mut facts = Vec::new();
-    if let Some(count) = document.page_count {
+    // A file that could not be read has no trustworthy page count
+    let failed = document.status() == DocumentStatus::Failed;
+    if let Some(count) = document.page_count.filter(|_| !failed) {
         facts.push(format!(
             "{count} {}",
             if count == 1 { "page" } else { "pages" }
         ));
     }
-    if let Some(mime) = &document.mime_type {
-        facts.push(mime.clone());
+    if let Some(kind) = document.mime_type.as_deref().and_then(kind_label) {
+        facts.push(kind.to_string());
     }
     facts.push(format!("added {}", document.created_at.format("%Y-%m-%d")));
 
     let template = DocumentViewTemplate {
-        sidebar: Sidebar::load(&state, Nav::None).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::None).await?,
         facts: facts.join(" · "),
         reading: view::reading_label(document.page_count),
+        failed,
         pages,
         document,
         correspondent,
@@ -290,6 +298,15 @@ async fn document_detail(
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering document view: {}", e)
     })))
+}
+
+/// What people call the file: "PDF" or "Photo", not the MIME type
+fn kind_label(mime: &str) -> Option<&'static str> {
+    match mime {
+        "application/pdf" => Some("PDF"),
+        m if m.starts_with("image/") => Some("Photo"),
+        _ => None,
+    }
 }
 
 /// The first of `candidates` that exists; later ones are keys from before the
@@ -358,30 +375,21 @@ async fn document_thumbnail(
         }
     }
 
-    // Return a placeholder SVG for non-images or missing files
-    let is_pdf = document
-        .mime_type
-        .as_ref()
-        .map(|m| m == "application/pdf")
-        .unwrap_or(false);
+    // Non-images and missing files get a quiet sheet, not a loud file-type icon
+    Ok(placeholder_svg(placeholder_sheet(100, 100)))
+}
 
-    let placeholder = if is_pdf {
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-            <rect width="100" height="100" fill="#f1f5f9"/>
-            <path d="M25 10h35l15 15v60a5 5 0 01-5 5H25a5 5 0 01-5-5V15a5 5 0 015-5z" fill="#ef4444"/>
-            <path d="M60 10v15h15" fill="#dc2626"/>
-            <text x="50" y="60" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14" font-weight="bold">PDF</text>
+/// A transparent sheet with a small document outline, in `ink-faint`, readable on both grounds
+fn placeholder_sheet(width: u32, height: u32) -> String {
+    let (x, y) = (width / 2 - 9, height / 2 - 12);
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" width="{width}" height="{height}">
+            <g transform="translate({x} {y})" fill="none" stroke="#7a7f7a" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+                <path d="M2 1h10l6 6v16H2z"/>
+                <path d="M12 1v6h6"/>
+            </g>
         </svg>"##
-    } else {
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
-            <rect width="100" height="100" fill="#f1f5f9"/>
-            <path d="M25 10h35l15 15v60a5 5 0 01-5 5H25a5 5 0 01-5-5V15a5 5 0 015-5z" fill="#64748b"/>
-            <path d="M60 10v15h15" fill="#475569"/>
-            <text x="50" y="60" text-anchor="middle" fill="white" font-family="sans-serif" font-size="12" font-weight="bold">FILE</text>
-        </svg>"##
-    };
-
-    Ok(placeholder_svg(placeholder))
+    )
 }
 
 /// Static SVG generated by the server (inline is safe, the sandbox CSP still applies)
@@ -424,18 +432,8 @@ async fn document_page_thumbnail(
         return Ok(stream_object(object, "image/jpeg"));
     }
 
-    // Fallback: return a placeholder SVG for the page
-    let placeholder = format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 140" width="100" height="140">
-            <rect width="100" height="140" fill="#f1f5f9"/>
-            <path d="M15 10h50l15 15v100a5 5 0 01-5 5H15a5 5 0 01-5-5V15a5 5 0 015-5z" fill="#94a3b8"/>
-            <path d="M65 10v15h15" fill="#64748b"/>
-            <text x="50" y="80" text-anchor="middle" fill="white" font-family="sans-serif" font-size="16" font-weight="bold">{}</text>
-        </svg>"##,
-        page
-    );
-
-    Ok(placeholder_svg(placeholder))
+    // Fallback: a quiet placeholder for the page
+    Ok(placeholder_svg(placeholder_sheet(100, 140)))
 }
 
 /// Turbo Streams that bring a list and the counters up to date
@@ -450,29 +448,31 @@ pub(super) struct DocumentStreams {
 
 impl DocumentStreams {
     pub(super) async fn added(state: &AppState, document: Document) -> ApiResult<Self> {
+        let vault = document.vault_id;
         Ok(Self {
             row: Some(view::row(state, document).await?),
             prepend: true,
             removed: None,
-            counts: Counts::load(state).await?,
+            counts: Counts::load(state, vault).await?,
         })
     }
 
     pub(super) async fn changed(state: &AppState, document: Document) -> ApiResult<Self> {
+        let vault = document.vault_id;
         Ok(Self {
             row: Some(view::row(state, document).await?),
             prepend: false,
             removed: None,
-            counts: Counts::load(state).await?,
+            counts: Counts::load(state, vault).await?,
         })
     }
 
-    pub(super) async fn removed(state: &AppState, id: Uuid) -> ApiResult<Self> {
+    pub(super) async fn removed(state: &AppState, vault: VaultId, id: Uuid) -> ApiResult<Self> {
         Ok(Self {
             row: None,
             prepend: false,
             removed: Some(id),
-            counts: Counts::load(state).await?,
+            counts: Counts::load(state, vault).await?,
         })
     }
 
@@ -483,21 +483,25 @@ impl DocumentStreams {
 }
 
 /// Read the uploaded file out of a multipart body, store it and queue processing
-pub(super) async fn store_upload(
+pub(crate) async fn store_upload(
     state: &AppState,
+    vault: VaultId,
+    uploaded_by: Option<UserId>,
     mut multipart: Multipart,
+    source: SourceKind,
 ) -> ApiResult<Document> {
-    debug!("Starting document upload (HTML)");
+    debug!("Starting document upload");
 
     let mut title: Option<String> = None;
     let mut file_data: Option<Vec<u8>> = None;
     let mut filename: Option<String> = None;
     let mut mime_type: Option<String> = None;
 
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        error!("Multipart error: {}", e);
-        ApiError::bad_request(format!("Invalid multipart data: {}", e))
-    })? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| multipart_error("Invalid multipart data", e))?
+    {
         let name = field.name().unwrap_or("").to_string();
         debug!("Processing field: {}", name);
 
@@ -506,7 +510,7 @@ pub(super) async fn store_upload(
                 let text = field
                     .text()
                     .await
-                    .map_err(|e| ApiError::bad_request(format!("Invalid title: {}", e)))?;
+                    .map_err(|e| multipart_error("Invalid title", e))?;
                 if !text.is_empty() {
                     title = Some(text);
                 }
@@ -518,7 +522,7 @@ pub(super) async fn store_upload(
                     field
                         .bytes()
                         .await
-                        .map_err(|e| ApiError::bad_request(format!("Failed to read file: {}", e)))?
+                        .map_err(|e| multipart_error("Failed to read file", e))?
                         .to_vec(),
                 );
             }
@@ -542,8 +546,9 @@ pub(super) async fn store_upload(
                 filename: filename.unwrap_or_else(|| "upload".to_string()),
                 mime_type: Some(mime_type),
                 data: file_data,
-                source: DocumentSource::of(SourceKind::Upload),
+                source: DocumentSource::of(source),
                 tag_ids: Vec::new(),
+                uploaded_by,
             },
         )
         .await?;
@@ -553,12 +558,20 @@ pub(super) async fn store_upload(
     Ok(document)
 }
 
+/// Keeps the status the multipart parser chose, such as 413 for an oversized body
+fn multipart_error(context: &str, e: axum::extract::multipart::MultipartError) -> ApiError {
+    error!("Multipart error: {}", e);
+    ApiError::new(e.status(), format!("{context}: {}", e.body_text()))
+}
+
 /// Upload a document (returns Turbo Stream)
 async fn upload_document(
+    DefaultVault(vault): DefaultVault,
+    Uploader(uploader): Uploader,
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let document = store_upload(&state, multipart).await?;
+    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Upload).await?;
     let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())

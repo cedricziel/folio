@@ -99,7 +99,7 @@ async fn rows(DefaultVault(vault): DefaultVault, state: &AppState) -> ApiResult<
 
 async fn list_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
     render(ListTemplate {
-        sidebar: Sidebar::load(&state, Nav::Settings).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Sources - Folio".into(),
         rows: rows(&state).await?,
         notice: None,
@@ -113,7 +113,7 @@ async fn test_saved(
     let def = find(&state, id).await?;
     let result = run_test(&state, &def).await;
     render(ListTemplate {
-        sidebar: Sidebar::load(&state, Nav::Settings).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Sources - Folio".into(),
         rows: rows(&state).await?,
         notice: Some(Notice {
@@ -310,7 +310,7 @@ async fn form(
     notice: Option<Notice>,
 ) -> ApiResult<Html<String>> {
     render(FormTemplate {
-        sidebar: Sidebar::load(state, Nav::Settings).await?,
+        sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
         title: format!(
             "{} - Folio",
             if source_id.is_some() {

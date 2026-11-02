@@ -5,10 +5,12 @@ pub mod auth;
 pub(crate) mod correspondents;
 pub(crate) mod document_types;
 pub(crate) mod documents;
+mod error_pages;
 pub(crate) mod events;
 mod file_response;
 mod health;
 mod manage;
+mod oidc;
 mod pages;
 mod pwa;
 mod settings;
@@ -64,10 +66,15 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         // Login, setup and OAuth authorization server
         .merge(auth_routes)
         // Static files
-        .merge(assets::router());
+        .merge(assets::router())
+        // Unknown paths answer 404 through the layers, so browsers get an HTML page
+        .fallback(|| async { axum::http::StatusCode::NOT_FOUND });
+
+    let html_errors = axum::middleware::from_fn_with_state(state.clone(), error_pages::html_errors);
 
     let router = crate::telemetry::instrument(routes)
         // Middleware
+        .layer(html_errors)
         .layer(default_vault)
         .layer(enforcement)
         .layer(forward)
