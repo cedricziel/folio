@@ -447,3 +447,19 @@ async fn server_identifies_as_folio() {
     assert_eq!(server.name, "folio");
     assert_eq!(server.version, env!("CARGO_PKG_VERSION"));
 }
+
+#[tokio::test]
+async fn trusted_stdio_mutations_have_no_user_actor() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Invoice", "total due").await;
+    let client = fx.in_process_client().await;
+    common::call_ok(
+        &client,
+        "add_tags",
+        json!({
+            "id": doc.id.to_string(), "tags": ["system actor"], "actor": "forged"
+        }),
+    )
+    .await;
+    assert_eq!(*fx.tag_actors.lock().unwrap(), vec![None]);
+}

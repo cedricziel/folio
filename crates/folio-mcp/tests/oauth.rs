@@ -630,3 +630,76 @@ async fn assert_deleted_tag_is_not_recreated(tool: &'static str) {
     assert!(fx.library.list_tags(server.vault).await.unwrap().is_empty());
     let _ = client.cancel().await;
 }
+
+#[tokio::test]
+async fn mutation_actor_comes_from_bearer_auth_instead_of_tool_arguments() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Invoice", "total due").await;
+    let server = serve(&fx).await;
+    issue(
+        &server,
+        "actor-token",
+        &["documents:read", "documents:write"],
+    )
+    .await;
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+            .auth_header("actor-token"),
+    );
+    let client = ().serve(transport).await.unwrap();
+    common::call_ok(
+        &client,
+        "add_tags",
+        json!({
+            "id": doc.id.to_string(), "tags": ["actor audit"],
+            "actor": "forged", "created_by": "forged"
+        }),
+    )
+    .await;
+    assert_eq!(
+        *fx.tag_actors.lock().unwrap(),
+        vec![Some(folio_core::models::UserId::from("u1"))]
+    );
+    assert_eq!(folio_core::mutation::current_actor(), None);
+}
+
+#[tokio::test]
+async fn personal_token_mutations_record_the_token_owner_as_actor() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Invoice", "total due").await;
+    let server = serve(&fx).await;
+    issue(&server, "setup-token", &["documents:read"]).await;
+    server
+        .store
+        .insert_personal_token(folio_auth::PersonalToken {
+            id: "actor-pat".into(),
+            user_id: "u1".into(),
+            name: "actor test".into(),
+            token_hash: hash_token("folio_pat_actor"),
+            prefix: "folio_pat_actor".into(),
+            audience: server.url.clone(),
+            scopes: vec!["documents:read".into(), "documents:write".into()],
+            created_at: 1,
+            expires_at: i64::MAX / 2,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+            .auth_header("folio_pat_actor"),
+    );
+    let client = ().serve(transport).await.unwrap();
+    common::call_ok(
+        &client,
+        "add_tags",
+        json!({
+            "id": doc.id.to_string(), "tags": ["token actor"], "actor": "forged"
+        }),
+    )
+    .await;
+    assert_eq!(
+        *fx.tag_actors.lock().unwrap(),
+        vec![Some(folio_core::models::UserId::from("u1"))]
+    );
+}

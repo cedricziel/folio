@@ -391,3 +391,12 @@ On macOS, sandbox restrictions can block system networking initialization,
 loopback listeners, or the Docker socket. Rerun with those capabilities while
 retaining temporary data and test credentials. Record a skipped backend as
 unverified.
+
+## Verify mutation actors
+
+Run `RUSTC_WRAPPER= cargo test -p folio-core --lib` and
+`RUSTC_WRAPPER= cargo test -p folio-api --test mutation_actor`, then the MCP suite.
+These regressions cover server-derived session, OAuth, and personal-token actors,
+forged input, optional authentication, concurrent requests, cancellation, and
+system task isolation. HTTP/MCP fixtures use temporary databases, test identities,
+and local transports; they do not access user sessions or credentials.

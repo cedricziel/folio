@@ -412,11 +412,11 @@ pub(crate) fn is_exempt(path: &str) -> bool {
 /// Requires a session (web UI) or an `/api`-scoped bearer token (API) on every
 /// route except the exemptions above. `/mcp` is guarded by its own bearer layer.
 /// Web requests are redirected to `/login`, API requests get a 401.
-pub async fn enforce_auth(
-    State(auth): State<AuthState>,
-    mut request: Request,
-    next: Next,
-) -> Response {
+pub async fn enforce_auth(State(auth): State<AuthState>, request: Request, next: Next) -> Response {
+    folio_core::mutation::with_actor(None, enforce_auth_inner(auth, request, next)).await
+}
+
+async fn enforce_auth_inner(auth: AuthState, mut request: Request, next: Next) -> Response {
     let path = request.uri().path().to_string();
     if is_exempt(&path) {
         return next.run(request).await;
@@ -448,8 +448,9 @@ pub async fn enforce_auth(
                 if !context.has_scope(needed) {
                     return insufficient_scope(needed);
                 }
+                let actor = folio_core::models::UserId::from(context.user_id.as_str());
                 request.extensions_mut().insert(context);
-                return next.run(request).await;
+                return folio_core::mutation::with_actor(Some(actor), next.run(request)).await;
             }
         }
         return api_unauthorized(&validator, request.headers());
@@ -459,7 +460,11 @@ pub async fn enforce_auth(
             return StatusCode::FORBIDDEN.into_response();
         }
         let sidebar_user = SidebarUser::new(&user, auth.csrf_session_token(&session_id));
-        return CURRENT_USER.scope(sidebar_user, next.run(request)).await;
+        return folio_core::mutation::with_actor(
+            Some(folio_core::models::UserId::from(user.id.as_str())),
+            CURRENT_USER.scope(sidebar_user, next.run(request)),
+        )
+        .await;
     }
     if !auth.required {
         return next.run(request).await;
