@@ -2,7 +2,9 @@
 
 mod correspondent;
 mod document;
+mod document_date;
 mod document_page;
+mod document_review;
 mod document_type;
 mod ingest;
 mod metadata;
@@ -18,7 +20,9 @@ pub use document::{
     CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
     UpdateDocument,
 };
+pub use document_date::DocumentDate;
 pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
+pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
