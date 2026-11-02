@@ -62,6 +62,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
     let state = AppState::new(
+        repos.saved_views,
         repos.documents,
         repos.tags,
         repos.correspondents,
