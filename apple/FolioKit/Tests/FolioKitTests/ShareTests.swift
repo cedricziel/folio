@@ -132,7 +132,7 @@ struct ShareViewModelTests {
         let model = ShareViewModel(
             files: [file("Bill.pdf")], service: MockFolioService(), background: RecordingUploader()
         )
-        #expect(model.title == "Bill")
+        #expect(model.title == "Bill.pdf")
         let many = ShareViewModel(
             files: [file("a.pdf"), file("b.pdf")], service: MockFolioService(), background: RecordingUploader()
         )
@@ -155,6 +155,7 @@ struct ShareViewModelTests {
         await model.upload()
         #expect(model.state == .done)
         #expect(background.enqueued.count == 1)
+        #expect(background.enqueued.first?.title == "a.pdf")
         #expect(await service.uploads.isEmpty)
     }
 
