@@ -67,7 +67,7 @@ struct RootView: View {
 
     var body: some View {
         if let url = model.serverURL {
-            InboxView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
+            WorkspaceView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
                 .id(url)
         } else {
             OnboardingView(model: model)

@@ -9,9 +9,12 @@ struct InboxView: View {
     let service: any FolioService
     let onSignOut: () -> Void
 
-    @State private var list: DocumentListViewModel
+    @Bindable var session: DocumentBrowserSession
+    let onNavigate: (WorkspaceDestination) -> Void
+    let onOpenDocument: (Document.ID) -> Void
+
+    private var list: DocumentListViewModel { session.list }
     @State private var uploads: UploadViewModel
-    @State private var selection: Document.ID?
     @State private var showFileImporter = false
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var pendingDelete: Document?
@@ -21,12 +24,19 @@ struct InboxView: View {
     @FocusState private var searchFocused: Bool
     private let router = IntentRouter.shared
 
-    init(serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void) {
+    init(
+        serverURL: URL, service: any FolioService, session: DocumentBrowserSession,
+        onSignOut: @escaping () -> Void,
+        onNavigate: @escaping (WorkspaceDestination) -> Void,
+        onOpenDocument: @escaping (Document.ID) -> Void
+    ) {
         self.serverURL = serverURL
         self.service = service
+        self.session = session
         self.onSignOut = onSignOut
-        let list = DocumentListViewModel(service: service)
-        _list = State(initialValue: list)
+        self.onNavigate = onNavigate
+        self.onOpenDocument = onOpenDocument
+        let list = session.list
         _uploads = State(
             initialValue: UploadViewModel(service: service) {
                 Task { await list.load() }
@@ -35,25 +45,31 @@ struct InboxView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationStack(path: $session.path) {
             sidebar
-        } detail: {
-            if let row = list.rows.first(where: { $0.id == selection }) {
-                DocumentDetailView(
-                    model: DocumentDetailViewModel(
-                        document: row.document,
-                        correspondent: list.correspondentName(for: row.document),
-                        type: list.typeName(for: row.document),
-                        service: service
-                    )
-                )
-                .id(row.id)
-            } else {
-                ContentUnavailableView(
-                    "Select a document", systemImage: "doc.text",
-                    description: Text("Pick one from the inbox to read it here.")
-                )
-            }
+                .navigationDestination(for: Document.ID.self) { id in
+                    if let row = list.rows.first(where: { $0.id == id }) {
+                        DocumentDetailView(
+                            model: DocumentDetailViewModel(
+                                document: row.document,
+                                correspondent: list.correspondentName(for: row.document),
+                                type: list.typeName(for: row.document),
+                                service: service
+                            )
+                        )
+                        .id(row.id)
+                    } else if list.phase == .loading || list.phase == .idle {
+                        ProgressView("Loading document…")
+                    } else {
+                        ContentUnavailableView(
+                            "Document unavailable", systemImage: "doc.text",
+                            description: Text("Return to the library and try again.")
+                        )
+                    }
+                }
+        }
+        .onChange(of: session.path) { _, path in
+            if let id = path.last { session.selection = id }
         }
         // Keep loading alive when compact navigation hides the sidebar.
         .task(id: list.searchText) { await list.search(list.searchText) }
@@ -75,10 +91,10 @@ struct InboxView: View {
         InboxActions(
             upload: { showFileImporter = true },
             scan: scanAction,
-            showInbox: { list.scope = .inbox },
-            showAll: { list.scope = .all },
+            showInbox: { onNavigate(.inbox) },
+            showAll: { onNavigate(.all) },
             find: { searchFocused = true },
-            deleteSelected: list.rows.first(where: { $0.id == selection }).map { row in
+            deleteSelected: list.rows.first(where: { $0.id == session.selection }).map { row in
                 { pendingDelete = row.document }
             }
         )
@@ -104,26 +120,27 @@ struct InboxView: View {
         case .upload:
             showFileImporter = true
         case .inbox:
-            list.scope = .inbox
+            onNavigate(.inbox)
         case let .document(id):
-            list.scope = .all
-            list.searchText = ""
-            selection = id
+            onOpenDocument(id)
         }
     }
 
     private var sidebar: some View {
-        List(selection: $selection) {
+        @Bindable var list = session.list
+        return List(selection: $session.selection) {
             ForEach(list.rows) { row in
-                DocumentRowView(row: row)
-                    .tag(row.id)
-                    .listRowBackground(row.id == selection ? Color.archiveTint : Color.paper)
-                    .listRowSeparatorTint(.rule)
-                    .swipeActions {
-                        Button("Delete", systemImage: "trash", role: .destructive) {
-                            pendingDelete = row.document
-                        }
+                NavigationLink(value: row.id) {
+                    DocumentRowView(row: row)
+                }
+                .tag(row.id)
+                .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
+                .listRowSeparatorTint(.rule)
+                .swipeActions {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        pendingDelete = row.document
                     }
+                }
             }
         }
         .listStyle(.plain)
@@ -177,7 +194,12 @@ struct InboxView: View {
             "Something went wrong",
             isPresented: Binding(
                 get: { problem != nil || list.actionError != nil },
-                set: { if !$0 { problem = nil; list.dismissActionError() } })
+                set: {
+                    if !$0 {
+                        problem = nil; list.dismissActionError()
+                    }
+                }
+            )
         ) {
             Button("OK") {}
         } message: {
@@ -196,7 +218,8 @@ struct InboxView: View {
                     if !$0 {
                         pendingDelete = nil
                     }
-                }),
+                }
+            ),
             presenting: pendingDelete
         ) { document in
             Button("Delete", role: .destructive) {
