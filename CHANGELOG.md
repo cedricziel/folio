@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/cedricziel/folio/compare/v0.3.0...v0.3.1) (2026-11-02)
+
+### Fixed
+
+- Preserve document loading across navigation in the Apple app. ([#112](https://github.com/cedricziel/folio/pull/112))
+- Prevent the macOS app from crashing when login completes. ([#114](https://github.com/cedricziel/folio/pull/114))
+
 ## [0.3.0](https://github.com/cedricziel/folio/compare/v0.2.0...v0.3.0) (2026-11-02)
 
 
