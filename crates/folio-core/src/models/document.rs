@@ -230,6 +230,7 @@ pub struct UpdateDocument {
     pub content: Option<String>,
     pub correspondent_id: Option<Option<Id>>,
     pub document_type_id: Option<Option<Id>>,
+    pub tag_ids: Option<Vec<Id>>,
 }
 
 /// Filter criteria for listing documents

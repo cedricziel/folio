@@ -19,10 +19,12 @@ use folio_core::models::{
     WorkflowTrigger,
 };
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentRepository, OutboxStore, TagRepository, WorkflowRepository,
 };
-use folio_core::services::{EventingDocumentRepository, WorkflowEngine};
-use folio_core::{DocumentEvent, EventBroadcaster};
+use folio_core::services::{
+    BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher, WorkflowEngine,
+};
+use folio_core::{DocumentEvent, EventBroadcaster, EventOrigin, OutboxEvent};
 use folio_infra::workflow::{sign, RunOutcome, WebhookRequest, MAX_ATTEMPTS};
 use folio_infra::{
     Database, JobQueue, ObjectStoreDocumentStore, StorageFileMetadata, WebhookClient,
@@ -105,12 +107,12 @@ impl TestServer {
 
 struct Harness {
     workflows: Arc<dyn WorkflowRepository>,
-    raw_documents: Arc<dyn DocumentRepository>,
-    documents: Arc<EventingDocumentRepository>,
+    documents: Arc<dyn DocumentRepository>,
     tags: Arc<dyn TagRepository>,
     correspondents: Arc<dyn CorrespondentRepository>,
     queue: JobQueue,
-    events: EventBroadcaster,
+    outbox: Arc<dyn OutboxStore>,
+    pool: sqlx::SqlitePool,
     engine: Arc<WorkflowEngine>,
     runner: WorkflowRunner,
     dir: std::path::PathBuf,
@@ -132,13 +134,11 @@ impl Harness {
         database.migrate().await.unwrap();
         let repos = database.repositories().await;
 
-        let events = EventBroadcaster::default();
+        let Database::Sqlite(pool) = database else {
+            unreachable!("connected to SQLite");
+        };
         let workflows = repos.workflows;
-        let raw_documents = repos.documents;
-        let documents = Arc::new(EventingDocumentRepository::new(
-            raw_documents.clone(),
-            events.clone(),
-        ));
+        let documents = repos.documents;
         let tags = repos.tags;
         let correspondents = repos.correspondents;
         let queue = repos.jobs;
@@ -146,10 +146,9 @@ impl Harness {
         let engine = Arc::new(
             WorkflowEngine::new(
                 workflows.clone(),
-                raw_documents.clone(),
+                documents.clone(),
                 correspondents.clone(),
                 repos.document_types,
-                Arc::new(queue.clone()),
                 Arc::new(StorageFileMetadata::new(Arc::new(
                     ObjectStoreDocumentStore::in_memory(),
                 ))),
@@ -159,18 +158,18 @@ impl Harness {
         );
         let runner = WorkflowRunner::new(
             workflows.clone(),
-            raw_documents.clone(),
+            repos.workflow_documents,
             WebhookClient::new(),
         );
 
         Self {
             workflows,
-            raw_documents,
             documents,
             tags,
             correspondents,
             queue,
-            events,
+            outbox: repos.outbox,
+            pool,
             engine,
             runner,
             dir,
@@ -235,13 +234,49 @@ impl Harness {
             workflow.trigger,
             Some(document_id),
             r#"{"event":"document.uploaded","version":1}"#.into(),
-        );
+        )
+        .with_actions(workflow.actions.clone());
         assert!(self.workflows.create_run(&run).await.unwrap());
         run
     }
 
     async fn run(&self, id: Id) -> WorkflowRun {
         self.workflows.find_run(id).await.unwrap().unwrap()
+    }
+
+    /// An event as the dispatcher would hand it over, with a fresh id
+    fn event(&self, event: DocumentEvent) -> OutboxEvent {
+        static NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1_000_000);
+        OutboxEvent {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            event,
+            origin: EventOrigin::User,
+            created_at: chrono::Utc::now(),
+            attempts: 1,
+        }
+    }
+
+    async fn handle(&self, event: DocumentEvent) -> Vec<WorkflowRun> {
+        self.engine.handle(&self.event(event)).await.unwrap()
+    }
+
+    fn dispatcher(&self, consumers: Vec<Arc<dyn EventConsumer>>) -> Arc<OutboxDispatcher> {
+        Arc::new(OutboxDispatcher::new(
+            self.outbox.clone(),
+            consumers,
+            DispatcherConfig {
+                poll_interval: Duration::from_millis(20),
+                ..Default::default()
+            },
+        ))
+    }
+
+    /// Everything not yet claimed, as a dispatcher would see it
+    async fn pending_events(&self) -> Vec<OutboxEvent> {
+        self.outbox
+            .claim(1000, chrono::Duration::seconds(30), 10)
+            .await
+            .unwrap()
     }
 }
 
@@ -324,12 +359,10 @@ async fn engine_only_queues_workflows_whose_conditions_match() {
 
     let doc = h.document("scan-001.pdf", "application/pdf").await;
     let runs = h
-        .engine
-        .handle(&DocumentEvent::Created {
+        .handle(DocumentEvent::Created {
             document_id: doc.id,
         })
-        .await
-        .unwrap();
+        .await;
 
     let mut matched: Vec<Id> = runs.iter().map(|r| r.workflow_id).collect();
     matched.sort();
@@ -358,9 +391,9 @@ async fn tag_conditions_are_evaluated_against_the_documents_tags() {
         document_id: doc.id,
     };
 
-    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert!(h.handle(event.clone()).await.is_empty());
     h.documents.add_tag(doc.id, tag).await.unwrap();
-    let runs = h.engine.handle(&event).await.unwrap();
+    let runs = h.handle(event).await;
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].workflow_id, workflow.id);
 }
@@ -373,7 +406,7 @@ async fn upload_creates_exactly_one_uploaded_run() {
         .await;
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-    tokio::spawn(h.engine.clone().run(h.events.subscribe(), shutdown_rx));
+    tokio::spawn(h.dispatcher(vec![h.engine.clone()]).run(shutdown_rx));
 
     let doc = h.document("a.pdf", "application/pdf").await;
     // Bookkeeping writes after the upload must not fire anything.
@@ -395,12 +428,10 @@ async fn upload_creates_exactly_one_uploaded_run() {
 
     // A repeated event for the same document is ignored.
     let again = h
-        .engine
-        .handle(&DocumentEvent::Created {
+        .handle(DocumentEvent::Created {
             document_id: doc.id,
         })
-        .await
-        .unwrap();
+        .await;
     assert!(again.is_empty());
     assert_eq!(
         h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
@@ -419,15 +450,10 @@ async fn concurrent_events_still_create_one_run() {
     let handles: Vec<_> = (0..8)
         .map(|_| {
             let engine = h.engine.clone();
-            tokio::spawn(async move {
-                engine
-                    .handle(&DocumentEvent::Created {
-                        document_id: doc.id,
-                    })
-                    .await
-                    .unwrap()
-                    .len()
-            })
+            let event = h.event(DocumentEvent::Created {
+                document_id: doc.id,
+            });
+            tokio::spawn(async move { engine.handle(&event).await.unwrap().len() })
         })
         .collect();
     let mut created = 0;
@@ -458,8 +484,8 @@ async fn processed_fires_once_per_document() {
         document_id: doc.id,
     };
 
-    assert_eq!(h.engine.handle(&event).await.unwrap().len(), 1);
-    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert_eq!(h.handle(event.clone()).await.len(), 1);
+    assert!(h.handle(event).await.is_empty());
     assert_eq!(
         h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
         1
@@ -484,7 +510,7 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .await
         .unwrap();
     let doc = h.document("gone.pdf", "application/pdf").await;
-    h.raw_documents
+    h.documents
         .update(
             doc.id,
             UpdateDocument {
@@ -495,14 +521,13 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .await
         .unwrap();
 
-    let mut rx = h.events.subscribe();
     h.documents.delete(doc.id).await.unwrap();
-    let event = loop {
-        let event = rx.recv().await.unwrap();
-        if matches!(event, DocumentEvent::Deleted { .. }) {
-            break event;
-        }
-    };
+    let event = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|e| matches!(e.event, DocumentEvent::Deleted { .. }))
+        .expect("the delete left an event in the outbox");
 
     let runs = h.engine.handle(&event).await.unwrap();
     assert_eq!(runs.len(), 1);
@@ -708,11 +733,11 @@ async fn retry_resumes_after_the_actions_that_already_finished() {
 
     assert_eq!(server.hits("first"), 1);
     assert_eq!(server.hits("second"), 2);
-    assert_eq!(h.raw_documents.get_tags(doc.id).await.unwrap().len(), 1);
+    assert_eq!(h.documents.get_tags(doc.id).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
-async fn local_actions_change_the_document_without_emitting_events() {
+async fn local_actions_are_announced_but_never_trigger_workflows() {
     let h = Harness::new().await;
     let tag = h.tag("auto").await;
     let sender = h
@@ -734,22 +759,49 @@ async fn local_actions_change_the_document_without_emitting_events() {
             ],
         )
         .await;
+    let on_update = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions::default(),
+            unreachable_hook(),
+        )
+        .await;
     let doc = h.document("a.pdf", "application/pdf").await;
     let run = h.run_for(&workflow, doc.id).await;
+    // The upload's own event is not under test
+    h.pending_events().await;
 
-    let mut rx = h.events.subscribe();
     assert_eq!(
         h.runner.execute(run.id).await.unwrap(),
         RunOutcome::Succeeded
     );
 
-    let updated = h.raw_documents.find_by_id(doc.id).await.unwrap().unwrap();
+    let updated = h.documents.find_by_id(doc.id).await.unwrap().unwrap();
     assert_eq!(updated.correspondent_id, Some(sender.id));
-    assert_eq!(h.raw_documents.get_tags(doc.id).await.unwrap()[0].id, tag);
-    assert!(
-        rx.try_recv().is_err(),
-        "workflow edits must not re-trigger workflows"
-    );
+    assert_eq!(h.documents.get_tags(doc.id).await.unwrap()[0].id, tag);
+
+    let events = h.pending_events().await;
+    assert_eq!(events.len(), 2, "the tag edit and the correspondent change");
+    assert!(events.iter().all(|e| e.origin == EventOrigin::Workflow
+        && matches!(e.event, DocumentEvent::Updated { document_id } if document_id == doc.id)));
+
+    // Dispatching them reaches live clients but starts no workflow.
+    let broadcaster = EventBroadcaster::default();
+    let mut live = broadcaster.subscribe();
+    for event in &events {
+        h.engine.consume(event).await.unwrap();
+        BroadcastConsumer(broadcaster.clone())
+            .consume(event)
+            .await
+            .unwrap();
+    }
+    assert!(h
+        .workflows
+        .list_runs(on_update.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(live.try_recv().unwrap().id, events[0].id);
 }
 
 #[tokio::test]
@@ -785,4 +837,138 @@ async fn deleting_a_workflow_removes_its_runs() {
     h.workflows.delete(workflow.id).await.unwrap();
     assert!(h.workflows.find_run(run.id).await.unwrap().is_none());
     assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+}
+
+#[tokio::test]
+async fn a_lagging_broadcast_does_not_lose_runs() {
+    let h = Harness::new().await;
+    let workflow = h
+        .webhook_workflow("http://127.0.0.1:1/x".into(), None)
+        .await;
+    // A subscriber that never reads overflows the tiny buffer many times over.
+    let broadcaster = EventBroadcaster::new(2);
+    let _idle = broadcaster.subscribe();
+    for i in 0..30 {
+        h.document(&format!("{i}.pdf"), "application/pdf").await;
+    }
+
+    let dispatcher = h.dispatcher(vec![
+        h.engine.clone(),
+        Arc::new(BroadcastConsumer(broadcaster)),
+    ]);
+    while dispatcher.dispatch_once().await.unwrap() > 0 {}
+
+    assert_eq!(
+        h.workflows.list_runs(workflow.id, 100).await.unwrap().len(),
+        30
+    );
+    assert_eq!(h.queue.pending_count().await.unwrap(), 30);
+}
+
+#[tokio::test]
+async fn handling_an_event_twice_creates_one_run() {
+    let h = Harness::new().await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let doc = h.document("a.pdf", "application/pdf").await;
+    let event = h.event(DocumentEvent::Updated {
+        document_id: doc.id,
+    });
+
+    assert_eq!(h.engine.handle(&event).await.unwrap().len(), 1);
+    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert_eq!(
+        h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
+        1
+    );
+    assert_eq!(h.queue.pending_count().await.unwrap(), 1);
+
+    // A later, distinct update is a new occurrence and runs again.
+    assert_eq!(
+        h.handle(DocumentEvent::Updated {
+            document_id: doc.id
+        })
+        .await
+        .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn one_failing_workflow_does_not_skip_the_others() {
+    let h = Harness::new().await;
+    let broken = h
+        .webhook_workflow("http://127.0.0.1:1/a".into(), None)
+        .await;
+    let healthy = h
+        .webhook_workflow("http://127.0.0.1:1/b".into(), None)
+        .await;
+    let doc = h.document("a.pdf", "application/pdf").await;
+    let event = h.event(DocumentEvent::Created {
+        document_id: doc.id,
+    });
+
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TRIGGER refuse BEFORE INSERT ON workflow_runs
+         WHEN NEW.workflow_id = '{}' BEGIN SELECT RAISE(ABORT, 'refused'); END",
+        broken.id
+    )))
+    .execute(&h.pool)
+    .await
+    .unwrap();
+    assert!(h.engine.handle(&event).await.is_err());
+    assert_eq!(
+        h.workflows.list_runs(healthy.id, 10).await.unwrap().len(),
+        1,
+        "the healthy workflow ran despite the failure before it"
+    );
+
+    // The dispatcher retries the event: the missing run appears, none is duplicated.
+    sqlx::query("DROP TRIGGER refuse")
+        .execute(&h.pool)
+        .await
+        .unwrap();
+    let retried = h.engine.handle(&event).await.unwrap();
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].workflow_id, broken.id);
+    assert_eq!(h.queue.pending_count().await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn editing_a_workflow_does_not_change_queued_runs() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let workflow = h.webhook_workflow(server.url("before"), None).await;
+    let doc = h.document("a.pdf", "application/pdf").await;
+    let runs = h
+        .handle(DocumentEvent::Created {
+            document_id: doc.id,
+        })
+        .await;
+
+    h.workflows
+        .update(
+            workflow.id,
+            WorkflowInput {
+                name: workflow.name,
+                enabled: true,
+                trigger: workflow.trigger,
+                conditions: workflow.conditions,
+                actions: vec![webhook(server.url("after"), None)],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        h.runner.execute(runs[0].id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+
+    assert_eq!(server.hits("before"), 1);
+    assert_eq!(server.hits("after"), 0);
 }

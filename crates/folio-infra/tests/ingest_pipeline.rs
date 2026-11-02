@@ -7,7 +7,6 @@ use folio_core::models::{
     IngestOutcome, SourceConditions, SourceKind, TextMatch, WorkflowAction, WorkflowConditions,
     WorkflowInput, WorkflowTrigger,
 };
-use folio_core::DocumentEvent;
 
 #[tokio::test]
 async fn imports_with_source_tags_and_the_stored_file() {
@@ -159,13 +158,7 @@ async fn uploaded_workflows_see_the_source_in_conditions_and_payload() {
     else {
         panic!("imported")
     };
-    let runs = h
-        .engine
-        .handle(&DocumentEvent::Created {
-            document_id: doc.id,
-        })
-        .await
-        .unwrap();
+    let runs = h.handle_created(doc.id).await;
 
     assert_eq!(runs.len(), 1, "the folder rule must not match a mail");
     let payload: serde_json::Value = serde_json::from_str(&runs[0].payload).unwrap();

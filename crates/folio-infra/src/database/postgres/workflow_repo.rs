@@ -9,6 +9,9 @@ use folio_core::error::{Error, Result};
 use folio_core::models::{Id, RunStatus, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger};
 use folio_core::ports::WorkflowRepository;
 
+use crate::queue::{insert_job_postgres as insert_job, JobType};
+use crate::workflow::MAX_ATTEMPTS;
+
 /// PostgreSQL-backed workflow repository
 #[derive(Clone)]
 pub struct PostgresWorkflowRepository {
@@ -70,6 +73,8 @@ struct RunRow {
     last_error: Option<String>,
     response_status: Option<i32>,
     payload: String,
+    actions: String,
+    source_event_id: Option<i64>,
     created_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
 }
@@ -89,6 +94,8 @@ impl TryFrom<RunRow> for WorkflowRun {
             last_error: row.last_error,
             response_status: row.response_status.map(|s| s as u16),
             payload: row.payload,
+            actions: serde_json::from_str(&row.actions).map_err(repo_err)?,
+            source_event_id: row.source_event_id,
             created_at: row.created_at,
             finished_at: row.finished_at,
         })
@@ -208,11 +215,12 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
                                         completed_actions, last_error, response_status, payload,
-                                        created_at, finished_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                        actions, source_event_id, created_at, finished_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              ON CONFLICT DO NOTHING",
         )
         .bind(run.id)
@@ -225,12 +233,25 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(&run.last_error)
         .bind(run.response_status.map(i32::from))
         .bind(&run.payload)
+        .bind(serde_json::to_string(&run.actions).map_err(repo_err)?)
+        .bind(run.source_event_id)
         .bind(run.created_at)
         .bind(run.finished_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        Ok(result.rows_affected() > 0)
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        insert_job(
+            &mut *tx,
+            JobType::ExecuteWorkflowRun { run_id: run.id },
+            Utc::now(),
+            MAX_ATTEMPTS as i32,
+        )
+        .await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(true)
     }
 
     #[instrument(skip(self))]
