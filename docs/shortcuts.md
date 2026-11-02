@@ -18,6 +18,7 @@ On Windows and Linux, read Cmd as Ctrl.
 | Edit details                    | `e`                 | -                           |
 | Edit tags                       | `t`                 | -                           |
 | Delete the document             | `#`, `Cmd Backspace` | `Cmd Backspace`            |
+| Lock Folio now                  | -                   | `Cmd Shift L` (App lock enabled) |
 | Show the shortcut list          | `?`                 | hold `Cmd` (iPad)           |
 
 ## Web rules

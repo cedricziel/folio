@@ -19,7 +19,10 @@ extension FocusedValues {
 }
 
 struct FolioCommands: Commands {
-    @FocusedValue(\.inboxActions) private var actions
+    let lock: AppLock
+    @FocusedValue(\.inboxActions) private var focusedActions
+
+    private var actions: InboxActions? { lock.isLocked ? nil : focusedActions }
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
