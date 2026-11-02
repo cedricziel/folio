@@ -11,6 +11,7 @@ public struct LiveFolioService: FolioService {
     private let baseURL: URL
     private let tokenProvider: any BearerTokenProvider
     private let session: URLSession
+    private let downloadDirectory: URL?
     private let client: Client
     private let telemetry: FolioTelemetry?
 
@@ -18,7 +19,8 @@ public struct LiveFolioService: FolioService {
         baseURL: URL,
         tokenProvider: any BearerTokenProvider = NoToken(),
         session: URLSession? = nil,
-        telemetry: FolioTelemetry? = nil
+        telemetry: FolioTelemetry? = nil,
+        downloadDirectory: URL? = nil
     ) {
         let session =
             session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
@@ -26,6 +28,7 @@ public struct LiveFolioService: FolioService {
         self.baseURL = baseURL
         self.tokenProvider = tokenProvider
         self.session = session
+        self.downloadDirectory = downloadDirectory
         client = Client(
             serverURL: baseURL,
             configuration: .init(dateTranscoder: LenientDateTranscoder()),
@@ -129,16 +132,23 @@ public struct LiveFolioService: FolioService {
     private func downloadFileRequest(for document: Document) async throws -> URL {
         let request = URLRequest(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
         let (temporary, response) = try await authorizedTransfer(request) { try await session.download(for: $0) }
+        defer { try? FileManager.default.removeItem(at: temporary) }
         try check(response, body: try? Data(contentsOf: temporary))
 
-        let directory = FileManager.default.temporaryDirectory
-            .appending(path: "folio-\(document.id.uuidString)", directoryHint: .isDirectory)
+        let filename = Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
+        let directory =
+            downloadDirectory
+            ?? FileManager.default.temporaryDirectory
+            .appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appending(
-            path: Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
-        )
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.moveItem(at: temporary, to: destination)
+            path: downloadDirectory == nil ? filename : "\(UUID().uuidString)-\(filename)")
+        do {
+            try FileManager.default.moveItem(at: temporary, to: destination)
+        } catch {
+            if downloadDirectory == nil { try? FileManager.default.removeItem(at: directory) }
+            throw error
+        }
         return destination
     }
 

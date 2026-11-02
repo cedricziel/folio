@@ -34,3 +34,19 @@ xcrun xcodebuild test -project apple/Folio/Folio.xcodeproj -scheme Folio \
 The tests exercise authentication completion from a background queue without
 launching the app, opening a browser, or accessing credentials.
 Do not launch the app against existing App Group or keychain state.
+
+## Apple File Provider
+
+Run `xcrun swift test --package-path apple/FolioKit --scratch-path /tmp/folio-provider-build`.
+`LiveFolioServiceTests` covers retained download contents and concurrent downloads into a supplied staging directory. Use a task-specific scratch path when another worker is testing.
+
+Generate the project with `xcodegen generate --spec apple/Folio/project.yml`. Build the extension through the app scheme:
+
+```sh
+xcrun xcodebuild build -project apple/Folio/Folio.xcodeproj -scheme Folio \
+  -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/folio-provider-xcode \
+  -clonedSourcePackagesDirPath /tmp/folio-provider-xcode-packages \
+  -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
+```
+
+Lint changed Swift files with `xcrun swift-format lint --strict`. A package test or unsigned build does not prove system materialization. For Files or Finder checks, use a new simulator or isolated test account, a separate test domain, and a throwaway server. Verify download bytes and reopening, then remove the domain, simulator, and server. Never register a test domain in the user's signed-in environment.
