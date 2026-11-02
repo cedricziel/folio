@@ -14,7 +14,7 @@ use folio_core::models::WebhookPayload;
 use crate::client_telemetry;
 use crate::error::ErrorResponse;
 use crate::routes::{
-    correspondents, document_types, documents, events, sources, tags, vaults, workflows,
+    correspondents, document_types, documents, events, sources, tags, tokens, vaults, workflows,
 };
 
 #[derive(OpenApi)]
@@ -25,6 +25,9 @@ use crate::routes::{
         license(name = "AGPL-3.0-only", identifier = "AGPL-3.0-only"),
     ),
     paths(
+        tokens::list_personal_tokens,
+        tokens::create_personal_token,
+        tokens::revoke_personal_token,
         client_telemetry::configuration,
         client_telemetry::export,
         vaults::list_vaults,
@@ -74,6 +77,7 @@ use crate::routes::{
     ),
     components(schemas(ErrorResponse, WebhookPayload)),
     tags(
+        (name = "authentication", description = "Session-only personal access token management"),
         (name = "telemetry", description = "Authenticated client OTLP export"),
         (name = "documents", description = "Documents and their files"),
         (name = "tags", description = "Tags for categorizing documents"),
@@ -115,8 +119,55 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
     use utoipa::openapi::{
         path::{ParameterBuilder, ParameterIn},
         schema::{ObjectBuilder, Type},
+        security::{
+            ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityRequirement, SecurityScheme,
+        },
     };
     let mut spec = ApiDoc::openapi();
+    let components = spec.components.get_or_insert_with(Default::default);
+    components.add_security_scheme("bearerAuth", SecurityScheme::Http(
+        HttpBuilder::new().scheme(HttpAuthScheme::Bearer)
+            .bearer_format("opaque")
+            .description(Some("OAuth access token or personal access token for this server's /api audience. Personal tokens support document, vocabulary, and vault-discovery endpoints only. Personal tokens use explicit documents:read and documents:write scopes; write does not imply read. Current vault permissions also apply. MCP requires a separate /mcp audience token. Explicit bearer credentials take precedence over session cookies."))
+            .build(),
+    ));
+    components.add_security_scheme("sessionAuth", SecurityScheme::ApiKey(ApiKey::Cookie(
+        ApiKeyValue::with_description("__Host-folio_session", "Signed-in browser session. Local HTTP deployments use folio_session. Session mutations require same-origin protection. Personal token management requires a session and rejects bearer credentials."),
+    )));
+    for (path, item) in &mut spec.paths.paths {
+        for operation in [
+            &mut item.get,
+            &mut item.post,
+            &mut item.put,
+            &mut item.patch,
+            &mut item.delete,
+            &mut item.head,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let mut requirements = vec![SecurityRequirement::new(
+                "sessionAuth",
+                Vec::<String>::new(),
+            )];
+            if path.starts_with("/api/") && !path.starts_with("/api/auth/tokens") {
+                requirements.push(SecurityRequirement::new("bearerAuth", Vec::<String>::new()));
+            }
+            operation.security = Some(requirements);
+            operation.responses.responses.entry("401".to_string()).or_insert_with(||
+                utoipa::openapi::Response::new("Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience").into());
+            operation
+                .responses
+                .responses
+                .entry("403".to_string())
+                .or_insert_with(|| {
+                    utoipa::openapi::Response::new(
+                        "The credential lacks the required scope or the request is not permitted",
+                    )
+                    .into()
+                });
+        }
+    }
     for (path, item) in &mut spec.paths.paths {
         if !crate::vault_context::is_scoped_path(path) {
             continue;
@@ -134,7 +185,10 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
         {
             operation.responses.responses.insert(
                 "403".to_string(),
-                utoipa::openapi::Response::new("The vault role does not allow this action").into(),
+                utoipa::openapi::Response::new(
+                    "The token scope or vault role does not allow this action",
+                )
+                .into(),
             );
             operation
                 .responses
