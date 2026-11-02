@@ -1,6 +1,7 @@
 //! PostgreSQL adapters
 
 mod auth_repo;
+mod document_entries;
 mod document_repo;
 mod ingest_repo;
 mod outbox;
@@ -15,6 +16,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{migrate::Migrate, Connection, PgPool};
 
 pub use auth_repo::PostgresAuthStore;
+pub use document_entries::PostgresDocumentEntryRepository;
 pub use document_repo::{
     PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
     PostgresTagRepository,

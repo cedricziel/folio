@@ -487,6 +487,15 @@ impl DocumentRepository for SqliteDocumentRepository {
         .await
         .map_err(map_sqlx_error)?;
 
+        sqlx::query("UPDATE document_entries SET updated_at = ?, updated_by = ? WHERE document_id = ? AND vault_id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(actor.map(UserId::as_str))
+            .bind(id.to_string())
+            .bind(to.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
         for vault in [from, to] {
             sqlx::query(
                 "INSERT INTO audit_events

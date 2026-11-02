@@ -4,6 +4,7 @@
 
 mod access;
 mod ai;
+mod document_entries;
 mod health;
 mod ingest;
 mod outbox;
@@ -17,6 +18,7 @@ pub use ai::{
     EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
     SearchService,
 };
+pub use document_entries::{DocumentEntryRepository, EntryCreation};
 pub use health::HealthCheck;
 pub use ingest::{
     DocumentImporter, IngestLedger, IngestSink, IngestionSource, IngestionSourceFactory,

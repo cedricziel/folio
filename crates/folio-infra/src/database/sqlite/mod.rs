@@ -1,6 +1,7 @@
 //! SQLite adapters
 
 mod auth_repo;
+mod document_entries;
 mod document_repo;
 mod ingest_repo;
 mod outbox;
@@ -15,6 +16,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{ConnectOptions, Connection, SqlitePool};
 
 pub use auth_repo::SqliteAuthStore;
+pub use document_entries::SqliteDocumentEntryRepository;
 pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
