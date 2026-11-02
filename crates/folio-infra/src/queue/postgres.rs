@@ -286,9 +286,12 @@ impl PostgresJobQueue {
 
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         let failed: bool = sqlx::query_scalar(
-            "SELECT COALESCE((SELECT status = 'failed' FROM jobs
-             WHERE payload->'data'->>'document_id' = $1 AND status IN ('completed', 'failed')
-             ORDER BY created_at DESC, completed_at DESC, id DESC LIMIT 1), FALSE)",
+            "SELECT EXISTS(SELECT 1 FROM (
+                SELECT status, ROW_NUMBER() OVER (
+                    PARTITION BY job_type ORDER BY created_at DESC, completed_at DESC, id DESC
+                ) AS position FROM jobs
+                WHERE payload->'data'->>'document_id' = $1 AND status IN ('completed', 'failed')
+            ) AS latest WHERE position = 1 AND status = 'failed')",
         )
         .bind(document_id.to_string())
         .fetch_one(&self.pool)

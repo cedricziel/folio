@@ -234,7 +234,7 @@ impl JobQueue {
         dispatch!(self, find_active_jobs_for_document(document_id))
     }
 
-    /// Whether the most recently finished processing job failed
+    /// Whether the latest finished job for any processing stage failed
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         dispatch!(self, has_failed_jobs_for_document(document_id))
     }

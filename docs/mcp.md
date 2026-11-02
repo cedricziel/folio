@@ -69,4 +69,4 @@ Read tools need the `documents:read` scope and write tools `documents:write`; cl
 
 With `auth.required = false` the endpoint is open and Folio logs a warning at startup; do not expose that beyond localhost.
 
-Processing status reports active work first. Once no jobs are active, the most recently finished job determines whether processing completed or failed. A successful reprocess clears an earlier failure. Failed file storage removes the newly created document record.
+Processing status reports active work first. Once no jobs are active, the latest finished job for each processing stage determines whether processing completed or failed. A successful retry clears an earlier failure in that stage; unrelated successful work does not. Failed file storage removes the newly created document record.
