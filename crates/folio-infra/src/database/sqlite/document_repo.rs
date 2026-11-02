@@ -1028,22 +1028,30 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        require_document(&mut tx, vault, id).await?;
         let result = sqlx::query(
             "UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ?
-             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL
+             AND (ocr_status != 'done' OR content IS NOT ?)",
         )
         .bind(content)
         .bind(Utc::now().to_rfc3339())
         .bind(id.to_string())
         .bind(vault.to_string())
-        .execute(&self.pool)
+        .bind(content)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
-            return Err(not_found("Document", id));
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::OcrComplete { document_id: id })
+                .await?;
         }
-        Ok(())
+        self.commit(tx).await
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {

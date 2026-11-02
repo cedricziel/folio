@@ -968,18 +968,25 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
-        self.touch_one(
-            id,
-            sqlx::query(
-                "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
-                 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
-            )
-            .bind(content.to_string())
-            .bind(Utc::now())
-            .bind(id)
-            .bind(vault.0),
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        require_document(&mut tx, vault, id).await?;
+        let result = sqlx::query(
+            "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
+             WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL
+             AND (ocr_status != 'done' OR content IS DISTINCT FROM $1)",
         )
+        .bind(content)
+        .bind(Utc::now())
+        .bind(id)
+        .bind(vault.0)
+        .execute(&mut *tx)
         .await
+        .map_err(repo_err)?;
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::OcrComplete { document_id: id })
+                .await?;
+        }
+        self.commit(tx).await
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {
