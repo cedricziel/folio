@@ -11,6 +11,8 @@
 - [ ] Write failing router tests for author editing, moderation, spoofed actors, viewer denial, revoked membership, malformed cursors, and cross-vault IDs; implement JSON routes.
 - [ ] Generate OpenAPI and verify generated Swift client compilation.
 
+- [ ] Write failing request regressions for lost responses, concurrent matching keys, conflicting payloads, revoked access, and deleted-entry retries; persist creation receipts atomically and retain draft keys in both clients.
+
 ## 3. Workflow events
 - [x] Align the design with foundation DomainEventEnvelope v1 and transaction-scoped append API.
 - [ ] Reconcile merged envelope signatures and workflow trigger catalog integration.

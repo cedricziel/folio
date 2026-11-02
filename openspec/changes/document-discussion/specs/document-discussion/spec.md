@@ -13,6 +13,26 @@ The system SHALL provide editable notes and chronological comments attached to a
 - **WHEN** POST `/api/documents/{id}/entries` or PATCH `/api/documents/{id}/entries/{entry_id}` receives blank or oversized text
 - **THEN** the server returns 400 without changing persisted content
 
+### Requirement: Creation retries do not duplicate entries
+
+POST `/api/documents/{id}/entries` SHALL require a non-nil UUID `Idempotency-Key` and atomically retain its request fingerprint and outcome with the entry and event.
+
+#### Scenario: Retry after a lost response
+- **WHEN** a currently authorized client repeats the same creation request and key after its response is lost
+- **THEN** the server returns the original 201 response and entry identity without creating another entry or event
+
+#### Scenario: Reuse a key for different content
+- **WHEN** a client reuses a creation key with a different body or kind in the same actor, vault, document, and operation scope
+- **THEN** the server returns 409 without changing the original entry
+
+#### Scenario: Retry a deleted entry
+- **WHEN** an authorized client retries creation after the original entry was soft-deleted
+- **THEN** the server returns 410 without recreating or exposing the entry
+
+#### Scenario: Omit the creation key
+- **WHEN** a client omits the key or supplies a malformed or nil UUID
+- **THEN** the server returns 400 without persisting an entry or event
+
 ### Requirement: Discussion access follows document and author permissions
 
 The system SHALL enforce vault membership, live document visibility, authorship, and moderation permissions for every request.

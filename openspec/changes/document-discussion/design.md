@@ -18,6 +18,10 @@ Use `/api/documents/{id}/entries` for GET and POST, and `/api/documents/{id}/ent
 
 Accept plain text with non-whitespace content and a 16 KiB UTF-8 bound. Escape text in HTML and render literal text in SwiftUI. Creation returns 201, editing returns 200, and deletion returns 204. Malformed bodies/cursors return 400; unauthenticated requests use existing authentication behavior; disallowed visible actions return 403; invisible or missing parents/entries return 404. Do not accept lifecycle fields from input.
 
+Entry creation requires an `Idempotency-Key` header containing a non-nil UUID. HTML forms submit the same UUID in a hidden field. Web and Apple generate the key when a draft starts and retain it across retries until that draft succeeds or is discarded. Missing or malformed keys return 400.
+
+Persist a creation receipt keyed by vault, logical document, authenticated actor identity, operation, and idempotency key. The receipt contains a fingerprint of the immutable request kind and exact body, the entry ID, and its original successful response. Insert the receipt, entry, and outbox event in one transaction with a unique receipt constraint. Concurrent matching requests converge on one committed receipt. A matching retry returns the original 201 response without another mutation or event; reuse with a different kind or body returns 409. Recheck current authorization and document visibility before every replay. If the original entry has been deleted, return 410 without recreating or exposing it. Retain receipts through soft deletion and delete them only with permanent document purge. Nullable actors use an explicit system scope, not SQL NULL uniqueness semantics. These receipts deduplicate creation requests; outbox event identity separately deduplicates delivery.
+
 The HTML routes preserve the selected vault, use existing CSRF protection, and redirect to the relevant document section. Generate `openapi/openapi.json` and compile the Swift client from its linked schema input.
 
 ## Interface
