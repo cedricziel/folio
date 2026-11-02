@@ -42,5 +42,5 @@ public struct VaultCatalog: Codable, Equatable, Sendable {
         self.defaultVaultID = defaultVaultID
     }
 
-    public static let legacy = VaultCatalog(vaults: [], defaultVaultID: nil)
+    public static let empty = VaultCatalog(vaults: [], defaultVaultID: nil)
 }

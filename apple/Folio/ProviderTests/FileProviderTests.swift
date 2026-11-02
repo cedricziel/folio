@@ -5,7 +5,7 @@ import XCTest
 
 private final class UploadTemplate: NSObject, NSFileProviderItem {
     var itemIdentifier = NSFileProviderItemIdentifier("new-file")
-    var parentItemIdentifier = FolioItemID.folder(.inbox).providerIdentifier
+    var parentItemIdentifier = FolioItemID.folder(.scoped(MockFolioService.defaultVault.id, .inbox)).providerIdentifier
     var filename = "scan.pdf"
     var contentType = UTType.pdf
 }
@@ -90,7 +90,9 @@ final class FileProviderTests: XCTestCase {
             XCTAssertNil(error)
             XCTAssertNotNil(item)
             XCTAssertEqual(item?.filename, "scan.pdf")
-            XCTAssertEqual(item?.parentItemIdentifier, FolioItemID.folder(.inbox).providerIdentifier)
+            XCTAssertEqual(
+                item?.parentItemIdentifier,
+                FolioItemID.folder(.scoped(MockFolioService.defaultVault.id, .inbox)).providerIdentifier)
             XCTAssertTrue(pending.isEmpty)
             XCTAssertFalse(fetch)
             completed.fulfill()

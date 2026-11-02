@@ -25,13 +25,14 @@ struct FolioItemIDTests {
 
     @Test(arguments: [
         FolioItemID.folder(.root),
-        .folder(.inbox),
-        .folder(.all),
-        .folder(.tag(tagID)),
-        .folder(.correspondent(personID)),
-        .folder(.type(typeID)),
-        .document(personID, in: .inbox),
-        .document(typeID, in: .correspondent(personID)),
+        .folder(.vault(tagID)),
+        .folder(.scoped(tagID, .inbox)),
+        .folder(.scoped(tagID, .all)),
+        .folder(.scoped(tagID, .tag(tagID))),
+        .folder(.scoped(tagID, .correspondent(personID))),
+        .folder(.scoped(tagID, .type(typeID))),
+        .document(personID, in: .scoped(tagID, .inbox)),
+        .document(typeID, in: .scoped(tagID, .correspondent(personID))),
     ])
     func rawValueRoundTrips(id: FolioItemID) {
         #expect(FolioItemID(rawValue: id.rawValue) == id)
@@ -43,13 +44,25 @@ struct FolioItemIDTests {
         #expect(FolioItemID(rawValue: "tag:") == nil)
     }
 
+    @Test(arguments: [
+        "inbox", "all", "tags", "correspondents", "types",
+        "tag:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "doc:66666666-7777-4888-9999-000000000000@inbox",
+    ])
+    func rejectsUnscopedIdentifiers(identifier: String) {
+        #expect(FolioItemID(rawValue: identifier) == nil)
+    }
+
     @Test func parentChainWalksUpToTheRoot() {
-        let id = FolioItemID.document(typeID, in: .correspondent(personID))
+        let id = FolioItemID.document(typeID, in: .scoped(tagID, .correspondent(personID)))
         #expect(
-            id.ancestors == [.folder(.correspondent(personID)), .folder(.correspondents), .folder(.root)]
+            id.ancestors == [
+                .folder(.scoped(tagID, .correspondent(personID))), .folder(.scoped(tagID, .correspondents)),
+                .folder(.vault(tagID)), .folder(.root),
+            ]
         )
         #expect(FolioItemID.folder(.root).ancestors.isEmpty)
-        #expect(FolioItemID.folder(.inbox).parent == .folder(.root))
+        #expect(FolioItemID.folder(.scoped(tagID, .inbox)).parent == .folder(.vault(tagID)))
     }
 }
 
@@ -130,7 +143,9 @@ struct VaultProviderCatalogTests {
         #expect(await source.uploads.isEmpty)
         #expect(try await catalog.node(for: .folder(.inbox)) == nil)
         #expect(try await catalog.children(of: .all).isEmpty)
-        await #expect(throws: FolioError.server(status: 404, message: nil)) { _ = try await catalog.upload(file) }
+        await #expect(throws: FolioError.server(status: 404, message: nil)) {
+            _ = try await catalog.upload(file, to: .inbox)
+        }
     }
 
     @Test func revokedVaultDoesNotBlockUnrelatedWorkingSetAndNetworkFailureDoesNotDeleteIt() async throws {
@@ -154,6 +169,15 @@ struct VaultProviderCatalogTests {
 }
 
 struct FolioCatalogTests {
+    @Test func emptyDiscoveryDoesNotExposeUnscopedDocuments() async throws {
+        let source = MockFolioService(documents: [Document(title: "Hidden")], vaults: .empty)
+        let catalog = FolioCatalog(service: source)
+
+        #expect(try await catalog.children(of: .root).isEmpty)
+        #expect(try await catalog.children(of: .all).isEmpty)
+        #expect(try await catalog.allNodes().isEmpty)
+    }
+
     private func document(
         _ title: String, filename: String? = nil, person: UUID? = nil, type: UUID? = nil,
         read: Bool = true
@@ -165,9 +189,9 @@ struct FolioCatalogTests {
         )
     }
 
-    @Test func rootListsTheVirtualFolders() async throws {
+    @Test func vaultListsTheVirtualFolders() async throws {
         let catalog = FolioCatalog(service: MockFolioService())
-        let names = try await catalog.children(of: .root).map(\.name)
+        let names = try await catalog.children(of: .vault(MockFolioService.defaultVault.id)).map(\.name)
         #expect(names == ["Inbox", "All documents", "Tags", "Correspondents", "Types"])
     }
 
@@ -176,17 +200,18 @@ struct FolioCatalogTests {
         let filed = document("Bill", person: personID)
         let reading = document("Scan", read: false)
         let catalog = FolioCatalog(service: MockFolioService(documents: [unfiled, filed, reading]))
-        let inbox = try await catalog.children(of: .inbox)
+        let inbox = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .inbox))
         #expect(Set(inbox.map(\.name)) == ["Letter", "Scan"])
-        #expect(inbox.contains { $0.id == .document(unfiled.id, in: .inbox) })
-        #expect(inbox.allSatisfy { $0.parent == .folder(.inbox) })
+        #expect(
+            inbox.contains { $0.id == .document(unfiled.id, in: .scoped(MockFolioService.defaultVault.id, .inbox)) })
+        #expect(inbox.allSatisfy { $0.parent == .folder(.scoped(MockFolioService.defaultVault.id, .inbox)) })
     }
 
     @Test func allDocumentsListsEverything() async throws {
         let catalog = FolioCatalog(
             service: MockFolioService(documents: [document("A"), document("B", person: personID)])
         )
-        #expect(try await catalog.children(of: .all).count == 2)
+        #expect(try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .all)).count == 2)
     }
 
     @Test func correspondentFolderFiltersOnTheServer() async throws {
@@ -197,18 +222,22 @@ struct FolioCatalogTests {
         )
         let catalog = FolioCatalog(service: service)
 
-        let folders = try await catalog.children(of: .correspondents)
+        let folders = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .correspondents))
         #expect(folders.map(\.name) == ["Stadtwerke-Köln"])
         #expect(folders[0].isFolder)
-        #expect(folders[0].id == .folder(.correspondent(personID)))
+        #expect(folders[0].id == .folder(.scoped(MockFolioService.defaultVault.id, .correspondent(personID))))
 
-        let docs = try await catalog.children(of: .correspondent(personID))
-        #expect(docs.map(\.id) == [.document(mine.id, in: .correspondent(personID))])
+        let docs = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .correspondent(personID)))
+        #expect(
+            docs.map(\.id) == [
+                .document(mine.id, in: .scoped(MockFolioService.defaultVault.id, .correspondent(personID)))
+            ])
     }
 
     @Test func typeFoldersListTypes() async throws {
         let service = MockFolioService(types: [DocumentType(id: typeID, name: "Invoice")])
-        let folders = try await FolioCatalog(service: service).children(of: .types)
+        let folders = try await FolioCatalog(service: service).children(
+            of: .scoped(MockFolioService.defaultVault.id, .types))
         #expect(folders.map(\.name) == ["Invoice"])
     }
 
@@ -218,8 +247,14 @@ struct FolioCatalogTests {
         let service = MockFolioService(documents: [document("A"), tagged])
         await service.setTags([insurance])
         let catalog = FolioCatalog(service: service)
-        #expect(try await catalog.children(of: .tags).map(\.name) == ["Insurance"])
-        #expect(try await catalog.children(of: .tag(tagID)).map(\.name) == ["policy.pdf"])
+        #expect(
+            try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .tags)).map(\.name) == [
+                "Insurance"
+            ])
+        #expect(
+            try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .tag(tagID))).map(\.name) == [
+                "policy.pdf"
+            ])
         #expect(await service.filters.last == DocumentFilter(tagIDs: [tagID]))
     }
 
@@ -228,7 +263,7 @@ struct FolioCatalogTests {
         let second = document("Bill again", filename: "bill.pdf")
         let titled = document("No file name")
         let catalog = FolioCatalog(service: MockFolioService(documents: [first, second, titled]))
-        let names = try await catalog.children(of: .all).map(\.name)
+        let names = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .all)).map(\.name)
         #expect(names.contains("No file name"))
         #expect(names.filter { $0.hasPrefix("bill") }.count == 2)
         #expect(Set(names).count == 3)
@@ -241,15 +276,18 @@ struct FolioCatalogTests {
         )
         let catalog = FolioCatalog(service: service)
 
-        let folder = try #require(try await catalog.node(for: .folder(.correspondent(personID))))
+        let folder = try #require(
+            try await catalog.node(for: .folder(.scoped(MockFolioService.defaultVault.id, .correspondent(personID)))))
         #expect(folder.name == "Stadtwerke")
-        #expect(folder.parent == .folder(.correspondents))
+        #expect(folder.parent == .folder(.scoped(MockFolioService.defaultVault.id, .correspondents)))
 
-        let node = try #require(try await catalog.node(for: .document(doc.id, in: .inbox)))
+        let node = try #require(
+            try await catalog.node(for: .document(doc.id, in: .scoped(MockFolioService.defaultVault.id, .inbox))))
         #expect(node.name == "letter.pdf")
         #expect(node.contentType == "application/pdf")
 
-        #expect(try await catalog.node(for: .document(UUID(), in: .all)) == nil)
+        #expect(
+            try await catalog.node(for: .document(UUID(), in: .scoped(MockFolioService.defaultVault.id, .all))) == nil)
     }
 
     @Test func workingSetIncludesEveryDocumentAliasAndItsParents() async throws {
@@ -263,11 +301,12 @@ struct FolioCatalogTests {
         await service.setTags([tag])
         let nodes = try await FolioCatalog(service: service).allNodes()
         let ids = Set(nodes.map(\.id))
-        #expect(ids.contains(.document(doc.id, in: .all)))
-        #expect(ids.contains(.document(doc.id, in: .inbox)))
-        #expect(ids.contains(.document(doc.id, in: .correspondent(personID))))
-        #expect(ids.contains(.document(doc.id, in: .type(typeID))))
-        #expect(ids.contains(.document(doc.id, in: .tag(tagID))))
+        #expect(ids.contains(.document(doc.id, in: .scoped(MockFolioService.defaultVault.id, .all))))
+        #expect(ids.contains(.document(doc.id, in: .scoped(MockFolioService.defaultVault.id, .inbox))))
+        #expect(
+            ids.contains(.document(doc.id, in: .scoped(MockFolioService.defaultVault.id, .correspondent(personID)))))
+        #expect(ids.contains(.document(doc.id, in: .scoped(MockFolioService.defaultVault.id, .type(typeID)))))
+        #expect(ids.contains(.document(doc.id, in: .scoped(MockFolioService.defaultVault.id, .tag(tagID)))))
         #expect(nodes.allSatisfy { $0.parent == .folder(.root) || ids.contains($0.parent) })
     }
 }

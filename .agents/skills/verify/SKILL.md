@@ -123,6 +123,10 @@ The Apple package suite covers immutable scoped services, independent upload
 destinations, and external document links. File Provider tests must cover stable
 vault-qualified identifiers, scoped downloads and Inbox uploads, read-only
 capabilities, membership revocation, and transient failures that retain entries.
+Verify that vault discovery 404 remains an error, unloaded catalogs grant no
+write capabilities, and UUID-only Spotlight and unscoped provider identifiers
+are rejected. Keep current default-vault document Intent coverage separate from
+external identifier parsing.
 Run both the package suite and native provider tests above after these changes.
 These tests do not establish system integration in Files or Finder.
 

@@ -16,12 +16,12 @@ Provider identifiers include the vault UUID, so renaming a vault or switching th
 
 ## Roles
 
-| Role | Permissions |
-| --- | --- |
-| Viewer | Read documents and vocabulary |
+| Role        | Permissions                                                                    |
+| ----------- | ------------------------------------------------------------------------------ |
+| Viewer      | Read documents and vocabulary                                                  |
 | Contributor | Upload documents; edit and delete their own uploads through the API and web UI |
-| Editor | Edit and delete any document; manage vocabulary |
-| Owner | Editor permissions and workflow/source management |
+| Editor      | Edit and delete any document; manage vocabulary                                |
+| Owner       | Editor permissions and workflow/source management                              |
 
 The Apple app currently offers edit and delete controls to editors and owners. Contributors can upload. The server checks permissions on every request, including after membership changes.
 
@@ -35,4 +35,4 @@ Existing document and vocabulary endpoints accept an optional `X-Folio-Vault` UU
 
 The generated contract is in [openapi/openapi.json](../openapi/openapi.json), also served at `/api/openapi.json`. The browser API reference is at `/api/docs`.
 
-When authentication is disabled, discovery exposes only the instance default vault. Older Apple clients continue to work through default-vault API requests; updated Apple clients also support older servers that do not expose vault discovery.
+When authentication is disabled, discovery exposes only the instance default vault. Apple clients require vault discovery. A server without `/api/vaults` reports an error instead of exposing an unscoped library. External Spotlight identifiers must include both the vault and document UUIDs; UUID-only identifiers are rejected.

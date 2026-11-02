@@ -3,9 +3,9 @@ import SwiftUI
 
 struct DocumentDetailView: View {
     @State var model: DocumentDetailViewModel
-    let vaultID: UUID?
+    let vaultID: UUID
 
-    init(model: DocumentDetailViewModel, vaultID: UUID? = nil) {
+    init(model: DocumentDetailViewModel, vaultID: UUID) {
         _model = State(initialValue: model)
         self.vaultID = vaultID
     }

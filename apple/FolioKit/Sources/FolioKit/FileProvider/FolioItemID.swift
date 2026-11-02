@@ -103,10 +103,11 @@ public enum FolioItemID: Hashable, Sendable {
     public init?(rawValue: String) {
         if rawValue.hasPrefix("doc:") {
             let parts = rawValue.dropFirst(4).split(separator: "@", maxSplits: 1).map(String.init)
-            guard parts.count == 2, let id = UUID(uuidString: parts[0]), let folder = Folder(rawValue: parts[1])
+            guard parts.count == 2, let id = UUID(uuidString: parts[0]), let folder = Folder(rawValue: parts[1]),
+                folder.vaultID != nil
             else { return nil }
             self = .document(id, in: folder)
-        } else if let folder = Folder(rawValue: rawValue) {
+        } else if let folder = Folder(rawValue: rawValue), folder == .root || folder.vaultID != nil {
             self = .folder(folder)
         } else {
             return nil
