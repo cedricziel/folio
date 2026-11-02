@@ -724,6 +724,7 @@ impl Worker {
             for (batch_no, batch_texts) in chunks.chunks(EMBED_BATCH_SIZE).enumerate() {
                 let texts: Vec<&str> = batch_texts.iter().map(String::as_str).collect();
                 let batch = self.embedding_service.embed(&texts).await?;
+                batch.validate(texts.len())?;
                 model = batch.model;
                 for (i, (text, embedding)) in batch_texts.iter().zip(batch.vectors).enumerate() {
                     embedded.push(EmbeddedChunk {
@@ -962,6 +963,63 @@ mod tests {
         async fn health(&self) -> Result<()> {
             Ok(())
         }
+    }
+
+    struct MissingEmbeddings;
+
+    #[async_trait]
+    impl EmbeddingService for MissingEmbeddings {
+        async fn embed(&self, _: &[&str]) -> Result<EmbeddingBatch> {
+            Ok(EmbeddingBatch {
+                vectors: Vec::new(),
+                model: "test:model".into(),
+                dimensions: 2,
+            })
+        }
+        async fn model_id(&self) -> Result<String> {
+            Ok("test:model".into())
+        }
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_embedding_vectors_never_publish_completion() {
+        let mut f = fixture("invoice").await;
+        f.worker.embedding_service = Arc::new(MissingEmbeddings);
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        f.repo
+            .complete_ocr(crate::database::test_vault(), f.doc_id, "invoice")
+            .await
+            .unwrap();
+
+        assert!(f.worker.process_embedding(f.doc_id).await.is_err());
+
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc.embed_status, ProcessingStatus::Failed);
+        let (chunks,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM document_chunks WHERE document_id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(chunks, 0);
+        let (completed,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE type = 'processed'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(completed, 0);
     }
 
     struct Fixture {
