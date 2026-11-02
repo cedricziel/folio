@@ -31,6 +31,7 @@ pub struct IngestionState {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
+    pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     pub document_repo: Arc<dyn DocumentRepository>,
     pub entry_repo: Arc<dyn DocumentEntryRepository>,
     pub tag_repo: Arc<dyn TagRepository>,
@@ -79,6 +80,7 @@ impl IngestionState {
 impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
         document_repo: Arc<dyn DocumentRepository>,
         entry_repo: Arc<dyn DocumentEntryRepository>,
         tag_repo: Arc<dyn TagRepository>,
@@ -107,6 +109,7 @@ impl AppState {
             Arc::new(job_queue.clone()),
         ));
         Self {
+            saved_views,
             document_repo,
             entry_repo,
             tag_repo,

@@ -205,6 +205,8 @@ For grouped workflow conditions, run `cargo test -p folio-core --features openap
 and `cargo test -p folio-api --test workflows --test openapi`. These cover nested
 all/any/none matching, depth and size limits, historical snapshots, legacy JSON,
 recursive schema references, and preserving API-created groups through HTML edits.
+The core suite also verifies trigger registration, duplicate and unknown selections,
+condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
 
 Run `cargo test -p folio-infra --test workflows` and
@@ -320,6 +322,12 @@ checks that private transitions remain owner-only, event payloads omit queries,
 unchanged and concurrent duplicate updates emit no extra event, and a forced
 outbox failure rolls back creates, updates, and deletes. Never use an existing
 archive for these checks.
+
+Run `cargo test -p folio-api --test saved_views --test openapi` for the JSON API.
+Temporary SQLite fixtures cover private visibility, viewer sharing restrictions,
+cross-vault filter rejection, rename precision, audit identity, and deletion.
+PATCH must reject explicit null and client-supplied ownership. Regenerate the
+OpenAPI contract with `make openapi` when the route schema changes.
 
 ## Verify document repository changes
 

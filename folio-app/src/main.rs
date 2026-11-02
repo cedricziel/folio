@@ -249,6 +249,7 @@ async fn main() -> Result<()> {
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
     let mut state = AppState::new(
+        repos.saved_views,
         document_repo.clone(),
         entry_repo,
         tag_repo,
