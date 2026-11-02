@@ -68,11 +68,37 @@ struct InboxView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $session.path) {
-            sidebar
+        GeometryReader { geometry in
+            let showsPreview = geometry.size.width >= 760
+            NavigationStack(
+                path: Binding(
+                    get: { showsPreview ? [] : session.path },
+                    set: {
+                        if !showsPreview {
+                            session.path = $0
+                        }
+                    }
+                )
+            ) {
+                HStack(spacing: 0) {
+                    sidebar(showsPreview: showsPreview)
+                        .frame(maxWidth: showsPreview ? 320 : .infinity)
+                    if showsPreview {
+                        Divider()
+                        Group {
+                            if let id = session.selection {
+                                documentDestination(id)
+                            } else {
+                                ContentUnavailableView("Select a document", systemImage: "doc.text")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
                 .navigationDestination(for: Document.ID.self) { id in
                     documentDestination(id)
                 }
+            }
         }
         .onChange(of: session.path) { _, path in
             if let id = path.last {
@@ -132,7 +158,10 @@ struct InboxView: View {
             scan: scanAction,
             showInbox: { onNavigate(.inbox) },
             showAll: { onNavigate(.all) },
-            find: { searchFocused = true },
+            find: {
+                session.path = []
+                searchFocused = true
+            },
             deleteSelected: canEdit && !trashHistory.isWorking
                 ? session.selection.flatMap { list.document(for: $0) }.map { document in
                     { pendingDelete = document }
@@ -171,11 +200,11 @@ struct InboxView: View {
         }
     }
 
-    private var sidebar: some View {
+    private func sidebar(showsPreview: Bool) -> some View {
         @Bindable var list = session.list
         return List(selection: documentSelection) {
             ForEach(list.rows) { row in
-                documentLink(row)
+                documentLink(row, showsPreview: showsPreview)
                     .transition(.opacity)
                     .tag(row.id)
                     .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
@@ -249,127 +278,131 @@ struct InboxView: View {
                 )
             }
         #endif
-        .sheet(item: $scannedPages) { scan in
-            ScanReviewView(
-                model: ScanReviewViewModel(
-                    pages: scan.images, service: service, destination: makeUploadDestination()
-                ),
-                onFinished: { filed in
-                    scannedPages = nil
-                    Task { await list.load(afterUpload: filed) }
-                }
-            )
-        }
-        .sheet(item: $pendingUploads) { batch in
-            UploadReviewView(files: batch.files, model: uploads) { pendingUploads = nil }
-        }
-        .fileImporter(
-            isPresented: $showFileImporter, allowedContentTypes: [.pdf, .image], allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case let .failure(error):
-                problem = error.localizedDescription
-            case let .success(urls):
-                importFiles(urls)
-            }
-        }
-        .alert(
-            "Something went wrong",
-            isPresented: Binding(
-                get: { problem != nil || list.actionError != nil },
-                set: {
-                    if !$0 {
-                        problem = nil; list.dismissActionError()
+            .sheet(item: $scannedPages) { scan in
+                ScanReviewView(
+                    model: ScanReviewViewModel(
+                        pages: scan.images, service: service, destination: makeUploadDestination()
+                    ),
+                    onFinished: { filed in
+                        scannedPages = nil
+                        Task { await list.load(afterUpload: filed) }
                     }
-                }
-            )
-        ) {
-            Button("OK") {}
-        } message: {
-            Text(problem ?? list.actionError ?? "")
-        }
-        .onChange(of: photoSelection) { _, items in
-            guard !items.isEmpty else { return }
-            photoSelection = []
-            guard canAcceptImport else { return }
-            isImporting = true
-            Task {
-                reviewUploads(await loadPhotos(items))
-                isImporting = false
+                )
             }
-        }
-        .confirmationDialog(
-            "Move this document to Trash?",
-            isPresented: Binding(
-                get: { pendingDelete != nil },
-                set: {
-                    if !$0 {
-                        pendingDelete = nil
-                    }
+            .sheet(item: $pendingUploads) { batch in
+                UploadReviewView(files: batch.files, model: uploads) { pendingUploads = nil }
+            }
+            .fileImporter(
+                isPresented: $showFileImporter, allowedContentTypes: [.pdf, .image], allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case let .failure(error):
+                    problem = error.localizedDescription
+                case let .success(urls):
+                    importFiles(urls)
                 }
-            ),
-            presenting: pendingDelete
-        ) { document in
-            Button("Move to Trash", role: .destructive) {
+            }
+            .alert(
+                "Something went wrong",
+                isPresented: Binding(
+                    get: { problem != nil || list.actionError != nil },
+                    set: {
+                        if !$0 {
+                            problem = nil; list.dismissActionError()
+                        }
+                    }
+                )
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(problem ?? list.actionError ?? "")
+            }
+            .onChange(of: photoSelection) { _, items in
+                guard !items.isEmpty else { return }
+                photoSelection = []
+                guard canAcceptImport else { return }
+                isImporting = true
                 Task {
-                    if await trashHistory.moveToTrash(document, undoManager: undoManager) {
-                        if session.selection == document.id { session.selection = nil }
-                        session.path.removeAll { $0 == document.id }
-                    }
+                    reviewUploads(await loadPhotos(items))
+                    isImporting = false
                 }
             }
-            .disabled(trashHistory.isWorking)
-            Button("Keep", role: .cancel) {}
-        } message: { document in
-            Text(
-                """
-                \(document.title) will stay in Trash until you delete it forever. \
-                You can restore it from Trash in the web app.
-                """
-            )
-            if undoManager != nil {
-                Text("You can also undo this action.")
+            .confirmationDialog(
+                "Move this document to Trash?",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: {
+                        if !$0 {
+                            pendingDelete = nil
+                        }
+                    }
+                ),
+                presenting: pendingDelete
+            ) { document in
+                Button("Move to Trash", role: .destructive) {
+                    Task {
+                        if await trashHistory.moveToTrash(document, undoManager: undoManager) {
+                            if session.selection == document.id {
+                                session.selection = nil
+                            }
+                            session.path.removeAll { $0 == document.id }
+                        }
+                    }
+                }
+                .disabled(trashHistory.isWorking)
+                Button("Keep", role: .cancel) {}
+            } message: { document in
+                Text(
+                    """
+                    \(document.title) will stay in Trash until you delete it forever. \
+                    You can restore it from Trash in the web app.
+                    """
+                )
+                if undoManager != nil {
+                    Text("You can also undo this action.")
+                }
             }
-        }
     }
 
     private var documentSelection: Binding<Document.ID?>? {
         #if os(macOS)
-            $session.selection
+            Binding(
+                get: { session.selection },
+                set: { id in
+                    session.selection = id
+                    session.path = id.map { [$0] } ?? []
+                }
+            )
         #else
             nil
         #endif
     }
 
-    @ViewBuilder
-    private func documentLink(_ row: DocumentRow) -> some View {
-        #if os(iOS)
-            Button {
-                session.selection = row.id
-                session.path = [row.id]
-            } label: {
-                HStack {
-                    DocumentRowView(row: row)
+    private func documentLink(_ row: DocumentRow, showsPreview: Bool) -> some View {
+        Button {
+            session.selection = row.id
+            session.path = [row.id]
+        } label: {
+            HStack {
+                DocumentRowView(row: row)
+                if !showsPreview {
                     Image(systemName: "chevron.right")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.inkMuted)
                         .accessibilityHidden(true)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-        #else
-            NavigationLink(value: row.id) {
-                DocumentRowView(row: row)
-            }
-        #endif
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("document-\(row.id)")
     }
 
     @ViewBuilder
     private var placeholder: some View {
         switch list.phase {
         case .loading where list.rows.isEmpty,
-            .idle where list.rows.isEmpty:
+             .idle where list.rows.isEmpty:
             Text("Reading your inbox…")
                 .font(FolioTheme.Typography.body)
                 .foregroundStyle(Color.inkMuted)
@@ -472,7 +505,9 @@ struct InboxView: View {
 
     private var canAcceptImport: Bool {
         guard canUpload, !isImporting, pendingUploads == nil, scannedPages == nil, !showScanner else { return false }
-        if case .uploading = uploads.state { return false }
+        if case .uploading = uploads.state {
+            return false
+        }
         return true
     }
 
@@ -488,10 +523,16 @@ struct InboxView: View {
                         continuation.resume(returning: data.flatMap { URL(dataRepresentation: $0, relativeTo: nil) })
                     }
                 }
-                if let url { urls.append(url) } else { failed = true }
+                if let url {
+                    urls.append(url)
+                } else {
+                    failed = true
+                }
             }
             await prepareFiles(urls)
-            if failed { problem = "Couldn't read some dropped files. Try choosing them with Choose files." }
+            if failed {
+                problem = "Couldn't read some dropped files. Try choosing them with Choose files."
+            }
             isImporting = false
         }
         return true

@@ -16,6 +16,21 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Second fixture"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    func testWideWindowKeepsDocumentListBesidePreview() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width < 1000, "Requires a full-width iPad window.")
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "First fixture")).firstMatch
+        let second = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
+        first.tap()
+        XCTAssertTrue(second.isHittable, "The document list must remain available alongside the preview.")
+        second.tap()
+        XCTAssertTrue(app.navigationBars["Second fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(first.isHittable)
+    }
+
     func testPendingScanSurvivesSwipeDismissal() {
         let app = openScanReview()
         let title = app.navigationBars["Review a scan"]
