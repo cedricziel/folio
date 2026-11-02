@@ -62,7 +62,7 @@ pub struct ListDocumentsQuery {
 }
 
 impl ListDocumentsQuery {
-    fn filter(raw: Option<&str>) -> ApiResult<Option<DocumentFilter>> {
+    pub(super) fn filter(raw: Option<&str>) -> ApiResult<Option<DocumentFilter>> {
         fn parse<T: std::str::FromStr>(name: &str, value: &str) -> ApiResult<T> {
             value
                 .parse()
@@ -72,7 +72,6 @@ impl ListDocumentsQuery {
         let mut filter = DocumentFilter::default();
         let mut any = false;
         for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
-            any = true;
             match key.as_ref() {
                 "correspondent_id" => filter.correspondent_id = Some(parse(&key, &value)?),
                 "document_type_id" => filter.document_type_id = Some(parse(&key, &value)?),
@@ -82,8 +81,9 @@ impl ListDocumentsQuery {
                     .push(parse(&key, &value)?),
                 "created_after" => filter.created_after = Some(parse(&key, &value)?),
                 "created_before" => filter.created_before = Some(parse(&key, &value)?),
-                _ => any = false,
+                _ => continue,
             }
+            any = true;
         }
         Ok(any.then_some(filter))
     }
@@ -119,7 +119,7 @@ pub struct DocumentListResponse {
     count: usize,
 }
 
-async fn present(
+pub(super) async fn present(
     vault: VaultId,
     state: &AppState,
     documents: Vec<Document>,

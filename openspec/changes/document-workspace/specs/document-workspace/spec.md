@@ -14,7 +14,7 @@ The system SHALL support vault-scoped paged document queries with chronological 
 
 ### Requirement: Authorized paged API
 
-After the vault-access dependency lands, `GET /api/vaults/{vault_id}/documents` SHALL expose bounded browse queries with enriched summaries and an optional next cursor.
+`GET /api/vaults/{vault_id}/documents` SHALL expose bounded browse queries with enriched summaries and an optional next cursor. Each request SHALL check the existing vault access policy. `GET /api/documents/browse` SHALL provide the same contract for the resolved default vault, without changing legacy list routes. Unauthenticated requests, permitted only when authentication is disabled, SHALL browse only the instance default vault.
 
 #### Scenario: Successful page
 - **WHEN** an authorized client requests a valid page
