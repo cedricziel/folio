@@ -57,6 +57,13 @@ pub trait IngestionSourceFactory: Send + Sync {
 #[async_trait]
 pub trait DocumentImporter: Send + Sync {
     async fn import(&self, vault: VaultId, upload: NewUpload) -> Result<Document>;
+    /// Resume an import using the document identity durably reserved by `claim`.
+    async fn import_reserved(
+        &self,
+        vault: VaultId,
+        claim: &LedgerEntry,
+        upload: NewUpload,
+    ) -> Result<Document>;
 }
 
 /// Persistence for managed sources and the status of every source
@@ -98,6 +105,14 @@ pub trait IngestLedger: Send + Sync {
         outcome: &str,
         document_id: Option<Id>,
     ) -> Result<()>;
+    /// Change only the unchanged reservation, fencing late import attempts.
+    async fn transition_if_matches(
+        &self,
+        vault: VaultId,
+        expected: &LedgerEntry,
+        outcome: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool>;
     /// Delete only the unchanged entry; returns false when it changed or disappeared.
     async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool>;
     async fn delete(&self, vault: VaultId, key: &str) -> Result<()>;
