@@ -5,6 +5,39 @@ const instance = new TourInstance();
 test.beforeAll(() => instance.start());
 test.afterAll(() => instance.stop());
 
+test("unavailable passkey autofill leaves password sign-in usable", async ({
+  browser,
+}) => {
+  await instance.ready(browser, { seeded: false });
+  const context = await browser.newContext({ baseURL: instance.baseURL });
+  await context.addInitScript(() => {
+    PublicKeyCredential.isConditionalMediationAvailable = async () => true;
+    navigator.credentials.get = async () => {
+      document.documentElement.dataset.passkeyAttempted = "true";
+      throw new DOMException("Passkeys are unavailable.", "NotSupportedError");
+    };
+  });
+  const page = await context.newPage();
+  try {
+    await page.goto("/login");
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-passkey-attempted",
+      "true",
+    );
+    await expect(page.locator("[data-passkey-target='error']")).toBeHidden();
+    await page
+      .getByRole("button", { name: "Sign in with a passkey", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toHaveText(
+      "Passkeys are unavailable.",
+    );
+    await tour.login(page);
+    await expect(page).toHaveURL(instance.baseURL + "/");
+  } finally {
+    await context.close();
+  }
+});
+
 test("a resident passkey signs in without a username", async ({ browser }) => {
   await instance.ready(browser, { seeded: false });
   const context = await browser.newContext({ baseURL: instance.baseURL });

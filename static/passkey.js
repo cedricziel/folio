@@ -87,12 +87,12 @@ class PasskeyController extends Controller {
   }
 
   async autofill() {
-    const available = await PublicKeyCredential.isConditionalMediationAvailable?.();
-    if (!available || !document.querySelector("input[autocomplete~='webauthn']")) return;
     try {
+      const available = await PublicKeyCredential.isConditionalMediationAvailable?.();
+      if (!available || !document.querySelector("input[autocomplete~='webauthn']")) return;
       await this.assertion("conditional");
-    } catch (error) {
-      this.fail(error);
+    } catch {
+      // Optional autofill must leave password sign-in usable when passkeys are unavailable.
     }
   }
 
