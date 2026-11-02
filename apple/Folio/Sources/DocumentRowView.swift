@@ -23,6 +23,7 @@ struct DocumentRowView: View {
                     Text(status)
                         .font(FolioTheme.Typography.bodySm)
                         .foregroundStyle(Color.pending)
+                        .lineLimit(1)
                 } else if !row.tags.isEmpty {
                     HStack(spacing: FolioTheme.Spacing.space2) {
                         ForEach(row.tags) { TagCapsule(tag: $0) }
@@ -33,6 +34,8 @@ struct DocumentRowView: View {
             Text(row.dateText)
                 .font(FolioTheme.Typography.meta)
                 .foregroundStyle(Color.inkMuted)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.vertical, FolioTheme.Spacing.space1)
         .accessibilityElement(children: .combine)

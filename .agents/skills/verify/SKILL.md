@@ -19,6 +19,7 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 ```
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
+`WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
 
 Build the app and run the macOS authentication and File Provider tests:
 
