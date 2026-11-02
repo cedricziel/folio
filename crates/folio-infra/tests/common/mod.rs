@@ -33,7 +33,7 @@ pub const MINIO_PASSWORD: &str = "folio-test-password";
 /// Create a bucket with a hand-signed SigV4 request; `object_store` cannot
 /// create buckets.
 pub async fn create_bucket(endpoint: &str, bucket: &str) {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::{Digest, Sha256};
 
     fn hmac_sha256(key: &[u8], data: &str) -> Vec<u8> {
