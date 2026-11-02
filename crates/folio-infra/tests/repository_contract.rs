@@ -2661,6 +2661,77 @@ async fn pagination_contract(db: &Database, r: &Repositories) {
     assert_eq!(r.documents.list(vault, None).await.unwrap().len(), 3);
 }
 
+async fn batch_tags_contract(r: &Repositories) {
+    let vault = r.vaults.create("Tag batch", None).await.unwrap().id;
+    let outside = r.vaults.instance_default().await.unwrap();
+    let tag = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "Batch tag".into(),
+                color: Some("#123456".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let tagged = r
+        .documents
+        .create(vault, new_document("Tagged"))
+        .await
+        .unwrap();
+    let untagged = r
+        .documents
+        .create(vault, new_document("Untagged"))
+        .await
+        .unwrap();
+    let foreign = r
+        .documents
+        .create(outside, new_document("Foreign"))
+        .await
+        .unwrap();
+    r.documents.add_tag(vault, tagged.id, tag.id).await.unwrap();
+    let foreign_tag = r
+        .tags
+        .create(
+            outside,
+            CreateTag {
+                name: "Foreign batch tag".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    r.documents
+        .add_tag(outside, foreign.id, foreign_tag.id)
+        .await
+        .unwrap();
+    let result = r
+        .documents
+        .tags_for_documents(
+            vault,
+            &[tagged.id, tagged.id, untagged.id, foreign.id, Id::new_v4()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[&tagged.id].len(), 1);
+    assert_eq!(result[&tagged.id][0].id, tag.id);
+    assert_eq!(result[&tagged.id][0].color, tag.color);
+    assert!(r
+        .documents
+        .tags_for_documents(vault, &[])
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(r
+        .documents
+        .tags_for_documents(outside, &[tagged.id])
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 async fn run_contract(db: &Database) {
     let (first, second) = tokio::join!(db.migrate(), db.migrate());
     first.unwrap();
@@ -2674,6 +2745,7 @@ async fn run_contract(db: &Database) {
     documents_contract(&repos).await;
     document_filter_contract(&repos).await;
     pagination_contract(db, &repos).await;
+    batch_tags_contract(&repos).await;
     settings_contract(&repos).await;
     search_contract(
         repos.vaults.instance_default().await.unwrap(),

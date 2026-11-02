@@ -167,6 +167,13 @@ impl TryFrom<DocumentRow> for Document {
 }
 
 #[derive(sqlx::FromRow)]
+struct DocumentTagRow {
+    document_id: Uuid,
+    #[sqlx(flatten)]
+    tag: TagRow,
+}
+
+#[derive(sqlx::FromRow)]
 struct TagRow {
     id: Uuid,
     name: String,
@@ -829,6 +836,44 @@ impl DocumentRepository for PostgresDocumentRepository {
         .map_err(repo_err)?;
 
         Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn tags_for_documents(
+        &self,
+        vault: VaultId,
+        document_ids: &[Id],
+    ) -> Result<std::collections::HashMap<Id, Vec<Tag>>> {
+        let mut ids = document_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut result: std::collections::HashMap<Id, Vec<Tag>> = Default::default();
+        // Legacy unbounded list callers can exceed the database's bind limit.
+        for chunk in ids.chunks(500) {
+            let mut qb = QueryBuilder::<Postgres>::new(
+                "SELECT dt.document_id, t.id, t.name, t.color, t.created_at
+                 FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
+                 JOIN documents d ON d.id = dt.document_id
+                 WHERE t.vault_id = d.vault_id AND d.vault_id = ",
+            );
+            qb.push_bind(vault.0).push(" AND d.id IN (");
+            let mut separated = qb.separated(", ");
+            for id in chunk {
+                separated.push_bind(*id);
+            }
+            qb.push(") ORDER BY t.name, t.id");
+            let rows: Vec<DocumentTagRow> = qb
+                .build_query_as()
+                .fetch_all(&self.pool)
+                .await
+                .map_err(repo_err)?;
+            for row in rows {
+                result
+                    .entry(row.document_id)
+                    .or_default()
+                    .push(row.tag.into());
+            }
+        }
+        Ok(result)
     }
 
     async fn set_tags(&self, vault: VaultId, document_id: Id, tag_ids: &[Id]) -> Result<()> {
