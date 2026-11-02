@@ -2487,6 +2487,180 @@ async fn fresh_database_uses_config_and_preserves_saved_overrides(db: &Database)
     assert!(pipeline.settings().await.processing.auto_ocr);
 }
 
+async fn pagination_contract(db: &Database, r: &Repositories) {
+    use folio_core::models::{DocumentPageQuery, DocumentSort};
+    let vault = r.vaults.create("Pagination", None).await.unwrap().id;
+    let first = r
+        .documents
+        .create(vault, new_document("Same"))
+        .await
+        .unwrap();
+    let second = r
+        .documents
+        .create(vault, new_document("Same"))
+        .await
+        .unwrap();
+    let third = r
+        .documents
+        .create(vault, new_document("Zebra"))
+        .await
+        .unwrap();
+    let at = "2026-01-01T00:00:00+00:00";
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query("UPDATE documents SET created_at = ? WHERE vault_id = ?")
+                .bind(at)
+                .bind(vault.to_string())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("UPDATE documents SET created_at = $1 WHERE vault_id = $2")
+                .bind(at.parse::<chrono::DateTime<Utc>>().unwrap())
+                .bind(vault.0)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    let query = DocumentPageQuery {
+        limit: 2,
+        sort: DocumentSort::Title,
+        ..Default::default()
+    };
+    let page = r.documents.page(vault, query.clone()).await.unwrap();
+    let mut expected = vec![first.id, second.id];
+    expected.sort();
+    assert_eq!(
+        page.documents.iter().map(|d| d.id).collect::<Vec<_>>(),
+        expected
+    );
+    let cursor = page.next_cursor.unwrap();
+    let next = DocumentPageQuery {
+        cursor: Some(cursor.clone()),
+        ..query.clone()
+    };
+    let page = r.documents.page(vault, next.clone()).await.unwrap();
+    assert_eq!(
+        page.documents.iter().map(|d| d.id).collect::<Vec<_>>(),
+        vec![third.id]
+    );
+    assert!(page.next_cursor.is_none());
+    let other = r.vaults.instance_default().await.unwrap();
+    assert!(matches!(
+        r.documents.page(other, next.clone()).await,
+        Err(Error::Validation(_))
+    ));
+    let changed_sort = DocumentPageQuery {
+        sort: DocumentSort::Newest,
+        ..next.clone()
+    };
+    assert!(matches!(
+        r.documents.page(vault, changed_sort).await,
+        Err(Error::Validation(_))
+    ));
+    let changed_filter = DocumentPageQuery {
+        filter: DocumentFilter {
+            search_query: Some("Same".into()),
+            ..Default::default()
+        },
+        ..next
+    };
+    assert!(matches!(
+        r.documents.page(vault, changed_filter).await,
+        Err(Error::Validation(_))
+    ));
+    let filtered = DocumentPageQuery {
+        filter: DocumentFilter {
+            search_query: Some("Zebra".into()),
+            ..Default::default()
+        },
+        ..query.clone()
+    };
+    let page = r.documents.page(vault, filtered).await.unwrap();
+    assert_eq!(page.documents.len(), 1);
+    assert_eq!(page.documents[0].id, third.id);
+    assert!(page.next_cursor.is_none());
+    let chronological = DocumentPageQuery {
+        limit: 2,
+        ..Default::default()
+    };
+    let page = r
+        .documents
+        .page(vault, chronological.clone())
+        .await
+        .unwrap();
+    let mut descending = [first.id, second.id, third.id];
+    descending.sort_by(|a, b| b.cmp(a));
+    assert_eq!(
+        page.documents.iter().map(|d| d.id).collect::<Vec<_>>(),
+        descending[..2]
+    );
+    let page = r
+        .documents
+        .page(
+            vault,
+            DocumentPageQuery {
+                cursor: page.next_cursor,
+                ..chronological
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.documents[0].id, descending[2]);
+    assert!(page.next_cursor.is_none());
+    assert!(matches!(
+        r.documents
+            .page(
+                vault,
+                DocumentPageQuery {
+                    limit: 0,
+                    ..query.clone()
+                }
+            )
+            .await,
+        Err(Error::Validation(_))
+    ));
+    assert!(matches!(
+        r.documents
+            .page(
+                vault,
+                DocumentPageQuery {
+                    limit: 101,
+                    ..query
+                }
+            )
+            .await,
+        Err(Error::Validation(_))
+    ));
+    let oldest = DocumentPageQuery {
+        limit: 2,
+        sort: DocumentSort::Oldest,
+        ..Default::default()
+    };
+    let page = r.documents.page(vault, oldest.clone()).await.unwrap();
+    descending.reverse();
+    assert_eq!(
+        page.documents.iter().map(|d| d.id).collect::<Vec<_>>(),
+        descending[..2]
+    );
+    let page = r
+        .documents
+        .page(
+            vault,
+            DocumentPageQuery {
+                cursor: page.next_cursor,
+                ..oldest
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.documents[0].id, descending[2]);
+    assert!(page.next_cursor.is_none());
+    assert_eq!(r.documents.list(vault, None).await.unwrap().len(), 3);
+}
+
 async fn run_contract(db: &Database) {
     let (first, second) = tokio::join!(db.migrate(), db.migrate());
     first.unwrap();
@@ -2499,6 +2673,7 @@ async fn run_contract(db: &Database) {
     document_types_contract(&repos).await;
     documents_contract(&repos).await;
     document_filter_contract(&repos).await;
+    pagination_contract(db, &repos).await;
     settings_contract(&repos).await;
     search_contract(
         repos.vaults.instance_default().await.unwrap(),

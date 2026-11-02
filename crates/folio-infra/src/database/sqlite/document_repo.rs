@@ -487,6 +487,59 @@ impl DocumentRepository for SqliteDocumentRepository {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    async fn page(
+        &self,
+        vault: VaultId,
+        query: folio_core::models::DocumentPageQuery,
+    ) -> Result<folio_core::models::DocumentPage> {
+        use folio_core::models::DocumentSort;
+        query.validate(vault)?;
+        let mut qb = QueryBuilder::<Sqlite>::new(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE vault_id = "
+        ));
+        qb.push_bind(vault.to_string());
+        push_filter(&mut qb, query.filter.clone());
+        let (column, direction, comparison) = match query.sort {
+            DocumentSort::Newest => ("created_at", "DESC", " < "),
+            DocumentSort::Oldest => ("created_at", "ASC", " > "),
+            DocumentSort::Title => ("title COLLATE BINARY", "ASC", " > "),
+        };
+        if let Some(cursor) = &query.cursor {
+            qb.push(" AND (")
+                .push(column)
+                .push(", id)")
+                .push(comparison)
+                .push("(");
+            match query.sort {
+                DocumentSort::Title => {
+                    qb.push_bind(cursor.title.clone());
+                }
+                _ => {
+                    qb.push_bind(cursor.created_at.to_rfc3339());
+                }
+            }
+            qb.push(", ").push_bind(cursor.id.to_string()).push(")");
+        }
+        qb.push(" ORDER BY ")
+            .push(column)
+            .push(" ")
+            .push(direction)
+            .push(", id ")
+            .push(direction)
+            .push(" LIMIT ")
+            .push_bind(i64::from(query.limit) + 1);
+        let rows: Vec<DocumentRow> = qb
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        let documents = rows
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(query.finish(vault, documents))
+    }
+
     async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
         let mut qb = QueryBuilder::<Sqlite>::new("SELECT id FROM documents WHERE vault_id = ");
         qb.push_bind(vault.to_string());

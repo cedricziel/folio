@@ -456,6 +456,57 @@ impl DocumentRepository for PostgresDocumentRepository {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    async fn page(
+        &self,
+        vault: VaultId,
+        query: folio_core::models::DocumentPageQuery,
+    ) -> Result<folio_core::models::DocumentPage> {
+        use folio_core::models::DocumentSort;
+        query.validate(vault)?;
+        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE vault_id = "));
+        qb.push_bind(vault.0);
+        push_filter(&mut qb, query.filter.clone());
+        let (column, direction, comparison) = match query.sort {
+            DocumentSort::Newest => ("created_at", "DESC", " < "),
+            DocumentSort::Oldest => ("created_at", "ASC", " > "),
+            DocumentSort::Title => ("title COLLATE \"C\"", "ASC", " > "),
+        };
+        if let Some(cursor) = &query.cursor {
+            qb.push(" AND (")
+                .push(column)
+                .push(", id)")
+                .push(comparison)
+                .push("(");
+            match query.sort {
+                DocumentSort::Title => {
+                    qb.push_bind(cursor.title.clone());
+                }
+                _ => {
+                    qb.push_bind(cursor.created_at);
+                }
+            }
+            qb.push(", ").push_bind(cursor.id).push(")");
+        }
+        qb.push(" ORDER BY ")
+            .push(column)
+            .push(" ")
+            .push(direction)
+            .push(", id ")
+            .push(direction)
+            .push(" LIMIT ")
+            .push_bind(i64::from(query.limit) + 1);
+        let rows: Vec<DocumentRow> = qb
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        let documents = rows
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(query.finish(vault, documents))
+    }
+
     async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
         let mut qb = QueryBuilder::<Postgres>::new("SELECT id FROM documents WHERE vault_id = ");
         qb.push_bind(vault.0);
