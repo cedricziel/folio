@@ -159,6 +159,9 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 
 ## Verify ingestion claims
 
+Folder regressions cover replacement during import, staged retry and restart,
+cancellation, concurrent source instances, and symlink-safe recovery.
+
 Run `cargo test -p folio-infra --test ingest_pipeline --test ingest_folder --test ingest_email`
 with a task-specific temporary `CARGO_TARGET_DIR` and bounded `CARGO_BUILD_JOBS`.
 The pipeline tests use temporary SQLite databases and in-memory original storage.

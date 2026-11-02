@@ -76,6 +76,8 @@ Set `enabled = false` on any source to keep its settings but not run it. Changes
 
 Folio watches the folder for changes and also rescans it every `rescan_secs`, because network shares often lose change events.
 
+Before reading a settled file, Folio moves it into `.folio-staging/` inside the consume folder. A new file at the original path stays available for a later poll. Staged inputs retain their original path and tags and resume after a busy import or restart. Leave this directory intact while the source is enabled. Moving to `processed/`, `failed/`, or `skipped/` requires hard-link support on the same filesystem. If cleanup fails, Folio keeps the staged input and retries.
+
 - **Settling.** A file is imported only after its size and modification time stayed the same across two looks and for at least `settle_secs`. A file still being copied is left alone.
 - **Ignored.** Hidden files and folders (`.name`), `~$` lock files, `Thumbs.db`, `desktop.ini`, and partial or temporary files (`.part`, `.partial`, `.tmp`, `.temp`, `.crdownload`, `.download`, `.filepart`, `.swp`, trailing `~`).
 - **Tags from folders.** With `subfolders_as_tags`, `Insurance/2025/x.pdf` is imported with the tags `Insurance` and `2025`. Missing tags are created.
