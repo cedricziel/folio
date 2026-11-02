@@ -30,6 +30,16 @@ pub mod keys {
         format!("documents/{id}/original")
     }
 
+    /// Each replacement receives a fresh revision ID before storing its original.
+    pub fn revision_original(document_id: Id, revision_id: Id) -> String {
+        format!("documents/{document_id}/revisions/{revision_id}/original")
+    }
+
+    /// A retained derivative receives a new artifact ID on every generation.
+    pub fn revision_artifact(document_id: Id, revision_id: Id, artifact_id: Id) -> String {
+        format!("documents/{document_id}/revisions/{revision_id}/artifacts/{artifact_id}")
+    }
+
     /// The first-page thumbnail. Page 1 of the page viewer reuses it.
     pub fn thumbnail(id: Id) -> String {
         format!("documents/{id}/thumb.jpg")

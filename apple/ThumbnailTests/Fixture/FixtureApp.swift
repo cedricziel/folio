@@ -40,6 +40,7 @@ typealias Document = FolioKit.Document
                     opened = row.title
                 } label: {
                     DocumentRowView(row: row)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier(row.title)

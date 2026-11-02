@@ -6,6 +6,7 @@
 //! - Business services
 //! - Domain events
 
+pub mod document_transitions;
 pub mod domain_event;
 pub mod error;
 pub mod events;
