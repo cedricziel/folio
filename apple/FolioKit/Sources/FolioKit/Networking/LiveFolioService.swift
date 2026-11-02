@@ -1,5 +1,6 @@
 import FolioAPI
 import Foundation
+import ImageIO
 import OpenAPIRuntime
 import OpenAPIURLSession
 import UniformTypeIdentifiers
@@ -179,6 +180,46 @@ public struct LiveFolioService: FolioService {
             try await client.listDocumentTypes().ok.body.json.map {
                 try DocumentType(id: Self.uuid($0.id), name: $0.name)
             }
+        }
+    }
+
+    public func thumbnail(id: Document.ID) async throws -> Data? {
+        try await call("documents.thumbnail") {
+            var request = URLRequest(url: endpoint("api/documents/\(id.uuidString.lowercased())/thumbnail"))
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.setValue("image/jpeg", forHTTPHeaderField: "Accept")
+            let (bytes, response) = try await authorizedTransfer(request) { request in
+                let result: (URLSession.AsyncBytes, URLResponse)
+                do {
+                    result = try await session.bytes(for: request)
+                } catch let error as URLError where error.code == .cancelled {
+                    throw CancellationError()
+                }
+                if (result.1 as? HTTPURLResponse)?.statusCode == 401 { result.0.task.cancel() }
+                return result
+            }
+            defer { bytes.task.cancel() }
+            try Task.checkCancellation()
+            if (response as? HTTPURLResponse)?.statusCode == 404 { return nil }
+            try check(response, body: nil)
+            guard response.mimeType == "image/jpeg", response.expectedContentLength <= 2_097_152 else {
+                throw FolioError.unreadableResponse
+            }
+            var data = Data()
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard data.count < 2_097_152 else { throw FolioError.unreadableResponse }
+                data.append(byte)
+            }
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                CGImageSourceGetType(source) as String? == UTType.jpeg.identifier,
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                width > 0, height > 0, width <= 4_000_000 / height,
+                CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) != nil
+            else { throw FolioError.unreadableResponse }
+            return data
         }
     }
 

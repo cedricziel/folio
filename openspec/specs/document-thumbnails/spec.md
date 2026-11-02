@@ -34,3 +34,33 @@ Provide small document previews without downloading original files or changing d
 
 - **WHEN** the thumbnail store fails for a reason other than a missing object
 - **THEN** the response is 500 rather than a successful placeholder
+
+### Requirement: Bounded Apple thumbnail transport
+
+Apple clients SHALL retrieve thumbnails through the authenticated, vault-scoped service. They SHALL treat 404 as unavailable, retain authorization errors, and reject malformed or oversized image responses before displaying them.
+
+#### Scenario: Access token expires
+
+- **WHEN** the thumbnail request receives 401 and token refresh succeeds
+- **THEN** the client retries with the fresh token and returns the JPEG
+- **AND** failed refresh remains an authentication error
+
+#### Scenario: Unusable response
+
+- **WHEN** a response is not a valid JPEG or exceeds the client byte or pixel limits
+- **THEN** the client rejects it instead of displaying or retaining the bytes
+
+### Requirement: File Provider thumbnail batches
+
+File Provider SHALL retrieve previews for vault-qualified document identifiers and report each item's data, unavailable result, or error independently. Folders SHALL use the system fallback without a thumbnail request.
+
+#### Scenario: Mixed batch
+
+- **WHEN** a batch includes a readable thumbnail, an unavailable thumbnail, and a denied item
+- **THEN** each item receives its own result and the batch completes once after those callbacks
+
+#### Scenario: Batch cancellation
+
+- **WHEN** the caller cancels the returned progress
+- **THEN** pending network work is cancelled and completion reports cancellation once
+- **AND** no item callbacks occur after completion

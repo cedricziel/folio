@@ -264,6 +264,13 @@ The server smoke test in `.claude/skills/verify/scripts/smoke.sh` also retrieves
 the processed fixture's thumbnail and checks its JPEG bytes and private no-store
 headers. Use that skill's disposable instance wrapper, never a user archive.
 
+`LiveFolioServiceTests` covers bearer and vault headers, token refresh, unavailable
+thumbnails, authentication errors, and JPEG byte/pixel limits. Native
+`FolioProviderTests/ThumbnailTests` covers independent per-item results, folder
+and invalid-identifier handling, empty batches, and cancellation that stops the
+network transfer and completes the batch once. Run the isolated package and
+macOS provider commands above; these tests do not register a provider domain.
+
 ## Verify document repository changes
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`

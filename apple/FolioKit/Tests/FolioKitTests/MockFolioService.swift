@@ -195,6 +195,11 @@ actor MockFolioService: FolioService {
         return document
     }
 
+    func thumbnail(id _: Document.ID) async throws -> Data? {
+        if let failure { throw failure }
+        return nil
+    }
+
     func downloadFile(for document: Document) async throws -> URL {
         try Task.checkCancellation()
         if let failure {
