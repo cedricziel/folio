@@ -59,7 +59,7 @@ Deleting a correspondent or document type SHALL leave its documents in place wit
 
 ### Requirement: Assigning metadata to a document
 
-The document page SHALL set a correspondent at `POST /documents/:id/correspondent`, set a document type at `POST /documents/:id/document_type`, add a tag at `POST /documents/:id/tags`, and remove a tag at `POST /documents/:id/tags/:tag_id`. Each SHALL redirect to `/documents/:id`.
+The document page SHALL set a correspondent at `POST /documents/:id/correspondent`, set a document type at `POST /documents/:id/document_type`, add a tag at `POST /documents/:id/tags`, and remove a tag at `POST /documents/:id/tags/:tag_id`. Valid submissions SHALL redirect to `/documents/:id`. Correspondent and document-type forms SHALL require the field to be present: an empty value clears it, a valid UUID assigns it, and missing or malformed values SHALL return status 400 without changing the document.
 
 #### Scenario: Assign a correspondent
 
@@ -75,3 +75,13 @@ The document page SHALL set a correspondent at `POST /documents/:id/corresponden
 
 - **WHEN** a user adds the tag `Tax` to a document and then removes it
 - **THEN** the document has no `Tax` tag afterwards
+
+#### Scenario: Reject malformed classification IDs
+
+- **WHEN** a correspondent or document-type form submits a nonempty value that is not a UUID through a page or API route
+- **THEN** the response status is 400 and the document keeps its existing associations
+
+#### Scenario: Missing classification is not a clear request
+
+- **WHEN** a correspondent or document-type form omits its classification field
+- **THEN** the response status is 400 and the document remains unchanged
