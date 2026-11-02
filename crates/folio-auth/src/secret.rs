@@ -58,7 +58,7 @@ impl SecretBox {
         let mut out = nonce.to_vec();
         let sealed = XChaCha20Poly1305::new(&self.cipher_key.into())
             .encrypt(
-                XNonce::from_slice(&nonce),
+                &XNonce::from(nonce),
                 Payload {
                     msg: plaintext,
                     aad: context.as_bytes(),
@@ -78,7 +78,7 @@ impl SecretBox {
         let (nonce, ciphertext) = raw.split_at(NONCE_LEN);
         XChaCha20Poly1305::new(&self.cipher_key.into())
             .decrypt(
-                XNonce::from_slice(nonce),
+                &XNonce::try_from(nonce).ok()?,
                 Payload {
                     msg: ciphertext,
                     aad: context.as_bytes(),
