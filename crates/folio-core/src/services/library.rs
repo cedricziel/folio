@@ -78,6 +78,24 @@ pub struct MetadataUpdate {
     pub tags: Option<Vec<String>>,
 }
 
+/// Whether name-based metadata edits may create missing vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VocabularyPolicy {
+    ExistingOnly,
+    CreateMissing,
+}
+
+impl VocabularyPolicy {
+    fn require_creation(self) -> Result<()> {
+        match self {
+            Self::CreateMissing => Ok(()),
+            Self::ExistingOnly => Err(Error::Validation(
+                "creating vocabulary is not permitted".into(),
+            )),
+        }
+    }
+}
+
 /// A file to add to the archive
 #[derive(Debug, Clone, Default)]
 pub struct NewUpload {
@@ -306,11 +324,13 @@ impl LibraryService {
         }
     }
 
+    /// Update metadata, rejecting missing names under [`VocabularyPolicy::ExistingOnly`].
     pub async fn update_metadata(
         &self,
         vault: VaultId,
         id: Id,
         update: MetadataUpdate,
+        vocabulary: VocabularyPolicy,
     ) -> Result<DocumentDetail> {
         self.require_document(vault, id).await?;
 
@@ -329,12 +349,20 @@ impl LibraryService {
         }
 
         let correspondent_id = match update.correspondent {
-            Some(Some(name)) => Some(Some(self.ensure_correspondent(vault, &name).await?.id)),
+            Some(Some(name)) => Some(Some(
+                self.ensure_correspondent(vault, &name, vocabulary)
+                    .await?
+                    .id,
+            )),
             Some(None) => Some(None),
             None => None,
         };
         let document_type_id = match update.document_type {
-            Some(Some(name)) => Some(Some(self.ensure_document_type(vault, &name).await?.id)),
+            Some(Some(name)) => Some(Some(
+                self.ensure_document_type(vault, &name, vocabulary)
+                    .await?
+                    .id,
+            )),
             Some(None) => Some(None),
             None => None,
         };
@@ -342,7 +370,7 @@ impl LibraryService {
             Some(names) => {
                 let mut ids = Vec::with_capacity(names.len());
                 for name in names {
-                    ids.push(self.ensure_tag(vault, name).await?.id);
+                    ids.push(self.ensure_tag(vault, name, vocabulary).await?.id);
                 }
                 Some(ids)
             }
@@ -372,19 +400,23 @@ impl LibraryService {
         self.get_document(vault, id).await
     }
 
-    /// Attach tags by name, creating missing ones
+    /// Attach tags by name, creating missing ones only when the policy permits it.
     pub async fn add_tags(
         &self,
         vault: VaultId,
         id: Id,
         names: &[String],
+        vocabulary: VocabularyPolicy,
     ) -> Result<DocumentDetail> {
         self.require_document(vault, id).await?;
         for name in names {
             non_empty(name, "tag")?;
         }
+        let mut tags = Vec::with_capacity(names.len());
         for name in names {
-            let tag = self.ensure_tag(vault, name).await?;
+            tags.push(self.ensure_tag(vault, name, vocabulary).await?);
+        }
+        for tag in tags {
             self.documents.add_tag(vault, id, tag.id).await?;
         }
         self.get_document(vault, id).await
@@ -495,11 +527,17 @@ impl LibraryService {
             .ok_or_else(|| unknown("document type", name))
     }
 
-    async fn ensure_tag(&self, vault: VaultId, name: &str) -> Result<Tag> {
+    async fn ensure_tag(
+        &self,
+        vault: VaultId,
+        name: &str,
+        vocabulary: VocabularyPolicy,
+    ) -> Result<Tag> {
         let name = non_empty(name, "tag")?;
         match self.lookup_tag(vault, name).await? {
             Some(tag) => Ok(tag),
             None => {
+                vocabulary.require_creation()?;
                 self.tags
                     .create(
                         vault,
@@ -513,11 +551,17 @@ impl LibraryService {
         }
     }
 
-    async fn ensure_correspondent(&self, vault: VaultId, name: &str) -> Result<Correspondent> {
+    async fn ensure_correspondent(
+        &self,
+        vault: VaultId,
+        name: &str,
+        vocabulary: VocabularyPolicy,
+    ) -> Result<Correspondent> {
         let name = non_empty(name, "correspondent")?;
         match self.lookup_correspondent(vault, name).await? {
             Some(found) => Ok(found),
             None => {
+                vocabulary.require_creation()?;
                 self.correspondents
                     .create(
                         vault,
@@ -530,11 +574,17 @@ impl LibraryService {
         }
     }
 
-    async fn ensure_document_type(&self, vault: VaultId, name: &str) -> Result<DocumentType> {
+    async fn ensure_document_type(
+        &self,
+        vault: VaultId,
+        name: &str,
+        vocabulary: VocabularyPolicy,
+    ) -> Result<DocumentType> {
         let name = non_empty(name, "document type")?;
         match self.lookup_document_type(vault, name).await? {
             Some(found) => Ok(found),
             None => {
+                vocabulary.require_creation()?;
                 self.document_types
                     .create(
                         vault,

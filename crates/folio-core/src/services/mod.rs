@@ -13,7 +13,8 @@ mod workflow_engine;
 pub use importer::Importer;
 pub use ingest::{content_key, IngestPipeline, IngestScheduler};
 pub use library::{
-    DocumentDetail, DocumentHit, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, TextPage,
+    DocumentDetail, DocumentHit, DocumentQuery, LibraryService, MetadataUpdate, NewUpload,
+    TextPage, VocabularyPolicy,
 };
 pub use outbox_dispatcher::{
     retry_delay, BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher,

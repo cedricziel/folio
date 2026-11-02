@@ -551,3 +551,82 @@ async fn contributors_edit_own_documents_but_cannot_create_vocabulary_or_edit_ot
     assert_eq!(other_edit.is_error, Some(true));
     let _ = client.cancel().await;
 }
+
+#[tokio::test]
+async fn contributor_cannot_recreate_a_tag_deleted_after_vocabulary_read() {
+    assert_deleted_tag_is_not_recreated("add_tags").await;
+}
+
+#[tokio::test]
+async fn contributor_metadata_cannot_recreate_a_tag_deleted_after_vocabulary_read() {
+    assert_deleted_tag_is_not_recreated("update_document").await;
+}
+
+async fn assert_deleted_tag_is_not_recreated(tool: &'static str) {
+    use folio_core::models::{CreateDocument, Principal, UserId, VaultRole};
+
+    let fx = Fixture::new().await;
+    let server = serve(&fx).await;
+    issue(&server, "contributor-token", &["documents:write"]).await;
+    let user = UserId::from("u1");
+    let document = fx
+        .documents
+        .create(
+            server.vault,
+            CreateDocument {
+                title: "Own document".into(),
+                uploaded_by: Some(user.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    fx.library
+        .add_tags(
+            server.vault,
+            document.id,
+            &["existing".into()],
+            folio_core::services::VocabularyPolicy::CreateMissing,
+        )
+        .await
+        .unwrap();
+    server
+        .members
+        .grant(
+            server.vault,
+            &Principal::User(user),
+            VaultRole::Contributor,
+            None,
+        )
+        .await
+        .unwrap();
+    let client = ()
+        .serve(StreamableHttpClientTransport::from_config(
+            StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+                .auth_header("contributor-token"),
+        ))
+        .await
+        .unwrap();
+    fx.delete_tags_after_next_list
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let result = client
+        .call_tool(
+            CallToolRequestParams::new(tool).with_arguments(
+                json!({"id":document.id,"tags":["existing"]})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.is_error,
+        Some(true),
+        "a Contributor must not recreate concurrently deleted vocabulary"
+    );
+    assert!(fx.library.list_tags(server.vault).await.unwrap().is_empty());
+    let _ = client.cancel().await;
+}

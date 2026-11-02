@@ -6,11 +6,12 @@ use std::sync::Arc;
 use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use folio_core::models::{
-    Document, DocumentSource, Id, SourceKind, Tag, UserId, VaultAction, VaultId,
+    Document, DocumentSource, Id, SourceKind, Tag, UserId, VaultAction, VaultId, VaultRole,
 };
 use folio_core::ports::ProcessingStatus;
 use folio_core::services::{
     DocumentDetail, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, VaultService,
+    VocabularyPolicy,
 };
 use folio_core::Error;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -74,6 +75,17 @@ impl FolioMcp {
         Ok(vault)
     }
 
+    async fn role(&self, user: &UserId, vault: VaultId) -> Result<VaultRole, String> {
+        self.vaults
+            .list(Some(user))
+            .await
+            .map_err(tool_error)?
+            .into_iter()
+            .find(|(item, _)| item.id == vault)
+            .map(|(_, role)| role)
+            .ok_or_else(|| "vault access denied".to_string())
+    }
+
     async fn authorize(
         &self,
         ctx: &RequestContext<RoleServer>,
@@ -83,16 +95,7 @@ impl FolioMcp {
         let Some(user) = crate::auth::subject_of(&ctx.extensions).map(UserId::from) else {
             return Ok(());
         };
-        let role = self
-            .vaults
-            .list(Some(&user))
-            .await
-            .map_err(tool_error)?
-            .into_iter()
-            .find(|(item, _)| item.id == vault)
-            .map(|(_, role)| role)
-            .ok_or_else(|| "vault access denied".to_string())?;
-        if role.permits(&action, &user) {
+        if self.role(&user, vault).await?.permits(&action, &user) {
             Ok(())
         } else {
             Err("vault role does not allow that action".into())
@@ -121,46 +124,25 @@ impl FolioMcp {
         .await
     }
 
-    async fn authorize_new_vocabulary(
+    async fn vocabulary_policy(
         &self,
         ctx: &RequestContext<RoleServer>,
         vault: VaultId,
-        tags: Option<&[String]>,
-        correspondent: Option<&str>,
-        document_type: Option<&str>,
-    ) -> Result<(), String> {
-        let mut creates = false;
-        if let Some(tags) = tags {
-            let existing = self.library.list_tags(vault).await.map_err(tool_error)?;
-            creates |= tags.iter().any(|name| {
-                !existing
-                    .iter()
-                    .any(|item| item.name.eq_ignore_ascii_case(name.trim()))
-            });
-        }
-        if let Some(name) = correspondent.filter(|name| !name.trim().is_empty()) {
-            creates |= !self
-                .library
-                .list_correspondents(vault)
-                .await
-                .map_err(tool_error)?
-                .iter()
-                .any(|item| item.name.eq_ignore_ascii_case(name.trim()));
-        }
-        if let Some(name) = document_type.filter(|name| !name.trim().is_empty()) {
-            creates |= !self
-                .library
-                .list_document_types(vault)
-                .await
-                .map_err(tool_error)?
-                .iter()
-                .any(|item| item.name.eq_ignore_ascii_case(name.trim()));
-        }
-        if creates {
-            self.authorize(ctx, vault, VaultAction::ManageVocabulary)
-                .await?;
-        }
-        Ok(())
+    ) -> Result<VocabularyPolicy, String> {
+        let Some(user) = crate::auth::subject_of(&ctx.extensions).map(UserId::from) else {
+            return Ok(VocabularyPolicy::CreateMissing);
+        };
+        Ok(
+            if self
+                .role(&user, vault)
+                .await?
+                .permits(&VaultAction::ManageVocabulary, &user)
+            {
+                VocabularyPolicy::CreateMissing
+            } else {
+                VocabularyPolicy::ExistingOnly
+            },
+        )
     }
 
     async fn names(&self, vault: VaultId) -> Result<Names, String> {
@@ -581,14 +563,7 @@ impl FolioMcp {
 
         let id = parse_id(&args.id)?;
         self.authorize_edit(&ctx, vault, id).await?;
-        self.authorize_new_vocabulary(
-            &ctx,
-            vault,
-            args.tags.as_deref(),
-            args.correspondent.as_deref(),
-            args.document_type.as_deref(),
-        )
-        .await?;
+        let vocabulary = self.vocabulary_policy(&ctx, vault).await?;
         let clearable = |v: Option<String>| {
             v.map(|s| {
                 let s = s.trim().to_string();
@@ -606,6 +581,7 @@ impl FolioMcp {
                     document_type: clearable(args.document_type),
                     tags: args.tags,
                 },
+                vocabulary,
             )
             .await
             .map_err(tool_error)?;
@@ -631,11 +607,10 @@ impl FolioMcp {
         let vault = self.vault(&ctx).await?;
         let id = parse_id(&args.id)?;
         self.authorize_edit(&ctx, vault, id).await?;
-        self.authorize_new_vocabulary(&ctx, vault, Some(&args.tags), None, None)
-            .await?;
+        let vocabulary = self.vocabulary_policy(&ctx, vault).await?;
         let detail = self
             .library
-            .add_tags(vault, id, &args.tags)
+            .add_tags(vault, id, &args.tags, vocabulary)
             .await
             .map_err(tool_error)?;
         self.metadata_output(vault, detail).await
