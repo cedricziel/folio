@@ -4,6 +4,7 @@ mod correspondent;
 mod document;
 mod document_page;
 mod document_type;
+mod file_identity;
 mod ingest;
 mod settings;
 mod source;
@@ -19,6 +20,7 @@ pub use document::{
 };
 pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
+pub use file_identity::FileIdentity;
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
