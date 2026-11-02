@@ -67,6 +67,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         crate::vault::resolve_default_vault,
     );
     let security = security::router(auth.clone());
+    let settings = settings::router(auth.clone());
     let auth_routes = auth::router(auth);
 
     let routes = Router::new()
@@ -82,7 +83,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         // Management routes (correspondents, document types, tags)
         .merge(manage::router())
         // Settings routes
-        .merge(settings::router())
+        .merge(settings)
         // Account and security
         .merge(security)
         // Workflow pages

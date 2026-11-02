@@ -16,22 +16,30 @@
             <label for="openai_api_key">OpenAI API key</label>
             <div class="input-row" data-controller="password-toggle">
                 <input class="input" type="password" id="openai_api_key" name="openai_api_key"
-                       value="{{ ai_settings.openai_api_key }}" placeholder="sk-..."
+                       placeholder="sk-..."
                        autocomplete="off" data-password-toggle-target="input">
                 <button type="button" class="f-btn" data-action="click->password-toggle#toggle" data-password-toggle-target="button">Show</button>
             </div>
             <span class="hint">Used by the openai-vision and openai providers.</span>
+            {% if credentials.openai_configured %}
+            <span class="hint">A saved key is configured. Leave blank to keep it.</span>
+            <label class="hint"><input type="checkbox" name="clear_openai_api_key"> Clear saved key and use startup configuration</label>
+            {% endif %}
         </div>
 
         <div class="field">
             <label for="anthropic_api_key">Anthropic API key</label>
             <div class="input-row" data-controller="password-toggle">
                 <input class="input" type="password" id="anthropic_api_key" name="anthropic_api_key"
-                       value="{{ ai_settings.anthropic_api_key }}" placeholder="sk-ant-..."
+                       placeholder="sk-ant-..."
                        autocomplete="off" data-password-toggle-target="input">
                 <button type="button" class="f-btn" data-action="click->password-toggle#toggle" data-password-toggle-target="button">Show</button>
             </div>
             <span class="hint">Used by the anthropic-vision provider.</span>
+            {% if credentials.anthropic_configured %}
+            <span class="hint">A saved key is configured. Leave blank to keep it.</span>
+            <label class="hint"><input type="checkbox" name="clear_anthropic_api_key"> Clear saved key and use startup configuration</label>
+            {% endif %}
         </div>
 
         <div class="form-actions">
