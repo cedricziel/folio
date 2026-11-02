@@ -90,6 +90,7 @@ pub async fn harness_with(
         repos.jobs,
         store,
         EventBroadcaster::new(16),
+        repos.outbox,
         repos.workflows,
         WebhookClient::new(),
         "http://folio.test".to_string(),

@@ -7,8 +7,8 @@ use folio_core::models::IngestionSourceDef;
 use folio_core::ports::{
     CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
     DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory,
-    OcrService, SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
-    WorkflowRepository,
+    OcrService, OutboxStore, SearchResult, SearchService, SettingsRepository, SourceRepository,
+    TagRepository, WorkflowRepository,
 };
 use folio_core::services::{Importer, SearchServiceFacade};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
@@ -43,6 +43,8 @@ pub struct AppState {
     pub job_queue: JobQueue,
     pub store: Arc<dyn DocumentStore>,
     pub event_broadcaster: EventBroadcaster,
+    /// Source of truth for events; SSE replays from it
+    pub outbox: Arc<dyn OutboxStore>,
     pub health_checks: HealthChecks,
     pub workflow_repo: Arc<dyn WorkflowRepository>,
     pub webhook_client: WebhookClient,
@@ -51,6 +53,8 @@ pub struct AppState {
     /// The one path that stores a new document
     pub importer: Arc<dyn DocumentImporter>,
     pub ingestion: IngestionState,
+    /// Whether `/mcp` is served while the `mcp.enabled` setting is unset
+    pub mcp_default: bool,
 }
 
 impl IngestionState {
@@ -83,6 +87,7 @@ impl AppState {
         job_queue: JobQueue,
         store: Arc<dyn DocumentStore>,
         event_broadcaster: EventBroadcaster,
+        outbox: Arc<dyn OutboxStore>,
         workflow_repo: Arc<dyn WorkflowRepository>,
         webhook_client: WebhookClient,
         public_url: String,
@@ -107,13 +112,21 @@ impl AppState {
             job_queue,
             store,
             event_broadcaster,
+            outbox,
             health_checks: Arc::from(Vec::new()),
             workflow_repo,
             webhook_client,
             public_url,
             importer,
             ingestion,
+            mcp_default: false,
         }
+    }
+
+    /// What /settings shows for `mcp.enabled` until an admin saves a choice.
+    pub fn with_mcp_default(mut self, enabled: bool) -> Self {
+        self.mcp_default = enabled;
+        self
     }
 
     /// Register the readiness checks reported by `/readyz`.

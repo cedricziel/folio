@@ -7,7 +7,41 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{Job, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS};
+use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS};
+
+/// Insert a pending job; pass a transaction to commit it together with other writes
+pub(crate) async fn insert_job<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    job_type: JobType,
+    scheduled_at: DateTime<Utc>,
+    max_attempts: i32,
+) -> Result<Uuid> {
+    let id = Uuid::new_v4();
+    let now = Utc::now();
+    let type_name = job_type.type_name();
+    let payload = serde_json::to_string(&job_type)
+        .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at)
+        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(id.to_string())
+    .bind(type_name)
+    .bind(&payload)
+    .bind(max_attempts)
+    .bind(now.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .bind(scheduled_at.to_rfc3339())
+    .execute(executor)
+    .await
+    .map_err(|e| Error::Repository(format!("Failed to enqueue job: {}", e)))?;
+
+    debug!("Enqueued job {} of type {}", id, type_name);
+    Ok(id)
+}
 
 /// SQLite-backed job queue
 #[derive(Clone)]
@@ -46,41 +80,18 @@ impl SqliteJobQueue {
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<Uuid> {
-        let id = Uuid::new_v4();
-        let now = Utc::now();
-        let type_name = job_type.type_name();
-        let payload = serde_json::to_string(&job_type)
-            .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
-
-        sqlx::query(
-            r#"
-            INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at)
-            VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(id.to_string())
-        .bind(type_name)
-        .bind(&payload)
-        .bind(max_attempts)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .bind(scheduled_at.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Repository(format!("Failed to enqueue job: {}", e)))?;
-
-        debug!("Enqueued job {} of type {}", id, type_name);
-        Ok(id)
+        insert_job(&self.pool, job_type, scheduled_at, max_attempts).await
     }
 
     /// Dequeue the next available job
     #[allow(clippy::type_complexity)]
-    pub async fn dequeue(&self) -> Result<Option<Job>> {
+    pub async fn dequeue(&self, class: Option<JobClass>) -> Result<Option<Job>> {
         let now = Utc::now();
+        let class_filter = class.map_or("TRUE", JobClass::condition);
 
         // Find and claim the next pending job
         let row: Option<(String, String, String, i32, i32, Option<String>, String, String, String, Option<String>, Option<String>)> =
-            sqlx::query_as(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 r#"
                 UPDATE jobs
                 SET status = 'processing',
@@ -91,12 +102,13 @@ impl SqliteJobQueue {
                     SELECT id FROM jobs
                     WHERE status = 'pending'
                     AND scheduled_at <= ?
+                    AND {class_filter}
                     ORDER BY scheduled_at ASC
                     LIMIT 1
                 )
                 RETURNING id, job_type, payload, attempts, max_attempts, error, created_at, updated_at, scheduled_at, started_at, completed_at
                 "#,
-            )
+            )))
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
@@ -168,7 +180,7 @@ impl SqliteJobQueue {
 
     /// Mark a job as failed
     #[instrument(skip(self))]
-    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<()> {
+    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<FailOutcome> {
         let now = Utc::now();
 
         // Get current attempt count
@@ -208,6 +220,7 @@ impl SqliteJobQueue {
                 "Job {} failed (attempt {}/{}), retrying in {}s: {}",
                 job_id, attempts, max_attempts, delay_seconds, error
             );
+            return Ok(FailOutcome::Retrying);
         } else {
             // Mark as permanently failed
             sqlx::query(
@@ -234,7 +247,7 @@ impl SqliteJobQueue {
             );
         }
 
-        Ok(())
+        Ok(FailOutcome::GaveUp)
     }
 
     /// Get count of pending jobs
@@ -348,15 +361,18 @@ impl SqliteJobQueue {
         Ok(jobs)
     }
 
-    /// Check if a document has any failed jobs (for displaying error state)
+    /// Whether the latest finished job for any processing stage failed
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         let search_pattern = format!("%\"document_id\":\"{}\"%", document_id);
 
         let row: (i64,) = sqlx::query_as(
             r#"
-            SELECT COUNT(*) FROM jobs
-            WHERE payload LIKE ?
-            AND status = 'failed'
+            SELECT COUNT(*) FROM (
+                SELECT status, ROW_NUMBER() OVER (
+                    PARTITION BY job_type ORDER BY created_at DESC, completed_at DESC, id DESC
+                ) AS position FROM jobs
+                WHERE payload LIKE ? AND status IN ('completed', 'failed')
+            ) WHERE position = 1 AND status = 'failed'
             "#,
         )
         .bind(&search_pattern)

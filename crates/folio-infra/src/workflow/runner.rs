@@ -36,9 +36,11 @@ struct ActionFailure {
 /// Runs the actions of a [`WorkflowRun`], recording progress and errors on it
 ///
 /// Actions run in order and each is at-least-once: a run that is retried
-/// resumes at the action that failed rather than repeating finished ones.
-/// Document changes go through the unwrapped repository on purpose, so a
-/// workflow's own edits never trigger `document.updated` workflows again.
+/// resumes at the action that failed rather than repeating finished ones. It
+/// executes the actions snapshotted when the run was created, so editing the
+/// workflow in between changes nothing. Document changes go through a
+/// repository whose events are attributed to workflows: live clients see them,
+/// but they never trigger `document.updated` workflows again.
 pub struct WorkflowRunner {
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
@@ -71,19 +73,10 @@ impl WorkflowRunner {
             });
         }
 
-        let Some(workflow) = self.workflows.find_by_id(run.workflow_id).await? else {
-            self.finish(
-                &mut run,
-                RunStatus::Failed,
-                Some("Workflow no longer exists".into()),
-            )
-            .await?;
-            return Ok(RunOutcome::Failed);
-        };
-
         run.attempts += 1;
         let skip = run.completed_actions as usize;
-        for (index, action) in workflow.actions.iter().enumerate().skip(skip) {
+        let actions = run.actions.clone();
+        for (index, action) in actions.iter().enumerate().skip(skip) {
             match self.perform(action, &run).await {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
@@ -111,6 +104,19 @@ impl WorkflowRunner {
             run.id, run.attempts
         );
         Ok(RunOutcome::Succeeded)
+    }
+
+    /// Mark a run failed because its job gave up, unless it already ended
+    pub async fn abandon(&self, run_id: Id, reason: &str) -> folio_core::Result<()> {
+        let Some(mut run) = self.workflows.find_run(run_id).await? else {
+            return Ok(());
+        };
+        if run.status.is_terminal() {
+            return Ok(());
+        }
+        // Keep the action's own error if there is one; it says more than the job's.
+        let error = run.last_error.take().unwrap_or_else(|| reason.to_string());
+        self.finish(&mut run, RunStatus::Failed, Some(error)).await
     }
 
     async fn finish(

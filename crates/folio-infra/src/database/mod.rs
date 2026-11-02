@@ -16,25 +16,27 @@ pub mod sqlite;
 use std::sync::Arc;
 
 use sqlx::{PgPool, SqlitePool};
+use tokio::sync::Notify;
 
 use folio_auth::AuthStore;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, IngestLedger,
+    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, IngestLedger, OutboxStore,
     SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
+use folio_core::EventOrigin;
 
 use crate::queue::JobQueue;
 
 pub use health::DatabaseHealthCheck;
 pub use postgres::{
     PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
-    PostgresDocumentTypeRepository, PostgresIngestLedger, PostgresSearchService,
-    PostgresSettingsRepository, PostgresSourceRepository, PostgresTagRepository,
-    PostgresWorkflowRepository,
+    PostgresDocumentTypeRepository, PostgresIngestLedger, PostgresOutboxStore,
+    PostgresSearchService, PostgresSettingsRepository, PostgresSourceRepository,
+    PostgresTagRepository, PostgresWorkflowRepository,
 };
 pub use sqlite::{
     create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
-    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger,
+    SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteOutboxStore,
     SqliteSearchService, SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
     SqliteWorkflowRepository,
 };
@@ -90,7 +92,12 @@ impl From<PgPool> for Database {
 
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    /// Writes an outbox event with every lifecycle change
     pub documents: Arc<dyn DocumentRepository>,
+    /// Like `documents`, but its events are attributed to workflows, so they
+    /// reach live clients without triggering workflows again
+    pub workflow_documents: Arc<dyn DocumentRepository>,
+    pub outbox: Arc<dyn OutboxStore>,
     pub tags: Arc<dyn TagRepository>,
     pub correspondents: Arc<dyn CorrespondentRepository>,
     pub document_types: Arc<dyn DocumentTypeRepository>,
@@ -132,32 +139,58 @@ impl Database {
     /// PostgreSQL search service probes for pgvector and adjusts the schema.
     pub async fn repositories(&self) -> Repositories {
         match self {
-            Self::Sqlite(pool) => Repositories {
-                documents: Arc::new(SqliteDocumentRepository::new(pool.clone())),
-                tags: Arc::new(SqliteTagRepository::new(pool.clone())),
-                correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
-                document_types: Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
-                settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
-                workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
-                sources: Arc::new(SqliteSourceRepository::new(pool.clone())),
-                ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
-                search: Arc::new(SqliteSearchService::new(pool.clone())),
-                jobs: JobQueue::sqlite(pool.clone()),
-                auth: Arc::new(SqliteAuthStore::new(pool.clone())),
-            },
-            Self::Postgres(pool) => Repositories {
-                documents: Arc::new(PostgresDocumentRepository::new(pool.clone())),
-                tags: Arc::new(PostgresTagRepository::new(pool.clone())),
-                correspondents: Arc::new(PostgresCorrespondentRepository::new(pool.clone())),
-                document_types: Arc::new(PostgresDocumentTypeRepository::new(pool.clone())),
-                settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
-                workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
-                sources: Arc::new(PostgresSourceRepository::new(pool.clone())),
-                ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
-                search: Arc::new(PostgresSearchService::new(pool.clone()).await),
-                jobs: JobQueue::postgres(pool.clone()),
-                auth: Arc::new(PostgresAuthStore::new(pool.clone())),
-            },
+            Self::Sqlite(pool) => {
+                let wake = Arc::new(Notify::new());
+                let documents = |origin| {
+                    Arc::new(
+                        SqliteDocumentRepository::new(pool.clone())
+                            .with_origin(origin)
+                            .with_wake(wake.clone()),
+                    )
+                };
+                Repositories {
+                    documents: documents(EventOrigin::User),
+                    workflow_documents: documents(EventOrigin::Workflow),
+                    outbox: Arc::new(SqliteOutboxStore::new(pool.clone()).with_wake(wake.clone())),
+                    tags: Arc::new(SqliteTagRepository::new(pool.clone())),
+                    correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
+                    document_types: Arc::new(SqliteDocumentTypeRepository::new(pool.clone())),
+                    settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
+                    workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
+                    sources: Arc::new(SqliteSourceRepository::new(pool.clone())),
+                    ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
+                    search: Arc::new(SqliteSearchService::new(pool.clone())),
+                    jobs: JobQueue::sqlite(pool.clone()),
+                    auth: Arc::new(SqliteAuthStore::new(pool.clone())),
+                }
+            }
+            Self::Postgres(pool) => {
+                let wake = Arc::new(Notify::new());
+                let documents = |origin| {
+                    Arc::new(
+                        PostgresDocumentRepository::new(pool.clone())
+                            .with_origin(origin)
+                            .with_wake(wake.clone()),
+                    )
+                };
+                Repositories {
+                    documents: documents(EventOrigin::User),
+                    workflow_documents: documents(EventOrigin::Workflow),
+                    outbox: Arc::new(
+                        PostgresOutboxStore::new(pool.clone()).with_wake(wake.clone()),
+                    ),
+                    tags: Arc::new(PostgresTagRepository::new(pool.clone())),
+                    correspondents: Arc::new(PostgresCorrespondentRepository::new(pool.clone())),
+                    document_types: Arc::new(PostgresDocumentTypeRepository::new(pool.clone())),
+                    settings: Arc::new(PostgresSettingsRepository::new(pool.clone())),
+                    workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
+                    sources: Arc::new(PostgresSourceRepository::new(pool.clone())),
+                    ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
+                    search: Arc::new(PostgresSearchService::new(pool.clone()).await),
+                    jobs: JobQueue::postgres(pool.clone()),
+                    auth: Arc::new(PostgresAuthStore::new(pool.clone())),
+                }
+            }
         }
     }
 }

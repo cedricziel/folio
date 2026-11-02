@@ -18,6 +18,9 @@ pub trait DocumentRepository: Send + Sync {
     /// List all documents with optional filtering
     async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;
 
+    /// Ids of the documents [`list`](Self::list) would return, without loading their content
+    async fn list_ids(&self, filter: Option<DocumentFilter>) -> Result<Vec<Id>>;
+
     /// Create a new document
     async fn create(&self, params: CreateDocument) -> Result<Document>;
 

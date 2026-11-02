@@ -4,7 +4,9 @@ mod postgres;
 mod sqlite;
 mod worker;
 
+pub(crate) use postgres::insert_job as insert_job_postgres;
 use postgres::PostgresJobQueue;
+pub(crate) use sqlite::insert_job as insert_job_sqlite;
 use sqlite::SqliteJobQueue;
 pub use worker::{Worker, WorkerConfig};
 
@@ -90,6 +92,37 @@ impl JobType {
     }
 }
 
+/// Which jobs a worker loop takes
+///
+/// Webhook delivery can stall for a long time on a dead target, so it has its
+/// own class and its own loop instead of queueing behind OCR, and vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobClass {
+    /// Everything except workflow runs
+    Processing,
+    /// Workflow runs
+    Workflow,
+}
+
+impl JobClass {
+    /// SQL condition on `job_type` selecting this class
+    pub(crate) fn condition(self) -> &'static str {
+        match self {
+            Self::Processing => "job_type <> 'execute_workflow_run'",
+            Self::Workflow => "job_type = 'execute_workflow_run'",
+        }
+    }
+}
+
+/// What happened to a job that was reported as failed
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailOutcome {
+    /// Rescheduled with backoff
+    Retrying,
+    /// Out of attempts or not retryable; it will not run again
+    GaveUp,
+}
+
 /// A job in the queue
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -161,9 +194,14 @@ impl JobQueue {
         )
     }
 
-    /// Claim the next available job
+    /// Claim the next available job of any class
     pub async fn dequeue(&self) -> Result<Option<Job>> {
-        dispatch!(self, dequeue())
+        dispatch!(self, dequeue(None))
+    }
+
+    /// Claim the next available job of one class
+    pub async fn dequeue_class(&self, class: JobClass) -> Result<Option<Job>> {
+        dispatch!(self, dequeue(Some(class)))
     }
 
     /// Mark a job as completed
@@ -172,7 +210,7 @@ impl JobQueue {
     }
 
     /// Mark a job as failed, rescheduling it when `retry` is set and attempts remain
-    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<()> {
+    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<FailOutcome> {
         dispatch!(self, fail(job_id, error, retry))
     }
 
@@ -196,7 +234,7 @@ impl JobQueue {
         dispatch!(self, find_active_jobs_for_document(document_id))
     }
 
-    /// Check if a document has any failed jobs
+    /// Whether the latest finished job for any processing stage failed
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         dispatch!(self, has_failed_jobs_for_document(document_id))
     }

@@ -1,19 +1,19 @@
 //! Token generation, hashing and PKCE helpers.
 
-use argon2::password_hash::{
-    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-};
+use argon2::password_hash::{phc::PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::Argon2;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use hmac::{Hmac, Mac};
-use rand::RngCore;
+use hmac::{Hmac, KeyInit, Mac};
+use rand::TryRng;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 /// 256 bits from the OS random source.
 pub fn random_secret() -> [u8; 32] {
     let mut bytes = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random source is unavailable");
     bytes
 }
 
@@ -31,7 +31,8 @@ pub fn hash_token(token: &str) -> String {
 /// Keyed MAC of `message`, base64url encoded. Used to bind CSRF tokens to a
 /// session under a secret only the server knows.
 pub fn hmac_token(key: &[u8], message: &str) -> String {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut mac =
+        <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(message.as_bytes());
     URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
@@ -41,9 +42,8 @@ pub fn ct_eq(a: &str, b: &str) -> bool {
 }
 
 pub fn hash_password(password: &str) -> Result<String, String> {
-    let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map(|h| h.to_string())
         .map_err(|e| e.to_string())
 }
@@ -91,6 +91,21 @@ mod tests {
             "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
         ));
         assert!(!verify_pkce("short", "x"));
+    }
+
+    #[test]
+    fn passwords_hashed_before_the_upgrade_still_verify() {
+        let hash = "$argon2id$v=19$m=19456,t=2,p=1$Zm9saW8tdXBncmFkZS10ZXN0$JKrDtfFpUmy4Cj/faWPtM7zwa2jH37D3Sdo3iILWE58";
+        assert!(verify_password("before-the-upgrade", hash));
+        assert!(!verify_password("wrong-password", hash));
+    }
+
+    #[test]
+    fn hmac_rfc4231_vector() {
+        assert_eq!(
+            hmac_token(&[0x0b; 20], "Hi There"),
+            "sDRMYdjbOFNcqK_OrwvxK4gdwgDJgz2nJuk3bC4yz_c"
+        );
     }
 
     #[test]

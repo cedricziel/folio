@@ -3,14 +3,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use folio_core::models::WorkflowRun;
 use folio_core::models::{
     DocumentSource, EmailOrigin, FolderOrigin, Id, IngestItem, IngestOutcome, SourceConditions,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowTrigger,
 };
 use folio_core::ports::DocumentStore;
-use folio_core::ports::{DocumentRepository, IngestLedger, IngestSink, WorkflowRepository};
-use folio_core::services::{EventingDocumentRepository, Importer, IngestPipeline, WorkflowEngine};
-use folio_core::EventBroadcaster;
+use folio_core::ports::{
+    DocumentRepository, IngestLedger, IngestSink, OutboxStore, WorkflowRepository,
+};
+use folio_core::services::{Importer, IngestPipeline, WorkflowEngine};
+use folio_core::DocumentEvent;
 use folio_infra::{Database, ObjectStoreDocumentStore, StorageFileMetadata};
 
 pub struct Harness {
@@ -20,6 +23,7 @@ pub struct Harness {
     pub documents: Arc<dyn DocumentRepository>,
     pub workflows: Arc<dyn WorkflowRepository>,
     pub engine: WorkflowEngine,
+    pub outbox: Arc<dyn OutboxStore>,
     pub source_id: Id,
     pub dir: std::path::PathBuf,
 }
@@ -41,12 +45,7 @@ impl Harness {
         let repos = database.repositories().await;
 
         let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
-        let events = EventBroadcaster::default();
         let documents = repos.documents;
-        let eventing = Arc::new(EventingDocumentRepository::new(
-            documents.clone(),
-            events.clone(),
-        ));
         let workflows = repos.workflows;
         let queue = repos.jobs;
         let ledger = repos.ledger;
@@ -56,7 +55,7 @@ impl Harness {
             workflows.clone(),
             ledger.clone(),
             Arc::new(Importer::new(
-                eventing,
+                documents.clone(),
                 store.clone(),
                 Arc::new(queue.clone()),
             )),
@@ -66,7 +65,6 @@ impl Harness {
             documents.clone(),
             repos.correspondents,
             repos.document_types,
-            Arc::new(queue),
             Arc::new(StorageFileMetadata::new(store.clone())),
             "http://folio.test",
         )
@@ -79,9 +77,23 @@ impl Harness {
             documents,
             workflows,
             engine,
+            outbox: repos.outbox,
             source_id: Id::new_v4(),
             dir,
         }
+    }
+
+    /// Hand the import's `created` event from the outbox to the engine
+    pub async fn handle_created(&self, document_id: Id) -> Vec<WorkflowRun> {
+        let event = self
+            .outbox
+            .claim(100, chrono::Duration::seconds(30), 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| matches!(e.event, DocumentEvent::Created { document_id: d } if d == document_id))
+            .expect("the import left a created event in the outbox");
+        self.engine.handle(&event).await.unwrap()
     }
 
     pub async fn ingest(&self, item: IngestItem) -> IngestOutcome {

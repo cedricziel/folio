@@ -24,8 +24,8 @@ pub struct SecretBox {
 }
 
 fn derive(secret: &str, label: &str) -> [u8; 32] {
-    let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key");
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts any key");
     mac.update(label.as_bytes());
     mac.finalize().into_bytes().into()
 }
@@ -88,7 +88,8 @@ impl SecretBox {
     /// Keyed hash for low-entropy-ish secrets such as recovery codes: a stolen
     /// database alone cannot be brute-forced.
     pub fn keyed_hash(&self, message: &str) -> String {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.mac_key).expect("any key size");
+        let mut mac =
+            <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(&self.mac_key).expect("any key size");
         mac.update(message.as_bytes());
         URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
     }
