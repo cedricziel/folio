@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.1](https://github.com/cedricziel/folio/compare/v0.3.0...v0.3.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **apple:** preserve loading across detail navigation ([02715c7](https://github.com/cedricziel/folio/commit/02715c7e34cb2764fae21b575176b15dde0281d4))
+* **apple:** preserve loading across detail navigation ([#112](https://github.com/cedricziel/folio/issues/112)) ([adbe64d](https://github.com/cedricziel/folio/commit/adbe64d0695d41eda103b7dadd155582a8bdb246))
+* **apple:** prevent actor isolation crash after login ([d69f5f1](https://github.com/cedricziel/folio/commit/d69f5f15712b38061c05da82604e2b1d2d411ad0))
+* **apple:** prevent actor isolation crash after login ([#114](https://github.com/cedricziel/folio/issues/114)) ([e48cdb1](https://github.com/cedricziel/folio/commit/e48cdb1c532aef8f0e7f48cc5ffd4c72467320c4))
+
 ## [0.3.0](https://github.com/cedricziel/folio/compare/v0.2.0...v0.3.0) (2026-11-02)
 
 
