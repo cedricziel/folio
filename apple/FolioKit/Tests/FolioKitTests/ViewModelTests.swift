@@ -215,21 +215,53 @@ struct DocumentStatusTests {
         #expect(model.preview == .failed("Document has no file"))
     }
 
-    @Test func cancelledPreviewDoesNotReportAServerFailureAndCanReload() async {
+    @Test func cancelledNavigationTaskStillLoadsTheNextPreview() async {
+        let service = MockFolioService()
+        let first = DocumentDetailViewModel(
+            document: Document(title: "First", originalFilename: "first.pdf"),
+            correspondent: nil, type: nil, service: service
+        )
+        await first.loadPreview()
+        #expect(first.preview == .ready(URL(filePath: "/tmp/first.pdf")))
+
+        let next = DocumentDetailViewModel(
+            document: Document(title: "Next", originalFilename: "next.png"),
+            correspondent: nil, type: nil, service: service
+        )
+        let navigation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await next.loadPreview()
+        }
+        await navigation.value
+        #expect(next.preview == .ready(URL(filePath: "/tmp/next.png")))
+    }
+
+    @Test func reappearingPreviewKeepsTheDownloadedFile() async {
+        let service = MockFolioService()
         let model = DocumentDetailViewModel(
             document: Document(title: "Bill", originalFilename: "bill.pdf"),
-            correspondent: nil, type: nil, service: MockFolioService()
+            correspondent: nil, type: nil, service: service
         )
-        let task = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            await model.loadPreview()
-        }
-        await task.value
-        #expect(model.preview == .loading)
-
+        await model.loadPreview()
+        await service.setFailure(.unreachable)
         await model.loadPreview()
         #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
     }
+
+    @Test func failedPreviewCanRetryWithoutRestartingTheApp() async {
+        let service = MockFolioService()
+        await service.setFailure(.unreachable)
+        let model = DocumentDetailViewModel(
+            document: Document(title: "Bill", originalFilename: "bill.pdf"),
+            correspondent: nil, type: nil, service: service
+        )
+        await model.loadPreview()
+        #expect(model.preview == .failed("Couldn't reach the server."))
+        await service.setFailure(nil)
+        await model.loadPreview()
+        #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
+    }
+
 }
 
 @MainActor struct UploadViewModelTests {

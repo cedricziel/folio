@@ -27,6 +27,7 @@ public final class DocumentDetailViewModel {
     public let summary: DocumentSummary
 
     private let service: any FolioService
+    private var loading = false
 
     public init(
         document: Document, correspondent: String?, type: String?, service: any FolioService
@@ -49,13 +50,18 @@ public final class DocumentDetailViewModel {
     }
 
     public func loadPreview() async {
+        guard !loading else { return }
+        if case .ready = preview { return }
+        loading = true
+        defer { loading = false }
         preview = .loading
+        // Navigation may cancel the view task while this model still owns the visible preview.
+        let download = Task { [service, document] in
+            try await service.downloadFile(for: document)
+        }
         do {
-            let url = try await service.downloadFile(for: document)
-            guard !Task.isCancelled else { return }
-            preview = .ready(url)
+            preview = .ready(try await download.value)
         } catch {
-            guard !Task.isCancelled else { return }
             preview = .failed(error.localizedDescription)
         }
     }
