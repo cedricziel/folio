@@ -1,6 +1,6 @@
 ## 1. Contract
 - [x] Inspect ownership and publish scoped event contract.
-- [ ] Reconcile foundation append API and workflow registry after merge.
+- [x] Reconcile foundation append API and workflow registry after merge.
 
 ## 2. Transactional producers
 - [x] Add failing delta tests for nullable IDs, title changes, duplicate tags, and equivalent reordered sets; implement pure delta derivation.
@@ -24,4 +24,4 @@
 - SQLite regression contracts first failed on missing title/tag/move/purge events. Metadata producers then passed six SQLite/PostgreSQL contracts, eight repository contracts, and 35 workflow tests with Docker required.
 - HTML/API classification forms and MCP metadata edits pass their focused ingress checks. Core lineage and cross-vault batch tests pass. Move/purge producers and workflow controls remain pending.
 
-- [PR #271](https://github.com/cedricziel/folio/pull/271) contains `metadata_envelopes` and transactional metadata producers. Commits `35a3ef2` and `a722013` define the date-event integration boundary. Required CI gates merge.
+- [PR #271](https://github.com/cedricziel/folio/pull/271) contains `metadata_envelopes` and transactional metadata producers. Commits `35a3ef2` and `a722013` define the date-event integration boundary. Merged as `ce6ac01`; required CI, embedding builds, end-to-end tests, and both container builds passed.

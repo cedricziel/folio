@@ -471,6 +471,8 @@ with a task-owned temporary target directory. These suites use temporary SQLite
 databases, disposable PostgreSQL containers, and loopback webhook fixtures.
 They cover exact title, classification, and tag deltas, no-ops, rollback,
 server-derived actors, shared mutation identities, and compatibility updates.
+Move contracts check source/destination snapshot isolation, rejected vault moves,
+and same-vault no-ops on both databases.
 Domain-only outbox rows have no legacy document projection; assertions about
 compatibility updates must select that projection explicitly.
 
