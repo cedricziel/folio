@@ -7,7 +7,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use hmac::{Hmac, Mac};
-use rand::RngCore;
+use rand::TryRng;
 use sha2::Sha256;
 
 use crate::crypto::random_token;
@@ -52,7 +52,9 @@ impl SecretBox {
     /// ciphertext cannot be moved to another user's row.
     pub fn seal(&self, plaintext: &[u8], context: &str) -> String {
         let mut nonce = [0u8; NONCE_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut nonce)
+            .expect("OS random source is unavailable");
         let mut out = nonce.to_vec();
         let sealed = XChaCha20Poly1305::new(&self.cipher_key.into())
             .encrypt(

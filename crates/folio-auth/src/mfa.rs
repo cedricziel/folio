@@ -1,7 +1,7 @@
 //! Time-based one-time passwords and recovery codes.
 
 use qrcode::{render::svg, QrCode};
-use rand::Rng;
+use rand::{RngExt, TryRng};
 use totp_rs::{Builder, Secret, Totp};
 
 /// Shown in the authenticator app next to the account name.
@@ -13,7 +13,9 @@ const RECOVERY_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 
 pub fn new_totp_secret() -> Vec<u8> {
     let mut bytes = vec![0u8; SECRET_BYTES];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random source is unavailable");
     bytes
 }
 
@@ -63,11 +65,13 @@ pub fn qr_svg(uri: &str) -> Result<String, String> {
 
 /// Ten codes like `k3m9-x7qp-4wzd`, 60 bits each.
 pub fn generate_recovery_codes() -> Vec<String> {
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
     (0..RECOVERY_CODE_COUNT)
         .map(|_| {
             let chars: Vec<char> = (0..12)
-                .map(|_| char::from(RECOVERY_ALPHABET[rng.gen_range(0..RECOVERY_ALPHABET.len())]))
+                .map(|_| {
+                    char::from(RECOVERY_ALPHABET[rng.random_range(0..RECOVERY_ALPHABET.len())])
+                })
                 .collect();
             chars
                 .chunks(4)
