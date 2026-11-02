@@ -1,5 +1,10 @@
 # Spec Delta
 
+## RENAMED Requirements
+
+- FROM: `### Requirement: JSON upload extracts text inline`
+- TO: `### Requirement: JSON upload queues processing`
+
 ## MODIFIED Requirements
 
 ### Requirement: Web upload queues processing
@@ -40,17 +45,19 @@ The system SHALL accept a multipart upload at `POST /vaults/{vault_id}/documents
 
 ### Requirement: Files are stored per document
 
-The system SHALL store each uploaded file under the storage key `vaults/<vault id>/documents/<document id>/<sanitized filename>` and record that key on the document; thumbnails SHALL be stored under the same `vaults/<vault id>/documents/<document id>/` prefix. Sanitizing SHALL drop directory components and replace every character other than letters, digits, `.`, `-` and `_` with `_`. Moving a document SHALL move its file and thumbnails to the target vault's prefix.
+The system SHALL store each uploaded file under the opaque storage key `vaults/<vault id>/documents/<document id>/original` and record that key on the document. Thumbnails SHALL be stored as `vaults/<vault id>/documents/<document id>/thumb.jpg` and page previews as `vaults/<vault id>/documents/<document id>/pages/<n>.jpg`. The original filename SHALL remain metadata and SHALL NOT control the storage path. Moving a document SHALL move its file and thumbnails to the target vault's prefix.
 
 #### Scenario: Filename with spaces and directories
 
 - **WHEN** a file named `../scans/my letter.pdf` is uploaded to vault `<v>`
-- **THEN** it is stored as `vaults/<v>/documents/<document id>/my_letter.pdf`
+- **THEN** it is stored as `vaults/<v>/documents/<document id>/original`
+- **AND** the original name is kept in `original_filename`
 
 #### Scenario: Filename that starts with a dot
 
-- **WHEN** a file named `.hidden` is uploaded
-- **THEN** the stored filename is prefixed with `document_`
+- **WHEN** a file named `.hidden` is uploaded to vault `<v>`
+- **THEN** it is stored as `vaults/<v>/documents/<document id>/original`
+- **AND** `.hidden` is kept in `original_filename`
 
 #### Scenario: File of a moved document
 
@@ -62,25 +69,28 @@ The system SHALL store each uploaded file under the storage key `vaults/<vault i
 - **WHEN** a document uploaded before the upgrade still has the key `<document id>/<filename>`
 - **THEN** its file is read and downloaded from that recorded key
 
-### Requirement: JSON upload extracts text inline
+### Requirement: JSON upload queues processing
 
-The system SHALL accept the same multipart fields at `POST /api/vaults/{vault_id}/documents/upload` from a contributor, editor or owner of the vault, run OCR and embedding generation before responding, and return the created document, including `vault_id`, as JSON with status 200. It SHALL NOT enqueue a processing job.
+The system SHALL accept the same multipart fields at `POST /api/vaults/{vault_id}/documents/upload` from a contributor, editor or owner of the vault. It SHALL record the caller as uploader, store the file through the shared importer, enqueue a document-processing job, and return the created document, including `vault_id`, as JSON with status 200. OCR and embedding generation SHALL run in the background.
 
 #### Scenario: Upload with a configured provider
 
-- **WHEN** a file is uploaded and OCR returns text
-- **THEN** the returned document's `content` holds that text
-- **AND** an embedding for the text is stored for search in the document's vault
+- **WHEN** a file is uploaded with a configured OCR provider
+- **THEN** the response status is 200 and the returned document has no extracted content yet
+- **AND** a processing job for that document is enqueued
+- **AND** processing stores extracted text and embeddings in the document's vault
 
-#### Scenario: Upload with the local provider
+#### Scenario: Upload with OCR disabled
 
-- **WHEN** a file is uploaded while the AI provider is `local`
-- **THEN** the document is created with empty content and no embedding is stored
+- **WHEN** a file is uploaded while the OCR provider is `none`
+- **THEN** the document and its processing job are created
+- **AND** processing completes without provider-generated text
 
 #### Scenario: Upload when OCR fails
 
-- **WHEN** OCR returns an error, for example because the selected provider has no API key
-- **THEN** the document is still created, with no content, and the response status is 200
+- **WHEN** background OCR fails after an upload
+- **THEN** the uploaded document and file remain available
+- **AND** the document records the failed OCR stage
 
 #### Scenario: Upload to a vault without a role
 
