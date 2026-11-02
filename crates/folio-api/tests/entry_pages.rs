@@ -268,4 +268,55 @@ async fn html_pages_are_bounded_and_cursors_remain_scoped() {
         .status(),
         StatusCode::BAD_REQUEST
     );
+    let form = format!(
+        "kind=note&body=Newest+visible&idempotency_key={}",
+        Uuid::new_v4()
+    );
+    let response = request(&h, "author", "POST", &path, &form).await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let target = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let saved = common::text(request(&h, "author", "GET", target, "").await).await;
+    assert!(
+        saved.contains("Newest visible"),
+        "Successful creation must display the saved entry"
+    );
+    assert!(saved.contains("First notes"));
+    assert_eq!(
+        request(
+            &h,
+            "author",
+            "GET",
+            &target.replace("kind=note", "kind=comment"),
+            ""
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let entry_id: Uuid = target.split("focus=").nth(1).unwrap().parse().unwrap();
+    let response = request(
+        &h,
+        "author",
+        "POST",
+        &format!("{path}/{entry_id}/edit"),
+        "body=Newest+edited",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let target = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let edited = common::text(request(&h, "author", "GET", target, "").await).await;
+    assert!(
+        edited.contains("Newest edited"),
+        "Successful editing must retain the saved entry"
+    );
 }

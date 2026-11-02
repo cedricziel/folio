@@ -13,7 +13,9 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use folio_core::{
-    models::{DocumentEntry, EntryBody, EntryKind, EntryPageQuery, EntryPermissions, VaultRole},
+    models::{
+        DocumentEntry, EntryBody, EntryKind, EntryPage, EntryPageQuery, EntryPermissions, VaultRole,
+    },
     ports::EntryCreation,
 };
 use serde::Deserialize;
@@ -30,6 +32,7 @@ pub fn router() -> Router<AppState> {
 pub struct PageQuery {
     kind: EntryKind,
     cursor: Option<String>,
+    focus: Option<Uuid>,
 }
 #[derive(Deserialize)]
 pub struct EntryForm {
@@ -61,6 +64,7 @@ struct EntriesTemplate {
     rows: Vec<Row>,
     next: Option<String>,
     has_cursor: bool,
+    focused: bool,
     can_create: bool,
     draft: String,
     key: Uuid,
@@ -97,7 +101,12 @@ async fn render(
     query: PageQuery,
     draft: Draft,
 ) -> ApiResult<Html<String>> {
-    let has_cursor = query.cursor.is_some();
+    if query.focus.is_some() && query.cursor.is_some() {
+        return Err(ApiError::bad_request(
+            "Choose either an entry or a page cursor",
+        ));
+    }
+    let has_cursor = query.cursor.is_some() || query.focus.is_some();
     let cursor = query
         .cursor
         .map(|value| {
@@ -110,18 +119,31 @@ async fn render(
                 })
         })
         .transpose()?;
-    let page = state
-        .entry_repo
-        .page(
-            vault,
-            document,
-            EntryPageQuery {
-                kind: query.kind,
-                limit: 20,
-                cursor,
-            },
-        )
-        .await?;
+    let page = if let Some(id) = query.focus {
+        let entry = state
+            .entry_repo
+            .find(vault, document, id)
+            .await?
+            .filter(|entry| entry.kind == query.kind)
+            .ok_or_else(|| ApiError::not_found("Entry not found"))?;
+        EntryPage {
+            entries: vec![entry],
+            next_cursor: None,
+        }
+    } else {
+        state
+            .entry_repo
+            .page(
+                vault,
+                document,
+                EntryPageQuery {
+                    kind: query.kind,
+                    limit: 20,
+                    cursor,
+                },
+            )
+            .await?
+    };
     let rows = page
         .entries
         .into_iter()
@@ -152,6 +174,7 @@ async fn render(
         rows,
         next,
         has_cursor,
+        focused: query.focus.is_some(),
         can_create: context()?.role >= VaultRole::Contributor,
         draft: draft.body,
         key: draft.key,
@@ -191,6 +214,13 @@ fn location(document: Uuid, kind: EntryKind) -> String {
         kind.as_str()
     ))
 }
+fn focused_location(entry: &DocumentEntry) -> String {
+    format!(
+        "{}&focus={}",
+        location(entry.document_id, entry.kind),
+        entry.id
+    )
+}
 async fn create(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
@@ -213,7 +243,7 @@ async fn create(
             .create(vault, document, form.kind, body, form.idempotency_key)
             .await?
         {
-            EntryCreation::Created(_) | EntryCreation::Replayed(_) => Ok(()),
+            EntryCreation::Created(entry) | EntryCreation::Replayed(entry) => Ok(entry),
             EntryCreation::Deleted => Err(ApiError::new(
                 StatusCode::GONE,
                 "The original entry was deleted. Cancel this draft before starting another.",
@@ -222,7 +252,7 @@ async fn create(
     }
     .await;
     match result {
-        Ok(()) => Ok(Redirect::to(&location(document, form.kind)).into_response()),
+        Ok(entry) => Ok(Redirect::to(&focused_location(&entry)).into_response()),
         Err(error) => Ok((
             StatusCode::UNPROCESSABLE_ENTITY,
             render(
@@ -232,6 +262,7 @@ async fn create(
                 PageQuery {
                     kind: form.kind,
                     cursor: None,
+                    focus: None,
                 },
                 Draft {
                     body: form.body,
@@ -272,7 +303,7 @@ async fn update(
     }
     .await;
     match result {
-        Ok(_) => Ok(Redirect::to(&location(document, current.kind)).into_response()),
+        Ok(entry) => Ok(Redirect::to(&focused_location(&entry)).into_response()),
         Err(error) => Ok((
             StatusCode::UNPROCESSABLE_ENTITY,
             render(
@@ -282,6 +313,7 @@ async fn update(
                 PageQuery {
                     kind: current.kind,
                     cursor: None,
+                    focus: None,
                 },
                 Draft {
                     body: form.body,

@@ -1,6 +1,7 @@
 <turbo-frame id="document-{{ kind }}s" data-entry-frame>
 <section class="panel" aria-labelledby="heading-{{ kind }}s">
 <h2 class="heading" id="heading-{{ kind }}s">{{ heading }}</h2><p data-entry-error role="alert" hidden></p>
+{% if focused %}<p class="hint" role="status">Showing one {{ kind }}.</p>{% endif %}
 {% match error %}{% when Some with (message) %}<p class="f-notice f-notice-danger" role="alert">{{ message }}</p>{% when None %}{% endmatch %}
 {% match edit_id %}{% when Some with (id) %}
 <form action="{{ "/documents"|vault_url }}/{{ document }}/entries/{{ id }}/edit" method="post">
