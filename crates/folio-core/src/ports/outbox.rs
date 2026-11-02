@@ -39,9 +39,10 @@ pub trait OutboxStore: Send + Sync {
     /// Give a claimed event back to be retried at `retry_at`
     async fn release(&self, id: i64, error: &str, retry_at: DateTime<Utc>) -> Result<()>;
 
-    /// Dispatched events after `after_id`, oldest first, for replaying to a reconnecting client
+    /// Events dispatched at or after `after_id`, excluding that event, in dispatch order
     ///
-    /// Events created before `since` are not replayed.
+    /// Events created before `since` are not replayed. Equal dispatch timestamps may
+    /// overlap previous deliveries; callers must tolerate repeats.
     async fn replay(
         &self,
         after_id: i64,

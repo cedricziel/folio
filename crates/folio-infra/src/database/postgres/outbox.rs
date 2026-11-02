@@ -163,8 +163,11 @@ impl OutboxStore for PostgresOutboxStore {
     ) -> Result<Vec<OutboxEvent>> {
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT id, payload::text, created_at, attempts FROM outbox_events
-             WHERE id > $1 AND dispatched_at IS NOT NULL AND created_at >= $2
-             ORDER BY id LIMIT $3",
+             WHERE dispatched_at IS NOT NULL AND created_at >= $2 AND id <> $1
+               AND (dispatched_at >= (SELECT dispatched_at FROM outbox_events WHERE id = $1)
+                    OR (NOT EXISTS (SELECT 1 FROM outbox_events WHERE id = $1) AND id > $1)
+                    OR EXISTS (SELECT 1 FROM outbox_events WHERE id = $1 AND dispatched_at IS NULL))
+             ORDER BY dispatched_at, id LIMIT $3",
         )
         .bind(after_id)
         .bind(since)

@@ -1754,6 +1754,25 @@ async fn outbox_contract(db: &Database) {
     );
     assert!(replay_ids(ids[0] - 1, hour_ago).await.is_empty());
     r.outbox.mark_dispatched(ids[2]).await.unwrap();
+
+    r.documents
+        .create(new_document("delayed-first"))
+        .await
+        .unwrap();
+    r.documents
+        .create(new_document("delivered-second"))
+        .await
+        .unwrap();
+    let batch = r.outbox.claim(10, lease(), 10).await.unwrap();
+    let earlier = batch[0].id;
+    let later = batch[1].id;
+    r.outbox.mark_dispatched(later).await.unwrap();
+    r.outbox.mark_dispatched(earlier).await.unwrap();
+    assert_eq!(
+        replay_ids(later, hour_ago).await,
+        [earlier],
+        "reconnect must recover a lower id delivered after the acknowledged event"
+    );
 }
 
 async fn run_atomicity_contract(db: &Database) {

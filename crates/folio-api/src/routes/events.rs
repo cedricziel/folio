@@ -84,8 +84,8 @@ pub(crate) async fn sse_handler(
         pending: VecDeque::new(),
         last_id: last_event_id,
         connected_at: Utc::now(),
-        replayed: HashSet::new(),
-        replayed_through: 0,
+        seen: HashSet::new(),
+        seen_order: VecDeque::new(),
     };
     if let Some(after) = last_event_id {
         connection.replay(after, Utc::now() - REPLAY_WINDOW).await;
@@ -134,19 +134,32 @@ struct Connection {
     /// Newest event sent or acknowledged by the client
     last_id: Option<i64>,
     connected_at: DateTime<Utc>,
-    /// Ids that were replayed and may still arrive live
-    replayed: HashSet<i64>,
-    replayed_through: i64,
+    seen: HashSet<i64>,
+    seen_order: VecDeque<i64>,
 }
 
 impl Connection {
+    fn remember(&mut self, id: i64) -> bool {
+        if !self.seen.insert(id) {
+            return false;
+        }
+        self.last_id = Some(id);
+        self.seen_order.push_back(id);
+        if self.seen_order.len() > REPLAY_LIMIT as usize {
+            if let Some(oldest) = self.seen_order.pop_front() {
+                self.seen.remove(&oldest);
+            }
+        }
+        true
+    }
+
     async fn replay(&mut self, after: i64, since: DateTime<Utc>) {
         match self.state.outbox.replay(after, since, REPLAY_LIMIT).await {
             Ok(events) => {
                 for event in events {
-                    self.replayed.insert(event.id);
-                    self.replayed_through = self.replayed_through.max(event.id);
-                    self.pending.push_back(event);
+                    if !self.seen.contains(&event.id) {
+                        self.pending.push_back(event);
+                    }
                 }
             }
             Err(e) => tracing::warn!("Failed to replay events: {e}"),
@@ -157,18 +170,16 @@ impl Connection {
     async fn next_event(&mut self) -> Option<OutboxEvent> {
         loop {
             if let Some(event) = self.pending.pop_front() {
-                self.last_id = Some(self.last_id.map_or(event.id, |id| id.max(event.id)));
-                return Some(event);
+                if self.remember(event.id) {
+                    return Some(event);
+                }
+                continue;
             }
             match self.rx.recv().await {
                 Ok(event) => {
-                    if event.id > self.replayed_through {
-                        self.replayed.clear();
-                    } else if self.replayed.contains(&event.id) {
-                        continue;
+                    if self.remember(event.id) {
+                        return Some(event);
                     }
-                    self.last_id = Some(self.last_id.map_or(event.id, |id| id.max(event.id)));
-                    return Some(event);
                 }
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     tracing::debug!("SSE client missed {missed} events, replaying");
