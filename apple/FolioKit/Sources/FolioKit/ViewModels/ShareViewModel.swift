@@ -32,7 +32,7 @@ public final class ShareViewModel {
         self.files = files
         self.background = background
         self.destination = destination ?? VaultDestinationViewModel(service: service)
-        title = files.count == 1 ? (files[0].filename as NSString).deletingPathExtension : ""
+        title = files.count == 1 ? files[0].filename : ""
     }
 
     public func loadTags() async {
