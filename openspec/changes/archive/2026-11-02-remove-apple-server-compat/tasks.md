@@ -11,4 +11,5 @@
 - [x] Update the project verification skill and validate this change with OpenSpec.
 - [x] Run make format, make lint, and make test.
 - [x] Review the diff and archive this verified change.
-- [ ] Ship through CI.
+
+CI and merge are tracked by the pull request.
