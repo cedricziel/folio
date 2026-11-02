@@ -7,4 +7,4 @@
 ## 2. Verification and delivery
 - [x] Run make format, make lint, and make test, plus the project verify ingestion suites in isolation.
 - [x] Update project verification guidance for item identity coverage.
-- [ ] Archive the validated spec for the pull request.
+- [x] Archive the validated spec for the pull request.
