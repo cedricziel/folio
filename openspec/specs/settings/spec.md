@@ -20,7 +20,12 @@ The system SHALL start without a `config.toml`. Every setting has a built-in def
 
 ### Requirement: Environment overrides
 
-The system SHALL read nested keys from environment variables prefixed `FOLIO_` with a double underscore as the section separator, for example `FOLIO_SERVER__PORT`, `FOLIO_DATABASE__URL`, `FOLIO_STORAGE__PATH`, `FOLIO_AI__PROVIDER`, `FOLIO_AI__OPENAI_API_KEY` and `FOLIO_AI__ANTHROPIC_API_KEY`. The single-underscore names `FOLIO_SERVER_HOST`, `FOLIO_SERVER_PORT`, `FOLIO_DATABASE_URL`, `FOLIO_STORAGE_PATH`, `FOLIO_AI_PROVIDER`, `FOLIO_AI_OPENAI_API_KEY` and `FOLIO_AI_ANTHROPIC_API_KEY` SHALL keep working as deprecated aliases that log a warning, and the double-underscore name SHALL win when both are set. Any variable SHALL also be readable from a file named by the same variable with a `_FILE` suffix; setting both is an error.
+The system SHALL read nested keys from environment variables prefixed `FOLIO_` with a double underscore as the section separator, for example `FOLIO_SERVER__PORT`, `FOLIO_DATABASE__URL`, `FOLIO_STORAGE__PATH`, `FOLIO_AI__OPENAI_API_KEY` and `FOLIO_AI__ANTHROPIC_API_KEY`. Any supported variable SHALL also be readable from a file named by the same variable with a `_FILE` suffix; setting both is an error.
+
+#### Scenario: Ignore unsupported environment names
+
+- **WHEN** the server starts with a single underscore between a section and key, such as `FOLIO_SERVER_PORT=8080` or `FOLIO_SERVER_PORT_FILE=/run/secrets/port`
+- **THEN** the variable does not override the configured value
 
 #### Scenario: Override the port
 
@@ -36,11 +41,6 @@ The system SHALL read nested keys from environment variables prefixed `FOLIO_` w
 
 - **WHEN** the server starts with `FOLIO_AI__OPENAI_API_KEY_FILE=/run/secrets/openai`
 - **THEN** the OpenAI key is the file contents without the trailing newline
-
-#### Scenario: Deprecated alias
-
-- **WHEN** the server starts with `FOLIO_AI_OPENAI_API_KEY` set and no `FOLIO_AI__OPENAI_API_KEY`
-- **THEN** the value is applied and a deprecation warning is logged
 
 ### Requirement: Database backend
 
@@ -72,12 +72,12 @@ The system SHALL store runtime settings as key-value rows in the `settings` tabl
 
 ### Requirement: AI settings page
 
-The system SHALL show the AI settings at `GET /settings` and save them at `POST /settings/ai`. The form SHALL offer the providers `local`, `openai` and `anthropic`, the two API keys, and the OCR and embedding model names, and the save SHALL respond with a Turbo Stream confirmation.
+The system SHALL show the AI settings at `GET /settings` and save them at `POST /settings/ai`. The credentials form SHALL offer the two API keys, and the save SHALL respond with a Turbo Stream confirmation. The processing form SHALL offer separate OCR and embedding providers and models and save them at `POST /settings/processing`.
 
 #### Scenario: Switch to OpenAI
 
-- **WHEN** a user selects `openai`, enters an API key and saves
-- **THEN** the `ai.provider` and `ai.openai_api_key` rows hold the new values
+- **WHEN** a user saves an OpenAI API key and selects `openai-vision` for OCR and `openai` for embeddings
+- **THEN** the `ai.openai_api_key`, `ocr.provider`, and `embeddings.provider` rows hold the new values
 
 ### Requirement: Effective AI settings
 
@@ -93,9 +93,9 @@ The OCR and embedding services SHALL read the provider and API keys from the dat
 - **WHEN** the database OpenAI key is empty and `config.toml` sets `ai.openai_api_key`
 - **THEN** OpenAI requests use the key from `config.toml`
 
-#### Scenario: Local provider
+#### Scenario: Disabled providers
 
-- **WHEN** the provider is `local`
+- **WHEN** the OCR and embedding providers are `none`
 - **THEN** no AI provider is called for OCR or embeddings
 
 ### Requirement: Pipeline startup configuration

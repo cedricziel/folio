@@ -25,6 +25,7 @@ preserve existing database rows, including values seeded by earlier releases.
 - Prefix `FOLIO_`.
 - Nested keys are separated by a double underscore: `ai.openai_api_key` is
   `FOLIO_AI__OPENAI_API_KEY`. Single underscores stay part of the key name.
+  Names such as `FOLIO_AI_OPENAI_API_KEY` are ignored.
 - Any variable accepts a `_FILE` companion that names a file holding the value,
   for Docker and Kubernetes secrets: `FOLIO_AI__OPENAI_API_KEY_FILE=/run/secrets/openai`.
   A trailing newline is stripped. Setting both the variable and its `_FILE`
@@ -86,7 +87,6 @@ preserve existing database rows, including values seeded by earlier releases.
 | `storage.s3.path_style` | `FOLIO_STORAGE__S3__PATH_STYLE` | unset (on when an endpoint is set) | Address buckets as `endpoint/bucket` instead of `bucket.endpoint`. |
 | `storage.s3.allow_http` | `FOLIO_STORAGE__S3__ALLOW_HTTP` | `false` | Allow a plain `http://` endpoint. |
 | `storage.s3.prefix` | `FOLIO_STORAGE__S3__PREFIX` | unset | Key prefix inside the bucket. |
-| `ai.provider` | `FOLIO_AI__PROVIDER` | `openai` | `openai`, `anthropic` or `local`. |
 | `ai.openai_api_key` | `FOLIO_AI__OPENAI_API_KEY` | unset | OpenAI API key. |
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |
 | `mcp.enabled` | `FOLIO_MCP__ENABLED` | follows `auth.required` | Serve the MCP endpoint at `/mcp`. On when `auth.required` is true, off otherwise because the endpoint is only protected by auth. The `mcp.enabled` database setting overrides it. See [mcp.md](mcp.md). |
@@ -99,18 +99,3 @@ them too. See [ingestion](ingestion.md).
 
 Other variables read directly: `FOLIO_CONFIG` (config file path) and `RUST_LOG`
 (log filter).
-
-## Deprecated names
-
-These single-underscore names still work and log a deprecation warning when
-used. When both forms are set, the new name wins.
-
-| Deprecated | Use instead |
-| --- | --- |
-| `FOLIO_SERVER_HOST` | `FOLIO_SERVER__HOST` |
-| `FOLIO_SERVER_PORT` | `FOLIO_SERVER__PORT` |
-| `FOLIO_DATABASE_URL` | `FOLIO_DATABASE__URL` |
-| `FOLIO_STORAGE_PATH` | `FOLIO_STORAGE__PATH` |
-| `FOLIO_AI_PROVIDER` | `FOLIO_AI__PROVIDER` |
-| `FOLIO_AI_OPENAI_API_KEY` | `FOLIO_AI__OPENAI_API_KEY` |
-| `FOLIO_AI_ANTHROPIC_API_KEY` | `FOLIO_AI__ANTHROPIC_API_KEY` |

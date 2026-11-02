@@ -76,15 +76,11 @@ pub async fn harness_with(
     ));
     let auth = make_auth(repos.auth.clone());
 
-    let ai = folio_infra::config::AiConfig {
-        provider: "local".into(),
-        openai_api_key: None,
-        anthropic_api_key: None,
-    };
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
-    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
+    let pipeline =
+        PipelineContext::from_config(repos.settings.clone(), &folio_infra::Config::default());
     let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
     let state = AppState::new(
         repos.documents,

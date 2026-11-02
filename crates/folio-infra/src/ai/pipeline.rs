@@ -15,7 +15,7 @@ use folio_core::ports::{
 use super::ocr::TextLayerFirst;
 use super::registry::{EmbeddingRegistry, OcrRegistry, ProviderContext};
 use super::{embeddings, ocr};
-use crate::config::{AiConfig, Config};
+use crate::config::Config;
 
 const SETTINGS_TTL: Duration = Duration::from_secs(5);
 
@@ -31,16 +31,6 @@ pub struct PipelineContext {
 }
 
 impl PipelineContext {
-    pub fn new(settings_repo: Arc<dyn SettingsRepository>, fallback: AiConfig) -> Arc<Self> {
-        Self::from_config(
-            settings_repo,
-            &Config {
-                ai: fallback,
-                ..Config::default()
-            },
-        )
-    }
-
     /// Use startup configuration as the fallback for runtime database settings.
     pub fn from_config(settings_repo: Arc<dyn SettingsRepository>, config: &Config) -> Arc<Self> {
         Arc::new(Self {
