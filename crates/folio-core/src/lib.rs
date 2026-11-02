@@ -7,6 +7,7 @@
 //! - Domain events
 
 pub mod document_transitions;
+pub mod domain_event;
 pub mod error;
 pub mod events;
 pub mod models;
@@ -15,6 +16,7 @@ pub mod ports;
 pub mod redact;
 pub mod services;
 
+pub use domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 pub use error::{Error, Result};
 pub use events::{
     DeletedDocument, DocumentEvent, EventBroadcaster, EventOrigin, EventSnapshot, OutboxEvent,

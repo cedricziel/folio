@@ -12,8 +12,9 @@ use sqlx::{PgConnection, PgPool};
 use tokio::sync::Notify;
 use tracing::warn;
 
+use folio_core::domain_event::DomainEventEnvelope;
 use folio_core::error::{Error, Result};
-use folio_core::events::{decode_outbox_payload_with_context, encode_outbox_payload_with_context};
+use folio_core::events::{decode_stored_outbox_payload, encode_stored_outbox_payload};
 use folio_core::models::{DocumentSource, Id, VaultId};
 use folio_core::ports::OutboxStore;
 use folio_core::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
@@ -57,23 +58,100 @@ pub(crate) async fn capture_document(
     .transpose()
 }
 
-/// Write an event inside the caller's transaction
+/// Write a document event in the caller's transaction, capturing its immutable metadata.
 pub(crate) async fn insert_event(
     conn: &mut PgConnection,
     event: &DocumentEvent,
     origin: EventOrigin,
     context: Option<&EventSnapshot>,
 ) -> Result<i64> {
-    let id = sqlx::query_scalar(
-        "INSERT INTO outbox_events (type, payload, created_at, available_at)
-         VALUES ($1, $2::jsonb, $3, $3) RETURNING id",
+    let captured;
+    let context = match context {
+        Some(context) => Some(context),
+        None => {
+            captured = match event {
+                DocumentEvent::Deleted {
+                    snapshot: Some(snapshot),
+                    ..
+                } => Some(EventSnapshot::from(snapshot.as_ref())),
+                _ => capture_document(conn, event.document_id(), None).await?,
+            };
+            captured.as_ref()
+        }
+    };
+    let envelope = folio_core::events::document_event_envelope(event, context)?;
+    let payload = encode_stored_outbox_payload(Some(event), origin, context, envelope.as_ref())?;
+    insert_payload(conn, event.event_type(), &payload, envelope.as_ref()).await
+}
+
+/// Persist a document projection and its validated immutable envelope in the caller's transaction.
+pub async fn insert_event_with_envelope(
+    conn: &mut PgConnection,
+    event: &DocumentEvent,
+    origin: EventOrigin,
+    context: Option<&EventSnapshot>,
+    envelope: &DomainEventEnvelope,
+) -> Result<i64> {
+    let payload = encode_stored_outbox_payload(Some(event), origin, context, Some(envelope))?;
+    insert_payload(conn, event.event_type(), &payload, Some(envelope)).await
+}
+
+/// Persist a validated domain transition in the caller's transaction.
+/// Reusing an event UUID is idempotent only when the immutable payload is identical.
+pub async fn insert_domain_event(
+    conn: &mut PgConnection,
+    envelope: &DomainEventEnvelope,
+) -> Result<i64> {
+    insert_domain_event_with_origin(conn, envelope, EventOrigin::User).await
+}
+
+/// Persist a domain transition with an explicit workflow delivery origin.
+pub async fn insert_domain_event_with_origin(
+    conn: &mut PgConnection,
+    envelope: &DomainEventEnvelope,
+    origin: EventOrigin,
+) -> Result<i64> {
+    let payload = encode_stored_outbox_payload(None, origin, None, Some(envelope))?;
+    insert_payload(conn, envelope.event_type(), &payload, Some(envelope)).await
+}
+
+async fn insert_payload(
+    conn: &mut PgConnection,
+    event_type: &str,
+    payload: &str,
+    envelope: Option<&DomainEventEnvelope>,
+) -> Result<i64> {
+    let now = envelope
+        .map(DomainEventEnvelope::occurred_at)
+        .unwrap_or_else(Utc::now);
+    let event_id = envelope.map(DomainEventEnvelope::event_id);
+    let id: Option<i64> = sqlx::query_scalar(
+        "INSERT INTO outbox_events (type, payload, created_at, available_at, event_id)
+         VALUES ($1, $2::jsonb, $3, $3, $4) ON CONFLICT(event_id) DO NOTHING RETURNING id",
     )
-    .bind(event.event_type())
-    .bind(encode_outbox_payload_with_context(event, origin, context))
-    .bind(Utc::now())
-    .fetch_one(conn)
+    .bind(event_type)
+    .bind(payload)
+    .bind(now)
+    .bind(event_id)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(repo_err)?;
+    if let Some(id) = id {
+        return Ok(id);
+    }
+    let (id, stored): (i64, String) =
+        sqlx::query_as("SELECT id, payload::text FROM outbox_events WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_one(conn)
+            .await
+            .map_err(repo_err)?;
+    if serde_json::from_str::<serde_json::Value>(&stored).map_err(repo_err)?
+        != serde_json::from_str::<serde_json::Value>(payload).map_err(repo_err)?
+    {
+        return Err(Error::Conflict(
+            "Domain event UUID already belongs to a different payload".into(),
+        ));
+    }
     Ok(id)
 }
 
@@ -81,15 +159,16 @@ type Row = (i64, String, DateTime<Utc>, i32);
 
 fn decode(row: Row) -> std::result::Result<OutboxEvent, i64> {
     let (id, payload, created_at, attempts) = row;
-    let (event, origin, context) = decode_outbox_payload_with_context(&payload).map_err(|e| {
+    let decoded = decode_stored_outbox_payload(&payload).map_err(|e| {
         warn!("Outbox event {id} has an unreadable payload: {e}");
         id
     })?;
     Ok(OutboxEvent {
         id,
-        event,
-        origin,
-        context,
+        event: decoded.event,
+        envelope: decoded.envelope,
+        origin: decoded.origin,
+        context: decoded.context,
         created_at,
         attempts,
     })
@@ -119,8 +198,14 @@ impl PostgresOutboxStore {
 #[async_trait]
 impl OutboxStore for PostgresOutboxStore {
     async fn append(&self, event: &DocumentEvent, origin: EventOrigin) -> Result<i64> {
-        let mut conn = self.pool.acquire().await.map_err(repo_err)?;
-        let id = insert_event(&mut conn, event, origin, None).await?;
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let _: Option<Id> = sqlx::query_scalar("SELECT id FROM documents WHERE id = $1 FOR SHARE")
+            .bind(event.document_id())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        let id = insert_event(&mut tx, event, origin, None).await?;
+        tx.commit().await.map_err(repo_err)?;
         self.wake.notify_one();
         Ok(id)
     }

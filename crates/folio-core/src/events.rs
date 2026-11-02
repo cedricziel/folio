@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use crate::models::{Document, DocumentSource, Id, NamedRef, Tag, VaultId};
 
 /// What a document looked like just before it was deleted
@@ -162,98 +163,262 @@ impl From<&DeletedDocument> for EventSnapshot {
     }
 }
 
-/// A [`DocumentEvent`] as persisted in the outbox
+/// A committed domain transition as persisted in the outbox.
 #[derive(Debug, Clone)]
 pub struct OutboxEvent {
-    /// Monotonic; also the SSE event id
+    /// Monotonic delivery and SSE cursor.
     pub id: i64,
-    pub event: DocumentEvent,
+    pub event: Option<DocumentEvent>,
+    pub envelope: Option<DomainEventEnvelope>,
     pub origin: EventOrigin,
     pub context: Option<Arc<EventSnapshot>>,
     pub created_at: DateTime<Utc>,
-    /// Delivery attempts so far, including the current one
     pub attempts: i32,
 }
 
 impl OutboxEvent {
-    /// The authoritative origin, when captured by this event or an older deletion snapshot.
+    /// The captured document origin, including legacy deletion snapshots and versioned envelopes.
     pub fn origin_vault(&self) -> Option<VaultId> {
-        match &self.context {
+        let event = self.event.as_ref()?;
+        let vault = match &self.context {
             Some(context) => {
-                (context.document_id == self.event.document_id()).then_some(context.vault_id)
+                (context.document_id == event.document_id()).then_some(context.vault_id)
             }
-            None => match &self.event {
+            None => match event {
                 DocumentEvent::Deleted {
                     document_id,
                     snapshot: Some(snapshot),
                 } if snapshot.document.id == *document_id => Some(snapshot.document.vault_id),
-                _ => None,
+                _ => self.envelope.as_ref().and_then(|envelope| {
+                    (envelope.document_id() == Some(event.document_id()))
+                        .then_some(envelope.vault_id())
+                }),
             },
-        }
+        };
+        vault.filter(|vault| {
+            self.envelope
+                .as_ref()
+                .is_none_or(|envelope| envelope.vault_id() == *vault)
+        })
     }
 }
 
 /// What the outbox stores in the `payload` column
 #[derive(Serialize, Deserialize)]
 struct StoredPayload {
-    event: DocumentEvent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event: Option<DocumentEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    envelope: Option<DomainEventEnvelope>,
     origin: EventOrigin,
     snapshot: Option<DeletedDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     context: Option<EventSnapshot>,
 }
 
-/// Encode an event for the outbox `payload` column
+/// Decoded durable payload, including legacy document-only rows.
+#[derive(Debug, Clone)]
+pub struct DecodedOutboxPayload {
+    pub event: Option<DocumentEvent>,
+    pub envelope: Option<DomainEventEnvelope>,
+    pub origin: EventOrigin,
+    pub context: Option<Arc<EventSnapshot>>,
+}
+
+/// Encode a legacy document projection without changing its stored contract.
 pub fn encode_outbox_payload(event: &DocumentEvent, origin: EventOrigin) -> String {
     encode_outbox_payload_with_context(event, origin, None)
 }
 
-/// Encode an event with its internal immutable metadata; wire events remain unchanged.
+/// Encode a legacy document projection and its immutable internal metadata.
 pub fn encode_outbox_payload_with_context(
     event: &DocumentEvent,
     origin: EventOrigin,
     context: Option<&EventSnapshot>,
 ) -> String {
+    serde_json::to_string(&stored_payload(Some(event), origin, context, None))
+        .expect("document events always serialize")
+}
+
+fn stored_payload(
+    event: Option<&DocumentEvent>,
+    origin: EventOrigin,
+    context: Option<&EventSnapshot>,
+    envelope: Option<&DomainEventEnvelope>,
+) -> StoredPayload {
     let snapshot = match event {
-        DocumentEvent::Deleted { snapshot, .. } => snapshot.as_deref().cloned(),
+        Some(DocumentEvent::Deleted { snapshot, .. }) => snapshot.as_deref().cloned(),
         _ => None,
     };
-    serde_json::to_string(&StoredPayload {
-        event: event.clone(),
+    StoredPayload {
+        event: event.cloned(),
+        envelope: envelope.cloned(),
         origin,
         snapshot,
         context: context.cloned(),
-    })
-    .expect("document events always serialize")
+    }
 }
 
-/// Decode an outbox `payload` column
+/// Encode a validated domain payload, optionally carrying its legacy document projection.
+/// Neither empty payloads nor inconsistent document or vault identities are accepted.
+pub fn encode_stored_outbox_payload(
+    event: Option<&DocumentEvent>,
+    origin: EventOrigin,
+    context: Option<&EventSnapshot>,
+    envelope: Option<&DomainEventEnvelope>,
+) -> crate::Result<String> {
+    let payload = serde_json::to_string(&stored_payload(event, origin, context, envelope))
+        .map_err(|error| crate::Error::Validation(error.to_string()))?;
+    decode_stored_outbox_payload(&payload)
+        .map_err(|error| crate::Error::Validation(error.to_string()))?;
+    Ok(payload)
+}
+
+/// Decode a legacy document projection. Domain-only rows have no document projection.
 pub fn decode_outbox_payload(payload: &str) -> serde_json::Result<(DocumentEvent, EventOrigin)> {
     decode_outbox_payload_with_context(payload).map(|(event, origin, _)| (event, origin))
 }
 
-/// Decode both current context and older payloads that lack it.
+/// Decode document payloads with or without an immutable context and domain envelope.
 pub fn decode_outbox_payload_with_context(
     payload: &str,
 ) -> serde_json::Result<(DocumentEvent, EventOrigin, Option<Arc<EventSnapshot>>)> {
+    let decoded = decode_stored_outbox_payload(payload)?;
+    let event = decoded.event.ok_or_else(|| {
+        <serde_json::Error as serde::de::Error>::custom(
+            "Domain-only outbox payload has no document projection",
+        )
+    })?;
+    Ok((event, decoded.origin, decoded.context))
+}
+
+/// Decode legacy and versioned domain payloads while checking their scoped identities.
+pub fn decode_stored_outbox_payload(payload: &str) -> serde_json::Result<DecodedOutboxPayload> {
     let StoredPayload {
         mut event,
+        envelope,
         origin,
         snapshot,
         context,
     } = serde_json::from_str(payload)?;
-    if let DocumentEvent::Deleted { snapshot: slot, .. } = &mut event {
+    let invalid = |message: &str| <serde_json::Error as serde::de::Error>::custom(message);
+    if event.is_none() && envelope.is_none() {
+        return Err(invalid("Outbox payload requires an event or envelope"));
+    }
+    if let Some(DocumentEvent::Deleted { snapshot: slot, .. }) = &mut event {
         *slot = snapshot.map(Arc::new);
     }
-    if context
-        .as_ref()
-        .is_some_and(|context| context.document_id != event.document_id())
-    {
-        return Err(<serde_json::Error as serde::de::Error>::custom(
-            "Outbox context document ID does not match its event",
-        ));
+    if let Some(event) = event.as_ref() {
+        if envelope.as_ref().is_some_and(|envelope| {
+            envelope.subject().subject_type != "document"
+                || envelope.subject().id != event.document_id()
+        }) {
+            return Err(invalid(
+                "Outbox document projection requires a matching document subject",
+            ));
+        }
+        if context
+            .as_ref()
+            .is_some_and(|context| context.document_id != event.document_id())
+        {
+            return Err(invalid(
+                "Outbox context document ID does not match its event",
+            ));
+        }
+        if envelope
+            .as_ref()
+            .is_some_and(|envelope| envelope.document_id() != Some(event.document_id()))
+        {
+            return Err(invalid(
+                "Outbox envelope document ID does not match its event",
+            ));
+        }
+        if let DocumentEvent::Deleted {
+            snapshot: Some(snapshot),
+            ..
+        } = event
+        {
+            if snapshot.document.id != event.document_id()
+                || envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.vault_id() != snapshot.document.vault_id)
+            {
+                return Err(invalid("Outbox deleted snapshot does not match its event"));
+            }
+        }
     }
-    Ok((event, origin, context.map(Arc::new)))
+    if let (Some(context), Some(envelope)) = (context.as_ref(), envelope.as_ref()) {
+        if context.vault_id != envelope.vault_id()
+            || Some(context.document_id) != envelope.document_id()
+        {
+            return Err(invalid(
+                "Outbox envelope does not match its captured context",
+            ));
+        }
+    }
+    Ok(DecodedOutboxPayload {
+        event,
+        envelope,
+        origin,
+        context: context.map(Arc::new),
+    })
+}
+
+/// Capture the allowlisted document metadata for a new durable envelope.
+/// Missing documents retain their legacy projection without inventing vault ownership.
+pub fn document_event_envelope(
+    event: &DocumentEvent,
+    context: Option<&EventSnapshot>,
+) -> crate::Result<Option<DomainEventEnvelope>> {
+    let captured;
+    let context = match context {
+        Some(context) => context,
+        None => {
+            let DocumentEvent::Deleted {
+                snapshot: Some(snapshot),
+                ..
+            } = event
+            else {
+                return Ok(None);
+            };
+            let document = &snapshot.document;
+            captured = EventSnapshot {
+                document_id: document.id,
+                vault_id: document.vault_id,
+                title: document.title.clone(),
+                original_filename: document.original_filename.clone(),
+                mime_type: document.mime_type.clone(),
+                file_path: None,
+                source: document.source.clone(),
+                created_at: document.created_at,
+                correspondent_id: document.correspondent_id,
+                correspondent_name: None,
+                document_type_id: document.document_type_id,
+                document_type_name: None,
+                tags: snapshot
+                    .tags
+                    .iter()
+                    .map(|tag| NamedRef {
+                        id: tag.id,
+                        name: tag.name.clone(),
+                    })
+                    .collect(),
+            };
+            &captured
+        }
+    };
+    DomainEventEnvelope::new(
+        format!("document.{}", event.event_type()), context.vault_id,
+        DomainEventSubject { subject_type: "document".into(), id: event.document_id() },
+        Some(event.document_id()), EventAudience::Vault,
+        serde_json::json!({
+            "title": context.title, "original_filename": context.original_filename,
+            "mime_type": context.mime_type, "created_at": context.created_at,
+            "correspondent_id": context.correspondent_id, "correspondent_name": context.correspondent_name,
+            "document_type_id": context.document_type_id, "document_type_name": context.document_type_name,
+            "tags": context.tags,
+        }),
+    ).map(Some)
 }
 
 /// In-process fan-out of dispatched events to live SSE connections
@@ -352,6 +517,88 @@ mod tests {
             .unwrap()
             .2
             .is_none());
+    }
+
+    #[test]
+    fn legacy_document_payload_has_no_invented_domain_identity() {
+        let event = DocumentEvent::Updated {
+            document_id: Id::new_v4(),
+        };
+        let payload = encode_outbox_payload(&event, EventOrigin::User);
+        let decoded = decode_stored_outbox_payload(&payload).unwrap();
+        assert_eq!(decoded.event.unwrap().document_id(), event.document_id());
+        assert!(decoded.envelope.is_none());
+    }
+
+    #[test]
+    fn domain_only_payload_round_trips_without_a_document_projection() {
+        let envelope = DomainEventEnvelope::new(
+            "tag.created",
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "tag".into(),
+                id: Id::new_v4(),
+            },
+            None,
+            EventAudience::Vault,
+            serde_json::json!({"name": "archive"}),
+        )
+        .unwrap();
+        let payload =
+            encode_stored_outbox_payload(None, EventOrigin::User, None, Some(&envelope)).unwrap();
+        let decoded = decode_stored_outbox_payload(&payload).unwrap();
+        assert!(decoded.event.is_none());
+        assert_eq!(decoded.envelope, Some(envelope));
+        assert!(decode_outbox_payload(&payload).is_err());
+    }
+
+    #[test]
+    fn empty_payload_and_mismatched_envelope_are_rejected() {
+        assert!(decode_stored_outbox_payload(r#"{"origin":"user","snapshot":null}"#).is_err());
+        let context = context();
+        let event = DocumentEvent::Updated {
+            document_id: context.document_id,
+        };
+        let envelope = document_event_envelope(&event, Some(&context))
+            .unwrap()
+            .unwrap();
+        let mut payload: serde_json::Value = serde_json::from_str(
+            &encode_stored_outbox_payload(
+                Some(&event),
+                EventOrigin::User,
+                Some(&context),
+                Some(&envelope),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        payload["envelope"]["vault_id"] = serde_json::json!(VaultId::new());
+        assert!(decode_stored_outbox_payload(&payload.to_string()).is_err());
+    }
+
+    #[test]
+    fn child_domain_event_cannot_imply_a_legacy_document_workflow_trigger() {
+        let document_id = Id::new_v4();
+        let envelope = DomainEventEnvelope::new(
+            "comment.created",
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "comment".into(),
+                id: Id::new_v4(),
+            },
+            Some(document_id),
+            EventAudience::Vault,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let event = DocumentEvent::Updated { document_id };
+        assert!(encode_stored_outbox_payload(
+            Some(&event),
+            EventOrigin::User,
+            None,
+            Some(&envelope)
+        )
+        .is_err());
     }
 
     #[test]

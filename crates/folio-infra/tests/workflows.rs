@@ -584,7 +584,7 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .pending_events()
         .await
         .into_iter()
-        .find(|e| matches!(e.event, DocumentEvent::Trashed { .. }))
+        .find(|e| matches!(e.event, Some(DocumentEvent::Trashed { .. })))
         .unwrap();
     assert!(h.engine.handle(&trash_event).await.unwrap().is_empty());
     h.documents.request_purge(h.vault, doc.id).await.unwrap();
@@ -593,7 +593,7 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .pending_events()
         .await
         .into_iter()
-        .find(|e| matches!(e.event, DocumentEvent::Deleted { .. }))
+        .find(|e| matches!(e.event, Some(DocumentEvent::Deleted { .. })))
         .expect("the delete left an event in the outbox");
 
     let runs = h.engine.handle(&event).await.unwrap();
@@ -887,7 +887,7 @@ async fn local_actions_are_announced_but_never_trigger_workflows() {
     let events = h.pending_events().await;
     assert_eq!(events.len(), 2, "the tag edit and the correspondent change");
     assert!(events.iter().all(|e| e.origin == EventOrigin::Workflow
-        && matches!(e.event, DocumentEvent::Updated { document_id } if document_id == doc.id)));
+        && matches!(e.event, Some(DocumentEvent::Updated { document_id }) if document_id == doc.id)));
 
     // Dispatching them reaches live clients but starts no workflow.
     let broadcaster = EventBroadcaster::default();
@@ -1012,6 +1012,106 @@ async fn handling_an_event_twice_creates_one_run() {
         .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn source_vault_envelope_cannot_trigger_destination_workflows_after_a_move() {
+    use folio_core::{DomainEventEnvelope, DomainEventSubject, EventAudience};
+    let h = Harness::new().await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let repos = Database::from(h.pool.clone()).repositories().await;
+    let source = repos
+        .vaults
+        .create("Original vault", None)
+        .await
+        .unwrap()
+        .id;
+    let doc = repos
+        .documents
+        .create(
+            source,
+            CreateDocument {
+                title: "Moved".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let envelope = DomainEventEnvelope::new(
+        "document.updated",
+        source,
+        DomainEventSubject {
+            subject_type: "document".into(),
+            id: doc.id,
+        },
+        Some(doc.id),
+        EventAudience::Vault,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    repos
+        .documents
+        .move_to(doc.id, source, h.vault, None)
+        .await
+        .unwrap();
+    let mut event = h
+        .event(DocumentEvent::Updated {
+            document_id: doc.id,
+        })
+        .await;
+    event.envelope = Some(envelope);
+
+    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert!(h
+        .workflows
+        .list_runs(h.vault, workflow.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(h.queue.pending_count().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn user_private_envelope_cannot_trigger_ordinary_document_workflows() {
+    use folio_core::{DomainEventEnvelope, DomainEventSubject, EventAudience};
+    let h = Harness::new().await;
+    h.workflow(
+        WorkflowTrigger::DocumentUpdated,
+        WorkflowConditions::default(),
+        unreachable_hook(),
+    )
+    .await;
+    let doc = h.document("private.pdf", "application/pdf").await;
+    let mut event = h
+        .event(DocumentEvent::Updated {
+            document_id: doc.id,
+        })
+        .await;
+    event.envelope = Some(
+        DomainEventEnvelope::new(
+            "document.updated",
+            h.vault,
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: doc.id,
+            },
+            Some(doc.id),
+            EventAudience::User {
+                user_id: folio_core::models::UserId::from("private-owner"),
+            },
+            serde_json::json!({}),
+        )
+        .unwrap(),
+    );
+
+    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert_eq!(h.queue.pending_count().await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -1525,16 +1625,16 @@ async fn legacy_nondeletion_event_fails_with_context_error_and_exhausts_delivery
     let doc = h.document("legacy.pdf", "application/pdf").await;
     let creation = h.pending_events().await.pop().unwrap();
     h.outbox.mark_dispatched(creation.id).await.unwrap();
-    let id = h
-        .outbox
-        .append(
-            &DocumentEvent::Updated {
-                document_id: doc.id,
-            },
-            EventOrigin::User,
-        )
-        .await
-        .unwrap();
+    let payload = folio_core::events::encode_outbox_payload(
+        &DocumentEvent::Updated {
+            document_id: doc.id,
+        },
+        EventOrigin::User,
+    );
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO outbox_events (type, payload, created_at, available_at) VALUES ('updated', ?, ?, ?) RETURNING id",
+    ).bind(payload).bind(&now).bind(&now).fetch_one(&h.pool).await.unwrap();
     let dispatch = OutboxDispatcher::new(
         h.outbox.clone(),
         vec![h.engine.clone()],
@@ -1585,9 +1685,10 @@ async fn legacy_deletion_snapshot_still_delivers_its_recorded_document_and_tags(
         .pending_events()
         .await
         .into_iter()
-        .find(|event| matches!(event.event, DocumentEvent::Deleted { .. }))
+        .find(|event| matches!(event.event, Some(DocumentEvent::Deleted { .. })))
         .unwrap();
     event.context = None;
+    event.envelope = None;
 
     let runs = h.engine.handle(&event).await.unwrap();
 
@@ -1636,13 +1737,13 @@ async fn captured_deletion_context_takes_precedence_over_the_legacy_fallback() {
         .pending_events()
         .await
         .into_iter()
-        .find(|event| matches!(event.event, DocumentEvent::Deleted { .. }))
+        .find(|event| matches!(event.event, Some(DocumentEvent::Deleted { .. })))
         .unwrap();
     let foreign = h.vaults.create("legacy fallback", None).await.unwrap().id;
     let DocumentEvent::Deleted {
         snapshot: Some(ref mut fallback),
         ..
-    } = event.event
+    } = event.event.as_mut().unwrap()
     else {
         panic!("legacy fallback exists")
     };
