@@ -168,7 +168,14 @@ async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent
         return Vec::new();
     }
     let id = outbox_event.id.to_string();
-    let event = &outbox_event.event;
+    if outbox_event.envelope.as_ref().is_some_and(|envelope| {
+        envelope.vault_id() != vault || envelope.audience() != &folio_core::EventAudience::Vault
+    }) {
+        return Vec::new();
+    }
+    let Some(event) = outbox_event.event.as_ref() else {
+        return Vec::new();
+    };
     let rendered = if matches!(event, DocumentEvent::Deleted { .. }) {
         DocumentStreams::removed(state, vault, event.document_id())
             .await

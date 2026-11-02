@@ -70,13 +70,29 @@ impl WorkflowEngine {
     /// is returned once all were tried, so the dispatcher retries the event;
     /// runs created in the meantime are not duplicated.
     pub async fn handle(&self, outbox_event: &OutboxEvent) -> Result<Vec<WorkflowRun>> {
-        let event = &outbox_event.event;
+        if outbox_event
+            .envelope
+            .as_ref()
+            .is_some_and(|envelope| envelope.audience() != &crate::EventAudience::Vault)
+        {
+            return Ok(Vec::new());
+        }
+        let Some(event) = outbox_event.event.as_ref() else {
+            return Ok(Vec::new());
+        };
         let Some(trigger) = Self::trigger_for(event) else {
             return Ok(Vec::new());
         };
         let document_id = event.document_id();
-        let ctx = self.load_context(outbox_event).await?;
+        let ctx = self.load_context(outbox_event, event).await?;
         let vault = ctx.vault_id;
+        if outbox_event
+            .envelope
+            .as_ref()
+            .is_some_and(|envelope| envelope.vault_id() != vault)
+        {
+            return Ok(Vec::new());
+        }
         if !matches!(event, DocumentEvent::Deleted { .. })
             && self.documents.locate(document_id).await? != Some(vault)
         {
@@ -133,15 +149,19 @@ impl WorkflowEngine {
         }
     }
 
-    async fn load_context(&self, event: &OutboxEvent) -> Result<EventSnapshot> {
-        if let Some(context) = &event.context {
-            if context.document_id == event.event.document_id() {
+    async fn load_context(
+        &self,
+        outbox_event: &OutboxEvent,
+        event: &DocumentEvent,
+    ) -> Result<EventSnapshot> {
+        if let Some(context) = &outbox_event.context {
+            if context.document_id == event.document_id() {
                 return Ok(context.as_ref().clone());
             }
         } else if let DocumentEvent::Deleted {
             document_id,
             snapshot: Some(snapshot),
-        } = &event.event
+        } = event
         {
             if snapshot.document.id == *document_id {
                 let mut context = EventSnapshot::from(snapshot.as_ref());
@@ -162,7 +182,7 @@ impl WorkflowEngine {
                 return Ok(context);
             }
         }
-        Err(Error::Repository(format!("Cannot deliver outbox event {} ({}): historical document/vault context is missing or invalid; its original metadata cannot be reconstructed", event.id, event.event.event_type())))
+        Err(Error::Repository(format!("Cannot deliver outbox event {} ({}): historical document/vault context is missing or invalid; its original metadata cannot be reconstructed", outbox_event.id, event.event_type())))
     }
 
     async fn build_payload(

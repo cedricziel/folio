@@ -20,7 +20,10 @@ pub use document_repo::{
     PostgresTagRepository,
 };
 pub use ingest_repo::{PostgresIngestLedger, PostgresSourceRepository};
-pub use outbox::PostgresOutboxStore;
+pub use outbox::{
+    insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,
+    PostgresOutboxStore,
+};
 pub use search::PostgresSearchService;
 pub use settings_repo::PostgresSettingsRepository;
 pub use vault_repo::PostgresVaultRepository;

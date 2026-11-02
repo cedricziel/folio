@@ -392,15 +392,17 @@ loopback listeners, or the Docker socket. Rerun with those capabilities while
 retaining temporary data and test credentials. Record a skipped backend as
 unverified.
 
-## Verify ownership and mutation actors
+## Verify domain ownership and event contracts
 
-Run `RUSTC_WRAPPER= cargo test -p folio-core --lib` for isolated mutation actors
-and legacy deletion-snapshot decoding.
-Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract --test workflows --test vault_outbox_upgrade`
+Run `RUSTC_WRAPPER= cargo test -p folio-core --lib` for isolated mutation actors,
+versioned envelope validation, and legacy deletion-snapshot decoding.
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract --test domain_events --test workflows --test vault_outbox_upgrade`
 against disposable SQLite databases and PostgreSQL containers. These suites cover
-explicit vault ownership, mismatched workflow and ingestion ownership rejection,
-and retained legacy deletion snapshots. Use task-owned build storage and the
-isolation settings above. PostgreSQL skips do not establish database parity.
+explicit vault ownership, mismatched workflow/ingestion ownership rejection,
+transaction rollback, concurrent event identity deduplication, stable delivery
+retries, retained legacy payloads, and workflow suppression for private or
+wrong-vault envelopes. Use task-owned build storage and the isolation settings
+above. PostgreSQL skips do not establish database parity.
 
 ## Verify mutation actors
 

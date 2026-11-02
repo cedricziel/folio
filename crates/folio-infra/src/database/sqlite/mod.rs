@@ -20,7 +20,10 @@ pub use document_repo::{
     SqliteTagRepository,
 };
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
-pub use outbox::SqliteOutboxStore;
+pub use outbox::{
+    insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,
+    SqliteOutboxStore,
+};
 pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
 pub use vault_repo::SqliteVaultRepository;

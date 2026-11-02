@@ -13,7 +13,7 @@ async fn created_events(r: &Repositories) -> Vec<folio_core::OutboxEvent> {
         .await
         .unwrap()
         .into_iter()
-        .filter(|event| matches!(event.event, folio_core::DocumentEvent::Created { .. }))
+        .filter(|event| matches!(event.event, Some(folio_core::DocumentEvent::Created { .. })))
         .collect()
 }
 
@@ -485,7 +485,7 @@ async fn blocked_original_put_emits_no_created_event_until_atomic_finalization()
 
     let events = created_events(&r).await;
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].event.document_id(), document.id);
+    assert_eq!(events[0].event.as_ref().unwrap().document_id(), document.id);
     assert_eq!(engine.handle(&events[0]).await.unwrap().len(), 1);
     r.documents
         .finalize_upload(vault, document.id, document.file_path.as_ref().unwrap())

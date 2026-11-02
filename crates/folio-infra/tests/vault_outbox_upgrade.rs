@@ -306,7 +306,7 @@ async fn snapshot_upgrade_contract(db: &Database, with_live_document: bool) {
     );
     assert_eq!(claimed[0].attempts, 1);
     assert!(matches!(
-        &claimed[0].event,
+        claimed[0].event.as_ref().unwrap(),
         DocumentEvent::Deleted {
             snapshot: Some(_),
             ..

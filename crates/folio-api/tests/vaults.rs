@@ -379,6 +379,95 @@ async fn event_stream_drops_events_from_unrelated_vaults() {
 }
 
 #[tokio::test]
+async fn event_stream_suppresses_restricted_domain_envelopes_with_document_projections() {
+    use folio_core::{DomainEventEnvelope, DomainEventSubject, EventAudience};
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "restricted-stream-reader").await;
+    let visible = h
+        .state
+        .document_repo
+        .create(
+            alice.vault,
+            CreateDocument {
+                title: "Visible public transition".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", "/events", &alice, Body::empty()))
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    let event = DocumentEvent::Updated {
+        document_id: visible.id,
+    };
+    let context = captured(&h, alice.vault, &event).await.context;
+    let envelope = DomainEventEnvelope::new(
+        "document.updated",
+        alice.vault,
+        DomainEventSubject {
+            subject_type: "document".into(),
+            id: visible.id,
+        },
+        Some(visible.id),
+        EventAudience::User {
+            user_id: UserId::from("private-owner"),
+        },
+        serde_json::json!({}),
+    )
+    .unwrap();
+    h.state.event_broadcaster.send(OutboxEvent {
+        id: 300,
+        event: Some(event),
+        envelope: Some(envelope),
+        origin: EventOrigin::User,
+        context: context.clone(),
+        created_at: chrono::Utc::now(),
+        attempts: 1,
+    });
+    let owners_envelope = DomainEventEnvelope::new(
+        "document.updated",
+        alice.vault,
+        DomainEventSubject {
+            subject_type: "document".into(),
+            id: visible.id,
+        },
+        Some(visible.id),
+        EventAudience::Owners,
+        serde_json::json!({}),
+    )
+    .unwrap();
+    h.state.event_broadcaster.send(OutboxEvent {
+        id: 301,
+        event: Some(DocumentEvent::Updated {
+            document_id: visible.id,
+        }),
+        envelope: Some(owners_envelope),
+        origin: EventOrigin::User,
+        context,
+        created_at: chrono::Utc::now(),
+        attempts: 1,
+    });
+    broadcast(
+        &h,
+        alice.vault,
+        302,
+        DocumentEvent::Updated {
+            document_id: visible.id,
+        },
+    )
+    .await;
+    let delivered = stream_until(&mut body, "Visible public transition").await;
+    assert!(!delivered.contains("id: 300\n"));
+    assert!(!delivered.contains("id: 301\n"));
+    assert!(delivered.contains("id: 302\n"));
+}
+
+#[tokio::test]
 async fn event_stream_closes_before_delivering_events_after_membership_is_revoked() {
     let h = harness_requiring_login().await;
     let owner = sign_in(&h, "stream-vault-owner").await;
@@ -1690,8 +1779,9 @@ async fn event_stream_rejects_moved_and_unknown_origins_without_exposing_context
         .finalize_purge(alice.vault, removed.id)
         .await
         .unwrap();
-    let mut legacy_deleted = h.state.outbox.replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100).await.unwrap().into_iter().find(|event| matches!(event.event, DocumentEvent::Deleted { document_id, .. } if document_id == removed.id)).unwrap();
+    let mut legacy_deleted = h.state.outbox.replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100).await.unwrap().into_iter().find(|event| matches!(event.event, Some(DocumentEvent::Deleted { document_id, .. }) if document_id == removed.id)).unwrap();
     legacy_deleted.context = None;
+    legacy_deleted.envelope = None;
     let response = h
         .app
         .clone()
@@ -1702,9 +1792,10 @@ async fn event_stream_rejects_moved_and_unknown_origins_without_exposing_context
     h.state.event_broadcaster.send(old_origin);
     h.state.event_broadcaster.send(OutboxEvent {
         id: 900_000,
-        event: DocumentEvent::Updated {
+        event: Some(DocumentEvent::Updated {
             document_id: visible.id,
-        },
+        }),
+        envelope: None,
         origin: EventOrigin::User,
         context: None,
         created_at: chrono::Utc::now(),

@@ -100,7 +100,7 @@ impl Harness {
             .await
             .unwrap()
             .into_iter()
-            .find(|e| matches!(e.event, DocumentEvent::Created { document_id: d } if d == document_id))
+            .find(|e| matches!(e.event, Some(DocumentEvent::Created { document_id: d }) if d == document_id))
             .expect("the import left a created event in the outbox");
         self.engine.handle(&event).await.unwrap()
     }

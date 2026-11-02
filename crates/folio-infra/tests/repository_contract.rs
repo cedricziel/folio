@@ -2326,7 +2326,7 @@ async fn event_context_contract(db: &Database) {
     expected_tags.sort_by_key(|tag| tag.id);
     assert_eq!(original.tags, expected_tags);
     let payload = folio_core::events::encode_outbox_payload_with_context(
-        &created.event,
+        created.event.as_ref().unwrap(),
         created.origin,
         Some(original),
     );
@@ -2492,14 +2492,14 @@ async fn event_context_contract(db: &Database) {
     let DocumentEvent::Deleted {
         snapshot: Some(ref fallback),
         ..
-    } = deleted.event
+    } = deleted.event.as_ref().unwrap()
     else {
         panic!("deletion snapshot")
     };
     assert!(fallback.document.content.is_none());
     assert!(
         folio_core::events::encode_outbox_payload_with_context(
-            &deleted.event,
+            deleted.event.as_ref().unwrap(),
             deleted.origin,
             deleted.context.as_deref()
         )
@@ -2566,7 +2566,7 @@ async fn upload_finalization_contract(db: &Database) {
     let created = flush_outbox(&r).await;
     assert_eq!(created.len(), 1);
     assert!(
-        matches!(created[0].event, DocumentEvent::Created { document_id } if document_id == pending.id)
+        matches!(created[0].event, Some(DocumentEvent::Created { document_id }) if document_id == pending.id)
     );
     assert_eq!(
         r.documents
@@ -2598,7 +2598,7 @@ async fn upload_finalization_contract(db: &Database) {
     let events = flush_outbox(&r).await;
     assert_eq!(events.len(), 1);
     assert!(
-        matches!(events[0].event, DocumentEvent::Created { document_id } if document_id == direct.id)
+        matches!(events[0].event, Some(DocumentEvent::Created { document_id }) if document_id == direct.id)
     );
     r.documents
         .finalize_upload(vault, direct.id, "legacy-original")
@@ -2671,7 +2671,7 @@ async fn outbox_contract(db: &Database) {
     let events = flush_outbox(&r).await;
     let seen: Vec<_> = events
         .iter()
-        .map(|e| (e.event.event_type(), e.origin))
+        .map(|e| (e.event.as_ref().unwrap().event_type(), e.origin))
         .collect();
     assert_eq!(
         seen,
@@ -2686,10 +2686,12 @@ async fn outbox_contract(db: &Database) {
         ]
     );
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
-    assert!(events.iter().all(|e| e.event.document_id() == doc.id));
+    assert!(events
+        .iter()
+        .all(|e| e.event.as_ref().unwrap().document_id() == doc.id));
     assert!(matches!(
         events.last().unwrap().event,
-        DocumentEvent::Trashed { .. }
+        Some(DocumentEvent::Trashed { .. })
     ));
     r.documents.request_purge(vault, doc.id).await.unwrap();
     r.documents.finalize_purge(vault, doc.id).await.unwrap();
@@ -2697,11 +2699,11 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(
         deleted
             .iter()
-            .map(|event| event.event.event_type())
+            .map(|event| event.event.as_ref().unwrap().event_type())
             .collect::<Vec<_>>(),
         ["trashed", "deleted"]
     );
-    let DocumentEvent::Deleted { snapshot, .. } = &deleted[1].event else {
+    let DocumentEvent::Deleted { snapshot, .. } = deleted[1].event.as_ref().unwrap() else {
         panic!("permanent deletion emits a deleted event");
     };
     assert_eq!(snapshot.as_ref().unwrap().document.title, "renamed");
@@ -2864,7 +2866,7 @@ async fn outbox_contract(db: &Database) {
         .unwrap();
     assert_eq!(replayed.len(), 1);
     assert!(
-        matches!(replayed[0].event, DocumentEvent::Created { document_id } if document_id == orphan.id)
+        matches!(replayed[0].event, Some(DocumentEvent::Created { document_id }) if document_id == orphan.id)
     );
 
     // Claimed but never finished: after the lease it is handed out again, then done for good.

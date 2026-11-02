@@ -5,7 +5,7 @@
 ## 2. Persistence and attribution
 - [ ] Add failing repository contract tests for actor metadata, live-name reuse, restore conflicts, retained references, and cross-vault rejection.
 - [ ] Add forward-only SQLite and PostgreSQL migrations and implement lifecycle-aware writes.
-- [ ] Add failing HTTP and MCP tests for spoofed actors and concurrent identity isolation, then implement authenticated mutation context.
+- [x] Add failing HTTP and MCP tests for spoofed actors and concurrent identity isolation, then implement authenticated mutation context.
 - [ ] Preserve document trash, move, worker, workflow, and ingestion behavior with regression coverage.
 
 ## 3. Interfaces
