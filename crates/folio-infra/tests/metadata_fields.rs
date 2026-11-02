@@ -27,9 +27,16 @@ async fn contract(db: Database) {
         Database::Postgres(pool) => Box::new(PostgresMetadataFieldRepository::new(pool.clone())),
     };
     let actor = UserId::from("metadata-test-editor");
-    let field = folio_core::mutation::with_actor(
-        Some(actor.clone()),
-        repo.create(vault, input(" Reference ")),
+    let lineage = folio_core::mutation::MutationLineage {
+        correlation_id: uuid::Uuid::new_v4(),
+        causation_id: Some(uuid::Uuid::new_v4()),
+    };
+    let field = folio_core::mutation::with_lineage(
+        Some(lineage),
+        folio_core::mutation::with_actor(
+            Some(actor.clone()),
+            repo.create(vault, input(" Reference ")),
+        ),
     )
     .await
     .unwrap();
@@ -96,6 +103,8 @@ async fn contract(db: Database) {
     assert_eq!(created.subject().id, field.id);
     assert_eq!(created.actor_id(), field.created_by.as_ref());
     assert_eq!(created.document_id(), None);
+    assert_eq!(created.correlation_id(), lineage.correlation_id);
+    assert_eq!(created.causation_id(), lineage.causation_id);
     assert_eq!(
         created.audience(),
         &folio_core::domain_event::EventAudience::Vault
