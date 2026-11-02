@@ -428,7 +428,7 @@ pub async fn enforce_auth(
     if path == "/api/auth/tokens" || path.starts_with("/api/auth/tokens/") {
         return next.run(request).await;
     }
-    if request.headers().contains_key(header::AUTHORIZATION) {
+    if is_api && request.headers().contains_key(header::AUTHORIZATION) {
         let validator = auth.validator("/api");
         if is_api {
             if let Some(context) = validator.validate(request.headers()).await {

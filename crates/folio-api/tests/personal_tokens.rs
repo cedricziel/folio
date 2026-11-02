@@ -178,6 +178,31 @@ async fn token_creation_rejects_cross_origin_and_invalid_permissions() {
 }
 
 #[tokio::test]
+async fn authorization_headers_do_not_replace_web_sessions() {
+    let h = harness_requiring_login().await;
+    let alice = account(&h, "alice").await;
+    for authorization in ["Basic dXNlcjpwYXNz", "Bearer invalid"] {
+        let mut request = req("GET", "/settings/integrations", &alice, "", Value::Null);
+        request
+            .headers_mut()
+            .insert(header::AUTHORIZATION, authorization.parse().unwrap());
+        assert_eq!(
+            h.app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let mut request = req("GET", "/api/documents", &alice, "", Value::Null);
+        request
+            .headers_mut()
+            .insert(header::AUTHORIZATION, authorization.parse().unwrap());
+        assert_eq!(
+            h.app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}
+
+#[tokio::test]
 async fn explicit_credentials_override_cookies_and_are_scoped_in_optional_auth() {
     let h = harness().await;
     let alice = account(&h, "alice").await;
