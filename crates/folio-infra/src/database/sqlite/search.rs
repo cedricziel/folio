@@ -193,13 +193,16 @@ mod tests {
     }
 
     async fn document(repo: &SqliteDocumentRepository, title: &str) -> Id {
-        repo.create(CreateDocument {
-            title: title.into(),
-            content: None,
-            original_filename: None,
-            mime_type: None,
-            ..Default::default()
-        })
+        repo.create(
+            crate::database::test_vault(),
+            CreateDocument {
+                title: title.into(),
+                content: None,
+                original_filename: None,
+                mime_type: None,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap()
         .id
@@ -220,6 +223,7 @@ mod tests {
         let b = document(&repo, "b").await;
         search
             .store_chunks(
+                crate::database::test_vault(),
                 a,
                 "m1",
                 &[
@@ -230,11 +234,19 @@ mod tests {
             .await
             .unwrap();
         search
-            .store_chunks(b, "m1", &[chunk(0, "weaker", vec![1.0, 1.0])])
+            .store_chunks(
+                crate::database::test_vault(),
+                b,
+                "m1",
+                &[chunk(0, "weaker", vec![1.0, 1.0])],
+            )
             .await
             .unwrap();
 
-        let results = search.search("m1", &[1.0, 0.0], 10).await.unwrap();
+        let results = search
+            .search(crate::database::test_vault(), "m1", &[1.0, 0.0], 10)
+            .await
+            .unwrap();
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].document_id, a);
@@ -248,15 +260,28 @@ mod tests {
         let old = document(&repo, "old").await;
         let new = document(&repo, "new").await;
         search
-            .store_chunks(old, "old-model", &[chunk(0, "x", vec![1.0, 0.0])])
+            .store_chunks(
+                crate::database::test_vault(),
+                old,
+                "old-model",
+                &[chunk(0, "x", vec![1.0, 0.0])],
+            )
             .await
             .unwrap();
         search
-            .store_chunks(new, "new-model", &[chunk(0, "x", vec![1.0, 0.0])])
+            .store_chunks(
+                crate::database::test_vault(),
+                new,
+                "new-model",
+                &[chunk(0, "x", vec![1.0, 0.0])],
+            )
             .await
             .unwrap();
 
-        let results = search.search("new-model", &[1.0, 0.0], 10).await.unwrap();
+        let results = search
+            .search(crate::database::test_vault(), "new-model", &[1.0, 0.0], 10)
+            .await
+            .unwrap();
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].document_id, new);
@@ -267,19 +292,31 @@ mod tests {
         let (search, repo, _dir) = setup().await;
         let doc = document(&repo, "d").await;
         search
-            .store_chunks(doc, "m1", &[chunk(0, "x", vec![1.0, 0.0])])
+            .store_chunks(
+                crate::database::test_vault(),
+                doc,
+                "m1",
+                &[chunk(0, "x", vec![1.0, 0.0])],
+            )
             .await
             .unwrap();
 
         assert_eq!(search.mark_stale_except("m2").await.unwrap(), 1);
         assert!(search
-            .search("m1", &[1.0, 0.0], 5)
+            .search(crate::database::test_vault(), "m1", &[1.0, 0.0], 5)
             .await
             .unwrap()
             .is_empty());
 
         assert_eq!(search.mark_stale_except("m1").await.unwrap(), 0);
-        assert_eq!(search.search("m1", &[1.0, 0.0], 5).await.unwrap().len(), 1);
+        assert_eq!(
+            search
+                .search(crate::database::test_vault(), "m1", &[1.0, 0.0], 5)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -288,6 +325,7 @@ mod tests {
         let doc = document(&repo, "d").await;
         search
             .store_chunks(
+                crate::database::test_vault(),
                 doc,
                 "m1",
                 &[chunk(0, "a", vec![1.0]), chunk(1, "b", vec![1.0])],
@@ -295,11 +333,19 @@ mod tests {
             .await
             .unwrap();
         search
-            .store_chunks(doc, "m1", &[chunk(0, "only", vec![1.0])])
+            .store_chunks(
+                crate::database::test_vault(),
+                doc,
+                "m1",
+                &[chunk(0, "only", vec![1.0])],
+            )
             .await
             .unwrap();
 
-        let results = search.search("m1", &[1.0], 5).await.unwrap();
+        let results = search
+            .search(crate::database::test_vault(), "m1", &[1.0], 5)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].snippet.as_deref(), Some("only"));
     }

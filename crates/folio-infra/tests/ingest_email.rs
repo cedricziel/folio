@@ -87,7 +87,7 @@ impl GreenMail {
     }
 
     fn source(&self, config: EmailConfig, h: &Harness) -> EmailSource {
-        EmailSource::new(h.source_id, "work", config, h.ledger.clone())
+        EmailSource::new(h.source_id, "work", config, h.ledger.clone(), Some(h.vault))
     }
 
     /// (seen, deleted) flags per UID in a mailbox
@@ -265,16 +265,19 @@ async fn pre_ingest_rules_discard_newsletters_and_the_body_can_be_kept_as_eml() 
     let mut config = gm.config("bob");
     config.mail_body = MailBody::Eml;
 
-    struct Pipeline(Arc<folio_core::services::IngestPipeline>);
+    struct Pipeline(
+        Arc<folio_core::services::IngestPipeline>,
+        folio_core::models::VaultId,
+    );
     #[async_trait]
     impl IngestSink for Pipeline {
         async fn ingest(&self, s: Id, item: IngestItem) -> Result<IngestOutcome> {
-            self.0.ingest(s, item).await
+            folio_core::ports::VaultIngest::ingest(self.0.as_ref(), self.1, s, item).await
         }
     }
     let report = gm
         .source(config, &h)
-        .poll(&Pipeline(h.pipeline.clone()))
+        .poll(&Pipeline(h.pipeline.clone(), h.vault))
         .await
         .unwrap();
 
@@ -282,7 +285,7 @@ async fn pre_ingest_rules_discard_newsletters_and_the_body_can_be_kept_as_eml() 
     assert_eq!((report.imported, report.skipped), (2, 2));
     let mut names: Vec<_> = h
         .documents
-        .list(None)
+        .list_all()
         .await
         .unwrap()
         .into_iter()

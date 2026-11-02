@@ -59,6 +59,7 @@ private struct FixedToken: BearerTokenProvider {
 
 private let documentJSON = """
     {"id": "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f", "title": "Jahresabrechnung 2025",
+     "vault_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "uploaded_by": "fixture-user",
      "content": "Rechnungsnummer 2025-00318", "original_filename": "bill.pdf",
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,

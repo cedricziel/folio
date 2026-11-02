@@ -210,6 +210,11 @@ impl Database {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_vault() -> folio_core::models::VaultId {
+    folio_core::models::VaultId(uuid::Uuid::nil())
+}
+
 /// Migrated throw-away database for tests; each pooled connection of an
 /// in-memory SQLite database would see its own empty schema, so use a file.
 #[cfg(test)]
@@ -218,6 +223,14 @@ pub(crate) async fn test_pool() -> (SqlitePool, tempfile::TempDir) {
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("test.db").display());
     let pool = create_pool(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO vaults (id, name, created_at, updated_at) VALUES ($1, 'Test', $2, $2)",
+    )
+    .bind(test_vault().to_string())
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
     (pool, dir)
 }
 

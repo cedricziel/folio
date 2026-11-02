@@ -21,6 +21,10 @@ use folio_infra::{
 pub struct Harness {
     pub app: Router,
     pub state: AppState,
+    pub vault: folio_core::models::VaultId,
+    pub auth: Arc<dyn folio_auth::AuthStore>,
+    pub members: Arc<dyn folio_core::ports::MembershipRepository>,
+    pub vault_repository: Arc<dyn folio_core::ports::VaultRepository>,
 }
 
 pub async fn harness() -> Harness {
@@ -50,6 +54,14 @@ async fn build_harness(configured: Vec<IngestionSourceDef>, require_login: bool)
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let vault = repos.vaults.instance_default().await.unwrap();
+    let auth_store = repos.auth.clone();
+    let members = repos.members.clone();
+    let vault_repository = repos.vaults.clone();
+    let vaults = Arc::new(folio_core::services::VaultService::new(
+        repos.vaults.clone(),
+        repos.members,
+    ));
     let auth = AuthState::new(repos.auth.clone(), None)
         .with_setup_token(SETUP_TOKEN)
         .with_required(require_login);
@@ -83,10 +95,16 @@ async fn build_harness(configured: Vec<IngestionSourceDef>, require_login: bool)
         WebhookClient::new(),
         "http://folio.test".to_string(),
         ingestion,
+        vaults,
+        repos.access,
     );
     Harness {
         app: create_router(state.clone(), auth),
         state,
+        vault,
+        auth: auth_store,
+        members,
+        vault_repository,
     }
 }
 

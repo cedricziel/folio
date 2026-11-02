@@ -16,7 +16,12 @@ async fn imports_with_source_tags_and_the_stored_file() {
         panic!("imported")
     };
 
-    let stored = h.documents.find_by_id(doc.id).await.unwrap().unwrap();
+    let stored = h
+        .documents
+        .find_by_id(h.vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.source.kind, SourceKind::Folder);
     assert_eq!(
         stored.source.folder.unwrap().relative_path,
@@ -24,7 +29,7 @@ async fn imports_with_source_tags_and_the_stored_file() {
     );
     let mut tags: Vec<_> = h
         .documents
-        .get_tags(doc.id)
+        .get_tags(h.vault, doc.id)
         .await
         .unwrap()
         .into_iter()
@@ -45,9 +50,9 @@ async fn the_same_content_is_not_imported_twice_until_its_document_is_gone() {
         h.ingest(file_item(b"same", &["Other"])).await,
         IngestOutcome::Duplicate
     ));
-    assert_eq!(h.documents.list(None).await.unwrap().len(), 1);
+    assert_eq!(h.documents.list(h.vault, None).await.unwrap().len(), 1);
 
-    h.documents.delete(first.id).await.unwrap();
+    h.documents.delete(h.vault, first.id).await.unwrap();
     assert!(matches!(
         h.ingest(file_item(b"same", &[])).await,
         IngestOutcome::Imported(_)
@@ -97,11 +102,11 @@ async fn pre_ingest_rules_discard_matching_mail_before_import() {
             .await,
         IngestOutcome::Imported(_)
     ));
-    assert_eq!(h.documents.list(None).await.unwrap().len(), 1);
+    assert_eq!(h.documents.list(h.vault, None).await.unwrap().len(), 1);
 
     // Skipped content is not remembered: lifting the rule lets it in.
-    for workflow in h.workflows.list().await.unwrap() {
-        h.workflows.delete(workflow.id).await.unwrap();
+    for workflow in h.workflows.list(h.vault).await.unwrap() {
+        h.workflows.delete(h.vault, workflow.id).await.unwrap();
     }
     assert!(matches!(
         h.ingest(mail_item("deals@newsletter.test", "Sale", "a.pdf", b"a"))
@@ -114,21 +119,24 @@ async fn pre_ingest_rules_discard_matching_mail_before_import() {
 async fn uploaded_workflows_see_the_source_in_conditions_and_payload() {
     let h = Harness::new().await;
     let create = |source: SourceConditions| {
-        h.workflows.create(WorkflowInput {
-            name: "w".into(),
-            enabled: true,
-            trigger: WorkflowTrigger::DocumentUploaded,
-            conditions: WorkflowConditions {
-                source,
-                ..Default::default()
+        h.workflows.create(
+            h.vault,
+            WorkflowInput {
+                name: "w".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::DocumentUploaded,
+                conditions: WorkflowConditions {
+                    source,
+                    ..Default::default()
+                },
+                actions: vec![WorkflowAction::Webhook {
+                    url: "http://localhost:1/hook".into(),
+                    method: Default::default(),
+                    headers: Default::default(),
+                    secret: None,
+                }],
             },
-            actions: vec![WorkflowAction::Webhook {
-                url: "http://localhost:1/hook".into(),
-                method: Default::default(),
-                headers: Default::default(),
-                secret: None,
-            }],
-        })
+        )
     };
     create(SourceConditions {
         email_from: Some(TextMatch::Contains("billing@".into())),

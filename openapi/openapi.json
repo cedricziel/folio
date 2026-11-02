@@ -2118,6 +2118,7 @@
         "description": "A document in the system",
         "required": [
           "id",
+          "vault_id",
           "title",
           "ocr_status",
           "embed_status",
@@ -2208,6 +2209,18 @@
             "type": "string",
             "format": "date-time",
             "description": "When the document was last updated"
+          },
+          "uploaded_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who uploaded the document; `None` for documents that predate vaults"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The vault the document belongs to"
           }
         }
       },

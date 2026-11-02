@@ -68,7 +68,23 @@ pub(crate) async fn all_sources(
     DefaultVault(vault): DefaultVault,
     state: &AppState,
 ) -> ApiResult<Vec<IngestionSourceDef>> {
-    let mut all: Vec<_> = state.ingestion.configured.iter().cloned().collect();
+    let instance_vault = if state
+        .ingestion
+        .configured
+        .iter()
+        .any(|source| source.vault_id.is_none())
+    {
+        Some(state.vaults.default_vault(None).await?)
+    } else {
+        None
+    };
+    let mut all: Vec<_> = state
+        .ingestion
+        .configured
+        .iter()
+        .filter(|source| source.vault_id.or(instance_vault) == Some(vault))
+        .cloned()
+        .collect();
     all.extend(state.ingestion.managed.list(vault).await?);
     Ok(all)
 }

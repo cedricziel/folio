@@ -72,6 +72,7 @@ impl FakeSearch {
 impl SearchService for FakeSearch {
     async fn store_chunks(
         &self,
+        _vault: folio_core::models::VaultId,
         _id: folio_core::models::Id,
         _model: &str,
         _chunks: &[folio_core::ports::EmbeddedChunk],
@@ -83,12 +84,17 @@ impl SearchService for FakeSearch {
         Ok(0)
     }
 
-    async fn delete_embedding(&self, _id: folio_core::models::Id) -> folio_core::Result<()> {
+    async fn delete_embedding(
+        &self,
+        _vault: folio_core::models::VaultId,
+        _id: folio_core::models::Id,
+    ) -> folio_core::Result<()> {
         Ok(())
     }
 
     async fn search(
         &self,
+        _vault: folio_core::models::VaultId,
         _model: &str,
         _embedding: &[f32],
         limit: usize,
@@ -117,24 +123,41 @@ struct CountingTags {
 
 #[async_trait]
 impl TagRepository for CountingTags {
-    async fn find_by_id(&self, id: Id) -> folio_core::Result<Option<Tag>> {
-        self.inner.find_by_id(id).await
+    async fn find_by_id(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Tag>> {
+        self.inner.find_by_id(vault, id).await
     }
-    async fn find_by_name(&self, name: &str) -> folio_core::Result<Option<Tag>> {
-        self.inner.find_by_name(name).await
+    async fn find_by_name(
+        &self,
+        vault: folio_core::models::VaultId,
+        name: &str,
+    ) -> folio_core::Result<Option<Tag>> {
+        self.inner.find_by_name(vault, name).await
     }
-    async fn list(&self) -> folio_core::Result<Vec<Tag>> {
+    async fn list(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Tag>> {
         self.lists.fetch_add(1, Ordering::SeqCst);
-        self.inner.list().await
+        self.inner.list(vault).await
     }
-    async fn create(&self, params: CreateTag) -> folio_core::Result<Tag> {
-        self.inner.create(params).await
+    async fn create(
+        &self,
+        vault: folio_core::models::VaultId,
+        params: CreateTag,
+    ) -> folio_core::Result<Tag> {
+        self.inner.create(vault, params).await
     }
-    async fn update(&self, id: Id, params: UpdateTag) -> folio_core::Result<Tag> {
-        self.inner.update(id, params).await
+    async fn update(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        params: UpdateTag,
+    ) -> folio_core::Result<Tag> {
+        self.inner.update(vault, id, params).await
     }
-    async fn delete(&self, id: Id) -> folio_core::Result<()> {
-        self.inner.delete(id).await
+    async fn delete(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<()> {
+        self.inner.delete(vault, id).await
     }
 }
 
@@ -174,6 +197,11 @@ impl DocumentStore for FailingStore {
 
 pub struct Fixture {
     pub library: Arc<LibraryService>,
+    pub vault: folio_core::models::VaultId,
+    pub vaults: Arc<folio_core::services::VaultService>,
+    pub vault_repo: Arc<dyn folio_core::ports::VaultRepository>,
+    pub members: Arc<dyn folio_core::ports::MembershipRepository>,
+    pub auth: Arc<dyn folio_auth::AuthStore>,
     /// Number of times the tags table was listed in full
     pub tag_lists: Arc<AtomicUsize>,
     pub documents: Arc<dyn DocumentRepository>,
@@ -211,6 +239,11 @@ impl Fixture {
         let db = Database::connect(&url).await.unwrap();
         db.migrate().await.unwrap();
         let repos = db.repositories().await;
+        let vault = repos.vaults.instance_default().await.unwrap();
+        let vaults = Arc::new(folio_core::services::VaultService::new(
+            repos.vaults.clone(),
+            repos.members.clone(),
+        ));
 
         let tag_lists = Arc::new(AtomicUsize::new(0));
         let tags = Arc::new(CountingTags {
@@ -229,6 +262,11 @@ impl Fixture {
         ));
 
         Self {
+            vault,
+            vaults,
+            vault_repo: repos.vaults,
+            members: repos.members,
+            auth: repos.auth,
             library,
             tag_lists,
             documents: repos.documents,
@@ -239,11 +277,14 @@ impl Fixture {
 
     pub async fn insert(&self, title: &str, content: &str) -> Document {
         self.documents
-            .create(CreateDocument {
-                title: title.to_string(),
-                content: Some(content.to_string()),
-                ..Default::default()
-            })
+            .create(
+                self.vault,
+                CreateDocument {
+                    title: title.to_string(),
+                    content: Some(content.to_string()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
     }
@@ -255,7 +296,7 @@ impl Fixture {
     /// An rmcp client connected to the handler over an in-memory pipe
     pub async fn in_process_client(&self) -> RunningService<RoleClient, ()> {
         let (server_io, client_io) = tokio::io::duplex(1 << 20);
-        let server = folio_mcp::FolioMcp::new(self.library.clone());
+        let server = folio_mcp::FolioMcp::new(self.library.clone(), self.vaults.clone());
         tokio::spawn(async move {
             let running = server.serve(server_io).await.unwrap();
             running.waiting().await.unwrap();

@@ -251,6 +251,7 @@ async fn legacy_migration_scenario(store: &dyn DocumentStore) {
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let vault = repos.vaults.instance_default().await.unwrap();
 
     let new_document = |title: &str| CreateDocument {
         title: title.into(),
@@ -262,16 +263,20 @@ async fn legacy_migration_scenario(store: &dyn DocumentStore) {
 
     let legacy = repos
         .documents
-        .create(new_document("legacy"))
+        .create(vault, new_document("legacy"))
         .await
         .unwrap();
     let legacy_path = format!("{}/scan.pdf", legacy.id);
     repos
         .documents
-        .set_file_path(legacy.id, &legacy_path)
+        .set_file_path(vault, legacy.id, &legacy_path)
         .await
         .unwrap();
-    repos.documents.set_page_count(legacy.id, 2).await.unwrap();
+    repos
+        .documents
+        .set_page_count(vault, legacy.id, 2)
+        .await
+        .unwrap();
     store
         .put(&legacy_path, Bytes::from_static(b"pdf"))
         .await
@@ -290,12 +295,12 @@ async fn legacy_migration_scenario(store: &dyn DocumentStore) {
 
     let current = repos
         .documents
-        .create(new_document("current"))
+        .create(vault, new_document("current"))
         .await
         .unwrap();
     repos
         .documents
-        .set_file_path(current.id, &keys::original(current.id))
+        .set_file_path(vault, current.id, &keys::original(current.id))
         .await
         .unwrap();
     store
@@ -310,7 +315,7 @@ async fn legacy_migration_scenario(store: &dyn DocumentStore) {
     // New keys exist and the row points at them ...
     let moved = repos
         .documents
-        .find_by_id(legacy.id)
+        .find_by_id(vault, legacy.id)
         .await
         .unwrap()
         .unwrap();

@@ -43,7 +43,7 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
 /// The document must exist in `vault`
 async fn require_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Result<()> {
     let found: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2")
+        sqlx::query_as("SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2 FOR UPDATE")
             .bind(id)
             .bind(vault.0)
             .fetch_optional(conn)

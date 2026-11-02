@@ -47,46 +47,71 @@ fn is_not_found<T: std::fmt::Debug>(r: Result<T, Error>) -> bool {
 }
 
 async fn tags_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     let tag = r
         .tags
-        .create(CreateTag {
-            name: "invoice".into(),
-            color: Some("#ff0000".into()),
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "invoice".into(),
+                color: Some("#ff0000".into()),
+            },
+        )
         .await
         .unwrap();
     assert_eq!(tag.name, "invoice");
 
     let dup = r
         .tags
-        .create(CreateTag {
-            name: "invoice".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "invoice".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap_err();
     assert!(is_duplicate(dup));
 
     r.tags
-        .create(CreateTag {
-            name: "alpha".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "alpha".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
 
-    let found = r.tags.find_by_id(tag.id).await.unwrap().unwrap();
+    let found = r.tags.find_by_id(vault, tag.id).await.unwrap().unwrap();
     assert_eq!(found.color.as_deref(), Some("#ff0000"));
     assert_eq!(
-        r.tags.find_by_name("invoice").await.unwrap().unwrap().id,
+        r.tags
+            .find_by_name(vault, "invoice")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
         tag.id
     );
-    assert!(r.tags.find_by_name("missing").await.unwrap().is_none());
-    assert!(r.tags.find_by_id(Id::new_v4()).await.unwrap().is_none());
+    assert!(r
+        .tags
+        .find_by_name(vault, "missing")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(r
+        .tags
+        .find_by_id(vault, Id::new_v4())
+        .await
+        .unwrap()
+        .is_none());
 
     let names: Vec<_> = r
         .tags
-        .list()
+        .list(vault)
         .await
         .unwrap()
         .into_iter()
@@ -97,6 +122,7 @@ async fn tags_contract(r: &Repositories) {
     let updated = r
         .tags
         .update(
+            vault,
             tag.id,
             UpdateTag {
                 name: Some("bill".into()),
@@ -110,6 +136,7 @@ async fn tags_contract(r: &Repositories) {
     let collision = r
         .tags
         .update(
+            vault,
             tag.id,
             UpdateTag {
                 name: Some("alpha".into()),
@@ -120,40 +147,52 @@ async fn tags_contract(r: &Repositories) {
         .unwrap_err();
     assert!(is_duplicate(collision));
     assert!(is_not_found(
-        r.tags.update(Id::new_v4(), UpdateTag::default()).await
+        r.tags
+            .update(vault, Id::new_v4(), UpdateTag::default())
+            .await
     ));
 
-    r.tags.delete(tag.id).await.unwrap();
-    assert!(r.tags.find_by_id(tag.id).await.unwrap().is_none());
-    assert!(is_not_found(r.tags.delete(tag.id).await));
+    r.tags.delete(vault, tag.id).await.unwrap();
+    assert!(r.tags.find_by_id(vault, tag.id).await.unwrap().is_none());
+    assert!(is_not_found(r.tags.delete(vault, tag.id).await));
 }
 
 async fn correspondents_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     let c = r
         .correspondents
-        .create(CreateCorrespondent {
-            name: "ACME".into(),
-        })
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: "ACME".into(),
+            },
+        )
         .await
         .unwrap();
     let dup = r
         .correspondents
-        .create(CreateCorrespondent {
-            name: "ACME".into(),
-        })
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: "ACME".into(),
+            },
+        )
         .await
         .unwrap_err();
     assert!(is_duplicate(dup));
     r.correspondents
-        .create(CreateCorrespondent {
-            name: "Zeta".into(),
-        })
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: "Zeta".into(),
+            },
+        )
         .await
         .unwrap();
 
     assert_eq!(
         r.correspondents
-            .find_by_id(c.id)
+            .find_by_id(vault, c.id)
             .await
             .unwrap()
             .unwrap()
@@ -162,7 +201,7 @@ async fn correspondents_contract(r: &Repositories) {
     );
     assert_eq!(
         r.correspondents
-            .find_by_name("ACME")
+            .find_by_name(vault, "ACME")
             .await
             .unwrap()
             .unwrap()
@@ -171,13 +210,13 @@ async fn correspondents_contract(r: &Repositories) {
     );
     assert!(r
         .correspondents
-        .find_by_name("nope")
+        .find_by_name(vault, "nope")
         .await
         .unwrap()
         .is_none());
     let names: Vec<_> = r
         .correspondents
-        .list()
+        .list(vault)
         .await
         .unwrap()
         .into_iter()
@@ -188,6 +227,7 @@ async fn correspondents_contract(r: &Repositories) {
     let updated = r
         .correspondents
         .update(
+            vault,
             c.id,
             UpdateCorrespondent {
                 name: Some("ACME Inc".into()),
@@ -198,34 +238,41 @@ async fn correspondents_contract(r: &Repositories) {
     assert_eq!(updated.name, "ACME Inc");
     assert!(is_not_found(
         r.correspondents
-            .update(Id::new_v4(), UpdateCorrespondent::default())
+            .update(vault, Id::new_v4(), UpdateCorrespondent::default())
             .await
     ));
 
-    r.correspondents.delete(c.id).await.unwrap();
-    assert!(is_not_found(r.correspondents.delete(c.id).await));
+    r.correspondents.delete(vault, c.id).await.unwrap();
+    assert!(is_not_found(r.correspondents.delete(vault, c.id).await));
 }
 
 async fn document_types_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     let t = r
         .document_types
-        .create(CreateDocumentType {
-            name: "Invoice".into(),
-        })
+        .create(
+            vault,
+            CreateDocumentType {
+                name: "Invoice".into(),
+            },
+        )
         .await
         .unwrap();
     let dup = r
         .document_types
-        .create(CreateDocumentType {
-            name: "Invoice".into(),
-        })
+        .create(
+            vault,
+            CreateDocumentType {
+                name: "Invoice".into(),
+            },
+        )
         .await
         .unwrap_err();
     assert!(is_duplicate(dup));
 
     assert_eq!(
         r.document_types
-            .find_by_id(t.id)
+            .find_by_id(vault, t.id)
             .await
             .unwrap()
             .unwrap()
@@ -234,7 +281,7 @@ async fn document_types_contract(r: &Repositories) {
     );
     assert_eq!(
         r.document_types
-            .find_by_name("Invoice")
+            .find_by_name(vault, "Invoice")
             .await
             .unwrap()
             .unwrap()
@@ -243,15 +290,16 @@ async fn document_types_contract(r: &Repositories) {
     );
     assert!(r
         .document_types
-        .find_by_name("nope")
+        .find_by_name(vault, "nope")
         .await
         .unwrap()
         .is_none());
-    assert_eq!(r.document_types.list().await.unwrap().len(), 1);
+    assert_eq!(r.document_types.list(vault).await.unwrap().len(), 1);
 
     let updated = r
         .document_types
         .update(
+            vault,
             t.id,
             UpdateDocumentType {
                 name: Some("Receipt".into()),
@@ -262,37 +310,53 @@ async fn document_types_contract(r: &Repositories) {
     assert_eq!(updated.name, "Receipt");
     assert!(is_not_found(
         r.document_types
-            .update(Id::new_v4(), UpdateDocumentType::default())
+            .update(vault, Id::new_v4(), UpdateDocumentType::default())
             .await
     ));
 
-    r.document_types.delete(t.id).await.unwrap();
-    assert!(is_not_found(r.document_types.delete(t.id).await));
+    r.document_types.delete(vault, t.id).await.unwrap();
+    assert!(is_not_found(r.document_types.delete(vault, t.id).await));
 }
 
 async fn documents_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     let corr = r
         .correspondents
-        .create(CreateCorrespondent {
-            name: "Docs Corp".into(),
-        })
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: "Docs Corp".into(),
+            },
+        )
         .await
         .unwrap();
     let kind = r
         .document_types
-        .create(CreateDocumentType {
-            name: "Contract".into(),
-        })
+        .create(
+            vault,
+            CreateDocumentType {
+                name: "Contract".into(),
+            },
+        )
         .await
         .unwrap();
 
-    let first = r.documents.create(new_document("first")).await.unwrap();
+    let first = r
+        .documents
+        .create(vault, new_document("first"))
+        .await
+        .unwrap();
     let mut with_meta = new_document("second");
     with_meta.correspondent_id = Some(corr.id);
     with_meta.document_type_id = Some(kind.id);
-    let second = r.documents.create(with_meta).await.unwrap();
+    let second = r.documents.create(vault, with_meta).await.unwrap();
 
-    let found = r.documents.find_by_id(second.id).await.unwrap().unwrap();
+    let found = r
+        .documents
+        .find_by_id(vault, second.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(found.title, "second");
     assert_eq!(found.correspondent_id, Some(corr.id));
     assert_eq!(found.document_type_id, Some(kind.id));
@@ -301,36 +365,42 @@ async fn documents_contract(r: &Repositories) {
     assert_eq!(found.page_count, None);
     assert!(r
         .documents
-        .find_by_id(Id::new_v4())
+        .find_by_id(vault, Id::new_v4())
         .await
         .unwrap()
         .is_none());
 
-    let all = r.documents.list(None).await.unwrap();
+    let all = r.documents.list(vault, None).await.unwrap();
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].id, second.id, "newest first");
     let by_corr = r
         .documents
-        .list(Some(DocumentFilter {
-            correspondent_id: Some(corr.id),
-            ..Default::default()
-        }))
+        .list(
+            vault,
+            Some(DocumentFilter {
+                correspondent_id: Some(corr.id),
+                ..Default::default()
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(by_corr.len(), 1);
     assert_eq!(by_corr[0].id, second.id);
     let by_type = r
         .documents
-        .list(Some(DocumentFilter {
-            document_type_id: Some(kind.id),
-            ..Default::default()
-        }))
+        .list(
+            vault,
+            Some(DocumentFilter {
+                document_type_id: Some(kind.id),
+                ..Default::default()
+            }),
+        )
         .await
         .unwrap();
     assert_eq!(by_type.len(), 1);
     assert_eq!(
         r.documents
-            .list(Some(DocumentFilter::default()))
+            .list(vault, Some(DocumentFilter::default()))
             .await
             .unwrap()
             .len(),
@@ -340,6 +410,7 @@ async fn documents_contract(r: &Repositories) {
     let updated = r
         .documents
         .update(
+            vault,
             second.id,
             UpdateDocument {
                 title: Some("renamed".into()),
@@ -354,76 +425,123 @@ async fn documents_contract(r: &Repositories) {
     assert_eq!(updated.title, "renamed");
     assert_eq!(updated.correspondent_id, None);
     assert_eq!(updated.document_type_id, Some(kind.id));
-    let reread = r.documents.find_by_id(second.id).await.unwrap().unwrap();
+    let reread = r
+        .documents
+        .find_by_id(vault, second.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(reread.content.as_deref(), Some("extracted text"));
     assert_eq!(reread.correspondent_id, None);
     assert!(is_not_found(
         r.documents
-            .update(Id::new_v4(), UpdateDocument::default())
+            .update(vault, Id::new_v4(), UpdateDocument::default())
             .await
     ));
 
     r.documents
-        .set_file_path(first.id, "docs/first.pdf")
+        .set_file_path(vault, first.id, "docs/first.pdf")
         .await
         .unwrap();
-    r.documents.set_page_count(first.id, 7).await.unwrap();
-    let reread = r.documents.find_by_id(first.id).await.unwrap().unwrap();
+    r.documents
+        .set_page_count(vault, first.id, 7)
+        .await
+        .unwrap();
+    let reread = r
+        .documents
+        .find_by_id(vault, first.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(reread.file_path.as_deref(), Some("docs/first.pdf"));
     assert_eq!(reread.page_count, Some(7));
     assert!(is_not_found(
-        r.documents.set_file_path(Id::new_v4(), "x").await
+        r.documents.set_file_path(vault, Id::new_v4(), "x").await
     ));
     assert!(is_not_found(
-        r.documents.set_page_count(Id::new_v4(), 1).await
+        r.documents.set_page_count(vault, Id::new_v4(), 1).await
     ));
 
     // Tags
     let a = r
         .tags
-        .create(CreateTag {
-            name: "doc-a".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "doc-a".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
     let b = r
         .tags
-        .create(CreateTag {
-            name: "doc-b".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "doc-b".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
-    r.documents.set_tags(first.id, &[a.id, b.id]).await.unwrap();
-    assert_eq!(r.documents.get_tags(first.id).await.unwrap().len(), 2);
-    r.documents.set_tags(first.id, &[a.id]).await.unwrap();
-    assert_eq!(r.documents.get_tags(first.id).await.unwrap().len(), 1);
-    r.documents.add_tag(first.id, b.id).await.unwrap();
-    r.documents.add_tag(first.id, b.id).await.unwrap();
-    assert_eq!(r.documents.get_tags(first.id).await.unwrap().len(), 2);
-    r.documents.remove_tag(first.id, a.id).await.unwrap();
-    let remaining = r.documents.get_tags(first.id).await.unwrap();
+    r.documents
+        .set_tags(vault, first.id, &[a.id, b.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        r.documents.get_tags(vault, first.id).await.unwrap().len(),
+        2
+    );
+    r.documents
+        .set_tags(vault, first.id, &[a.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        r.documents.get_tags(vault, first.id).await.unwrap().len(),
+        1
+    );
+    r.documents.add_tag(vault, first.id, b.id).await.unwrap();
+    r.documents.add_tag(vault, first.id, b.id).await.unwrap();
+    assert_eq!(
+        r.documents.get_tags(vault, first.id).await.unwrap().len(),
+        2
+    );
+    r.documents.remove_tag(vault, first.id, a.id).await.unwrap();
+    let remaining = r.documents.get_tags(vault, first.id).await.unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, b.id);
 
     // Deleting a tag or a document cleans up associations
-    r.tags.delete(b.id).await.unwrap();
-    assert!(r.documents.get_tags(first.id).await.unwrap().is_empty());
-    r.documents.set_tags(first.id, &[a.id]).await.unwrap();
-    r.documents.delete(first.id).await.unwrap();
-    assert!(r.documents.find_by_id(first.id).await.unwrap().is_none());
-    assert!(is_not_found(r.documents.delete(first.id).await));
-    assert!(r.tags.find_by_id(a.id).await.unwrap().is_some());
+    r.tags.delete(vault, b.id).await.unwrap();
+    assert!(r
+        .documents
+        .get_tags(vault, first.id)
+        .await
+        .unwrap()
+        .is_empty());
+    r.documents
+        .set_tags(vault, first.id, &[a.id])
+        .await
+        .unwrap();
+    r.documents.delete(vault, first.id).await.unwrap();
+    assert!(r
+        .documents
+        .find_by_id(vault, first.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(is_not_found(r.documents.delete(vault, first.id).await));
+    assert!(r.tags.find_by_id(vault, a.id).await.unwrap().is_some());
 
     // Deleting a correspondent keeps the document and clears the link
     let mut linked = new_document("linked");
     linked.correspondent_id = Some(corr.id);
-    let linked = r.documents.create(linked).await.unwrap();
-    r.correspondents.delete(corr.id).await.unwrap();
+    let linked = r.documents.create(vault, linked).await.unwrap();
+    r.correspondents.delete(vault, corr.id).await.unwrap();
     assert_eq!(
         r.documents
-            .find_by_id(linked.id)
+            .find_by_id(vault, linked.id)
             .await
             .unwrap()
             .unwrap()
@@ -433,41 +551,61 @@ async fn documents_contract(r: &Repositories) {
 }
 
 async fn document_filter_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     let tax = r
         .tags
-        .create(CreateTag {
-            name: "filter-tax".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "filter-tax".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
     let home = r
         .tags
-        .create(CreateTag {
-            name: "filter-home".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "filter-home".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
     let acme = r
         .correspondents
-        .create(CreateCorrespondent {
-            name: "Filter Acme".into(),
-        })
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: "Filter Acme".into(),
+            },
+        )
         .await
         .unwrap();
 
     let mut invoice = new_document("Filter invoice");
     invoice.content = Some("Total due: 100 EUR for March".into());
-    let invoice = r.documents.create(invoice).await.unwrap();
+    let invoice = r.documents.create(vault, invoice).await.unwrap();
     let mut letter = new_document("Filter letter");
     letter.content = Some("Dear Sir".into());
-    let letter = r.documents.create(letter).await.unwrap();
-    r.documents.add_tag(invoice.id, tax.id).await.unwrap();
-    r.documents.add_tag(invoice.id, home.id).await.unwrap();
-    r.documents.add_tag(letter.id, home.id).await.unwrap();
+    let letter = r.documents.create(vault, letter).await.unwrap();
+    r.documents
+        .add_tag(vault, invoice.id, tax.id)
+        .await
+        .unwrap();
+    r.documents
+        .add_tag(vault, invoice.id, home.id)
+        .await
+        .unwrap();
+    r.documents
+        .add_tag(vault, letter.id, home.id)
+        .await
+        .unwrap();
     r.documents
         .update(
+            vault,
             invoice.id,
             UpdateDocument {
                 correspondent_id: Some(Some(acme.id)),
@@ -480,8 +618,9 @@ async fn document_filter_contract(r: &Repositories) {
     let ids = |docs: Vec<folio_core::models::Document>| {
         docs.into_iter().map(|d| d.id).collect::<Vec<_>>()
     };
-    let list =
-        |filter: DocumentFilter| async move { r.documents.list(Some(filter)).await.unwrap() };
+    let list = |filter: DocumentFilter| async move {
+        r.documents.list(vault, Some(filter)).await.unwrap()
+    };
 
     // Every term must match, case-insensitively, in any order and field
     let by_terms = list(DocumentFilter {
@@ -536,7 +675,12 @@ async fn document_filter_contract(r: &Repositories) {
     assert!(none.is_empty());
 
     // created_after is inclusive, created_before exclusive
-    let stored = r.documents.find_by_id(invoice.id).await.unwrap().unwrap();
+    let stored = r
+        .documents
+        .find_by_id(vault, invoice.id)
+        .await
+        .unwrap()
+        .unwrap();
     let at = stored.created_at;
     let has = |docs: &[folio_core::models::Document]| docs.iter().any(|d| d.id == invoice.id);
     let from = list(DocumentFilter {
@@ -579,7 +723,7 @@ async fn document_filter_contract(r: &Repositories) {
     ] {
         let listed = ids(list(filter.clone()).await);
         assert_eq!(
-            r.documents.list_ids(Some(filter)).await.unwrap(),
+            r.documents.list_ids(vault, Some(filter)).await.unwrap(),
             listed,
             "list_ids agrees with list"
         );
@@ -630,17 +774,19 @@ fn chunk(index: u32, text: &str, embedding: &[f32]) -> EmbeddedChunk {
 }
 
 async fn search_contract(
+    vault: folio_core::models::VaultId,
     documents: &dyn folio_core::ports::DocumentRepository,
     search: &dyn SearchService,
 ) {
     const M: &str = "test:model";
-    let near = documents.create(new_document("near")).await.unwrap();
-    let mid = documents.create(new_document("mid")).await.unwrap();
-    let far = documents.create(new_document("far")).await.unwrap();
+    let near = documents.create(vault, new_document("near")).await.unwrap();
+    let mid = documents.create(vault, new_document("mid")).await.unwrap();
+    let far = documents.create(vault, new_document("far")).await.unwrap();
 
     // Several chunks per document: the best chunk decides the document's score
     search
         .store_chunks(
+            vault,
             near.id,
             M,
             &[
@@ -651,15 +797,15 @@ async fn search_contract(
         .await
         .unwrap();
     search
-        .store_chunks(mid.id, M, &[chunk(0, "middle", &[1.0, 1.0, 0.0])])
+        .store_chunks(vault, mid.id, M, &[chunk(0, "middle", &[1.0, 1.0, 0.0])])
         .await
         .unwrap();
     search
-        .store_chunks(far.id, M, &[chunk(0, "far away", &[0.0, 0.0, 1.0])])
+        .store_chunks(vault, far.id, M, &[chunk(0, "far away", &[0.0, 0.0, 1.0])])
         .await
         .unwrap();
 
-    let results = search.search(M, &[1.0, 0.1, 0.0], 10).await.unwrap();
+    let results = search.search(vault, M, &[1.0, 0.1, 0.0], 10).await.unwrap();
     let ids: Vec<_> = results.iter().map(|r| r.document_id).collect();
     assert_eq!(ids, [near.id, mid.id, far.id]);
     assert_eq!(results[0].snippet.as_deref(), Some("the hit"));
@@ -667,13 +813,17 @@ async fn search_contract(
     assert!(results[0].score > 0.9);
 
     assert_eq!(
-        search.search(M, &[1.0, 0.1, 0.0], 2).await.unwrap().len(),
+        search
+            .search(vault, M, &[1.0, 0.1, 0.0], 2)
+            .await
+            .unwrap()
+            .len(),
         2
     );
 
     // Vectors of another model are never compared
     assert!(search
-        .search("other:model", &[1.0, 0.1, 0.0], 10)
+        .search(vault, "other:model", &[1.0, 0.1, 0.0], 10)
         .await
         .unwrap()
         .is_empty());
@@ -681,27 +831,31 @@ async fn search_contract(
     // Switching the active model flags the old vectors stale; switching back restores them
     assert_eq!(search.mark_stale_except("other:model").await.unwrap(), 3);
     assert!(search
-        .search(M, &[1.0, 0.1, 0.0], 10)
+        .search(vault, M, &[1.0, 0.1, 0.0], 10)
         .await
         .unwrap()
         .is_empty());
     assert_eq!(search.mark_stale_except(M).await.unwrap(), 0);
     assert_eq!(
-        search.search(M, &[1.0, 0.1, 0.0], 10).await.unwrap().len(),
+        search
+            .search(vault, M, &[1.0, 0.1, 0.0], 10)
+            .await
+            .unwrap()
+            .len(),
         3
     );
 
     // Storing again replaces the document's chunks
     search
-        .store_chunks(far.id, M, &[chunk(0, "now close", &[1.0, 0.1, 0.0])])
+        .store_chunks(vault, far.id, M, &[chunk(0, "now close", &[1.0, 0.1, 0.0])])
         .await
         .unwrap();
-    let top = search.search(M, &[1.0, 0.1, 0.0], 1).await.unwrap();
+    let top = search.search(vault, M, &[1.0, 0.1, 0.0], 1).await.unwrap();
     assert_eq!(top[0].document_id, far.id);
 
-    search.delete_embedding(far.id).await.unwrap();
+    search.delete_embedding(vault, far.id).await.unwrap();
     let ids: Vec<_> = search
-        .search(M, &[1.0, 0.1, 0.0], 10)
+        .search(vault, M, &[1.0, 0.1, 0.0], 10)
         .await
         .unwrap()
         .into_iter()
@@ -710,16 +864,16 @@ async fn search_contract(
     assert_eq!(ids, [near.id, mid.id]);
 
     // Deleting the document removes its chunks
-    documents.delete(near.id).await.unwrap();
+    documents.delete(vault, near.id).await.unwrap();
     let ids: Vec<_> = search
-        .search(M, &[1.0, 0.1, 0.0], 10)
+        .search(vault, M, &[1.0, 0.1, 0.0], 10)
         .await
         .unwrap()
         .into_iter()
         .map(|r| r.document_id)
         .collect();
     assert_eq!(ids, [mid.id]);
-    documents.delete(mid.id).await.unwrap();
+    documents.delete(vault, mid.id).await.unwrap();
 }
 
 async fn jobs_contract(r: &Repositories) {
@@ -892,19 +1046,20 @@ fn workflow_input(name: &str, trigger: WorkflowTrigger) -> WorkflowInput {
 }
 
 async fn workflows_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     let uploaded = WorkflowTrigger::DocumentUploaded;
     let wf = r
         .workflows
-        .create(workflow_input("Notify", uploaded))
+        .create(vault, workflow_input("Notify", uploaded))
         .await
         .unwrap();
-    let fetched = r.workflows.find_by_id(wf.id).await.unwrap().unwrap();
+    let fetched = r.workflows.find_by_id(vault, wf.id).await.unwrap().unwrap();
     assert_eq!(fetched.name, "Notify");
     assert_eq!(fetched.conditions, wf.conditions);
     assert_eq!(fetched.actions, wf.actions);
     assert!(r
         .workflows
-        .find_by_id(Id::new_v4())
+        .find_by_id(vault, Id::new_v4())
         .await
         .unwrap()
         .is_none());
@@ -913,39 +1068,39 @@ async fn workflows_contract(r: &Repositories) {
     let mut bad = workflow_input("Bad", uploaded);
     bad.actions = vec![];
     assert!(matches!(
-        r.workflows.create(bad).await,
+        r.workflows.create(vault, bad).await,
         Err(Error::Validation(_))
     ));
 
     let mut off = workflow_input("Off", uploaded);
     off.enabled = false;
-    let off = r.workflows.create(off).await.unwrap();
+    let off = r.workflows.create(vault, off).await.unwrap();
     r.workflows
-        .create(workflow_input(
-            "Other trigger",
-            WorkflowTrigger::DocumentDeleted,
-        ))
+        .create(
+            vault,
+            workflow_input("Other trigger", WorkflowTrigger::DocumentDeleted),
+        )
         .await
         .unwrap();
     let enabled: Vec<_> = r
         .workflows
-        .list_enabled(uploaded)
+        .list_enabled(vault, uploaded)
         .await
         .unwrap()
         .into_iter()
         .map(|w| w.id)
         .collect();
     assert_eq!(enabled, vec![wf.id]);
-    assert_eq!(r.workflows.list().await.unwrap().len(), 3);
+    assert_eq!(r.workflows.list(vault).await.unwrap().len(), 3);
 
     let mut changed = workflow_input("Renamed", uploaded);
     changed.enabled = false;
-    let updated = r.workflows.update(wf.id, changed).await.unwrap();
+    let updated = r.workflows.update(vault, wf.id, changed).await.unwrap();
     assert_eq!(updated.name, "Renamed");
     assert!(!updated.enabled);
     assert!(is_not_found(
         r.workflows
-            .update(Id::new_v4(), workflow_input("x", uploaded))
+            .update(vault, Id::new_v4(), workflow_input("x", uploaded))
             .await
     ));
 
@@ -1003,25 +1158,32 @@ async fn workflows_contract(r: &Repositories) {
         );
         assert!(r.workflows.create_run(&again).await.unwrap());
     }
-    let runs = r.workflows.list_runs(off.id, 100).await.unwrap();
+    let runs = r.workflows.list_runs(vault, off.id, 100).await.unwrap();
     assert_eq!(runs.len(), 4);
-    assert_eq!(r.workflows.list_runs(off.id, 2).await.unwrap().len(), 2);
+    assert_eq!(
+        r.workflows.list_runs(vault, off.id, 2).await.unwrap().len(),
+        2
+    );
     assert!(runs.windows(2).all(|w| w[0].created_at >= w[1].created_at));
 
     // Deleting a workflow removes its runs
-    r.workflows.delete(off.id).await.unwrap();
+    r.workflows.delete(vault, off.id).await.unwrap();
     assert!(r.workflows.find_run(run.id).await.unwrap().is_none());
-    assert!(is_not_found(r.workflows.delete(off.id).await));
+    assert!(is_not_found(r.workflows.delete(vault, off.id).await));
 }
 
 async fn ingestion_contract(r: &Repositories) {
+    let vault = r.vaults.instance_default().await.unwrap();
     // A document keeps its source and the tags it was created with
     let tag = r
         .tags
-        .create(CreateTag {
-            name: "ingested".into(),
-            color: None,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: "ingested".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
     let source = DocumentSource::email(
@@ -1040,17 +1202,29 @@ async fn ingestion_contract(r: &Repositories) {
     );
     let doc = r
         .documents
-        .create(CreateDocument {
-            source: source.clone(),
-            tag_ids: vec![tag.id, tag.id],
-            ..new_document("mail")
-        })
+        .create(
+            vault,
+            CreateDocument {
+                source: source.clone(),
+                tag_ids: vec![tag.id, tag.id],
+                ..new_document("mail")
+            },
+        )
         .await
         .unwrap();
-    let found = r.documents.find_by_id(doc.id).await.unwrap().unwrap();
+    let found = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(found.source, source);
-    assert_eq!(r.documents.get_tags(doc.id).await.unwrap().len(), 1);
-    let plain = r.documents.create(new_document("plain")).await.unwrap();
+    assert_eq!(r.documents.get_tags(vault, doc.id).await.unwrap().len(), 1);
+    let plain = r
+        .documents
+        .create(vault, new_document("plain"))
+        .await
+        .unwrap();
     assert_eq!(plain.source.kind, SourceKind::Upload);
 
     // Managed sources: unique names, replace, status
@@ -1064,17 +1238,17 @@ async fn ingestion_contract(r: &Repositories) {
             .unwrap(),
         }
     };
-    let created = r.sources.create(input("inbox")).await.unwrap();
+    let created = r.sources.create(vault, input("inbox")).await.unwrap();
     assert!(is_duplicate(
-        r.sources.create(input("inbox")).await.unwrap_err()
+        r.sources.create(vault, input("inbox")).await.unwrap_err()
     ));
     let mut off = input("inbox");
     off.enabled = false;
-    let updated = r.sources.update(created.id, off).await.unwrap();
+    let updated = r.sources.update(vault, created.id, off).await.unwrap();
     assert!(!updated.enabled);
-    assert_eq!(r.sources.list().await.unwrap().len(), 1);
+    assert_eq!(r.sources.list(vault).await.unwrap().len(), 1);
     assert!(is_not_found(
-        r.sources.update(Id::new_v4(), input("x")).await
+        r.sources.update(vault, Id::new_v4(), input("x")).await
     ));
 
     assert!(r.sources.status(created.id).await.unwrap().is_none());
@@ -1092,10 +1266,10 @@ async fn ingestion_contract(r: &Repositories) {
         (saved.last_imported, saved.last_error.as_deref()),
         (3, Some("boom"))
     );
-    r.sources.delete(created.id).await.unwrap();
-    assert!(r.sources.find(created.id).await.unwrap().is_none());
+    r.sources.delete(vault, created.id).await.unwrap();
+    assert!(r.sources.find(vault, created.id).await.unwrap().is_none());
     assert!(r.sources.status(created.id).await.unwrap().is_none());
-    assert!(is_not_found(r.sources.delete(created.id).await));
+    assert!(is_not_found(r.sources.delete(vault, created.id).await));
 
     // Ledger: the first insert wins, later ones report false
     let entry = LedgerEntry {
@@ -1105,20 +1279,20 @@ async fn ingestion_contract(r: &Repositories) {
         outcome: "claimed".into(),
         created_at: Utc::now(),
     };
-    assert!(r.ledger.insert(&entry).await.unwrap());
-    assert!(!r.ledger.insert(&entry).await.unwrap());
+    assert!(r.ledger.insert(vault, &entry).await.unwrap());
+    assert!(!r.ledger.insert(vault, &entry).await.unwrap());
     r.ledger
-        .complete("hash:abc", "imported", Some(doc.id))
+        .complete(vault, "hash:abc", "imported", Some(doc.id))
         .await
         .unwrap();
-    let stored = r.ledger.find("hash:abc").await.unwrap().unwrap();
+    let stored = r.ledger.find(vault, "hash:abc").await.unwrap().unwrap();
     assert_eq!(
         (stored.outcome.as_str(), stored.document_id),
         ("imported", Some(doc.id))
     );
-    r.ledger.delete("hash:abc").await.unwrap();
-    assert!(r.ledger.find("hash:abc").await.unwrap().is_none());
-    assert!(r.ledger.insert(&entry).await.unwrap());
+    r.ledger.delete(vault, "hash:abc").await.unwrap();
+    assert!(r.ledger.find(vault, "hash:abc").await.unwrap().is_none());
+    assert!(r.ledger.insert(vault, &entry).await.unwrap());
 }
 
 async fn auth_contract(r: &Repositories) {
@@ -1575,22 +1749,31 @@ async fn exec(db: &Database, sqlite: &[&str], postgres: &[&str]) {
 
 async fn outbox_contract(db: &Database) {
     let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
     flush_outbox(&r).await;
 
     // Lifecycle changes leave their event in the transaction that made them.
-    let doc = r.documents.create(new_document("outbox")).await.unwrap();
-    let tag = r
-        .tags
-        .create(CreateTag {
-            name: "outbox-tag".into(),
-            color: None,
-        })
+    let doc = r
+        .documents
+        .create(vault, new_document("outbox"))
         .await
         .unwrap();
-    r.documents.add_tag(doc.id, tag.id).await.unwrap();
-    r.documents.add_tag(doc.id, tag.id).await.unwrap();
+    let tag = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "outbox-tag".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    r.documents.add_tag(vault, doc.id, tag.id).await.unwrap();
+    r.documents.add_tag(vault, doc.id, tag.id).await.unwrap();
     r.documents
         .update(
+            vault,
             doc.id,
             UpdateDocument {
                 title: Some("renamed".into()),
@@ -1599,22 +1782,28 @@ async fn outbox_contract(db: &Database) {
         )
         .await
         .unwrap();
-    r.documents.set_file_path(doc.id, "a/b.pdf").await.unwrap();
-    r.documents.set_page_count(doc.id, 2).await.unwrap();
-    r.documents.remove_tag(doc.id, tag.id).await.unwrap();
-    r.documents.remove_tag(doc.id, tag.id).await.unwrap();
-    r.documents.set_tags(doc.id, &[tag.id]).await.unwrap();
+    r.documents
+        .set_file_path(vault, doc.id, "a/b.pdf")
+        .await
+        .unwrap();
+    r.documents.set_page_count(vault, doc.id, 2).await.unwrap();
+    r.documents.remove_tag(vault, doc.id, tag.id).await.unwrap();
+    r.documents.remove_tag(vault, doc.id, tag.id).await.unwrap();
+    r.documents
+        .set_tags(vault, doc.id, &[tag.id])
+        .await
+        .unwrap();
     r.workflow_documents
-        .remove_tag(doc.id, tag.id)
+        .remove_tag(vault, doc.id, tag.id)
         .await
         .unwrap();
     assert!(is_not_found(
         r.documents
-            .update(Id::new_v4(), UpdateDocument::default())
+            .update(vault, Id::new_v4(), UpdateDocument::default())
             .await
     ));
-    assert!(is_not_found(r.documents.delete(Id::new_v4()).await));
-    r.documents.delete(doc.id).await.unwrap();
+    assert!(is_not_found(r.documents.delete(vault, Id::new_v4()).await));
+    r.documents.delete(vault, doc.id).await.unwrap();
 
     let events = flush_outbox(&r).await;
     let seen: Vec<_> = events
@@ -1642,10 +1831,15 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(snapshot.document.title, "renamed");
     assert!(snapshot.tags.is_empty());
 
-    let atomic = r.documents.create(new_document("metadata")).await.unwrap();
+    let atomic = r
+        .documents
+        .create(vault, new_document("metadata"))
+        .await
+        .unwrap();
     flush_outbox(&r).await;
     r.documents
         .update(
+            vault,
             atomic.id,
             UpdateDocument {
                 title: Some("metadata changed".into()),
@@ -1660,9 +1854,13 @@ async fn outbox_contract(db: &Database) {
         1,
         "one metadata save emits one event"
     );
-    r.documents.set_tags(atomic.id, &[tag.id]).await.unwrap();
+    r.documents
+        .set_tags(vault, atomic.id, &[tag.id])
+        .await
+        .unwrap();
     r.documents
         .update(
+            vault,
             atomic.id,
             UpdateDocument {
                 title: Some("metadata changed".into()),
@@ -1678,6 +1876,7 @@ async fn outbox_contract(db: &Database) {
     assert!(r
         .documents
         .update(
+            vault,
             atomic.id,
             UpdateDocument {
                 title: Some("must roll back".into()),
@@ -1689,18 +1888,25 @@ async fn outbox_contract(db: &Database) {
         .is_err());
     assert_eq!(
         r.documents
-            .find_by_id(atomic.id)
+            .find_by_id(vault, atomic.id)
             .await
             .unwrap()
             .unwrap()
             .title,
         "metadata changed"
     );
-    assert_eq!(r.documents.get_tags(atomic.id).await.unwrap()[0].id, tag.id);
+    assert_eq!(
+        r.documents.get_tags(vault, atomic.id).await.unwrap()[0].id,
+        tag.id
+    );
     assert!(flush_outbox(&r).await.is_empty());
 
     // A change whose event cannot be written does not happen either.
-    let survivor = r.documents.create(new_document("survivor")).await.unwrap();
+    let survivor = r
+        .documents
+        .create(vault, new_document("survivor"))
+        .await
+        .unwrap();
     flush_outbox(&r).await;
     exec(
         db,
@@ -1714,10 +1920,15 @@ async fn outbox_contract(db: &Database) {
         ],
     )
     .await;
-    assert!(r.documents.create(new_document("doomed")).await.is_err());
+    assert!(r
+        .documents
+        .create(vault, new_document("doomed"))
+        .await
+        .is_err());
     assert!(r
         .documents
         .update(
+            vault,
             survivor.id,
             UpdateDocument {
                 title: Some("doomed".into()),
@@ -1726,7 +1937,7 @@ async fn outbox_contract(db: &Database) {
         )
         .await
         .is_err());
-    assert!(r.documents.delete(survivor.id).await.is_err());
+    assert!(r.documents.delete(vault, survivor.id).await.is_err());
     exec(
         db,
         &["DROP TRIGGER refuse_outbox"],
@@ -1738,14 +1949,19 @@ async fn outbox_contract(db: &Database) {
     .await;
     let titles: Vec<_> = r
         .documents
-        .list(None)
+        .list(vault, None)
         .await
         .unwrap()
         .into_iter()
         .map(|d| d.title)
         .collect();
     assert!(!titles.contains(&"doomed".to_string()));
-    let kept = r.documents.find_by_id(survivor.id).await.unwrap().unwrap();
+    let kept = r
+        .documents
+        .find_by_id(vault, survivor.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(kept.title, "survivor", "the update was rolled back");
     assert!(
         flush_outbox(&r).await.is_empty(),
@@ -1753,7 +1969,11 @@ async fn outbox_contract(db: &Database) {
     );
 
     // Written, never dispatched, process gone: the restart delivers it exactly once.
-    let orphan = r.documents.create(new_document("orphan")).await.unwrap();
+    let orphan = r
+        .documents
+        .create(vault, new_document("orphan"))
+        .await
+        .unwrap();
     drop(r);
     let restarted = db.repositories().await;
     let recorder = Arc::new(Recorder::default());
@@ -1774,7 +1994,7 @@ async fn outbox_contract(db: &Database) {
     // Claimed but never finished: after the lease it is handed out again, then done for good.
     let r = restarted;
     r.documents
-        .create(new_document("interrupted"))
+        .create(vault, new_document("interrupted"))
         .await
         .unwrap();
     let first = r.outbox.claim(10, Duration::seconds(-1), 10).await.unwrap();
@@ -1790,7 +2010,7 @@ async fn outbox_contract(db: &Database) {
     flush_outbox(&r).await;
     for i in 0..40 {
         r.documents
-            .create(new_document(&format!("burst-{i}")))
+            .create(vault, new_document(&format!("burst-{i}")))
             .await
             .unwrap();
     }
@@ -1813,7 +2033,10 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(delivered.len(), 40, "no event was delivered twice");
 
     // Failures back off, and an event stops being retried once it used its attempts.
-    r.documents.create(new_document("flaky")).await.unwrap();
+    r.documents
+        .create(vault, new_document("flaky"))
+        .await
+        .unwrap();
     let past = || Utc::now() - Duration::seconds(1);
     let first = r.outbox.claim(10, lease(), 3).await.unwrap().remove(0);
     assert!(r.outbox.claim(10, lease(), 3).await.unwrap().is_empty());
@@ -1834,7 +2057,10 @@ async fn outbox_contract(db: &Database) {
 
     // Replay includes pending events so consumer failures cannot hide live updates.
     for title in ["replay-1", "replay-2", "replay-3"] {
-        r.documents.create(new_document(title)).await.unwrap();
+        r.documents
+            .create(vault, new_document(title))
+            .await
+            .unwrap();
     }
     let ids: Vec<_> = r
         .outbox
@@ -1883,11 +2109,11 @@ async fn outbox_contract(db: &Database) {
     r.outbox.mark_dispatched(ids[2]).await.unwrap();
 
     r.documents
-        .create(new_document("delayed-first"))
+        .create(vault, new_document("delayed-first"))
         .await
         .unwrap();
     r.documents
-        .create(new_document("delivered-second"))
+        .create(vault, new_document("delivered-second"))
         .await
         .unwrap();
     let batch = r.outbox.claim(10, lease(), 10).await.unwrap();
@@ -1909,9 +2135,13 @@ async fn outbox_contract(db: &Database) {
 
 async fn run_atomicity_contract(db: &Database) {
     let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
     let workflow = r
         .workflows
-        .create(workflow_input("atomic", WorkflowTrigger::DocumentUpdated))
+        .create(
+            vault,
+            workflow_input("atomic", WorkflowTrigger::DocumentUpdated),
+        )
         .await
         .unwrap();
     let document = Id::new_v4();
@@ -1981,7 +2211,12 @@ async fn run_contract(db: &Database) {
     documents_contract(&repos).await;
     document_filter_contract(&repos).await;
     settings_contract(&repos).await;
-    search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
+    search_contract(
+        repos.vaults.instance_default().await.unwrap(),
+        repos.documents.as_ref(),
+        repos.search.as_ref(),
+    )
+    .await;
     // Before the workflow contracts, which leave queued run jobs behind
     jobs_contract(&repos).await;
     processing_recovery_contract(&repos).await;
@@ -2030,7 +2265,12 @@ async fn postgres_satisfies_the_contract() {
     // The Rust cosine fallback satisfies the same search contract
     let repos = db.repositories().await;
     let fallback = PostgresSearchService::without_pgvector(pool.clone());
-    search_contract(repos.documents.as_ref(), &fallback).await;
+    search_contract(
+        repos.vaults.instance_default().await.unwrap(),
+        repos.documents.as_ref(),
+        &fallback,
+    )
+    .await;
 }
 
 #[tokio::test]

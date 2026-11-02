@@ -32,7 +32,7 @@ async fn inject_auth(
     next: Next,
 ) -> Response {
     req.extensions_mut().insert(McpAuth::new(
-        Some("alice".into()),
+        None,
         scopes.iter().map(|s| s.to_string()).collect::<HashSet<_>>(),
     ));
     next.run(req).await
@@ -49,6 +49,7 @@ async fn read_scope_allows_reads_but_not_writes() {
     let app = with_scopes(
         folio_mcp::router(
             fx.library.clone(),
+            fx.vaults.clone(),
             fx.settings_port(),
             McpOptions::default(),
         ),
@@ -84,7 +85,7 @@ async fn read_scope_allows_reads_but_not_writes() {
         }
     };
     assert!(denied, "write tool must require documents:write");
-    let unchanged = fx.library.get_document(doc.id).await.unwrap();
+    let unchanged = fx.library.get_document(fx.vault, doc.id).await.unwrap();
     assert_eq!(unchanged.document.title, "Invoice");
 }
 
@@ -95,6 +96,7 @@ async fn write_scope_allows_writes() {
     let app = with_scopes(
         folio_mcp::router(
             fx.library.clone(),
+            fx.vaults.clone(),
             fx.settings_port(),
             McpOptions::default(),
         ),
@@ -117,7 +119,7 @@ async fn write_scope_allows_writes() {
     assert_ne!(res.is_error, Some(true));
     assert_eq!(
         fx.library
-            .get_document(doc.id)
+            .get_document(fx.vault, doc.id)
             .await
             .unwrap()
             .document
@@ -131,6 +133,7 @@ async fn disabled_setting_hides_endpoint() {
     let fx = Fixture::new().await;
     let app = folio_mcp::router(
         fx.library.clone(),
+        fx.vaults.clone(),
         fx.settings_port(),
         McpOptions {
             settings_ttl: Duration::ZERO,
@@ -159,6 +162,7 @@ async fn disabled_setting_hides_endpoint() {
     };
     let url = serve(folio_mcp::router(
         fx.library.clone(),
+        fx.vaults.clone(),
         fx.settings_port(),
         off_by_default,
     ))
@@ -218,6 +222,7 @@ async fn enable_gate_does_not_query_settings_per_request() {
     });
     let url = serve(folio_mcp::router(
         fx.library.clone(),
+        fx.vaults.clone(),
         counting.clone(),
         McpOptions::default(),
     ))

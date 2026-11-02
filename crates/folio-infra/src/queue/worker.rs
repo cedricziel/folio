@@ -884,13 +884,16 @@ mod tests {
             Arc::new(crate::storage::ObjectStoreDocumentStore::in_memory());
         let thumbnails = Arc::new(ThumbnailService::new(storage.clone()));
         let doc = repo
-            .create(CreateDocument {
-                title: "scan".into(),
-                content: None,
-                original_filename: Some("scan.png".into()),
-                mime_type: Some("image/png".into()),
-                ..Default::default()
-            })
+            .create(
+                crate::database::test_vault(),
+                CreateDocument {
+                    title: "scan".into(),
+                    content: None,
+                    original_filename: Some("scan.png".into()),
+                    mime_type: Some("image/png".into()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let path = folio_core::ports::keys::original(doc.id);
@@ -898,7 +901,9 @@ mod tests {
             .put(&path, b"not a real png".as_slice().into())
             .await
             .unwrap();
-        repo.set_file_path(doc.id, &path).await.unwrap();
+        repo.set_file_path(crate::database::test_vault(), doc.id, &path)
+            .await
+            .unwrap();
 
         let worker = Worker::new(
             queue.clone(),
@@ -945,7 +950,12 @@ mod tests {
             .unwrap();
         drain(&f).await;
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.content.as_deref(), Some(""));
         assert_eq!(doc.ocr_status, ProcessingStatus::Done);
         assert_eq!(doc.embed_status, ProcessingStatus::Skipped);
@@ -981,7 +991,12 @@ mod tests {
             .unwrap();
         drain(&f).await;
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             doc.content.as_deref(),
             Some("Invoice from ACME for services")
@@ -989,11 +1004,15 @@ mod tests {
         assert_eq!(doc.ocr_status, ProcessingStatus::Done);
         assert_eq!(doc.embed_status, ProcessingStatus::Done);
 
-        let hits = f.search.search("test:model", &[1.0, 0.0], 5).await.unwrap();
+        let hits = f
+            .search
+            .search(crate::database::test_vault(), "test:model", &[1.0, 0.0], 5)
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert!(f
             .search
-            .search("other:model", &[1.0, 0.0], 5)
+            .search(crate::database::test_vault(), "other:model", &[1.0, 0.0], 5)
             .await
             .unwrap()
             .is_empty());
@@ -1017,7 +1036,10 @@ mod tests {
         }
         async fn get(&self, key: &str) -> Result<folio_core::ports::StoredObject> {
             let object = self.inner.get(key).await?;
-            let _ = self.repo.delete(self.doc_id).await;
+            let _ = self
+                .repo
+                .delete(crate::database::test_vault(), self.doc_id)
+                .await;
             Ok(object)
         }
         async fn size(&self, key: &str) -> Result<Option<u64>> {
@@ -1077,7 +1099,7 @@ mod tests {
     #[async_trait]
     impl EmbeddingService for DeletingEmbeddings {
         async fn embed(&self, texts: &[&str]) -> Result<EmbeddingBatch> {
-            let _ = self.0.delete(self.1).await;
+            let _ = self.0.delete(crate::database::test_vault(), self.1).await;
             FixedEmbeddings.embed(texts).await
         }
         async fn model_id(&self) -> Result<String> {
@@ -1092,7 +1114,10 @@ mod tests {
     async fn a_document_deleted_mid_job_gets_no_embedding() {
         let mut f = fixture("some text").await;
         f.worker.embedding_service = Arc::new(DeletingEmbeddings(f.repo.clone(), f.doc_id));
-        f.repo.complete_ocr(f.doc_id, "some text").await.unwrap();
+        f.repo
+            .complete_ocr(crate::database::test_vault(), f.doc_id, "some text")
+            .await
+            .unwrap();
         f.settings
             .set("embeddings.provider", "openai")
             .await
@@ -1108,7 +1133,7 @@ mod tests {
 
         assert!(f
             .search
-            .search("test:model", &[1.0, 0.0], 5)
+            .search(crate::database::test_vault(), "test:model", &[1.0, 0.0], 5)
             .await
             .unwrap()
             .is_empty());
@@ -1135,7 +1160,12 @@ mod tests {
             .unwrap();
         drain(&f).await;
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.ocr_status, ProcessingStatus::Done);
         assert_eq!(doc.embed_status, ProcessingStatus::Skipped);
 
@@ -1146,25 +1176,36 @@ mod tests {
         f.pipeline.invalidate().await;
         let doc2 = f
             .repo
-            .create(CreateDocument {
-                title: "second".into(),
-                content: None,
-                original_filename: None,
-                mime_type: Some("image/png".into()),
-                ..Default::default()
-            })
+            .create(
+                crate::database::test_vault(),
+                CreateDocument {
+                    title: "second".into(),
+                    content: None,
+                    original_filename: None,
+                    mime_type: Some("image/png".into()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let path = folio_core::ports::keys::original(doc2.id);
         f.storage.put(&path, b"x".as_slice().into()).await.unwrap();
-        f.repo.set_file_path(doc2.id, &path).await.unwrap();
+        f.repo
+            .set_file_path(crate::database::test_vault(), doc2.id, &path)
+            .await
+            .unwrap();
         f.worker
             .process_job(&JobType::ProcessDocument {
                 document_id: doc2.id,
             })
             .await
             .unwrap();
-        let doc2 = f.repo.find_by_id(doc2.id).await.unwrap().unwrap();
+        let doc2 = f
+            .repo
+            .find_by_id(crate::database::test_vault(), doc2.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc2.ocr_status, ProcessingStatus::Skipped);
     }
 
@@ -1172,7 +1213,7 @@ mod tests {
     async fn failed_ocr_is_recorded_and_not_requeued_by_repair() {
         let f = fixture("x").await;
         f.repo
-            .set_file_path(f.doc_id, "missing/file.png")
+            .set_file_path(crate::database::test_vault(), f.doc_id, "missing/file.png")
             .await
             .unwrap();
 
@@ -1184,7 +1225,12 @@ mod tests {
             .await
             .is_err());
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.ocr_status, ProcessingStatus::Failed);
         f.worker.repair_orphaned_documents().await.unwrap();
         assert_eq!(f.queue.pending_count().await.unwrap(), 0);
@@ -1203,18 +1249,21 @@ mod tests {
         f.worker.workflow_runner = Some(runner);
 
         let workflow = workflows
-            .create(WorkflowInput {
-                name: "hook".into(),
-                enabled: true,
-                trigger: WorkflowTrigger::DocumentUploaded,
-                conditions: WorkflowConditions::default(),
-                actions: vec![WorkflowAction::Webhook {
-                    url: "http://127.0.0.1:1/hook".into(),
-                    method: Default::default(),
-                    headers: Default::default(),
-                    secret: None,
-                }],
-            })
+            .create(
+                crate::database::test_vault(),
+                WorkflowInput {
+                    name: "hook".into(),
+                    enabled: true,
+                    trigger: WorkflowTrigger::DocumentUploaded,
+                    conditions: WorkflowConditions::default(),
+                    actions: vec![WorkflowAction::Webhook {
+                        url: "http://127.0.0.1:1/hook".into(),
+                        method: Default::default(),
+                        headers: Default::default(),
+                        secret: None,
+                    }],
+                },
+            )
             .await
             .unwrap();
         let run = WorkflowRun::new(
@@ -1268,7 +1317,7 @@ mod tests {
             }
         });
         let mut stuck = workflows
-            .find_by_id(run.workflow_id)
+            .find_by_id(crate::database::test_vault(), run.workflow_id)
             .await
             .unwrap()
             .unwrap();
@@ -1293,7 +1342,12 @@ mod tests {
         let (_stop, shutdown) = watch::channel(false);
         let processed = async {
             loop {
-                let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+                let doc = f
+                    .repo
+                    .find_by_id(crate::database::test_vault(), f.doc_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 if doc.ocr_status == ProcessingStatus::Done {
                     return;
                 }

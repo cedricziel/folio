@@ -7,7 +7,6 @@ use std::sync::Arc;
 use axum::middleware::from_fn_with_state;
 use common::Fixture;
 use folio_auth::{crypto::hash_token, require_bearer, AccessToken, AuthStore, TokenValidator};
-use folio_infra::Database;
 use folio_mcp::McpOptions;
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -18,28 +17,31 @@ use serde_json::json;
 struct Server {
     url: String,
     store: Arc<dyn AuthStore>,
+    vault: folio_core::models::VaultId,
+    vault_repo: Arc<dyn folio_core::ports::VaultRepository>,
+    members: Arc<dyn folio_core::ports::MembershipRepository>,
     _dir: tempfile::TempDir,
 }
 
 async fn serve(fx: &Fixture) -> Server {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::connect(&format!("sqlite:{}/auth.db", dir.path().display()))
-        .await
-        .unwrap();
-    db.migrate().await.unwrap();
-    let store = db.repositories().await.auth;
+    let store = fx.auth.clone();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let mcp = folio_mcp::router(
         fx.library.clone(),
+        fx.vaults.clone(),
         fx.settings_port(),
         McpOptions {
             enabled_by_default: true,
             ..McpOptions::default()
         },
     )
-    .layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))
+    .layer(axum::middleware::from_fn_with_state(
+        store.clone(),
+        folio_mcp::bridge_auth_context,
+    ))
     .layer(from_fn_with_state(
         TokenValidator::new(store.clone(), Some(format!("http://{addr}")), "/mcp"),
         require_bearer,
@@ -48,6 +50,9 @@ async fn serve(fx: &Fixture) -> Server {
     Server {
         url: format!("http://{addr}/mcp"),
         store,
+        vault: fx.vault,
+        vault_repo: fx.vault_repo.clone(),
+        members: fx.members.clone(),
         _dir: dir,
     }
 }
@@ -69,6 +74,23 @@ async fn issue(server: &Server, token: &str, scopes: &[&str]) {
         })
         .await
         .unwrap();
+    let user = folio_core::models::UserId::from("u1");
+    server
+        .members
+        .grant(
+            server.vault,
+            &folio_core::models::Principal::User(user.clone()),
+            folio_core::models::VaultRole::Owner,
+            None,
+        )
+        .await
+        .unwrap();
+    server
+        .vault_repo
+        .set_default(&user, server.vault)
+        .await
+        .unwrap();
+    server.vault_repo.mark_provisioned(&user).await.unwrap();
     server
         .store
         .insert_client(folio_auth::OAuthClient {
@@ -152,7 +174,7 @@ async fn read_token_can_search_but_not_update() {
     assert!(denied, "write tool must require documents:write");
     assert_eq!(
         fx.library
-            .get_document(doc.id)
+            .get_document(fx.vault, doc.id)
             .await
             .unwrap()
             .document
