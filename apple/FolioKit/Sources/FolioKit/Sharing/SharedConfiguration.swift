@@ -14,9 +14,10 @@ public enum SharedConfiguration {
         UserDefaultsServerConfigStore.shared().load()
     }
 
-    public static func makeService(session: URLSession = .shared) -> LiveFolioService? {
+    public static func makeService(session: URLSession = .shared, downloadDirectory: URL? = nil) -> LiveFolioService? {
         serverURL().map {
-            LiveFolioService(baseURL: $0, tokenProvider: tokenProvider(), session: session)
+            LiveFolioService(
+                baseURL: $0, tokenProvider: tokenProvider(), session: session, downloadDirectory: downloadDirectory)
         }
     }
 

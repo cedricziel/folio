@@ -16,8 +16,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
 
     func invalidate() {}
 
-    private func catalog() throws -> (FolioCatalog, any FolioService) {
-        guard let service = SharedConfiguration.makeService() else {
+    private func catalog(downloadDirectory: URL? = nil) throws -> (FolioCatalog, any FolioService) {
+        guard let service = SharedConfiguration.makeService(downloadDirectory: downloadDirectory) else {
             throw NSFileProviderError(.notAuthenticated)
         }
         return (FolioCatalog(service: service), service)
@@ -52,7 +52,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
         Task {
             defer { progress.completedUnitCount = 1 }
             do {
-                let (catalog, service) = try catalog()
+                guard let manager = NSFileProviderManager(for: domain) else {
+                    throw NSFileProviderError(.providerNotFound)
+                }
+                let (catalog, service) = try catalog(downloadDirectory: manager.temporaryDirectoryURL())
                 guard let id = FolioItemID(providerIdentifier: itemIdentifier),
                     let node = try await catalog.node(for: id), let document = node.document
                 else { return completionHandler(nil, nil, NSFileProviderError(.noSuchItem)) }
