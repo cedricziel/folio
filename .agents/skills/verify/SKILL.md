@@ -108,6 +108,26 @@ On every exit, shut down and delete only `verify_device`, then remove `verify_di
 An accessibility initialization failure before the test taps a row is an
 infrastructure failure, not a navigation regression or a passing check.
 
+## Apple review and recovery
+
+The package suite includes `UploadViewModelTests` for partial-batch retries,
+original-vault retention, and independent batches. `DocumentTrashHistoryTests`
+checks native Undo/Redo, failed deletion and restoration, and ordered asynchronous
+operations. `TokenGeneratorTests`, `TokenContrastTests`, and `TokenDriftTests`
+check high-contrast asset generation, foreground/background contrast, and generated
+asset drift.
+
+The isolated navigation fixture also covers scan dismissal confirmation and
+retaining the list beside a preview in a wide iPad window. Run the compact
+navigation test on an iPhone and the wide-window test on an iPad. A test-runner
+launch failure before a test starts does not verify these behaviors.
+
+For layout investigation, launch the fixture with `--onboarding-layout` or
+`--share-layout`. These modes use a short viewport, the largest Dynamic Type size,
+and mock data. Confirm that all controls are reachable before changing production
+layout. The fixture does not establish keyboard avoidance or actual share-extension
+hosting behavior; check those separately in an isolated simulator.
+
 ## Apple File Provider
 
 Run `xcrun swift test --package-path apple/FolioKit --scratch-path /tmp/folio-provider-build`.

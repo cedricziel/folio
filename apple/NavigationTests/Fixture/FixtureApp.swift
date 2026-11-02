@@ -14,6 +14,10 @@ typealias Document = FolioKit.Document
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("--scan-review") {
                 ScanReviewFixture(service: service)
+            } else if ProcessInfo.processInfo.arguments.contains("--onboarding-layout") {
+                OnboardingLayoutFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--share-layout") {
+                ShareLayoutFixture()
             } else {
                 WorkspaceView(
                     serverURL: URL(string: "https://unused.invalid")!,
