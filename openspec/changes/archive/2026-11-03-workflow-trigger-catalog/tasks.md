@@ -6,4 +6,4 @@
 ## 2. Verification
 
 - [x] 2.1 Run formatting, scoped core lint/tests with OpenAPI enabled, and existing legacy workflow validation regressions on the publication branch.
-- [ ] 2.2 Validate and archive the change.
+- [x] 2.2 Validate and archive the change.
