@@ -55,6 +55,8 @@ struct InboxView: View {
                 )
             }
         }
+        // Keep loading alive when compact navigation hides the sidebar.
+        .task(id: list.searchText) { await list.search(list.searchText) }
         .focusedSceneValue(\.inboxActions, actions)
         .onChange(of: router.request, initial: true) { _, request in
             guard let request else { return }
@@ -130,7 +132,6 @@ struct InboxView: View {
         .navigationTitle(list.scope == .inbox ? "Inbox" : "All documents")
         .searchable(text: $list.searchText, prompt: "Search documents")
         .searchFocused($searchFocused)
-        .task(id: list.searchText) { await list.search(list.searchText) }
         .refreshable { await list.load() }
         .overlay { placeholder }
         .safeAreaInset(edge: .top, spacing: 0) { uploadNotice }
