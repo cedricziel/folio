@@ -702,15 +702,17 @@ impl AuthStore for SqliteAuthStore {
     async fn confirm_totp(
         &self,
         user_id: &str,
+        expected_secret: &str,
         step: i64,
         recovery_hashes: &[String],
     ) -> Result<bool, AuthError> {
         let mut tx = self.pool.begin().await.map_err(err)?;
         let confirmed = sqlx::query(
-            "UPDATE user_totp SET confirmed = 1, last_step = $2 WHERE user_id = $1 AND confirmed = 0",
+            "UPDATE user_totp SET confirmed = 1, last_step = $2 WHERE user_id = $1 AND confirmed = 0 AND secret_enc = $3",
         )
         .bind(user_id)
         .bind(step)
+        .bind(expected_secret)
         .execute(&mut *tx)
         .await
         .map_err(err)?
@@ -750,6 +752,26 @@ impl AuthStore for SqliteAuthStore {
                 .map_err(err)?;
         }
         tx.commit().await.map_err(err)
+    }
+
+    async fn delete_pending_totp(&self, user_id: &str) -> Result<bool, AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
+        let removed = sqlx::query("DELETE FROM user_totp WHERE user_id = $1 AND confirmed = 0")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?
+            .rows_affected()
+            == 1;
+        if removed {
+            sqlx::query("DELETE FROM user_recovery_codes WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(err)?;
+        }
+        tx.commit().await.map_err(err)?;
+        Ok(removed)
     }
 
     async fn replace_recovery_codes(

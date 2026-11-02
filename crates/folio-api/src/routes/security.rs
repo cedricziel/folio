@@ -455,7 +455,7 @@ async fn totp_confirm(
     auth.code_by_user.record_success(&user.id);
     let codes = mfa::generate_recovery_codes();
     let hashes = hashes_of(&auth, &user.id, &codes);
-    match auth.store.confirm_totp(&user.id, step, &hashes).await {
+    match auth.store.confirm_totp(&user.id, &record.secret_enc, step, &hashes).await {
         Ok(true) => render_page(&state, &auth, &caller, Some("totp-on"), codes)
             .await
             .unwrap_or_else(IntoResponse::into_response),
@@ -483,15 +483,9 @@ async fn totp_cancel(
         Ok(c) => c,
         Err(r) => return *r,
     };
-    let pending = auth
-        .store
-        .get_totp(&caller.user.id)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|t| !t.confirmed);
-    if pending {
-        let _ = auth.store.delete_totp(&caller.user.id).await;
+    if let Err(e) = auth.store.delete_pending_totp(&caller.user.id).await {
+        tracing::error!("cancelling TOTP enrollment failed: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     Redirect::to("/settings/security").into_response()
 }

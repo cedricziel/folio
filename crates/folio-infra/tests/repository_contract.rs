@@ -1469,17 +1469,27 @@ async fn mfa_contract(r: &Repositories) {
         !auth.advance_totp_step(&ada.id, 5).await.unwrap(),
         "an unconfirmed enrollment accepts no logins"
     );
-    assert!(!auth.confirm_totp(&bob.id, 7, &[]).await.unwrap());
+    assert!(!auth.confirm_totp(&bob.id, "seed1", 7, &[]).await.unwrap());
+    assert!(
+        !auth.confirm_totp(&ada.id, "seed1", 7, &[]).await.unwrap(),
+        "a replaced seed cannot be confirmed by a code for the old seed"
+    );
+    assert!(!auth.get_totp(&ada.id).await.unwrap().unwrap().confirmed);
+
     assert!(auth
-        .confirm_totp(&ada.id, 7, &hashes(&["a", "b", "c"]))
+        .confirm_totp(&ada.id, "seed2", 7, &hashes(&["a", "b", "c"]))
         .await
         .unwrap());
     assert!(
         !auth
-            .confirm_totp(&ada.id, 8, &hashes(&["x"]))
+            .confirm_totp(&ada.id, "seed2", 8, &hashes(&["x"]))
             .await
             .unwrap(),
         "confirming twice does nothing"
+    );
+    assert!(
+        !auth.delete_pending_totp(&ada.id).await.unwrap(),
+        "cancellation cannot remove a factor confirmed concurrently"
     );
     let on = auth.get_totp(&ada.id).await.unwrap().unwrap();
     assert!((on.confirmed, on.last_step) == (true, 7));

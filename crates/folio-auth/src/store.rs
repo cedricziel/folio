@@ -120,6 +120,7 @@ pub trait AuthStore: Send + Sync {
     async fn confirm_totp(
         &self,
         user_id: &str,
+        expected_secret: &str,
         step: i64,
         recovery_hashes: &[String],
     ) -> Result<bool, AuthError>;
@@ -128,6 +129,8 @@ pub trait AuthStore: Send + Sync {
     async fn advance_totp_step(&self, user_id: &str, step: i64) -> Result<bool, AuthError>;
     /// Removes the enrollment and every recovery code.
     async fn delete_totp(&self, user_id: &str) -> Result<(), AuthError>;
+    /// Cancel only an unconfirmed enrollment; a confirmed factor is preserved.
+    async fn delete_pending_totp(&self, user_id: &str) -> Result<bool, AuthError>;
     async fn replace_recovery_codes(
         &self,
         user_id: &str,
