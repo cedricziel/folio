@@ -294,6 +294,14 @@ verifies row interaction without claiming that the XCTest runner passed.
 The Apple workflow also runs the iPhone fixture in the `Thumbnail UI` job and
 retains its result bundle, including screenshot attachments, for seven days.
 
+## Verify saved-view contracts
+
+Run `cargo test -p folio-core --all-features` with the isolated Cargo settings
+above. Saved-view tests cover query versions, unknown fields, bounded paging,
+date ranges, owner-only private visibility, shared edit permissions after a role
+change, soft deletion, and rejection of client-supplied ownership or actors.
+These tests exercise models only and do not launch an app or access user data.
+
 ## Verify document repository changes
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`
