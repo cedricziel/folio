@@ -29,6 +29,7 @@ async fn taxonomy_contract(db: Database) {
     assert_eq!(tag.created_by, Some(actor.clone()));
     assert_eq!(tag.updated_by, Some(actor));
     assert_eq!(tag.created_at, tag.updated_at);
+    let tag = r.tags.find_by_id(vault, tag.id).await.unwrap().unwrap();
     let correspondent = r
         .correspondents
         .create(
@@ -195,6 +196,7 @@ async fn taxonomy_contract(db: Database) {
     assert!(restored.deleted_at.is_none());
     assert_eq!(restored.created_at, tag.created_at);
     assert_eq!(restored.created_by, tag.created_by);
+    let restored = r.tags.find_by_id(vault, tag.id).await.unwrap().unwrap();
     let unchanged = r.tags.restore(vault, tag.id).await.unwrap();
     assert_eq!(unchanged.updated_at, restored.updated_at);
     let updated = with_actor(
