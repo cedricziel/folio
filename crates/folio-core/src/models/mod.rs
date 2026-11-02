@@ -9,6 +9,7 @@ mod document_type;
 mod file_identity;
 mod ingest;
 mod metadata;
+mod metadata_field;
 mod saved_view;
 mod settings;
 mod source;
@@ -33,6 +34,7 @@ pub use ingest::{
     SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
 pub use metadata::{MetadataKind, MetadataValue};
+pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
