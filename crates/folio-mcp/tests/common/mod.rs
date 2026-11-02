@@ -117,6 +117,7 @@ impl SearchService for FakeSearch {
 
 /// Tag repository that counts how often the whole table is listed
 struct CountingTags {
+    actors: Arc<std::sync::Mutex<Vec<Option<folio_core::models::UserId>>>>,
     inner: Arc<dyn TagRepository>,
     lists: Arc<AtomicUsize>,
     delete_after_list: Arc<AtomicBool>,
@@ -153,6 +154,10 @@ impl TagRepository for CountingTags {
         vault: folio_core::models::VaultId,
         params: CreateTag,
     ) -> folio_core::Result<Tag> {
+        self.actors
+            .lock()
+            .unwrap()
+            .push(folio_core::mutation::current_actor());
         self.inner.create(vault, params).await
     }
     async fn update(
@@ -208,6 +213,7 @@ pub struct Fixture {
     pub auth: Arc<dyn folio_auth::AuthStore>,
     /// Number of times the tags table was listed in full
     pub tag_lists: Arc<AtomicUsize>,
+    pub tag_actors: Arc<std::sync::Mutex<Vec<Option<folio_core::models::UserId>>>>,
     pub delete_tags_after_next_list: Arc<AtomicBool>,
     pub documents: Arc<dyn DocumentRepository>,
     pub settings: Arc<dyn SettingsRepository>,
@@ -251,10 +257,12 @@ impl Fixture {
         ));
 
         let tag_lists = Arc::new(AtomicUsize::new(0));
+        let tag_actors = Arc::new(std::sync::Mutex::new(Vec::new()));
         let delete_tags_after_next_list = Arc::new(AtomicBool::new(false));
         let tags = Arc::new(CountingTags {
             inner: repos.tags,
             lists: tag_lists.clone(),
+            actors: tag_actors.clone(),
             delete_after_list: delete_tags_after_next_list.clone(),
         });
         let library = Arc::new(LibraryService::new(
@@ -276,6 +284,7 @@ impl Fixture {
             auth: repos.auth,
             library,
             tag_lists,
+            tag_actors,
             delete_tags_after_next_list,
             documents: repos.documents,
             settings: repos.settings,

@@ -814,6 +814,16 @@ impl FolioMcp {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FolioMcp {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+        let actor = crate::auth::subject_of(&context.extensions).map(UserId::from);
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        folio_core::mutation::with_actor(actor, self.tool_router.call(call)).await
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(
             ServerCapabilities::builder()
