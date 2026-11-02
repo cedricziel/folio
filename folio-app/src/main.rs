@@ -32,6 +32,9 @@ enum Mode {
     CleanupLegacyStorage,
 }
 
+/// Database settings key of the generated secret key.
+const SECRET_KEY_SETTING: &str = "auth.secret_key";
+
 fn parse_args() -> Result<Mode> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args
@@ -248,6 +251,7 @@ async fn main() -> Result<()> {
     }
 
     let mcp_settings: Arc<dyn SettingsRepository> = settings_repo.clone();
+    let auth_settings = settings_repo.clone();
     let mcp_default = config.mcp.enabled.unwrap_or(config.auth.required);
     if !config.auth.required && folio_mcp::is_enabled(mcp_settings.as_ref(), mcp_default).await {
         tracing::warn!(
@@ -288,6 +292,34 @@ async fn main() -> Result<()> {
     if let Some(token) = config.auth.setup_token.as_deref().filter(|t| !t.is_empty()) {
         auth = auth.with_setup_token(token);
     }
+    let secret_key = match config.auth.secret_key.as_deref().filter(|k| !k.is_empty()) {
+        Some(key) => {
+            if let Some(stored) = auth_settings.get(SECRET_KEY_SETTING).await? {
+                if stored.value != key {
+                    tracing::error!(
+                        "auth.secret_key differs from the database fallback key; existing TOTP enrollments and recovery codes created with the stored key will stop working. Restore that key or reset those enrollments"
+                    );
+                }
+            }
+            key.to_string()
+        }
+        None => {
+            tracing::warn!(
+                "auth.secret_key is not set; using a key kept in the database. Set FOLIO_AUTH__SECRET_KEY (or FOLIO_AUTH__SECRET_KEY_FILE) so a copy of the database alone cannot decrypt two-factor secrets"
+            );
+            match auth_settings.get(SECRET_KEY_SETTING).await? {
+                Some(setting) => setting.value,
+                None => {
+                    let key = folio_auth::secret::SecretBox::generate_key();
+                    auth_settings.set(SECRET_KEY_SETTING, &key).await?;
+                    key
+                }
+            }
+        }
+    };
+    auth = auth
+        .with_secret_key(&secret_key)
+        .map_err(|e| anyhow::anyhow!("invalid auth.secret_key: {e}"))?;
     let forward = &config.auth.forward;
     if forward.enabled {
         let settings = folio_auth::ForwardAuth::new(folio_auth::ForwardConfig {

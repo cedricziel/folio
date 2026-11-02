@@ -14,7 +14,7 @@ bin=${FOLIO_BIN:-${CARGO_TARGET_DIR:-$repo/target}/debug/folio-app}
 
 dir=$(mktemp -d "${TMPDIR:-/tmp}/folio-verify.XXXXXX")
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-base="http://127.0.0.1:$port"
+base="http://localhost:$port"
 mkdir -p "$dir/storage"
 
 # The app serves ./static relative to its working directory.
@@ -28,6 +28,7 @@ ln -s "$repo/static" "$dir/static"
   exec env -i PATH="$PATH" HOME="$dir" RUST_LOG="${RUST_LOG:-info}" \
     FOLIO_SERVER__HOST=127.0.0.1 \
     FOLIO_SERVER__PORT="$port" \
+    FOLIO_SERVER__PUBLIC_URL="$base" \
     FOLIO_DATABASE__URL="sqlite:$dir/folio.db?mode=rwc" \
     FOLIO_STORAGE__PATH="$dir/storage" \
     FOLIO_AI__PROVIDER=local \

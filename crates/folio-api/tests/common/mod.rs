@@ -21,6 +21,7 @@ use folio_infra::{
 pub struct Harness {
     pub app: Router,
     pub state: AppState,
+    pub auth_store: Arc<dyn folio_auth::AuthStore>,
 }
 
 pub async fn harness() -> Harness {
@@ -30,17 +31,29 @@ pub async fn harness() -> Harness {
 /// A harness that requires sign-in; the first account is created through
 /// `/setup?token=`[`SETUP_TOKEN`]
 pub async fn harness_requiring_login() -> Harness {
-    build_harness(Vec::new(), true).await
+    harness_with(Vec::new(), |store| {
+        AuthState::new(store, None)
+            .with_setup_token(SETUP_TOKEN)
+            .with_required(true)
+    })
+    .await
 }
 
 pub const SETUP_TOKEN: &str = "test-setup-token";
 
 /// A harness whose configuration defines `configured` ingestion sources
 pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harness {
-    build_harness(configured, false).await
+    harness_with(configured, |store| {
+        AuthState::new(store, None).with_required(false)
+    })
+    .await
 }
 
-async fn build_harness(configured: Vec<IngestionSourceDef>, require_login: bool) -> Harness {
+/// A harness whose auth state is built by `make_auth` from the auth store
+pub async fn harness_with(
+    configured: Vec<IngestionSourceDef>,
+    make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
+) -> Harness {
     let dir = std::env::temp_dir().join(format!("folio-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let storage = dir.to_string_lossy().to_string();
@@ -50,9 +63,8 @@ async fn build_harness(configured: Vec<IngestionSourceDef>, require_login: bool)
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
-    let auth = AuthState::new(repos.auth.clone(), None)
-        .with_setup_token(SETUP_TOKEN)
-        .with_required(require_login);
+    let auth_store = repos.auth.clone();
+    let auth = make_auth(repos.auth.clone());
 
     let ai = folio_infra::config::AiConfig {
         provider: "local".into(),
@@ -87,6 +99,7 @@ async fn build_harness(configured: Vec<IngestionSourceDef>, require_login: bool)
     Harness {
         app: create_router(state.clone(), auth),
         state,
+        auth_store,
     }
 }
 

@@ -76,7 +76,7 @@ async function login(page) {
   await page.goto("/login");
   await page.getByLabel("Username").fill(credentials.username);
   await page.getByLabel("Password").fill(credentials.password);
-  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await page.waitForURL((u) => !u.pathname.startsWith("/login"));
 }
 

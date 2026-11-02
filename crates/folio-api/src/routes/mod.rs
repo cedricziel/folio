@@ -10,9 +10,12 @@ pub(crate) mod events;
 mod file_response;
 mod health;
 mod manage;
+mod mfa;
 mod oidc;
 mod pages;
+mod pending;
 mod pwa;
+mod security;
 mod settings;
 mod source_pages;
 pub(crate) mod sources;
@@ -35,6 +38,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let health = health::router(state.health_checks.clone());
     let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
     let forward = axum::middleware::from_fn_with_state(auth.clone(), crate::forward::forward_auth);
+    let security = security::router(auth.clone());
     let auth_routes = auth::router(auth);
 
     let routes = Router::new()
@@ -50,6 +54,8 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(manage::router())
         // Settings routes
         .merge(settings::router())
+        // Account and security
+        .merge(security)
         // Workflow pages
         .merge(workflow_pages::router())
         // Source pages

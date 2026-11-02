@@ -247,6 +247,9 @@ pub struct AuthConfig {
     /// One-time secret for `/setup` while no user exists. A random one is
     /// generated and logged at startup when unset.
     pub setup_token: Option<String>,
+    /// Encrypts TOTP seeds at rest. When unset a key is generated on first
+    /// start and kept in the database settings.
+    pub secret_key: Option<String>,
 }
 
 impl fmt::Debug for AuthConfig {
@@ -255,6 +258,7 @@ impl fmt::Debug for AuthConfig {
             .field("required", &self.required)
             .field("forward", &self.forward)
             .field("setup_token", &Redacted(&self.setup_token))
+            .field("secret_key", &Redacted(&self.secret_key))
             .finish()
     }
 }
@@ -266,6 +270,7 @@ impl Default for AuthConfig {
             forward: ForwardAuthConfig::default(),
             oidc: OidcConfig::default(),
             setup_token: None,
+            secret_key: None,
         }
     }
 }
@@ -570,6 +575,12 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "auth.setup_token",
         env: "FOLIO_AUTH__SETUP_TOKEN",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "auth.secret_key",
+        env: "FOLIO_AUTH__SECRET_KEY",
         legacy_env: &[],
         kind: ValueKind::Str,
     },
@@ -965,6 +976,7 @@ mod tests {
             },
             auth: AuthConfig {
                 setup_token: Some("setup-secret".into()),
+                secret_key: Some("totp-key-secret".into()),
                 forward: ForwardAuthConfig {
                     shared_secret: Some("proxy-secret".into()),
                     ..Default::default()
@@ -986,6 +998,7 @@ mod tests {
             "key-id-secret",
             "access-secret",
             "setup-secret",
+            "totp-key-secret",
             "proxy-secret",
             "sk-openai-secret",
             "sk-anthropic-secret",
