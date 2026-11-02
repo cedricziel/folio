@@ -3,6 +3,7 @@
 mod auth_repo;
 mod document_repo;
 mod ingest_repo;
+mod outbox;
 mod search;
 mod settings_repo;
 mod workflow_repo;
@@ -18,6 +19,7 @@ pub use document_repo::{
     SqliteTagRepository,
 };
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
+pub use outbox::SqliteOutboxStore;
 pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
 pub use workflow_repo::SqliteWorkflowRepository;

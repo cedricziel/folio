@@ -78,6 +78,7 @@ async fn build_harness(configured: Vec<IngestionSourceDef>, require_login: bool)
         repos.jobs,
         store,
         EventBroadcaster::new(16),
+        repos.outbox,
         repos.workflows,
         WebhookClient::new(),
         "http://folio.test".to_string(),
