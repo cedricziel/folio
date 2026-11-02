@@ -757,7 +757,13 @@ async fn settings_contract(r: &Repositories) {
     let keys: Vec<_> = by_prefix.iter().map(|s| s.key.as_str()).collect();
     assert_eq!(keys, ["test.a", "test.b", "test.key"]);
     assert_eq!(by_prefix[2].value, "three");
-    assert!(r.settings.list().await.unwrap().len() >= 12);
+    assert!(r
+        .settings
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .any(|setting| { setting.key == "test.key" && setting.value == "three" }));
     assert!(!r.settings.list_by_prefix("ai.").await.unwrap().is_empty());
 
     r.settings.delete("test.a").await.unwrap();
@@ -2433,10 +2439,59 @@ async fn run_atomicity_contract(db: &Database) {
     assert!(r.workflows.create_run(&run_for(44)).await.unwrap());
 }
 
+async fn fresh_database_uses_config_and_preserves_saved_overrides(db: &Database) {
+    let repos = db.repositories().await;
+    let config = folio_infra::config::Config::load_with(
+        "/nonexistent/folio-config.toml",
+        [
+            ("FOLIO_OCR__PROVIDER".to_string(), "none".to_string()),
+            (
+                "FOLIO_PROCESSING__AUTO_OCR".to_string(),
+                "false".to_string(),
+            ),
+        ],
+    )
+    .unwrap();
+    let pipeline = folio_infra::PipelineContext::from_config(repos.settings.clone(), &config);
+    assert!(repos.settings.get("ocr.provider").await.unwrap().is_none());
+    assert!(repos
+        .settings
+        .get("processing.auto_ocr")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(pipeline.settings().await.ocr.provider, "none");
+    assert!(!pipeline.settings().await.processing.auto_ocr);
+    repos
+        .settings
+        .set("ocr.provider", "tesseract")
+        .await
+        .unwrap();
+    repos
+        .settings
+        .set("processing.auto_ocr", "true")
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    pipeline.invalidate().await;
+    assert_eq!(
+        repos
+            .settings
+            .get("ocr.provider")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
+        "tesseract"
+    );
+    assert!(pipeline.settings().await.processing.auto_ocr);
+}
+
 async fn run_contract(db: &Database) {
-    db.migrate().await.unwrap();
-    // Migrating twice is a no-op
-    db.migrate().await.unwrap();
+    let (first, second) = tokio::join!(db.migrate(), db.migrate());
+    first.unwrap();
+    second.unwrap();
+    fresh_database_uses_config_and_preserves_saved_overrides(db).await;
     let repos = db.repositories().await;
 
     tags_contract(&repos).await;
@@ -2472,6 +2527,113 @@ async fn sqlite_satisfies_the_contract() {
 }
 
 #[tokio::test]
+async fn interrupted_fresh_initialization_removes_seeded_overrides() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    sqlx::migrate!("../../migrations/sqlite")
+        .run(pool)
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    fresh_database_uses_config_and_preserves_saved_overrides(&db).await;
+}
+
+#[tokio::test]
+async fn existing_database_preserves_seeded_overrides() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    let mut migrator = sqlx::migrate!("../../migrations/sqlite");
+    migrator
+        .migrations
+        .to_mut()
+        .retain(|migration| migration.version != 0);
+    migrator.run(pool).await.unwrap();
+    db.migrate().await.unwrap();
+    let repos = db.repositories().await;
+    assert_eq!(
+        repos
+            .settings
+            .get("ocr.provider")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
+        "tesseract"
+    );
+}
+
+#[tokio::test]
+async fn memory_database_survives_initialization() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let (first, second) = tokio::join!(db.migrate(), db.migrate());
+    first.unwrap();
+    second.unwrap();
+    let repos = db.repositories().await;
+    repos.settings.set("test.key", "value").await.unwrap();
+    db.migrate().await.unwrap();
+    assert_eq!(
+        repos.settings.get("test.key").await.unwrap().unwrap().value,
+        "value"
+    );
+}
+
+async fn postgres_initialization_recovery(pool: &sqlx::PgPool, host: &str, port: u16) {
+    for existing in [false, true] {
+        let name = if existing {
+            "existing_install"
+        } else {
+            "interrupted_install"
+        };
+        sqlx::query(if existing {
+            "CREATE DATABASE existing_install"
+        } else {
+            "CREATE DATABASE interrupted_install"
+        })
+        .execute(pool)
+        .await
+        .unwrap();
+        let fixture = Database::connect(&format!(
+            "postgres://postgres:postgres@{host}:{port}/{name}"
+        ))
+        .await
+        .unwrap();
+        let Database::Postgres(fixture_pool) = &fixture else {
+            unreachable!()
+        };
+        let mut migrator = sqlx::migrate!("../../migrations/postgres");
+        if existing {
+            migrator
+                .migrations
+                .to_mut()
+                .retain(|migration| migration.version != 0);
+        }
+        migrator.run(fixture_pool).await.unwrap();
+        fixture.migrate().await.unwrap();
+        if existing {
+            assert_eq!(
+                fixture
+                    .repositories()
+                    .await
+                    .settings
+                    .get("ocr.provider")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                "tesseract"
+            );
+        } else {
+            fresh_database_uses_config_and_preserves_saved_overrides(&fixture).await;
+        }
+        fixture_pool.close().await;
+    }
+}
+
+#[tokio::test]
 async fn postgres_satisfies_the_contract() {
     let started = Postgres::default()
         .with_name("pgvector/pgvector")
@@ -2487,6 +2649,10 @@ async fn postgres_satisfies_the_contract() {
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let db = Database::connect(&url).await.unwrap();
+    let Database::Postgres(pool) = &db else {
+        unreachable!()
+    };
+    postgres_initialization_recovery(pool, &host.to_string(), port).await;
     run_contract(&db).await;
 
     let Database::Postgres(pool) = &db else {
@@ -2520,6 +2686,10 @@ async fn postgres_without_the_vector_extension_falls_back() {
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let db = Database::connect(&url).await.unwrap();
+    let Database::Postgres(pool) = &db else {
+        unreachable!()
+    };
+    postgres_initialization_recovery(pool, &host.to_string(), port).await;
     run_contract(&db).await;
 
     let Database::Postgres(pool) = &db else {

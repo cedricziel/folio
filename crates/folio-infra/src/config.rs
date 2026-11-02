@@ -18,7 +18,8 @@ use figment::{
     Figment,
 };
 use folio_core::models::{
-    EmailConfig, FolderConfig, Id, IngestionSourceDef, SourceConfig, SourceOrigin,
+    EmailConfig, EmbeddingSettings, FolderConfig, Id, IngestionSourceDef, OcrSettings,
+    ProcessingSettings, SourceConfig, SourceOrigin,
 };
 use folio_core::redact::Redacted;
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,9 @@ pub struct Config {
     pub database: DatabaseConfig,
     pub storage: StorageConfig,
     pub ai: AiConfig,
+    pub ocr: OcrSettings,
+    pub embeddings: EmbeddingSettings,
+    pub processing: ProcessingSettings,
     pub ingest: IngestConfig,
     pub auth: AuthConfig,
     pub mcp: McpConfig,
@@ -731,6 +735,66 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::Str,
     },
     Setting {
+        key: "ocr.provider",
+        env: "FOLIO_OCR__PROVIDER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ocr.model",
+        env: "FOLIO_OCR__MODEL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ocr.languages",
+        env: "FOLIO_OCR__LANGUAGES",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ocr.base_url",
+        env: "FOLIO_OCR__BASE_URL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "embeddings.provider",
+        env: "FOLIO_EMBEDDINGS__PROVIDER",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "embeddings.model",
+        env: "FOLIO_EMBEDDINGS__MODEL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "embeddings.base_url",
+        env: "FOLIO_EMBEDDINGS__BASE_URL",
+        legacy_env: &[],
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "processing.auto_ocr",
+        env: "FOLIO_PROCESSING__AUTO_OCR",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "processing.auto_thumbnail",
+        env: "FOLIO_PROCESSING__AUTO_THUMBNAIL",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
+        key: "processing.auto_embed",
+        env: "FOLIO_PROCESSING__AUTO_EMBED",
+        legacy_env: &[],
+        kind: ValueKind::Bool,
+    },
+    Setting {
         key: "mcp.enabled",
         env: "FOLIO_MCP__ENABLED",
         legacy_env: &[],
@@ -1151,6 +1215,51 @@ mod tests {
                 setting.key
             );
         }
+    }
+
+    #[test]
+    fn pipeline_environment_overrides_file_and_keeps_missing_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[ocr]\nprovider = 'none'\nlanguages = 'deu'\n[processing]\nauto_ocr = false\n",
+        )
+        .unwrap();
+        let config = Config::load_with(
+            path.to_str().unwrap(),
+            env(&[
+                ("FOLIO_OCR__PROVIDER", "ollama-vision"),
+                ("FOLIO_EMBEDDINGS__MODEL", "nomic-embed-text"),
+                ("FOLIO_PROCESSING__AUTO_EMBED", "false"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            lookup(&config, "ocr.provider").as_deref(),
+            Some("ollama-vision")
+        );
+        assert_eq!(lookup(&config, "ocr.languages").as_deref(), Some("deu"));
+        assert_eq!(
+            lookup(&config, "embeddings.provider").as_deref(),
+            Some("none")
+        );
+        assert_eq!(
+            lookup(&config, "embeddings.model").as_deref(),
+            Some("nomic-embed-text")
+        );
+        assert_eq!(
+            lookup(&config, "processing.auto_ocr").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            lookup(&config, "processing.auto_embed").as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            lookup(&config, "processing.auto_thumbnail").as_deref(),
+            Some("true")
+        );
     }
 
     #[test]

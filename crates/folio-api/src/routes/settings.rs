@@ -75,7 +75,7 @@ async fn settings_page(
     Query(query): Query<SettingsQuery>,
 ) -> ApiResult<Html<String>> {
     let settings = state.settings_repo.list().await?;
-    let processing = PipelineSettings::from_settings(&settings);
+    let processing = (*state.pipeline.settings().await).clone();
     let mcp_enabled = settings
         .iter()
         .find(|s| s.key == MCP_ENABLED)
@@ -92,7 +92,7 @@ async fn settings_page(
     let template = SettingsTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
-        ai_settings: processing.ai.clone(),
+        ai_settings: AiSettings::from_settings(&settings),
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),
         embedding_providers: options(
             state.pipeline.embedding_providers(),

@@ -12,7 +12,7 @@ mod workflow_repo;
 use std::str::FromStr;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::SqlitePool;
+use sqlx::{ConnectOptions, Connection, SqlitePool};
 
 pub use auth_repo::SqliteAuthStore;
 pub use document_repo::{
@@ -32,13 +32,57 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
         .create_if_missing(true)
         .foreign_keys(true);
 
-    SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await
+    // SQLx cannot serialize its generated in-memory filename into a URL.
+    let memory = options
+        .clone()
+        .filename("folio")
+        .to_url_lossy()
+        .query_pairs()
+        .any(|(key, value)| key == "mode" && value == "memory");
+    let pool_options = if memory {
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+    } else {
+        SqlitePoolOptions::new().max_connections(5)
+    };
+    pool_options.connect_with(options).await
 }
 
 /// Run SQLite database migrations
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("../../migrations/sqlite").run(pool).await
+    let mut connection = pool.acquire().await?;
+    let file_backed: bool =
+        sqlx::query_scalar("SELECT file != '' FROM pragma_database_list WHERE name = 'main'")
+            .fetch_one(&mut *connection)
+            .await?;
+    if file_backed {
+        // A connection lock permits the vault migration's explicit transactions.
+        connection.close_on_drop();
+        sqlx::raw_sql("BEGIN EXCLUSIVE; PRAGMA locking_mode = EXCLUSIVE; COMMIT;")
+            .execute(&mut *connection)
+            .await?;
+    }
+    sqlx::migrate!("../../migrations/sqlite")
+        .run_direct(None, &mut *connection, false)
+        .await?;
+    let pending: bool =
+        sqlx::query_scalar("SELECT pending FROM pipeline_initialization WHERE id = 1")
+            .fetch_one(&mut *connection)
+            .await?;
+    if pending {
+        let mut transaction = connection.begin().await?;
+        sqlx::query(super::CLEAR_PIPELINE_DEFAULTS)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("UPDATE pipeline_initialization SET pending = false WHERE id = 1")
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+    }
+    if file_backed {
+        connection.close().await?;
+    }
+    Ok(())
 }

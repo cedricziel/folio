@@ -39,8 +39,12 @@ echo "id=$id"
 step "wait for processing (worker sets page_count after thumbnails)"
 # With AI provider "local" OCR yields no text, so content stays null; page_count is the
 # completion signal. Extension point: poll a status field once one exists.
+completion="d.get('page_count') is not None"
+if [ "${FOLIO_VERIFY_AUTO_OCR:-true}" = false ]; then
+  completion="$completion and d['ocr_status'] == 'skipped' and d['embed_status'] == 'skipped'"
+fi
 for _ in $(seq 1 60); do
-  done_=$(curl -fsS "$BASE_URL/api/documents/$id" | jqpy "d.get('page_count') is not None")
+  done_=$(curl -fsS "$BASE_URL/api/documents/$id" | jqpy "$completion")
   [ "$done_" = True ] && break
   sleep 0.5
 done

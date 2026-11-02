@@ -718,7 +718,10 @@ async fn migration_prefix(db: &Database) {
         Database::Sqlite(_) => &SQLITE_MIGRATIONS,
         Database::Postgres(_) => &POSTGRES_MIGRATIONS,
     };
-    for migration in migrations.iter().filter(|m| m.version < VAULT_MIGRATION) {
+    for migration in migrations
+        .iter()
+        .filter(|m| m.version > 0 && m.version < VAULT_MIGRATION)
+    {
         execute(db, migration.sql.as_ref()).await;
     }
 }

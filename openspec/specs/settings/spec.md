@@ -3,9 +3,7 @@
 ## Purpose
 
 How Folio is configured: startup configuration from `config.toml` and the environment, and runtime AI settings stored in the database and edited at `/settings`.
-
 ## Requirements
-
 ### Requirement: Startup configuration
 
 The system SHALL start without a `config.toml`. Every setting has a built-in default (`127.0.0.1`, `3000`, `sqlite:folio.db?mode=rwc`, `./data` and provider `openai`), `config.toml` (or the file named by `FOLIO_CONFIG`) overrides the defaults, and environment variables override `config.toml`. Settings stored in the database override all of these for the keys the database manages.
@@ -60,12 +58,17 @@ The system SHALL select the database backend from the scheme of `database.url`: 
 
 ### Requirement: Database settings
 
-The system SHALL store runtime settings as key-value rows in the `settings` table. A migration SHALL seed `ai.provider` (`local`), `ai.openai_api_key`, `ai.anthropic_api_key`, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_ocr`, `processing.auto_thumbnail` and `processing.auto_embedding` flags. Of these, `ai.ocr_model`, `ai.embedding_model`, `storage.path` and the `processing.auto_*` flags are stored but not yet applied.
+The system SHALL store runtime settings as key-value rows in the `settings` table. Fresh installations SHALL use startup pipeline values without retaining migration-seeded pipeline overrides. Existing installations SHALL preserve every saved row. On upgrade, migrations SHALL copy the legacy `ai.provider`, `ai.ocr_model`, `ai.embedding_model` and `processing.auto_embedding` values into per-stage pipeline keys before removing the legacy keys. `storage.path` and `processing.auto_thumbnail` are stored but not yet applied.
 
 #### Scenario: Fresh database
 
-- **WHEN** Folio starts against an empty database
-- **THEN** the settings table contains the seeded keys and the AI provider is `local`
+- **WHEN** Folio starts against an empty database without pipeline configuration
+- **THEN** effective `ocr.provider` is `tesseract`, `ocr.languages` is `eng` and `embeddings.provider` is `none`
+
+#### Scenario: Upgrade from OpenAI
+
+- **WHEN** the database had `ai.provider` `openai` and `ai.embedding_model` `text-embedding-3-large`
+- **THEN** `ocr.provider` is `openai-vision`, `embeddings.provider` is `openai` and `embeddings.model` is `text-embedding-3-large`
 
 ### Requirement: AI settings page
 
@@ -94,3 +97,32 @@ The OCR and embedding services SHALL read the provider and API keys from the dat
 
 - **WHEN** the provider is `local`
 - **THEN** no AI provider is called for OCR or embeddings
+
+### Requirement: Pipeline startup configuration
+
+The system SHALL accept `ocr.provider`, `ocr.model`, `ocr.languages`, `ocr.base_url`, `embeddings.provider`, `embeddings.model`, `embeddings.base_url`, and `processing.auto_ocr`, `processing.auto_thumbnail`, `processing.auto_embed` through typed startup configuration and corresponding `FOLIO_` environment variables. Precedence SHALL be built-in defaults, config file, environment, then saved database rows. The HTML settings page SHALL show the effective pipeline values.
+
+#### Scenario: Environment overrides a partial file
+
+- **WHEN** a config file selects an OCR provider and language and the environment selects another provider
+- **THEN** the environment provider and configured language are used and missing fields retain built-in defaults
+
+#### Scenario: Saved settings win
+
+- **WHEN** a database row overrides a configured provider, model, or processing toggle
+- **THEN** that row wins while missing database keys retain startup values
+
+#### Scenario: Fresh installation
+
+- **WHEN** a new database is initialized with OCR disabled and embeddings unconfigured through environment variables
+- **THEN** migration-seeded defaults do not hide those values and no OCR or embedding provider is called
+
+#### Scenario: Existing installation
+
+- **WHEN** an existing database is initialized with different startup values
+- **THEN** every saved pipeline row remains unchanged, including values equal to built-in defaults
+
+#### Scenario: Interrupted initialization
+
+- **WHEN** a fresh installation restarts after migrations finish but before pipeline defaults are removed
+- **THEN** initialization retries cleanup and records completion atomically, so seeded rows cannot hide startup values

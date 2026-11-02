@@ -21,7 +21,7 @@ $S/with-instance.sh bash -c "$S/smoke.sh \$FOLIO_VERIFY_ENV"
 ## 2. Or step by step
 
 1. `scripts/build.sh` builds `folio-app` once (uses `~/.local/bin/cargo-slot` when present, `CARGO_INCREMENTAL=0`). Set `CARGO_TARGET_DIR` inside the worktree when sharing a machine with other agents. `up.sh` builds on demand if the binary is missing; set `FOLIO_BIN` to use another binary (for example a release build in CI).
-2. `env_file=$(scripts/up.sh)` picks a free port, creates `${TMPDIR:-/tmp}/folio-verify.XXXXXX` (DB, storage, log in `server.log`), starts the app, waits for readiness and prints the env file path. The env file defines `BASE_URL`, `PID`, `VERIFY_DIR`. `source` it in later steps.
+2. `env_file=$(scripts/up.sh)` picks a free port, creates `${TMPDIR:-/tmp}/folio-verify.XXXXXX` (DB, storage, log in `server.log`), starts the app, waits for readiness and prints the env file path. The env file defines `BASE_URL`, `PID`, `VERIFY_DIR`, and the effective `FOLIO_VERIFY_AUTO_OCR` so a separately invoked smoke test uses the instance configuration. `source` it in later steps.
 3. `scripts/smoke.sh "$env_file"` runs the API checks: upload the fixture PDF through the UI route (so the worker handles it), poll until the worker has set `page_count` (with provider `local` OCR yields no text, so `content` stays null), list and get via `/api`, download and compare bytes, assert an SSE event arrived on `/events`, delete and expect 404.
 4. Drive the UI (next section).
 5. `scripts/down.sh "$env_file"` kills the PID and removes the temp dir. Idempotent. When using `up.sh` directly, install `trap '$S/down.sh "$env_file"' EXIT` first.
@@ -69,7 +69,8 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - MCP at `/mcp`: `claude mcp add --transport http folio-verify "$BASE_URL/mcp"` (remove it afterwards) or a JSON-RPC probe: `curl -sS -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE_URL/mcp"`.
 - Webhooks and workflows: start a local receiver (`python3 -m http.server`, or `nc -l`) on a free port, point the webhook at `http://127.0.0.1:<port>`, run the trigger (upload), and check the receiver log.
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.
-- Real OCR or embeddings: `FOLIO_AI_PROVIDER=local` skips them. Test those providers only with a dedicated test key supplied by the user, never from the environment you inherited.
+- Pipeline startup configuration: run the smoke test with `FOLIO_VERIFY_OCR_PROVIDER=none FOLIO_VERIFY_AUTO_OCR=false FOLIO_VERIFY_AUTO_EMBED=false`. On the fresh database, `/settings` must select `none` and leave both processing checkboxes unchecked; uploads must finish with skipped OCR and embeddings. The scripts pass these test options through the scrubbed environment.
+- Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
 ## Client telemetry
 

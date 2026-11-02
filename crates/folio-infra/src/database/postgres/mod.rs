@@ -12,7 +12,7 @@ mod workflow_repo;
 use std::str::FromStr;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::PgPool;
+use sqlx::{migrate::Migrate, Connection, PgPool};
 
 pub use auth_repo::PostgresAuthStore;
 pub use document_repo::{
@@ -38,7 +38,29 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
 
 /// Run PostgreSQL database migrations
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("../../migrations/postgres").run(pool).await
+    let mut connection = pool.acquire().await?;
+    connection.close_on_drop();
+    connection.lock().await?;
+    sqlx::migrate!("../../migrations/postgres")
+        .set_locking(false)
+        .run_direct(None, &mut *connection, false)
+        .await?;
+    let pending: bool =
+        sqlx::query_scalar("SELECT pending FROM pipeline_initialization WHERE id = 1")
+            .fetch_one(&mut *connection)
+            .await?;
+    if pending {
+        let mut transaction = connection.begin().await?;
+        sqlx::query(super::CLEAR_PIPELINE_DEFAULTS)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query("UPDATE pipeline_initialization SET pending = false WHERE id = 1")
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+    }
+    connection.close().await?;
+    Ok(())
 }
 
 /// Map a sqlx error, turning unique violations into `Duplicate`.

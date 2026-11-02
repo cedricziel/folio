@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use folio_core::error::Result;
-use folio_core::models::{EmbeddingSettings, OcrSettings, PipelineSettings};
+use folio_core::models::{AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings};
 use folio_core::ports::{
     EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SettingsRepository,
 };
@@ -15,7 +15,7 @@ use folio_core::ports::{
 use super::ocr::TextLayerFirst;
 use super::registry::{EmbeddingRegistry, OcrRegistry, ProviderContext};
 use super::{embeddings, ocr};
-use crate::config::AiConfig;
+use crate::config::{AiConfig, Config};
 
 const SETTINGS_TTL: Duration = Duration::from_secs(5);
 
@@ -23,7 +23,7 @@ const SETTINGS_TTL: Duration = Duration::from_secs(5);
 /// and builds providers from the registries
 pub struct PipelineContext {
     settings_repo: Arc<dyn SettingsRepository>,
-    fallback: AiConfig,
+    fallback: PipelineSettings,
     http: reqwest::Client,
     ocr_registry: OcrRegistry,
     embedding_registry: EmbeddingRegistry,
@@ -32,9 +32,28 @@ pub struct PipelineContext {
 
 impl PipelineContext {
     pub fn new(settings_repo: Arc<dyn SettingsRepository>, fallback: AiConfig) -> Arc<Self> {
+        Self::from_config(
+            settings_repo,
+            &Config {
+                ai: fallback,
+                ..Config::default()
+            },
+        )
+    }
+
+    /// Use startup configuration as the fallback for runtime database settings.
+    pub fn from_config(settings_repo: Arc<dyn SettingsRepository>, config: &Config) -> Arc<Self> {
         Arc::new(Self {
             settings_repo,
-            fallback,
+            fallback: PipelineSettings {
+                ocr: config.ocr.clone(),
+                embeddings: config.embeddings.clone(),
+                processing: config.processing.clone(),
+                ai: AiSettings {
+                    openai_api_key: config.ai.openai_api_key.clone().unwrap_or_default(),
+                    anthropic_api_key: config.ai.anthropic_api_key.clone().unwrap_or_default(),
+                },
+            },
             http: reqwest::Client::new(),
             ocr_registry: ocr::builtin(),
             embedding_registry: embeddings::builtin(),
@@ -61,7 +80,7 @@ impl PipelineContext {
         }
 
         let rows = self.settings_repo.list().await.unwrap_or_default();
-        let settings = Arc::new(self.with_fallbacks(PipelineSettings::from_settings(&rows)));
+        let settings = Arc::new(self.with_fallbacks(self.fallback.clone().with_settings(&rows)));
         *self.cache.write().await = Some((Instant::now(), settings.clone()));
         settings
     }
@@ -74,11 +93,10 @@ impl PipelineContext {
     /// Fill empty API keys from `config.toml`
     pub fn with_fallbacks(&self, mut settings: PipelineSettings) -> PipelineSettings {
         if settings.ai.openai_api_key.is_empty() {
-            settings.ai.openai_api_key = self.fallback.openai_api_key.clone().unwrap_or_default();
+            settings.ai.openai_api_key = self.fallback.ai.openai_api_key.clone();
         }
         if settings.ai.anthropic_api_key.is_empty() {
-            settings.ai.anthropic_api_key =
-                self.fallback.anthropic_api_key.clone().unwrap_or_default();
+            settings.ai.anthropic_api_key = self.fallback.ai.anthropic_api_key.clone();
         }
         settings
     }

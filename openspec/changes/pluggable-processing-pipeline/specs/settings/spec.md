@@ -2,12 +2,12 @@
 
 ### Requirement: Database settings
 
-The system SHALL store runtime settings as key-value rows in the `settings` table. A migration SHALL seed `ai.openai_api_key`, `ai.anthropic_api_key`, `storage.path`, `ocr.provider`, `ocr.model`, `ocr.languages`, `ocr.base_url`, `embeddings.provider`, `embeddings.model`, `embeddings.base_url`, `processing.auto_ocr`, `processing.auto_thumbnail` and `processing.auto_embed`, copying values from the legacy `ai.provider`, `ai.ocr_model`, `ai.embedding_model` and `processing.auto_embedding` rows, which it then removes. `storage.path` and `processing.auto_thumbnail` are stored but not yet applied.
+The system SHALL store runtime settings as key-value rows in the `settings` table. Fresh installations SHALL use startup pipeline values without retaining migration-seeded pipeline overrides. Existing installations SHALL preserve every saved row. On upgrade, migrations SHALL copy the legacy `ai.provider`, `ai.ocr_model`, `ai.embedding_model` and `processing.auto_embedding` values into per-stage pipeline keys before removing the legacy keys. `storage.path` and `processing.auto_thumbnail` are stored but not yet applied.
 
 #### Scenario: Fresh database
 
-- **WHEN** Folio starts against an empty database
-- **THEN** `ocr.provider` is `tesseract`, `ocr.languages` is `eng` and `embeddings.provider` is `none`
+- **WHEN** Folio starts against an empty database without pipeline configuration
+- **THEN** effective `ocr.provider` is `tesseract`, `ocr.languages` is `eng` and `embeddings.provider` is `none`
 
 #### Scenario: Upgrade from OpenAI
 
