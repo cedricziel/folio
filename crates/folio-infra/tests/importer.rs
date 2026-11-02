@@ -28,7 +28,7 @@ impl DocumentStore for FailedPutStore {
     }
 
     async fn exists(&self, _key: &str) -> Result<bool> {
-        unreachable!()
+        Ok(false)
     }
 
     async fn delete(&self, _key: &str) -> Result<()> {
@@ -142,4 +142,258 @@ async fn failed_processing_enqueue_keeps_the_successfully_stored_upload() {
         .exists(&folio_core::ports::keys::original(document.id))
         .await
         .unwrap());
+}
+
+#[tokio::test]
+async fn failed_reserved_upload_keeps_the_document_for_retry_without_cleanup() {
+    let (_db, r, vault) = fixture().await;
+    let claim = folio_core::models::LedgerEntry {
+        key: folio_core::services::content_key(&upload().data),
+        source_id: uuid::Uuid::new_v4(),
+        document_id: Some(uuid::Uuid::new_v4()),
+        outcome: "claimed".into(),
+        created_at: chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+            .unwrap(),
+    };
+    assert!(r.ledger.insert(vault, &claim).await.unwrap());
+    let failed = Importer::new(
+        r.documents.clone(),
+        Arc::new(FailedPutStore),
+        Arc::new(r.jobs.clone()),
+    );
+
+    assert!(matches!(
+        failed.import_reserved(vault, &claim, upload()).await,
+        Err(Error::Storage(_))
+    ));
+
+    let retained = r.documents.list(vault, None).await.unwrap();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(Some(retained[0].id), claim.document_id);
+    assert!(r.documents.list_trash(vault).await.unwrap().is_empty());
+    assert!(r
+        .jobs
+        .find_active_jobs_for_document(retained[0].id)
+        .await
+        .unwrap()
+        .is_empty());
+    let retry = Importer::new(
+        r.documents.clone(),
+        Arc::new(ObjectStoreDocumentStore::in_memory()),
+        Arc::new(r.jobs.clone()),
+    );
+    let document = retry
+        .import_reserved(vault, &claim, upload())
+        .await
+        .unwrap();
+    assert_eq!(Some(document.id), claim.document_id);
+    assert_eq!(r.documents.list(vault, None).await.unwrap().len(), 1);
+}
+
+struct PausedPutStore {
+    inner: ObjectStoreDocumentStore,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl DocumentStore for PausedPutStore {
+    fn backend(&self) -> &'static str {
+        self.inner.backend()
+    }
+    async fn put(&self, key: &str, data: bytes::Bytes) -> Result<()> {
+        self.started.notify_one();
+        self.release.notified().await;
+        self.inner.put(key, data).await
+    }
+    async fn get(&self, key: &str) -> Result<StoredObject> {
+        self.inner.get(key).await
+    }
+    async fn size(&self, key: &str) -> Result<Option<u64>> {
+        self.inner.size(key).await
+    }
+    async fn exists(&self, key: &str) -> Result<bool> {
+        self.inner.exists(key).await
+    }
+    async fn delete(&self, key: &str) -> Result<()> {
+        self.inner.delete(key).await
+    }
+    async fn delete_prefix(&self, prefix: &str) -> Result<u64> {
+        self.inner.delete_prefix(prefix).await
+    }
+    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.list(prefix).await
+    }
+}
+
+#[tokio::test]
+async fn original_written_after_purge_is_removed_without_resurrecting_the_document() {
+    let (_db, r, vault) = fixture().await;
+    let claim = folio_core::models::LedgerEntry {
+        key: folio_core::services::content_key(&upload().data),
+        source_id: uuid::Uuid::new_v4(),
+        document_id: Some(uuid::Uuid::new_v4()),
+        outcome: "claimed".into(),
+        created_at: chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+            .unwrap(),
+    };
+    assert!(r.ledger.insert(vault, &claim).await.unwrap());
+    let store = Arc::new(PausedPutStore {
+        inner: ObjectStoreDocumentStore::in_memory(),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
+    let attempt = claim.clone();
+    let owner =
+        tokio::spawn(async move { importer.import_reserved(vault, &attempt, upload()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), store.started.notified())
+        .await
+        .unwrap();
+    let id = claim.document_id.unwrap();
+    r.documents.delete(vault, id).await.unwrap();
+    r.documents.request_purge(vault, id).await.unwrap();
+    folio_core::ports::purge_document(store.as_ref(), id)
+        .await
+        .unwrap();
+    r.documents.finalize_purge(vault, id).await.unwrap();
+
+    store.release.notify_one();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), owner)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+
+    assert!(r.documents.locate_retained(id).await.unwrap().is_none());
+    assert!(!store
+        .exists(&folio_core::ports::keys::original(id))
+        .await
+        .unwrap());
+    assert_eq!(
+        r.ledger
+            .find(vault, &claim.key)
+            .await
+            .unwrap()
+            .unwrap()
+            .outcome,
+        "deleted"
+    );
+}
+
+#[tokio::test]
+async fn original_written_between_purge_and_finalization_is_removed() {
+    let (_db, r, vault) = fixture().await;
+    let claim = folio_core::models::LedgerEntry {
+        key: folio_core::services::content_key(&upload().data),
+        source_id: uuid::Uuid::new_v4(),
+        document_id: Some(uuid::Uuid::new_v4()),
+        outcome: "claimed".into(),
+        created_at: chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+            .unwrap(),
+    };
+    assert!(r.ledger.insert(vault, &claim).await.unwrap());
+    let store = Arc::new(PausedPutStore {
+        inner: ObjectStoreDocumentStore::in_memory(),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
+    let attempt = claim.clone();
+    let owner =
+        tokio::spawn(async move { importer.import_reserved(vault, &attempt, upload()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), store.started.notified())
+        .await
+        .unwrap();
+    let id = claim.document_id.unwrap();
+    r.documents.delete(vault, id).await.unwrap();
+    r.documents.request_purge(vault, id).await.unwrap();
+    folio_core::ports::purge_document(store.as_ref(), id)
+        .await
+        .unwrap();
+
+    store.release.notify_one();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), owner)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+
+    assert!(r
+        .documents
+        .find_trashed_by_id(vault, id)
+        .await
+        .unwrap()
+        .unwrap()
+        .purge_requested_at
+        .is_some());
+    r.documents.finalize_purge(vault, id).await.unwrap();
+    assert!(r.documents.locate_retained(id).await.unwrap().is_none());
+    assert!(!store
+        .exists(&folio_core::ports::keys::original(id))
+        .await
+        .unwrap());
+    assert_eq!(
+        r.ledger
+            .find(vault, &claim.key)
+            .await
+            .unwrap()
+            .unwrap()
+            .outcome,
+        "deleted"
+    );
+}
+
+#[tokio::test]
+async fn original_written_after_soft_delete_is_preserved_for_restore() {
+    let (_db, r, vault) = fixture().await;
+    let claim = folio_core::models::LedgerEntry {
+        key: folio_core::services::content_key(&upload().data),
+        source_id: uuid::Uuid::new_v4(),
+        document_id: Some(uuid::Uuid::new_v4()),
+        outcome: "claimed".into(),
+        created_at: chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+            .unwrap(),
+    };
+    assert!(r.ledger.insert(vault, &claim).await.unwrap());
+    let store = Arc::new(PausedPutStore {
+        inner: ObjectStoreDocumentStore::in_memory(),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
+    let attempt = claim.clone();
+    let owner =
+        tokio::spawn(async move { importer.import_reserved(vault, &attempt, upload()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), store.started.notified())
+        .await
+        .unwrap();
+    let id = claim.document_id.unwrap();
+    r.documents.delete(vault, id).await.unwrap();
+
+    store.release.notify_one();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), owner)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err()
+    );
+
+    r.documents.restore(vault, id).await.unwrap();
+    assert!(r.documents.find_by_id(vault, id).await.unwrap().is_some());
+    assert_eq!(
+        store
+            .get(&folio_core::ports::keys::original(id))
+            .await
+            .unwrap()
+            .into_bytes()
+            .await
+            .unwrap(),
+        b"uploaded document"
+    );
 }

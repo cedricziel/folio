@@ -24,7 +24,7 @@ use crate::ports::{
 };
 
 enum ClaimOutcome {
-    Claimed,
+    Claimed(LedgerEntry),
     Duplicate,
     Busy,
 }
@@ -78,27 +78,53 @@ impl IngestPipeline {
         let entry = LedgerEntry {
             key: key.to_string(),
             source_id,
-            document_id: None,
+            document_id: Some(Id::new_v4()),
             outcome: "claimed".to_string(),
-            created_at: Utc::now(),
+            created_at: claim_time(),
         };
         if self.ledger.insert(vault, &entry).await? {
-            return Ok(ClaimOutcome::Claimed);
+            return Ok(ClaimOutcome::Claimed(entry));
         }
         let Some(existing) = self.ledger.find(vault, key).await? else {
             return Ok(if self.ledger.insert(vault, &entry).await? {
-                ClaimOutcome::Claimed
+                ClaimOutcome::Claimed(entry)
             } else {
                 ClaimOutcome::Busy
             });
         };
-        // Age cannot prove that an importer has stopped writing its document.
-        if existing.outcome != "imported" {
-            return Ok(ClaimOutcome::Busy);
-        }
         let Some(id) = existing.document_id else {
             return Ok(ClaimOutcome::Busy);
         };
+        if existing.outcome != "imported" && existing.outcome != "deleted" {
+            let retryable = existing.outcome == "retryable"
+                || (existing.outcome == "claimed"
+                    && Utc::now() - existing.created_at >= chrono::Duration::minutes(10));
+            if !retryable
+                || self.documents.locate_trashed(id).await?.is_some()
+                || self
+                    .documents
+                    .locate_retained(id)
+                    .await?
+                    .is_some_and(|retained| retained != vault)
+            {
+                return Ok(ClaimOutcome::Busy);
+            }
+            let mut renewed = existing.clone();
+            renewed.outcome = "claimed".into();
+            renewed.created_at =
+                claim_time().max(existing.created_at + chrono::Duration::microseconds(1));
+            return Ok(
+                if self
+                    .ledger
+                    .transition_if_matches(vault, &existing, "claimed", renewed.created_at)
+                    .await?
+                {
+                    ClaimOutcome::Claimed(renewed)
+                } else {
+                    ClaimOutcome::Busy
+                },
+            );
+        }
         if self.documents.locate_retained(id).await? == Some(vault) {
             return Ok(if self.files.exists(&keys::original(id)).await? {
                 ClaimOutcome::Duplicate
@@ -110,7 +136,7 @@ impl IngestPipeline {
             return Ok(ClaimOutcome::Busy);
         }
         Ok(if self.ledger.insert(vault, &entry).await? {
-            ClaimOutcome::Claimed
+            ClaimOutcome::Claimed(entry)
         } else {
             ClaimOutcome::Busy
         })
@@ -150,6 +176,11 @@ impl IngestPipeline {
     }
 }
 
+// PostgreSQL persists timestamps at microsecond precision; claims must compare identically.
+fn claim_time() -> chrono::DateTime<Utc> {
+    chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros()).unwrap()
+}
+
 /// Ledger key for a file's content
 pub fn content_key(data: &[u8]) -> String {
     format!("hash:{}", hex::encode(Sha256::digest(data)))
@@ -169,17 +200,18 @@ impl VaultIngest for IngestPipeline {
         }
 
         let key = content_key(&item.data);
-        match self.claim(vault, &key, source_id).await? {
-            ClaimOutcome::Claimed => {}
+        let claim = match self.claim(vault, &key, source_id).await? {
+            ClaimOutcome::Claimed(claim) => claim,
             ClaimOutcome::Duplicate => return Ok(IngestOutcome::Duplicate),
             ClaimOutcome::Busy => return Ok(IngestOutcome::Busy),
-        }
+        };
 
         let imported = async {
             let tag_ids = self.resolve_tags(vault, &item.tags).await?;
             self.importer
-                .import(
+                .import_reserved(
                     vault,
+                    &claim,
                     NewUpload {
                         title: Some(item.filename.clone()),
                         filename: item.filename,
@@ -196,15 +228,25 @@ impl VaultIngest for IngestPipeline {
 
         match imported {
             Ok(document) => {
-                self.ledger
-                    .complete(vault, &key, "imported", Some(document.id))
-                    .await?;
+                if !self
+                    .ledger
+                    .transition_if_matches(vault, &claim, "imported", claim.created_at)
+                    .await?
+                {
+                    return Ok(IngestOutcome::Busy);
+                }
                 Ok(IngestOutcome::Imported(Box::new(document)))
             }
             Err(e) => {
-                // Release the claim so the next attempt is not mistaken for a duplicate.
-                let _ = self.ledger.delete(vault, &key).await;
-                Err(e)
+                if self
+                    .ledger
+                    .transition_if_matches(vault, &claim, "retryable", claim.created_at)
+                    .await?
+                {
+                    Err(e)
+                } else {
+                    Ok(IngestOutcome::Busy)
+                }
             }
         }
     }

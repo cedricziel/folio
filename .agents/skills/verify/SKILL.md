@@ -162,6 +162,9 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 Run `cargo test -p folio-infra --test ingest_pipeline --test ingest_folder --test ingest_email`
 with a task-specific temporary `CARGO_TARGET_DIR` and bounded `CARGO_BUILD_JOBS`.
 The pipeline tests use temporary SQLite databases and in-memory original storage.
+The pipeline and importer suites cover recovery before document creation, after
+creation, after original storage, and before ledger completion. They also cover
+stale-owner fencing, failed storage, and purge during a late object write.
 They cover competing source claims, owner success/failure/cancellation, missing
 originals, and retained trash. Folder tests use temporary inputs; IMAP tests use
 loopback fixtures or disposable GreenMail containers. Never point these suites

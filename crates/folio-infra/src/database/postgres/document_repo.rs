@@ -542,83 +542,23 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
-        let id = Id::new_v4();
-        let now = Utc::now();
-        let ocr_status = if params.content.is_some() {
-            ProcessingStatus::Done
-        } else {
-            ProcessingStatus::Pending
-        };
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
-
-        if let Some(c) = params.correspondent_id {
-            require_entry(&mut tx, "correspondents", "Correspondent", vault, c).await?;
-        }
-        if let Some(t) = params.document_type_id {
-            require_entry(&mut tx, "document_types", "DocumentType", vault, t).await?;
-        }
-        for tag_id in &params.tag_ids {
-            require_entry(&mut tx, "tags", "Tag", vault, *tag_id).await?;
-        }
-
-        sqlx::query(
-            "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
-                                    mime_type, correspondent_id, document_type_id, ocr_status,
-                                    source_type, source_meta, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)",
-        )
-        .bind(id)
-        .bind(vault.0)
-        .bind(params.uploaded_by.as_ref().map(UserId::as_str))
-        .bind(&params.title)
-        .bind(&params.content)
-        .bind(&params.original_filename)
-        .bind(&params.mime_type)
-        .bind(params.correspondent_id)
-        .bind(params.document_type_id)
-        .bind(ocr_status.as_str())
-        .bind(params.source.kind.as_str())
-        .bind(params.source.metadata_json())
-        .bind(now)
-        .execute(&mut *tx)
-        .await
-        .map_err(repo_err)?;
-
-        for tag_id in &params.tag_ids {
-            sqlx::query(
-                "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)
-                 ON CONFLICT DO NOTHING",
-            )
-            .bind(id)
-            .bind(tag_id)
-            .execute(&mut *tx)
+        self.create_reserved(vault, Id::new_v4(), None, params)
             .await
-            .map_err(repo_err)?;
-        }
-        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
-            .await?;
-        self.commit(tx).await?;
+    }
 
-        Ok(Document {
-            id,
-            vault_id: vault,
-            uploaded_by: params.uploaded_by,
-            title: params.title,
-            content: params.content,
-            original_filename: params.original_filename,
-            file_path: None,
-            mime_type: params.mime_type,
-            correspondent_id: params.correspondent_id,
-            document_type_id: params.document_type_id,
-            page_count: None,
-            source: params.source,
-            ocr_status,
-            embed_status: ProcessingStatus::Pending,
-            deleted_at: None,
-            purge_requested_at: None,
-            created_at: now,
-            updated_at: now,
-        })
+    async fn create_for_ingest(
+        &self,
+        vault: VaultId,
+        claim: &folio_core::models::LedgerEntry,
+        params: CreateDocument,
+    ) -> Result<Document> {
+        if claim.outcome != "claimed" {
+            return Err(Error::Conflict("Ingest reservation is not claimed".into()));
+        }
+        let id = claim
+            .document_id
+            .ok_or_else(|| Error::Validation("Ingest claim has no document identity".into()))?;
+        self.create_reserved(vault, id, Some(claim), params).await
     }
 
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
@@ -734,6 +674,11 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
         Ok(row.map(|(v,)| VaultId(v)))
+    }
+
+    async fn is_purging_or_missing(&self, id: Id) -> Result<bool> {
+        sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM documents WHERE id = $1 AND purge_requested_at IS NULL)")
+            .bind(id).fetch_one(&self.pool).await.map_err(repo_err)
     }
 
     async fn locate_trashed(&self, id: Id) -> Result<Option<VaultId>> {
@@ -854,6 +799,11 @@ impl DocumentRepository for PostgresDocumentRepository {
 
     async fn finalize_purge(&self, vault: VaultId, id: Id) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        sqlx::query("SELECT key FROM ingest_ledger WHERE document_id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(repo_err)?;
         let row: Option<DocumentRow> = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2 AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL FOR UPDATE"))
             .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?;
         let Some(row) = row else {
@@ -864,6 +814,11 @@ impl DocumentRepository for PostgresDocumentRepository {
              WHERE dt.document_id = $1 AND t.vault_id = $2")
             .bind(id).bind(vault.0).fetch_all(&mut *tx).await.map_err(repo_err)?;
         let tags = tags.into_iter().map(Into::into).collect();
+        sqlx::query("UPDATE ingest_ledger SET outcome = 'deleted' WHERE document_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
         sqlx::query(
             "DELETE FROM documents
              WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NOT NULL",
@@ -1471,5 +1426,111 @@ impl PostgresDocumentRepository {
                 .map_err(repo_err)?;
         }
         Ok(true)
+    }
+}
+
+impl PostgresDocumentRepository {
+    async fn create_reserved(
+        &self,
+        vault: VaultId,
+        id: Id,
+        claim: Option<&folio_core::models::LedgerEntry>,
+        params: CreateDocument,
+    ) -> Result<Document> {
+        let now = Utc::now();
+        let ocr_status = if params.content.is_some() {
+            ProcessingStatus::Done
+        } else {
+            ProcessingStatus::Pending
+        };
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+
+        if let Some(claim) = claim {
+            let current: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM ingest_ledger WHERE vault_id = $1 AND key = $2 AND source_id = $3
+                 AND document_id IS NOT DISTINCT FROM $4 AND outcome = $5 AND created_at = $6 FOR UPDATE")
+                .bind(vault.0).bind(&claim.key).bind(claim.source_id).bind(claim.document_id)
+                .bind(&claim.outcome).bind(claim.created_at).fetch_optional(&mut *tx).await.map_err(repo_err)?;
+            if current.is_none() {
+                return Err(Error::Validation("Ingest claim changed".into()));
+            }
+        }
+
+        if let Some(c) = params.correspondent_id {
+            require_entry(&mut tx, "correspondents", "Correspondent", vault, c).await?;
+        }
+        if let Some(t) = params.document_type_id {
+            require_entry(&mut tx, "document_types", "DocumentType", vault, t).await?;
+        }
+        for tag_id in &params.tag_ids {
+            require_entry(&mut tx, "tags", "Tag", vault, *tag_id).await?;
+        }
+
+        let inserted = sqlx::query(
+            "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
+                                    mime_type, correspondent_id, document_type_id, ocr_status,
+                                    source_type, source_meta, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13) ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .bind(params.uploaded_by.as_ref().map(UserId::as_str))
+        .bind(&params.title)
+        .bind(&params.content)
+        .bind(&params.original_filename)
+        .bind(&params.mime_type)
+        .bind(params.correspondent_id)
+        .bind(params.document_type_id)
+        .bind(ocr_status.as_str())
+        .bind(params.source.kind.as_str())
+        .bind(params.source.metadata_json())
+        .bind(now)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        if inserted.rows_affected() == 0 {
+            tx.rollback().await.map_err(repo_err)?;
+            return self
+                .find_by_id(vault, id)
+                .await?
+                .ok_or_else(|| not_found("Document", id));
+        }
+
+        for tag_id in &params.tag_ids {
+            sqlx::query(
+                "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(id)
+            .bind(tag_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        }
+        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+            .await?;
+        self.commit(tx).await?;
+
+        Ok(Document {
+            id,
+            vault_id: vault,
+            uploaded_by: params.uploaded_by,
+            title: params.title,
+            content: params.content,
+            original_filename: params.original_filename,
+            file_path: None,
+            mime_type: params.mime_type,
+            correspondent_id: params.correspondent_id,
+            document_type_id: params.document_type_id,
+            page_count: None,
+            source: params.source,
+            ocr_status,
+            embed_status: ProcessingStatus::Pending,
+            deleted_at: None,
+            purge_requested_at: None,
+            created_at: now,
+            updated_at: now,
+        })
     }
 }

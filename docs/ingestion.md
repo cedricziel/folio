@@ -102,6 +102,8 @@ On versions before the scoped IMAP cleanup fix, use **Mark Read** or disable the
 
 Every file and attachment is hashed (SHA-256) before it is imported. Content that was imported before, from any source, is skipped and counted as skipped, so a re-dropped file or a forwarded mail does not create a second document. Documents in Trash remain deduplicated. After you delete a document forever, the same content can be imported again.
 
+An import reserves its document identity before creating the record or storing bytes. If an attempt fails, a retry resumes that identity. After a crash, a pending reservation becomes recoverable after ten minutes. Concurrent retries cannot replace a newer attempt or recreate an identity that was permanently deleted. Older pending claims without a reserved document identity remain busy for manual reconciliation, because Folio cannot safely identify their partial document.
+
 ## Rules
 
 Rules are workflows. They see the source in two places.

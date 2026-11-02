@@ -58,6 +58,14 @@ pub trait DocumentRepository: Send + Sync {
     /// Create a new document
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document>;
 
+    /// Create the reserved identity once while its ledger claim still matches.
+    async fn create_for_ingest(
+        &self,
+        vault: VaultId,
+        claim: &crate::models::LedgerEntry,
+        params: CreateDocument,
+    ) -> Result<Document>;
+
     /// Update an existing document
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document>;
 
@@ -66,6 +74,9 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Locate a retained document regardless of trash state, in one read.
     async fn locate_retained(&self, id: Id) -> Result<Option<VaultId>>;
+
+    /// Whether an original may be removed: the document is globally absent or irreversibly purging.
+    async fn is_purging_or_missing(&self, id: Id) -> Result<bool>;
 
     /// Locate a trashed document, including one awaiting permanent deletion.
     async fn locate_trashed(&self, id: Id) -> Result<Option<VaultId>>;

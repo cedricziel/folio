@@ -268,6 +268,32 @@ impl IngestLedger for PostgresIngestLedger {
         Ok(())
     }
 
+    async fn transition_if_matches(
+        &self,
+        vault: VaultId,
+        expected: &LedgerEntry,
+        outcome: &str,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE ingest_ledger SET outcome = $1, created_at = $2
+             WHERE vault_id = $3 AND key = $4 AND source_id = $5
+               AND document_id IS NOT DISTINCT FROM $6 AND outcome = $7 AND created_at = $8",
+        )
+        .bind(outcome)
+        .bind(created_at)
+        .bind(vault.0)
+        .bind(&expected.key)
+        .bind(expected.source_id)
+        .bind(expected.document_id)
+        .bind(&expected.outcome)
+        .bind(expected.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool> {
         let result = sqlx::query(
             "DELETE FROM ingest_ledger

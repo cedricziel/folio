@@ -1343,6 +1343,134 @@ async fn ingestion_contract(r: &Repositories) {
     assert_eq!(pending.outcome, "claimed");
     assert!(r.ledger.delete_if_matches(vault, &pending).await.unwrap());
     assert!(r.ledger.find(vault, "hash:abc").await.unwrap().is_none());
+
+    let reservation = LedgerEntry {
+        key: "hash:reserved".into(),
+        document_id: Some(Id::new_v4()),
+        ..entry
+    };
+    assert!(r.ledger.insert(vault, &reservation).await.unwrap());
+    let reservation = r
+        .ledger
+        .find(vault, &reservation.key)
+        .await
+        .unwrap()
+        .unwrap();
+    let document = r
+        .documents
+        .create_for_ingest(
+            vault,
+            &reservation,
+            CreateDocument {
+                title: "reserved".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let repeated = r
+        .documents
+        .create_for_ingest(
+            vault,
+            &reservation,
+            CreateDocument {
+                title: "retry must preserve original metadata".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!r
+        .documents
+        .is_purging_or_missing(document.id)
+        .await
+        .unwrap());
+    assert!(r
+        .documents
+        .is_purging_or_missing(Id::new_v4())
+        .await
+        .unwrap());
+    assert_eq!(document.id, repeated.id);
+    assert_eq!(repeated.title, "reserved");
+    assert!(r
+        .ledger
+        .transition_if_matches(vault, &reservation, "retryable", reservation.created_at)
+        .await
+        .unwrap());
+    assert!(!r
+        .ledger
+        .transition_if_matches(vault, &reservation, "imported", reservation.created_at)
+        .await
+        .unwrap());
+    assert!(r
+        .documents
+        .create_for_ingest(vault, &reservation, CreateDocument::default())
+        .await
+        .is_err());
+    let moved_vault = r.vaults.create("Moved reservation", None).await.unwrap().id;
+    r.documents
+        .move_to(document.id, vault, moved_vault, None)
+        .await
+        .unwrap();
+    assert!(!r
+        .documents
+        .is_purging_or_missing(document.id)
+        .await
+        .unwrap());
+    r.documents.delete(moved_vault, document.id).await.unwrap();
+    assert!(!r
+        .documents
+        .is_purging_or_missing(document.id)
+        .await
+        .unwrap());
+    r.documents.restore(moved_vault, document.id).await.unwrap();
+    assert!(!r
+        .documents
+        .is_purging_or_missing(document.id)
+        .await
+        .unwrap());
+    r.documents.delete(moved_vault, document.id).await.unwrap();
+    r.documents
+        .request_purge(moved_vault, document.id)
+        .await
+        .unwrap();
+    assert!(r
+        .documents
+        .is_purging_or_missing(document.id)
+        .await
+        .unwrap());
+    r.documents
+        .finalize_purge(moved_vault, document.id)
+        .await
+        .unwrap();
+    let deleted = r
+        .ledger
+        .find(vault, &reservation.key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(deleted.outcome, "deleted");
+    assert!(r
+        .documents
+        .is_purging_or_missing(document.id)
+        .await
+        .unwrap());
+    assert!(!r
+        .ledger
+        .transition_if_matches(vault, &reservation, "imported", reservation.created_at)
+        .await
+        .unwrap());
+    assert!(r
+        .documents
+        .create_for_ingest(vault, &reservation, CreateDocument::default())
+        .await
+        .is_err());
+    assert!(r
+        .documents
+        .locate_retained(document.id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 async fn auth_contract(r: &Repositories) {

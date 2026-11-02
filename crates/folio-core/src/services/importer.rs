@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use super::NewUpload;
 use crate::error::Result;
-use crate::models::{CreateDocument, Document, VaultId};
+use crate::models::{CreateDocument, Document, LedgerEntry, VaultId};
 use crate::ports::{keys, DocumentImporter, DocumentRepository, DocumentStore, ProcessingQueue};
 
 /// Creates the record, stores the file, and queues background processing
@@ -36,6 +36,69 @@ impl Importer {
 
 #[async_trait]
 impl DocumentImporter for Importer {
+    async fn import_reserved(
+        &self,
+        vault: VaultId,
+        claim: &LedgerEntry,
+        upload: NewUpload,
+    ) -> Result<Document> {
+        let document = self
+            .documents
+            .create_for_ingest(
+                vault,
+                claim,
+                CreateDocument {
+                    uploaded_by: upload.uploaded_by,
+                    title: upload.title.unwrap_or_else(|| upload.filename.clone()),
+                    original_filename: Some(upload.filename),
+                    mime_type: upload.mime_type,
+                    source: upload.source,
+                    tag_ids: upload.tag_ids,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let imported = async {
+            let key = keys::original(document.id);
+            if !self.files.exists(&key).await? {
+                self.files.put(&key, upload.data.into()).await?;
+            }
+            self.documents
+                .set_file_path(vault, document.id, &key)
+                .await?;
+            if let Err(e) = self.queue.enqueue_processing(document.id).await {
+                tracing::error!("Failed to queue processing of {}: {e}", document.id);
+            }
+            self.documents
+                .find_by_id(vault, document.id)
+                .await?
+                .ok_or_else(|| crate::Error::NotFound {
+                    entity_type: "Document",
+                    id: document.id.to_string(),
+                })
+        }
+        .await;
+        if imported.is_err()
+            && matches!(
+                self.documents.is_purging_or_missing(document.id).await,
+                Ok(true)
+            )
+        {
+            // Purge cleanup can run before an in-flight original write finishes.
+            if let Err(e) = self
+                .files
+                .delete_prefix(&keys::document_prefix(document.id))
+                .await
+            {
+                tracing::warn!(
+                    "Failed to remove late import objects for {}: {e}",
+                    document.id
+                );
+            }
+        }
+        imported
+    }
+
     async fn import(&self, vault: VaultId, upload: NewUpload) -> Result<Document> {
         let document = self
             .documents
