@@ -293,7 +293,16 @@ async fn main() -> Result<()> {
         auth = auth.with_setup_token(token);
     }
     let secret_key = match config.auth.secret_key.as_deref().filter(|k| !k.is_empty()) {
-        Some(key) => key.to_string(),
+        Some(key) => {
+            if let Some(stored) = auth_settings.get(SECRET_KEY_SETTING).await? {
+                if stored.value != key {
+                    tracing::error!(
+                        "auth.secret_key differs from the database fallback key; existing TOTP enrollments and recovery codes created with the stored key will stop working. Restore that key or reset those enrollments"
+                    );
+                }
+            }
+            key.to_string()
+        }
         None => {
             tracing::warn!(
                 "auth.secret_key is not set; using a key kept in the database. Set FOLIO_AUTH__SECRET_KEY (or FOLIO_AUTH__SECRET_KEY_FILE) so a copy of the database alone cannot decrypt two-factor secrets"
