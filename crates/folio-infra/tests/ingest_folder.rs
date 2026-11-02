@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Document, FolderAfterImport, FolderConfig, Id, IngestItem, IngestOutcome, VaultId,
+    Document, FolderAfterImport, FolderConfig, Id, IngestItem, IngestOutcome, PollReport, VaultId,
 };
 use folio_core::ports::{IngestSink, IngestionSource};
 use folio_infra::FolderSource;
@@ -233,7 +233,7 @@ async fn busy_sink_keeps_file_for_a_later_delete_import() {
     assert_eq!(busy.failed, 0);
     assert_eq!(busy.skipped, 0);
     assert_eq!(busy.recheck_in, Some(Duration::from_millis(100)));
-    assert!(path.exists(), "busy input remains in the consume folder");
+    assert!(!path.exists(), "busy input stays in private staging");
     assert!(sink.items.lock().unwrap().is_empty());
 
     let imported = source.poll(&sink).await.unwrap();
@@ -260,7 +260,7 @@ async fn busy_sink_keeps_file_for_a_later_move_import() {
     assert_eq!(busy.failed, 0);
     assert_eq!(busy.skipped, 0);
     assert_eq!(busy.recheck_in, Some(Duration::from_millis(100)));
-    assert!(path.exists(), "busy input remains in the consume folder");
+    assert!(!path.exists(), "busy input stays in private staging");
     assert!(sink.items.lock().unwrap().is_empty());
 
     let imported = source.poll(&sink).await.unwrap();
@@ -272,4 +272,370 @@ async fn busy_sink_keeps_file_for_a_later_move_import() {
     );
     assert!(fx.root.join("processed/busy.pdf").exists());
     assert_eq!(sink.items.lock().unwrap().len(), 1);
+}
+
+struct BlockingSink {
+    items: Mutex<Vec<IngestItem>>,
+    started: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
+    fail: bool,
+}
+
+impl BlockingSink {
+    fn new(fail: bool) -> Self {
+        Self {
+            items: Mutex::new(Vec::new()),
+            started: tokio::sync::Notify::new(),
+            resume: tokio::sync::Notify::new(),
+            fail,
+        }
+    }
+}
+
+#[async_trait]
+impl IngestSink for BlockingSink {
+    async fn ingest(&self, _source: Id, item: IngestItem) -> Result<IngestOutcome> {
+        self.items.lock().unwrap().push(item);
+        self.started.notify_one();
+        self.resume.notified().await;
+        if self.fail {
+            Err(Error::Storage("import failed".into()))
+        } else {
+            Ok(IngestOutcome::Imported(Box::new(Document::new(
+                VaultId::new(),
+                "t",
+            ))))
+        }
+    }
+}
+
+async fn import_with_replacement(
+    after: FolderAfterImport,
+    fail: bool,
+) -> (Fixture, BlockingSink, PollReport) {
+    let fx = Fixture::new();
+    let path = fx.write("Tax/scan.pdf", b"first scan");
+    let source = fx.source(after);
+    let sink = BlockingSink::new(fail);
+    source.poll(&sink).await.unwrap();
+
+    let (report, ()) = tokio::join!(source.poll(&sink), async {
+        sink.started.notified().await;
+        assert!(!path.exists(), "the first scan is claimed before import");
+        fx.write("Tax/scan.pdf", b"replacement scan");
+        sink.resume.notify_one();
+    });
+
+    (fx, sink, report.unwrap())
+}
+
+#[tokio::test]
+async fn deleting_an_imported_claim_preserves_a_replacement() {
+    let (fx, sink, report) = import_with_replacement(FolderAfterImport::Delete, false).await;
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(
+        std::fs::read(fx.root.join("Tax/scan.pdf")).unwrap(),
+        b"replacement scan"
+    );
+    assert_eq!(sink.items.lock().unwrap()[0].data, b"first scan");
+}
+
+#[tokio::test]
+async fn moving_an_imported_claim_preserves_a_replacement() {
+    let (fx, sink, report) = import_with_replacement(FolderAfterImport::Move, false).await;
+
+    assert_eq!(report.imported, 1);
+    assert_eq!(
+        std::fs::read(fx.root.join("Tax/scan.pdf")).unwrap(),
+        b"replacement scan"
+    );
+    assert_eq!(
+        std::fs::read(fx.root.join("processed/Tax/scan.pdf")).unwrap(),
+        b"first scan"
+    );
+    let items = sink.items.lock().unwrap();
+    assert_eq!(items[0].filename, "scan.pdf");
+    assert_eq!(items[0].tags, ["Tax"]);
+    assert_eq!(
+        items[0].source.folder.as_ref().unwrap().relative_path,
+        "Tax/scan.pdf"
+    );
+}
+
+#[tokio::test]
+async fn quarantining_a_failed_claim_preserves_a_replacement() {
+    let (fx, _, report) = import_with_replacement(FolderAfterImport::Move, true).await;
+
+    assert_eq!(report.failed, 1);
+    assert_eq!(
+        std::fs::read(fx.root.join("Tax/scan.pdf")).unwrap(),
+        b"replacement scan"
+    );
+    assert_eq!(
+        std::fs::read(fx.root.join("failed/Tax/scan.pdf")).unwrap(),
+        b"first scan"
+    );
+    assert!(
+        std::fs::read_to_string(fx.root.join("failed/Tax/scan.pdf.error.txt"))
+            .unwrap()
+            .contains("import failed")
+    );
+}
+
+#[tokio::test]
+async fn a_busy_claim_survives_source_restart_beside_a_replacement() {
+    let fx = Fixture::new();
+    fx.write("Tax/scan.pdf", b"first scan");
+    let source = fx.source(FolderAfterImport::Delete);
+    let busy_sink = RecordingSink {
+        busy_once: Mutex::new(true),
+        ..Default::default()
+    };
+    source.poll(&busy_sink).await.unwrap();
+    assert!(source.poll(&busy_sink).await.unwrap().recheck_in.is_some());
+    drop(source);
+    fx.write("Tax/scan.pdf", b"replacement scan");
+    let restarted = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+
+    let recovered = restarted.poll(&sink).await.unwrap();
+
+    assert_eq!(recovered.imported, 1);
+    assert_eq!(
+        std::fs::read(fx.root.join("Tax/scan.pdf")).unwrap(),
+        b"replacement scan"
+    );
+    {
+        let items = sink.items.lock().unwrap();
+        assert_eq!(items[0].data, b"first scan");
+        assert_eq!(items[0].filename, "scan.pdf");
+        assert_eq!(items[0].tags, ["Tax"]);
+        assert_eq!(
+            items[0].source.folder.as_ref().unwrap().relative_path,
+            "Tax/scan.pdf"
+        );
+    }
+
+    assert_eq!(restarted.poll(&sink).await.unwrap().imported, 1);
+    assert_eq!(sink.items.lock().unwrap()[1].data, b"replacement scan");
+}
+
+#[tokio::test]
+async fn concurrent_sources_do_not_recover_an_active_claim() {
+    let fx = Fixture::new();
+    fx.write("scan.pdf", b"first scan");
+    let source = fx.source(FolderAfterImport::Delete);
+    let other = fx.source(FolderAfterImport::Delete);
+    let blocking = BlockingSink::new(false);
+    let sink = RecordingSink::default();
+    source.poll(&blocking).await.unwrap();
+
+    let (imported, ()) = tokio::join!(source.poll(&blocking), async {
+        blocking.started.notified().await;
+        let blocked = other.poll(&sink).await.unwrap();
+        assert_eq!(blocked.imported, 0);
+        assert!(blocked.recheck_in.is_some());
+        assert!(sink.items.lock().unwrap().is_empty());
+        blocking.resume.notify_one();
+    });
+
+    assert_eq!(imported.unwrap().imported, 1);
+    assert_eq!(other.poll(&sink).await.unwrap().imported, 0);
+    assert!(sink.items.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn moving_a_claim_does_not_overwrite_an_existing_destination() {
+    let fx = Fixture::new();
+    fx.write("scan.pdf", b"new scan");
+    fx.write("processed/scan.pdf", b"previous scan");
+    let source = fx.source(FolderAfterImport::Move);
+    let sink = RecordingSink::default();
+    source.poll(&sink).await.unwrap();
+
+    assert_eq!(source.poll(&sink).await.unwrap().imported, 1);
+
+    assert_eq!(
+        std::fs::read(fx.root.join("processed/scan.pdf")).unwrap(),
+        b"previous scan"
+    );
+    assert_eq!(
+        std::fs::read(fx.root.join("processed/scan-1.pdf")).unwrap(),
+        b"new scan"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_import_is_recovered_without_touching_a_replacement() {
+    let fx = Fixture::new();
+    fx.write("Tax/scan.pdf", b"first scan");
+    let source = fx.source(FolderAfterImport::Move);
+    let blocking = BlockingSink::new(false);
+    source.poll(&blocking).await.unwrap();
+
+    tokio::select! {
+        result = source.poll(&blocking) => panic!("import unexpectedly finished: {result:?}"),
+        () = blocking.started.notified() => {},
+    }
+    drop(source);
+    fx.write("Tax/scan.pdf", b"replacement scan");
+    let restarted = fx.source(FolderAfterImport::Move);
+    let sink = RecordingSink::default();
+
+    let recovered = restarted.poll(&sink).await.unwrap();
+
+    assert_eq!(recovered.imported, 1);
+    assert_eq!(sink.items.lock().unwrap()[0].data, b"first scan");
+    assert_eq!(
+        std::fs::read(fx.root.join("processed/Tax/scan.pdf")).unwrap(),
+        b"first scan"
+    );
+    assert_eq!(
+        std::fs::read(fx.root.join("Tax/scan.pdf")).unwrap(),
+        b"replacement scan"
+    );
+}
+
+#[tokio::test]
+async fn recovery_preserves_unexpected_files_beside_the_claimed_input() {
+    let fx = Fixture::new();
+    let stage = format!(".folio-staging/{}", Id::new_v4());
+    fx.write(&format!("{stage}/.origin.json"), br#""Tax/a.pdf""#);
+    let first = fx.write(&format!("{stage}/Tax/a.pdf"), b"first scan");
+    let second = fx.write(&format!("{stage}/Tax/b.pdf"), b"second scan");
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+
+    let recovered = source.poll(&sink).await.unwrap();
+
+    assert_eq!(recovered.imported, 1);
+    assert_eq!(recovered.failed, 0);
+    assert_eq!(names(&sink), ["a.pdf"]);
+    assert_eq!(sink.items.lock().unwrap()[0].data, b"first scan");
+    assert!(!first.exists());
+    assert_eq!(std::fs::read(second).unwrap(), b"second scan");
+    assert!(fx.root.join(stage).exists());
+    assert_eq!(source.poll(&sink).await.unwrap().imported, 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn recovery_ignores_staged_file_and_directory_symlinks() {
+    let fx = Fixture::new();
+    let outside = Fixture::new();
+    let external = outside.write("scan.pdf", b"outside staging");
+    let stage = fx
+        .root
+        .join(".folio-staging")
+        .join(Id::new_v4().to_string());
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join(".origin.json"), br#""link.pdf""#).unwrap();
+    std::os::unix::fs::symlink(&external, stage.join("link.pdf")).unwrap();
+    let directory_stage = fx
+        .root
+        .join(".folio-staging")
+        .join(Id::new_v4().to_string());
+    std::fs::create_dir(&directory_stage).unwrap();
+    std::fs::write(
+        directory_stage.join(".origin.json"),
+        br#""linked-folder/scan.pdf""#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside.root, directory_stage.join("linked-folder")).unwrap();
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+
+    let recovered = source.poll(&sink).await.unwrap();
+
+    assert_eq!(recovered.imported, 0);
+    assert_eq!(recovered.failed, 0);
+    assert!(sink.items.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(external).unwrap(), b"outside staging");
+    assert!(stage
+        .join("link.pdf")
+        .symlink_metadata()
+        .unwrap()
+        .is_symlink());
+    assert!(directory_stage
+        .join("linked-folder")
+        .symlink_metadata()
+        .unwrap()
+        .is_symlink());
+}
+
+#[tokio::test]
+async fn recovery_does_not_import_children_of_a_claim_replaced_with_a_directory() {
+    let fx = Fixture::new();
+    let stage = format!(".folio-staging/{}", Id::new_v4());
+    fx.write(&format!("{stage}/.origin.json"), br#""Tax/scan.pdf""#);
+    let child = fx.write(
+        &format!("{stage}/Tax/scan.pdf/child.pdf"),
+        b"unexpected child",
+    );
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+
+    let recovered = source.poll(&sink).await.unwrap();
+
+    assert_eq!(recovered.imported, 0);
+    assert!(sink.items.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(child).unwrap(), b"unexpected child");
+}
+
+#[tokio::test]
+async fn recovery_rejects_origins_outside_the_claim_directory() {
+    let fx = Fixture::new();
+    let stage = format!(".folio-staging/{}", Id::new_v4());
+    fx.write(&format!("{stage}/.origin.json"), br#""../../external.pdf""#);
+    let external = fx.write("external.pdf", b"outside claim");
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+
+    let recovered = source.poll(&sink).await.unwrap();
+
+    assert_eq!(recovered.imported, 0);
+    assert!(sink.items.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(external).unwrap(), b"outside claim");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_non_utf8_filename_is_retained_when_its_origin_cannot_be_recorded() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let fx = Fixture::new();
+    let path = fx
+        .root
+        .join(std::ffi::OsString::from_vec(b"scan-\xff.pdf".to_vec()));
+    std::fs::write(&path, b"first scan").unwrap();
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+    source.poll(&sink).await.unwrap();
+
+    let report = source.poll(&sink).await.unwrap();
+
+    assert_eq!(report.imported, 0);
+    assert!(report.recheck_in.is_some());
+    assert!(sink.items.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(path).unwrap(), b"first scan");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlink_staging_root_leaves_input_and_external_files_untouched() {
+    let fx = Fixture::new();
+    let input = fx.write("scan.pdf", b"source input");
+    let outside = Fixture::new();
+    let external = outside.write("scan.pdf", b"external input");
+    std::os::unix::fs::symlink(&outside.root, fx.root.join(".folio-staging")).unwrap();
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink::default();
+
+    assert!(source.poll(&sink).await.is_err());
+
+    assert!(sink.items.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read(input).unwrap(), b"source input");
+    assert_eq!(std::fs::read(external).unwrap(), b"external input");
+    assert_eq!(std::fs::read_dir(&outside.root).unwrap().count(), 1);
 }
