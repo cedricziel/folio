@@ -89,3 +89,24 @@ The system SHALL support bounded cursor pagination for an exact typed value in o
 #### Scenario: Reject an unavailable field
 - **WHEN** metadata search references a missing or retired field
 - **THEN** the API returns 404 instead of broadening the query
+
+### Requirement: Committed metadata transitions can trigger workflows
+
+The system SHALL emit versioned metadata lifecycle and value-change events through the shared transactional outbox with stable event identity, occurrence time, vault, subject, server-derived actor, and workflow correlation/causation.
+
+#### Scenario: Emit one committed value transition
+- **WHEN** a valid atomic metadata patch changes canonical values on a logical document
+- **THEN** the same transaction persists one `document.metadata.changed` event with immutable typed change data
+- **AND** workflows can select that trigger and use authorized field conditions in both web and Apple interfaces
+
+#### Scenario: Suppress failed and unchanged edits
+- **WHEN** a metadata mutation rolls back, changes no canonical value, or repeats an already committed transition
+- **THEN** no new transition event is published
+
+#### Scenario: Reject unsupported non-document actions
+- **WHEN** a workflow uses a field or option lifecycle trigger with an action that requires a document
+- **THEN** workflow validation rejects the combination explicitly
+
+#### Scenario: Preserve access and recursion boundaries
+- **WHEN** a workflow handles a metadata event or changes values itself
+- **THEN** event data stays inside the authorized vault and subsequent events preserve causation for the shared recursion guard

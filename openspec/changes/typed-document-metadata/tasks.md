@@ -29,3 +29,10 @@
 - [ ] Validate changed specs, archive the completed change, and open reviewable PRs after foundation integration.
 - [ ] Resolve CI, review findings, and conflicts; verify every deliverable merged.
 - [ ] Disable monitoring, report merged PRs and verification, and archive this chat.
+
+## 6. Workflow event amendment
+
+- [ ] Align event envelope and trigger dependency contracts with foundation and workflow slices.
+- [ ] Write failing outbox contract tests for committed metadata transitions, no-op suppression, rollback, retry identity, purge clearing, vault scope, and causation; publish events in mutation transactions.
+- [ ] Verify metadata triggers and typed conditions are selectable in web and Apple workflows; reject document-only actions for field/option events.
+- [ ] Include event integration, CI, and merged PR verification in completion criteria.
