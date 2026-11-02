@@ -163,6 +163,8 @@ lane :test do
     sh("cd '#{APPLE_DIR}/Folio' && xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio " \
        "-destination '#{destination}' #{XCODEBUILD_FLAGS} CODE_SIGNING_ALLOWED=NO")
   end
+  sh("cd '#{APPLE_DIR}/Folio' && xcrun xcodebuild test -project Folio.xcodeproj -scheme Folio " \
+     "-destination 'platform=macOS' #{XCODEBUILD_FLAGS} -only-testing:FolioAuthTests CODE_SIGNING_ALLOWED=NO")
 end
 
 desc "One-time local setup: register bundle ids with App Groups, then create signing assets with match"

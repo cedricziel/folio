@@ -13,20 +13,29 @@ final class SystemWebAuthenticator: NSObject, WebAuthenticating, ASWebAuthentica
 
     private func begin(url: URL, callbackScheme: String) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(url: url, callback: .customScheme(callbackScheme)) {
-                callback, error in
-                if let callback {
-                    continuation.resume(returning: callback)
-                } else if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
-                    continuation.resume(throwing: FolioError.signInFailed("Sign-in was cancelled or denied."))
-                } else {
-                    continuation.resume(throwing: error ?? FolioError.signInFailed("Sign-in failed."))
-                }
-            }
+            let session = ASWebAuthenticationSession(
+                url: url, callback: .customScheme(callbackScheme),
+                completionHandler: Self.completionHandler(for: continuation)
+            )
             session.presentationContextProvider = self
             // The session only lives while something holds it.
             self.session = session
             session.start()
+        }
+    }
+
+    // macOS can deliver completion on Safari's XPC queue rather than the main actor.
+    nonisolated static func completionHandler(
+        for continuation: CheckedContinuation<URL, any Error>
+    ) -> @Sendable (URL?, (any Error)?) -> Void {
+        { callback, error in
+            if let callback {
+                continuation.resume(returning: callback)
+            } else if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
+                continuation.resume(throwing: FolioError.signInFailed("Sign-in was cancelled or denied."))
+            } else {
+                continuation.resume(throwing: error ?? FolioError.signInFailed("Sign-in failed."))
+            }
         }
     }
 
