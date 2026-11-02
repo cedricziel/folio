@@ -16,6 +16,8 @@ url = "sqlite:folio.db?mode=rwc"
 path = "./data"
 
 [ai]
+# Provider: "openai", "anthropic", or "local"
+provider = "openai"
 # API keys are loaded from environment variables:
 # - FOLIO_AI__OPENAI_API_KEY
 # - FOLIO_AI__ANTHROPIC_API_KEY

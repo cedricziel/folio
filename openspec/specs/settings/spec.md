@@ -20,7 +20,7 @@ The system SHALL start without a `config.toml`. Every setting has a built-in def
 
 ### Requirement: Environment overrides
 
-The system SHALL read nested keys from environment variables prefixed `FOLIO_` with a double underscore as the section separator, for example `FOLIO_SERVER__PORT`, `FOLIO_DATABASE__URL`, `FOLIO_STORAGE__PATH`, `FOLIO_AI__OPENAI_API_KEY` and `FOLIO_AI__ANTHROPIC_API_KEY`. Any supported variable SHALL also be readable from a file named by the same variable with a `_FILE` suffix; setting both is an error.
+The system SHALL read nested keys from environment variables prefixed `FOLIO_` with a double underscore as the section separator, for example `FOLIO_SERVER__PORT`, `FOLIO_DATABASE__URL`, `FOLIO_STORAGE__PATH`, `FOLIO_AI__PROVIDER`, `FOLIO_AI__OPENAI_API_KEY` and `FOLIO_AI__ANTHROPIC_API_KEY`. Any supported variable SHALL also be readable from a file named by the same variable with a `_FILE` suffix; setting both is an error.
 
 #### Scenario: Ignore unsupported environment names
 
@@ -72,12 +72,12 @@ The system SHALL store runtime settings as key-value rows in the `settings` tabl
 
 ### Requirement: AI settings page
 
-The system SHALL show the AI settings at `GET /settings` and save them at `POST /settings/ai`. The credentials form SHALL offer the two API keys, and the save SHALL respond with a Turbo Stream confirmation. The processing form SHALL offer separate OCR and embedding providers and models and save them at `POST /settings/processing`.
+The system SHALL show the AI settings at `GET /settings` and save them at `POST /settings/ai`. The form SHALL offer the providers `local`, `openai` and `anthropic`, the two API keys, and the OCR and embedding model names, and the save SHALL respond with a Turbo Stream confirmation.
 
 #### Scenario: Switch to OpenAI
 
-- **WHEN** a user saves an OpenAI API key and selects `openai-vision` for OCR and `openai` for embeddings
-- **THEN** the `ai.openai_api_key`, `ocr.provider`, and `embeddings.provider` rows hold the new values
+- **WHEN** a user selects `openai`, enters an API key and saves
+- **THEN** the `ai.provider` and `ai.openai_api_key` rows hold the new values
 
 ### Requirement: Effective AI settings
 
@@ -93,9 +93,9 @@ The OCR and embedding services SHALL read the provider and API keys from the dat
 - **WHEN** the database OpenAI key is empty and `config.toml` sets `ai.openai_api_key`
 - **THEN** OpenAI requests use the key from `config.toml`
 
-#### Scenario: Disabled providers
+#### Scenario: Local provider
 
-- **WHEN** the OCR and embedding providers are `none`
+- **WHEN** the provider is `local`
 - **THEN** no AI provider is called for OCR or embeddings
 
 ### Requirement: Pipeline startup configuration

@@ -807,7 +807,7 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::AiConfig;
     use crate::database::{
         test_pool, SqliteDocumentRepository, SqliteOutboxStore, SqliteSettingsRepository,
         SqliteWorkflowRepository,
@@ -872,7 +872,14 @@ mod tests {
         let settings = Arc::new(SqliteSettingsRepository::new(pool.clone()));
         let search = Arc::new(SqliteSearchService::new(pool.clone()));
         let queue = JobQueue::sqlite(pool.clone());
-        let pipeline = PipelineContext::from_config(settings.clone(), &Config::default());
+        let pipeline = PipelineContext::new(
+            settings.clone(),
+            AiConfig {
+                provider: "local".into(),
+                openai_api_key: None,
+                anthropic_api_key: None,
+            },
+        );
         let storage: Arc<dyn DocumentStore> =
             Arc::new(crate::storage::ObjectStoreDocumentStore::in_memory());
         let thumbnails = Arc::new(ThumbnailService::new(storage.clone()));

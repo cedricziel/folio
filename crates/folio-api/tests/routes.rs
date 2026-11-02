@@ -56,7 +56,8 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let auth_store = repos.auth.clone();
 
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
-    let pipeline = PipelineContext::from_config(repos.settings.clone(), &Config::default());
+    let ai = Config::default().ai;
+    let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
     let state = AppState::new(
         repos.documents,

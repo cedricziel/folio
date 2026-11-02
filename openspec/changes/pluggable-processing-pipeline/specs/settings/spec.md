@@ -57,11 +57,6 @@ The OCR and embedding services SHALL read provider, model, language and base URL
 - **WHEN** `ocr.provider` is `tesseract` and `embeddings.provider` is `none`
 - **THEN** no hosted AI provider is called for OCR or embeddings
 
-#### Scenario: Disabled providers
-
-- **WHEN** the OCR and embedding providers are `none`
-- **THEN** no AI provider is called for OCR or embeddings
-
 #### Scenario: Unknown provider id
 
 - **WHEN** a setting names a provider that is not registered

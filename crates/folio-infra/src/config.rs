@@ -402,10 +402,11 @@ impl Default for OidcConfig {
     }
 }
 
-/// Credentials for hosted AI providers
-#[derive(Clone, Default, Serialize, Deserialize)]
+/// AI provider configuration
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiConfig {
+    pub provider: String,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
 }
@@ -413,9 +414,20 @@ pub struct AiConfig {
 impl fmt::Debug for AiConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AiConfig")
+            .field("provider", &self.provider)
             .field("openai_api_key", &Redacted(&self.openai_api_key))
             .field("anthropic_api_key", &Redacted(&self.anthropic_api_key))
             .finish()
+    }
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            provider: "openai".to_string(),
+            openai_api_key: None,
+            anthropic_api_key: None,
+        }
     }
 }
 
@@ -658,6 +670,11 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "storage.s3.prefix",
         env: "FOLIO_STORAGE__S3__PREFIX",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "ai.provider",
+        env: "FOLIO_AI__PROVIDER",
         kind: ValueKind::Str,
     },
     Setting {
@@ -951,6 +968,7 @@ mod tests {
                 ..Default::default()
             },
             ai: AiConfig {
+                provider: "openai".into(),
                 openai_api_key: Some("sk-openai-secret".into()),
                 anthropic_api_key: Some("sk-anthropic-secret".into()),
             },
@@ -1163,14 +1181,13 @@ mod tests {
     }
 
     #[test]
-    fn obsolete_environment_names_and_their_file_variants_are_ignored() {
+    fn single_underscore_aliases_and_their_file_variants_are_ignored() {
         let config = load(&[
             ("FOLIO_SERVER_HOST", "0.0.0.0"),
             ("FOLIO_SERVER_PORT", "4343"),
             ("FOLIO_DATABASE_URL", "sqlite://ignored"),
             ("FOLIO_STORAGE_PATH", "/ignored"),
             ("FOLIO_AI_PROVIDER", "ignored"),
-            ("FOLIO_AI__PROVIDER", "ignored"),
             ("FOLIO_AI_OPENAI_API_KEY", "ignored"),
             ("FOLIO_AI_ANTHROPIC_API_KEY", "ignored"),
             ("FOLIO_SERVER_HOST_FILE", "/nonexistent/alias"),
@@ -1178,7 +1195,6 @@ mod tests {
             ("FOLIO_DATABASE_URL_FILE", "/nonexistent/alias"),
             ("FOLIO_STORAGE_PATH_FILE", "/nonexistent/alias"),
             ("FOLIO_AI_PROVIDER_FILE", "/nonexistent/alias"),
-            ("FOLIO_AI__PROVIDER_FILE", "/nonexistent/alias"),
             ("FOLIO_AI_OPENAI_API_KEY_FILE", "/nonexistent/alias"),
             ("FOLIO_AI_ANTHROPIC_API_KEY_FILE", "/nonexistent/alias"),
         ]);

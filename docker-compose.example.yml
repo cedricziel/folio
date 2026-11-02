@@ -57,8 +57,7 @@ services:
       FOLIO_STORAGE__S3__ACCESS_KEY_ID: folio
       FOLIO_STORAGE__S3__SECRET_ACCESS_KEY_FILE: /run/secrets/minio_password
       FOLIO_STORAGE__S3__ALLOW_HTTP: "true"
-      FOLIO_OCR__PROVIDER: openai-vision
-      FOLIO_EMBEDDINGS__PROVIDER: openai
+      FOLIO_AI__PROVIDER: openai
       FOLIO_AI__OPENAI_API_KEY_FILE: /run/secrets/openai_api_key
     secrets:
       - openai_api_key
