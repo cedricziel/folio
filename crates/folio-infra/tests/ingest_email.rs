@@ -398,6 +398,54 @@ async fn cleanup_state(
     mailbox.state().await
 }
 
+struct BusySink;
+
+#[async_trait]
+impl IngestSink for BusySink {
+    async fn ingest(&self, _source_id: Id, _item: IngestItem) -> Result<IngestOutcome> {
+        Ok(IngestOutcome::Busy)
+    }
+}
+
+#[tokio::test]
+async fn busy_ingest_leaves_message_untouched_and_requests_recheck() {
+    let mailbox = imap::ImapMailbox::start("UIDPLUS MOVE", None).await;
+    let h = Harness::new().await;
+    let config = serde_json::from_value(serde_json::json!({
+        "host": "127.0.0.1", "port": mailbox.port, "security": "plain",
+        "username": "fixture", "password": "fixture", "mail_body": "eml",
+        "after_import": "delete", "move_to": "Processed",
+    }))
+    .unwrap();
+    let source = EmailSource::new(
+        h.source_id,
+        "fixture",
+        config,
+        h.ledger.clone(),
+        Some(h.vault),
+    );
+
+    let report = source.poll(&BusySink).await.unwrap();
+
+    assert_eq!(report.imported, 0);
+    assert_eq!(report.skipped, 0);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.recheck_in, Some(std::time::Duration::from_secs(2)));
+    assert!(h
+        .ledger
+        .find(
+            h.vault,
+            &format!("msg:{}:imported@example.test", h.source_id)
+        )
+        .await
+        .unwrap()
+        .is_none());
+    let state = mailbox.state().await;
+    assert!(state.imported_present && !state.imported_deleted);
+    assert!(state.unrelated_present && state.unrelated_deleted);
+    assert_eq!(state.destination_copies, 0);
+}
+
 #[tokio::test]
 async fn uidplus_delete_removes_only_the_imported_uid() {
     let state = cleanup_state("UIDPLUS", MailAfterImport::Delete, None).await;

@@ -16,6 +16,7 @@ use folio_infra::FolderSource;
 struct RecordingSink {
     items: Mutex<Vec<IngestItem>>,
     fail_with: Option<String>,
+    busy_once: Mutex<bool>,
 }
 
 #[async_trait]
@@ -23,6 +24,11 @@ impl IngestSink for RecordingSink {
     async fn ingest(&self, _source: Id, item: IngestItem) -> Result<IngestOutcome> {
         if let Some(message) = &self.fail_with {
             return Err(Error::Storage(message.clone()));
+        }
+        let mut busy_once = self.busy_once.lock().unwrap();
+        if *busy_once {
+            *busy_once = false;
+            return Ok(IngestOutcome::Busy);
         }
         self.items.lock().unwrap().push(item);
         Ok(IngestOutcome::Imported(Box::new(Document::new(
@@ -208,4 +214,62 @@ async fn failed_files_are_quarantined_with_an_error_note() {
     // The quarantined file and its note stay put on later scans.
     let again = source.poll(&sink).await.unwrap();
     assert_eq!(again.failed, 0);
+}
+
+#[tokio::test]
+async fn busy_sink_keeps_file_for_a_later_delete_import() {
+    let fx = Fixture::new();
+    let path = fx.write("busy.pdf", b"data");
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink {
+        busy_once: Mutex::new(true),
+        ..Default::default()
+    };
+
+    source.poll(&sink).await.unwrap();
+    let busy = source.poll(&sink).await.unwrap();
+
+    assert_eq!(busy.imported, 0);
+    assert_eq!(busy.failed, 0);
+    assert_eq!(busy.skipped, 0);
+    assert_eq!(busy.recheck_in, Some(Duration::from_millis(100)));
+    assert!(path.exists(), "busy input remains in the consume folder");
+    assert!(sink.items.lock().unwrap().is_empty());
+
+    let imported = source.poll(&sink).await.unwrap();
+
+    assert_eq!(imported.imported, 1);
+    assert!(!path.exists(), "successful delete import removes the file");
+    assert_eq!(sink.items.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn busy_sink_keeps_file_for_a_later_move_import() {
+    let fx = Fixture::new();
+    let path = fx.write("busy.pdf", b"data");
+    let source = fx.source(FolderAfterImport::Move);
+    let sink = RecordingSink {
+        busy_once: Mutex::new(true),
+        ..Default::default()
+    };
+
+    source.poll(&sink).await.unwrap();
+    let busy = source.poll(&sink).await.unwrap();
+
+    assert_eq!(busy.imported, 0);
+    assert_eq!(busy.failed, 0);
+    assert_eq!(busy.skipped, 0);
+    assert_eq!(busy.recheck_in, Some(Duration::from_millis(100)));
+    assert!(path.exists(), "busy input remains in the consume folder");
+    assert!(sink.items.lock().unwrap().is_empty());
+
+    let imported = source.poll(&sink).await.unwrap();
+
+    assert_eq!(imported.imported, 1);
+    assert!(
+        !path.exists(),
+        "successful move import removes the inbox entry"
+    );
+    assert!(fx.root.join("processed/busy.pdf").exists());
+    assert_eq!(sink.items.lock().unwrap().len(), 1);
 }

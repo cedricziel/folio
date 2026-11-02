@@ -326,8 +326,10 @@ pub enum IngestOutcome {
     Skipped {
         rule: String,
     },
-    /// The same content was imported before
+    /// The same content has a retained document and a stored original.
     Duplicate,
+    /// A pending or incomplete import owns the content; retry without acknowledging the source.
+    Busy,
 }
 
 /// Record of something the pipeline already handled

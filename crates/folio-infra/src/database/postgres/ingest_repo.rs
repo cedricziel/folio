@@ -268,6 +268,24 @@ impl IngestLedger for PostgresIngestLedger {
         Ok(())
     }
 
+    async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool> {
+        let result = sqlx::query(
+            "DELETE FROM ingest_ledger
+             WHERE vault_id = $1 AND key = $2 AND source_id = $3
+               AND document_id IS NOT DISTINCT FROM $4 AND outcome = $5 AND created_at = $6",
+        )
+        .bind(vault.0)
+        .bind(&expected.key)
+        .bind(expected.source_id)
+        .bind(expected.document_id)
+        .bind(&expected.outcome)
+        .bind(expected.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn delete(&self, vault: VaultId, key: &str) -> Result<()> {
         sqlx::query("DELETE FROM ingest_ledger WHERE vault_id = $1 AND key = $2")
             .bind(vault.0)

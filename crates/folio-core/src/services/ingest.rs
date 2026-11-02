@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -18,16 +18,21 @@ use crate::models::{
     SourceStatus, VaultId, WorkflowAction, WorkflowTrigger,
 };
 use crate::ports::{
-    DocumentImporter, DocumentRepository, IngestLedger, IngestSink, IngestionSourceFactory,
-    SourceRepository, TagRepository, VaultIngest, VaultRepository, WorkflowRepository,
+    keys, DocumentImporter, DocumentRepository, DocumentStore, IngestLedger, IngestSink,
+    IngestionSourceFactory, SourceRepository, TagRepository, VaultIngest, VaultRepository,
+    WorkflowRepository,
 };
 
-/// A claim without a document older than this is treated as left over from a crash
-const STALE_CLAIM: ChronoDuration = ChronoDuration::minutes(10);
+enum ClaimOutcome {
+    Claimed,
+    Duplicate,
+    Busy,
+}
 
 /// Applies pre-ingest rules, de-duplicates by content, and hands files to the importer
 pub struct IngestPipeline {
     documents: Arc<dyn DocumentRepository>,
+    files: Arc<dyn DocumentStore>,
     tags: Arc<dyn TagRepository>,
     workflows: Arc<dyn WorkflowRepository>,
     ledger: Arc<dyn IngestLedger>,
@@ -37,6 +42,7 @@ pub struct IngestPipeline {
 impl IngestPipeline {
     pub fn new(
         documents: Arc<dyn DocumentRepository>,
+        files: Arc<dyn DocumentStore>,
         tags: Arc<dyn TagRepository>,
         workflows: Arc<dyn WorkflowRepository>,
         ledger: Arc<dyn IngestLedger>,
@@ -44,6 +50,7 @@ impl IngestPipeline {
     ) -> Self {
         Self {
             documents,
+            files,
             tags,
             workflows,
             ledger,
@@ -67,8 +74,7 @@ impl IngestPipeline {
             .map(|w| w.name))
     }
 
-    /// Reserve the content hash; false means another import owns it
-    async fn claim(&self, vault: VaultId, key: &str, source_id: Id) -> Result<bool> {
+    async fn claim(&self, vault: VaultId, key: &str, source_id: Id) -> Result<ClaimOutcome> {
         let entry = LedgerEntry {
             key: key.to_string(),
             source_id,
@@ -77,21 +83,37 @@ impl IngestPipeline {
             created_at: Utc::now(),
         };
         if self.ledger.insert(vault, &entry).await? {
-            return Ok(true);
+            return Ok(ClaimOutcome::Claimed);
         }
         let Some(existing) = self.ledger.find(vault, key).await? else {
-            return self.ledger.insert(vault, &entry).await;
+            return Ok(if self.ledger.insert(vault, &entry).await? {
+                ClaimOutcome::Claimed
+            } else {
+                ClaimOutcome::Busy
+            });
         };
-        let alive = match existing.document_id {
-            Some(id) => self.documents.locate_retained(id).await? == Some(vault),
-            None => Utc::now() - existing.created_at < STALE_CLAIM,
-        };
-        if alive {
-            return Ok(false);
+        // Age cannot prove that an importer has stopped writing its document.
+        if existing.outcome != "imported" {
+            return Ok(ClaimOutcome::Busy);
         }
-        // Only permanent deletion or a stale claim allows the content to be imported again.
-        self.ledger.delete(vault, key).await?;
-        self.ledger.insert(vault, &entry).await
+        let Some(id) = existing.document_id else {
+            return Ok(ClaimOutcome::Busy);
+        };
+        if self.documents.locate_retained(id).await? == Some(vault) {
+            return Ok(if self.files.exists(&keys::original(id)).await? {
+                ClaimOutcome::Duplicate
+            } else {
+                ClaimOutcome::Busy
+            });
+        }
+        if !self.ledger.delete_if_matches(vault, &existing).await? {
+            return Ok(ClaimOutcome::Busy);
+        }
+        Ok(if self.ledger.insert(vault, &entry).await? {
+            ClaimOutcome::Claimed
+        } else {
+            ClaimOutcome::Busy
+        })
     }
 
     async fn resolve_tags(&self, vault: VaultId, names: &[String]) -> Result<Vec<Id>> {
@@ -147,8 +169,10 @@ impl VaultIngest for IngestPipeline {
         }
 
         let key = content_key(&item.data);
-        if !self.claim(vault, &key, source_id).await? {
-            return Ok(IngestOutcome::Duplicate);
+        match self.claim(vault, &key, source_id).await? {
+            ClaimOutcome::Claimed => {}
+            ClaimOutcome::Duplicate => return Ok(IngestOutcome::Duplicate),
+            ClaimOutcome::Busy => return Ok(IngestOutcome::Busy),
         }
 
         let imported = async {
