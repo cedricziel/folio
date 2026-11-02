@@ -160,21 +160,19 @@ struct InboxView: View {
 
     private var sidebar: some View {
         @Bindable var list = session.list
-        return List(selection: $session.selection) {
+        return List(selection: documentSelection) {
             ForEach(list.rows) { row in
-                NavigationLink(value: row.id) {
-                    DocumentRowView(row: row)
-                }
-                .tag(row.id)
-                .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
-                .listRowSeparatorTint(.rule)
-                .swipeActions {
-                    if canEdit {
-                        Button("Move to Trash", systemImage: "trash", role: .destructive) {
-                            pendingDelete = row.document
+                documentLink(row)
+                    .tag(row.id)
+                    .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
+                    .listRowSeparatorTint(.rule)
+                    .swipeActions {
+                        if canEdit {
+                            Button("Move to Trash", systemImage: "trash", role: .destructive) {
+                                pendingDelete = row.document
+                            }
                         }
                     }
-                }
             }
             if list.phase == .loading && !list.rows.isEmpty {
                 ProgressView("Loading documents…")
@@ -293,6 +291,38 @@ struct InboxView: View {
                 """
             )
         }
+    }
+
+    private var documentSelection: Binding<Document.ID?>? {
+        #if os(macOS)
+            $session.selection
+        #else
+            nil
+        #endif
+    }
+
+    @ViewBuilder
+    private func documentLink(_ row: DocumentRow) -> some View {
+        #if os(iOS)
+            Button {
+                session.selection = row.id
+                session.path = [row.id]
+            } label: {
+                HStack {
+                    DocumentRowView(row: row)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.inkMuted)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        #else
+            NavigationLink(value: row.id) {
+                DocumentRowView(row: row)
+            }
+        #endif
     }
 
     @ViewBuilder
