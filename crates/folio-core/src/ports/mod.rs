@@ -7,6 +7,7 @@ mod ai;
 mod document_entries;
 mod health;
 mod ingest;
+mod metadata;
 mod outbox;
 mod repository;
 mod saved_view;
@@ -24,6 +25,7 @@ pub use ingest::{
     DocumentImporter, IngestLedger, IngestSink, IngestionSource, IngestionSourceFactory,
     SourceRepository, VaultIngest,
 };
+pub use metadata::MetadataFieldRepository;
 pub use outbox::OutboxStore;
 pub use repository::{
     AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,

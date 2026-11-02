@@ -475,3 +475,15 @@ so setup owns the disposable instance. Desktop and mobile checks save, reopen,
 rename, share, and delete views. Inspect screenshots and confirm that a single
 grid card keeps a bounded width. The precision regression renames a view without
 rounding its stored submillisecond boundaries to the date input's display value.
+
+## Verify typed metadata fields
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields`
+with task-owned build storage, at most two jobs, incremental compilation disabled,
+and zero debug symbols when capacity is constrained. The shared contract uses a
+temporary SQLite database and a disposable PostgreSQL container. It covers scoped
+field reads, server-derived attribution, canonical name uniqueness, concurrent
+claims, pagination, retirement, restore conflicts, no-op suppression, and rollback
+when transactional outbox publication fails. It also checks that field events are
+vault-visible non-document events. A Docker access failure requires rerunning the
+PostgreSQL case with socket access; a skipped backend is not verified parity.
