@@ -1,8 +1,9 @@
 # Observability
 
 Folio exports traces, metrics and logs with OpenTelemetry. Export is off until
-you set an OTLP endpoint; without one Folio only writes logs to stdout. All
-configuration uses the standard `OTEL_*` variables, nothing Folio-specific.
+you set an OTLP endpoint; without one Folio only writes logs to stderr. Server
+export uses the standard `OTEL_*` variables. Client export has an additional
+explicit opt-in described below.
 
 | Variable | Effect |
 | --- | --- |
@@ -80,3 +81,52 @@ Prometheus compatible APIs of the router, for example
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 ```
+
+## Browser and native clients
+
+Set `FOLIO_TELEMETRY__CLIENTS_ENABLED=true` to enable client telemetry. Clients
+fetch authenticated `/api/telemetry/config` and export through the same-origin
+`/api/telemetry/v1/traces`, `/metrics` and `/logs` routes. Server export headers
+and credentials stay on the server. Session origin checks apply; bearer tokens
+need `documents:read`, including for telemetry POST requests.
+
+The relay uses the HTTP OTLP endpoint and headers above. If the server exports
+over gRPC, set `FOLIO_TELEMETRY__OTLP_HTTP_ENDPOINT` to the HTTP collector base
+URL for client forwarding. Export requests are limited to one MiB, four
+concurrent upstream requests and 120 requests per minute per authenticated user,
+with a shared 1,200-request budget. Compressed bodies and redirects are refused.
+Payload reads and upstream requests have five-second deadlines. Telemetry
+requests do not create server request spans or metrics, avoiding export loops.
+
+All components use `service.namespace=folio`. Browser resources use
+`service.name=folio-web`; Apple clients use `folio-app`. Set the deployed server
+name with `OTEL_SERVICE_NAME=folio-server`. Each runtime gets a distinct
+`service.instance.id`. Client `folio.installation.id` values persist in local
+browser storage or shared app preferences. Restricted browser storage falls
+back to a runtime ID. Set a stable server installation ID through
+`OTEL_RESOURCE_ATTRIBUTES=folio.installation.id=<random UUID>`.
+
+Browser resources describe the browser, OS and generic device class where
+available. Apple resources include OS version, architecture and generic Apple
+device model where available. Clients do not collect account IDs, hardware
+serial numbers, advertising IDs or document contents. Client network telemetry
+removes query strings, fragments and document IDs, never captures request or
+response bodies or authorization headers, and only propagates trace context
+to the configured Folio origin. Export failures do not interrupt app requests.
+
+For the Hive deployment, the destination is tenant `homelab`, dataset `apps`:
+
+```sh
+OTEL_SERVICE_NAME=folio-server
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=folio,deployment.environment.name=production,folio.installation.id=<persisted UUID>
+OTEL_EXPORTER_OTLP_ENDPOINT=http://<hive-host>:4318
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_HEADERS=authorization=Bearer%20<ingest-key>,x-tenant-id=homelab,x-dataset-id=apps
+FOLIO_TELEMETRY__CLIENTS_ENABLED=true
+```
+
+Use a key restricted to `apps` with traces, logs and metrics write scopes.
+Keep read/query credentials separate. SDK exporters send actual OTLP requests;
+Swift SDKs use protobuf and browser SDKs use JSON. Neither client receives the
+SignalDB key. The Swift transport obtains the current Folio OAuth token and
+stops sending after sign-out.
