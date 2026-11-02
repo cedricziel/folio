@@ -1,11 +1,11 @@
 <div class="manage-edit-inline">
-    <form action="/manage/tags/{{ tag.id }}/update" method="post"
+    <form action="{{ "/manage/tags"|vault_url }}/{{ tag.id }}/update" method="post"
           data-turbo-frame="tags-list">
         <label class="sr-only" for="edit-name">Name</label>
         <input class="input" id="edit-name" type="text" name="name" value="{{ tag.name }}" required autofocus>
         <div class="manage-edit-actions">
             <button type="submit" class="f-btn f-btn-primary">Save</button>
-            <a href="/manage/tags" class="f-btn f-btn-quiet" data-turbo-frame="tags-list">Cancel</a>
+            <a href="{{ "/manage/tags"|vault_url }}" class="f-btn f-btn-quiet" data-turbo-frame="tags-list">Cancel</a>
         </div>
     </form>
 </div>

@@ -7,10 +7,11 @@
         {% for tag in tags %}
         <li class="manage-list-item" id="tag-{{ tag.id }}">
             <span class="manage-item-name"><span class="f-tag f-tag-{{ tag.tone() }}">{{ tag.name }}</span></span>
+            {% if true|can_manage %}
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename tag {{ tag.name }}"
                         onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{{ icons::pencil() }}</button>
-                <form action="/manage/tags/{{ tag.id }}/delete" method="post" class="inline-form"
+                <form action="{{ "/manage/tags"|vault_url }}/{{ tag.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
                       data-confirm-message-value="Delete tag '{{ tag.name }}'?"
                       data-action="submit->confirm#confirm"
@@ -19,7 +20,7 @@
                 </form>
             </div>
             <div class="manage-edit-form">
-                <form action="/manage/tags/{{ tag.id }}/update" method="post"
+                <form action="{{ "/manage/tags"|vault_url }}/{{ tag.id }}/update" method="post"
                       data-turbo-frame="tags-list">
                     <label class="sr-only" for="edit-tag-{{ tag.id }}">Name</label>
                     <input class="input" id="edit-tag-{{ tag.id }}" type="text" name="name" value="{{ tag.name }}" required>
@@ -30,6 +31,7 @@
                     </div>
                 </form>
             </div>
+            {% endif %}
         </li>
         {% endfor %}
         {% endif %}

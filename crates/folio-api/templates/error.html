@@ -8,6 +8,6 @@
         <h1 class="title">{{ heading }}</h1>
         <p class="lede">{{ message }}</p>
     </header>
-    <p><a href="/">Back to the inbox</a></p>
+    <p><a href="{{ "/"|vault_url }}">Back to the inbox</a></p>
 </section>
 {% endblock %}

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::error::Result;
-use crate::models::{Principal, UserId, VaultId, VaultRole};
+use crate::models::{Principal, UserId, Vault, VaultId, VaultRole};
 use crate::ports::{MembershipRepository, VaultRepository};
 
 /// Name of the vault every user gets for their own papers
@@ -77,6 +77,20 @@ impl VaultService {
         self.vaults.set_default(user, wanted).await?;
         self.vaults.mark_provisioned(user).await?;
         Ok(wanted)
+    }
+
+    /// Lists only vaults visible to the user; unauthenticated mode exposes the instance vault.
+    pub async fn list(&self, user: Option<&UserId>) -> Result<Vec<(Vault, VaultRole)>> {
+        match user {
+            Some(user) => self.vaults.list_for_user(user).await,
+            None => {
+                let id = self.vaults.instance_default().await?;
+                let vault = self.vaults.find(id).await?.ok_or_else(|| {
+                    crate::error::Error::Repository("instance vault is missing".into())
+                })?;
+                Ok(vec![(vault, VaultRole::Owner)])
+            }
+        }
     }
 
     /// The vault a request lands in: the user's default (provisioned on first

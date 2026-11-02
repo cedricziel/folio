@@ -7,10 +7,11 @@
         {% for doc_type in document_types %}
         <li class="manage-list-item" id="document-type-{{ doc_type.id }}">
             <span class="manage-item-name">{{ doc_type.name }}</span>
+            {% if true|can_manage %}
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename document-type {{ doc_type.name }}"
                         onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{{ icons::pencil() }}</button>
-                <form action="/manage/document_types/{{ doc_type.id }}/delete" method="post" class="inline-form"
+                <form action="{{ "/manage/document_types"|vault_url }}/{{ doc_type.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
                       data-confirm-message-value="Delete document-type '{{ doc_type.name }}'?"
                       data-action="submit->confirm#confirm"
@@ -19,7 +20,7 @@
                 </form>
             </div>
             <div class="manage-edit-form">
-                <form action="/manage/document_types/{{ doc_type.id }}/update" method="post"
+                <form action="{{ "/manage/document_types"|vault_url }}/{{ doc_type.id }}/update" method="post"
                       data-turbo-frame="document-types-list">
                     <label class="sr-only" for="edit-document-type-{{ doc_type.id }}">Name</label>
                     <input class="input" id="edit-document-type-{{ doc_type.id }}" type="text" name="name" value="{{ doc_type.name }}" required>
@@ -30,6 +31,7 @@
                     </div>
                 </form>
             </div>
+            {% endif %}
         </li>
         {% endfor %}
         {% endif %}

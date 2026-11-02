@@ -4,9 +4,9 @@
 {% block title %}{{ document.title }} - Folio{% endblock %}
 
 {% block content %}
-<article class="doc-view" data-hotkey-document="{{ document.id }}" data-hotkey-title="{{ document.title }}">
+<article data-can-edit="{{ document|can_edit_document }}" class="doc-view" data-hotkey-document="{{ document.id }}" data-hotkey-title="{{ document.title }}">
     <header class="doc-head">
-        <a href="/" class="back-link">{{ icons::arrow_left() }} Inbox</a>
+        <a href="{{ "/"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Inbox</a>
         <div class="doc-head-row">
             <div class="doc-head-text">
                 <h1 class="title">{{ document.title }}</h1>
@@ -14,17 +14,21 @@
             </div>
             <div class="doc-actions">
                 {% if document.file_path.is_some() %}
-                <a href="/api/documents/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
-                <form action="/documents/{{ document.id }}/reprocess" method="post" data-turbo="false">
+                <a href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
+                {% if document|can_edit_document %}
+                <form action="{{ "/documents"|vault_url }}/{{ document.id }}/reprocess" method="post" data-turbo="false">
                     <button type="submit" class="f-btn {% if failed %}f-btn-primary{% else %}f-btn-quiet{% endif %}">{{ icons::refresh() }} Read again</button>
                 </form>
                 {% endif %}
-                <form action="/documents/{{ document.id }}/delete" method="post"
+                {% endif %}
+                {% if document|can_edit_document %}
+                <form action="{{ "/documents"|vault_url }}/{{ document.id }}/delete" method="post"
                       data-controller="confirm"
                       data-confirm-message-value="Delete '{{ document.title }}'? This cannot be undone."
                       data-action="submit->confirm#confirm">
                     <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{{ icons::trash() }} Delete</button>
                 </form>
+                {% endif %}
             </div>
         </div>
     </header>
@@ -35,7 +39,7 @@
                  data-page-viewer-document-id-value="{{ document.id }}"
                  data-page-viewer-page-count-value="{{ pages.len() }}">
             <div class="f-sheet page-sheet">
-                <img src="/documents/{{ document.id }}/page/1/thumbnail" alt="Page 1 of {{ document.title }}" data-page-viewer-target="image">
+                <img src="{{ "/documents"|vault_url }}/{{ document.id }}/page/1/thumbnail" alt="Page 1 of {{ document.title }}" data-page-viewer-target="image">
             </div>
             {% if show_page_nav %}
             <div class="page-nav">
@@ -47,7 +51,7 @@
                 {% for p in pages %}
                 <button type="button" class="f-thumb page-thumb" aria-label="Page {{ p }}" aria-current="{% if loop.first %}true{% else %}false{% endif %}"
                         data-page="{{ p }}" data-page-viewer-target="thumb" data-action="click->page-viewer#select">
-                    <img src="/documents/{{ document.id }}/page/{{ p }}/thumbnail" alt="" loading="lazy">
+                    <img src="{{ "/documents"|vault_url }}/{{ document.id }}/page/{{ p }}/thumbnail" alt="" loading="lazy">
                 </button>
                 {% endfor %}
             </div>
@@ -60,8 +64,8 @@
                 <dl class="f-meta-list">
                     <dt>From</dt>
                     <dd>
-                        <form action="/documents/{{ document.id }}/correspondent" method="post" data-turbo="false">
-                            <select name="correspondent_id" class="select" aria-label="From" data-hotkey="edit" onchange="this.form.requestSubmit()">
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">
+                            <select name="correspondent_id" class="select" aria-label="From" {% if !(document|can_edit_document) %}disabled{% endif %} data-hotkey="edit" onchange="this.form.requestSubmit()">
                                 <option value="">Not set</option>
                                 {% for c in all_correspondents %}
                                 <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
@@ -72,8 +76,8 @@
 
                     <dt>Type</dt>
                     <dd>
-                        <form action="/documents/{{ document.id }}/document_type" method="post" data-turbo="false">
-                            <select name="document_type_id" class="select" aria-label="Type" onchange="this.form.requestSubmit()">
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">
+                            <select name="document_type_id" class="select" aria-label="Type" {% if !(document|can_edit_document) %}disabled{% endif %} onchange="this.form.requestSubmit()">
                                 <option value="">Not set</option>
                                 {% for dt in all_document_types %}
                                 <option value="{{ dt.id }}" {% match document_type %}{% when Some with (dtype) %}{% if dt.id == dtype.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ dt.name }}</option>
@@ -104,11 +108,12 @@
                             {% for tag in tags %}
                             <span class="f-tag f-tag-{{ tag.tone }}" data-tag-id="{{ tag.id }}">
                                 {{ tag.name }}
-                                <button type="button" class="tag-remove" aria-label="Remove tag {{ tag.name }}" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>
+                                {% if document|can_edit_document %}<button type="button" class="tag-remove" aria-label="Remove tag {{ tag.name }}" data-action="click->tags#removeTag" data-tag-id="{{ tag.id }}">&times;</button>{% endif %}
                             </span>
                             {% endfor %}
                             {% endif %}
                         </div>
+                        {% if document|can_edit_document %}
                         <button type="button" class="f-btn f-btn-quiet" title="Edit tags (t)" aria-keyshortcuts="t" data-hotkey="tag" data-action="click->tags#openModal">Edit tags</button>
 
                         <dialog class="f-palette dialog" aria-labelledby="tags-title" data-tags-target="modal"
@@ -136,11 +141,12 @@
                                     {% for t in all_tags %}
                                     <button type="button" class="f-tag f-tag-{{ t.tone }} tag-option" data-action="click->tags#addTag" data-tag-id="{{ t.id }}" data-tag-name="{{ t.name }}" data-tag-tone="{{ t.tone }}">+ {{ t.name }}</button>
                                     {% else %}
-                                    <span class="tags-empty">No tags yet. <a href="/manage">Create one</a>.</span>
+                                    <span class="tags-empty">No tags yet. <a href="{{ "/manage"|vault_url }}">Create one</a>.</span>
                                     {% endfor %}
                                 </div>
                             </div>
                         </dialog>
+                        {% endif %}
                     </dd>
                 </dl>
             </section>

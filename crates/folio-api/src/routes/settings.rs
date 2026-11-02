@@ -1,5 +1,6 @@
 //! Settings page routes
 
+use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Query, State},

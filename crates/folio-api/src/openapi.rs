@@ -13,7 +13,9 @@ use folio_core::models::WebhookPayload;
 
 use crate::client_telemetry;
 use crate::error::ErrorResponse;
-use crate::routes::{correspondents, document_types, documents, events, sources, tags, workflows};
+use crate::routes::{
+    correspondents, document_types, documents, events, sources, tags, vaults, workflows,
+};
 
 #[derive(OpenApi)]
 #[openapi(
@@ -25,6 +27,7 @@ use crate::routes::{correspondents, document_types, documents, events, sources, 
     paths(
         client_telemetry::configuration,
         client_telemetry::export,
+        vaults::list_vaults,
         documents::list_documents,
         crate::routes::browse::browse_default,
         crate::routes::browse::browse_vault,
@@ -105,7 +108,46 @@ error_response!(InternalError, 500, "Unexpected server error");
 
 /// The OpenAPI document describing the JSON API.
 pub fn openapi() -> utoipa::openapi::OpenApi {
-    ApiDoc::openapi()
+    use utoipa::openapi::{
+        path::{ParameterBuilder, ParameterIn},
+        schema::{ObjectBuilder, Type},
+    };
+    let mut spec = ApiDoc::openapi();
+    for (path, item) in &mut spec.paths.paths {
+        if !crate::vault_context::is_scoped_path(path) {
+            continue;
+        }
+        for operation in [
+            &mut item.get,
+            &mut item.post,
+            &mut item.put,
+            &mut item.patch,
+            &mut item.delete,
+            &mut item.head,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            operation.responses.responses.insert(
+                "403".to_string(),
+                utoipa::openapi::Response::new("The vault role does not allow this action").into(),
+            );
+            operation
+                .responses
+                .responses
+                .entry("404".to_string())
+                .or_insert_with(|| {
+                    utoipa::openapi::Response::new("The vault or resource is not visible").into()
+                });
+            operation.parameters.get_or_insert_with(Vec::new).push(ParameterBuilder::new()
+                .name("X-Folio-Vault")
+                .parameter_in(ParameterIn::Header)
+                .description(Some("Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403."))
+                .schema(Some(ObjectBuilder::new().schema_type(Type::String)))
+                .build().into());
+        }
+    }
+    spec
 }
 
 /// The spec as pretty-printed JSON, built once: the document never changes while running.

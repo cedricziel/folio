@@ -100,6 +100,7 @@ pub(crate) async fn sse_handler(
 
     // Subscribe before replaying, so nothing falls into the gap between the two.
     let mut connection = Connection {
+        context: crate::vault::CURRENT_VAULT.try_with(Clone::clone).ok(),
         rx: state.event_broadcaster.subscribe(),
         vault,
         user,
@@ -118,11 +119,22 @@ pub(crate) async fn sse_handler(
         let event = conn.next_event().await?;
         if let Some(user) = &conn.user {
             match conn.state.access.effective_role(user, conn.vault).await {
-                Ok(Some(_)) => {}
+                Ok(Some(role)) => {
+                    if let Some(context) = &mut conn.context {
+                        context.role = role;
+                    }
+                }
                 _ => return None,
             }
         }
-        let frames = frames_for(&conn.state, conn.vault, &event).await;
+        let frames = match &conn.context {
+            Some(context) => {
+                crate::vault::CURRENT_VAULT
+                    .scope(context.clone(), frames_for(&conn.state, conn.vault, &event))
+                    .await
+            }
+            None => frames_for(&conn.state, conn.vault, &event).await,
+        };
         Some((stream::iter(frames.into_iter().map(Ok)), conn))
     });
 
@@ -160,6 +172,7 @@ async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent
 
 /// One open SSE connection
 struct Connection {
+    context: Option<crate::vault::VaultContext>,
     vault: VaultId,
     user: Option<UserId>,
     state: AppState,

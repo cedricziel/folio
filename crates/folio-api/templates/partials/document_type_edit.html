@@ -1,11 +1,11 @@
 <div class="manage-edit-inline">
-    <form action="/manage/document_types/{{ document_type.id }}/update" method="post"
+    <form action="{{ "/manage/document_types"|vault_url }}/{{ document_type.id }}/update" method="post"
           data-turbo-frame="document-types-list">
         <label class="sr-only" for="edit-name">Name</label>
         <input class="input" id="edit-name" type="text" name="name" value="{{ document_type.name }}" required autofocus>
         <div class="manage-edit-actions">
             <button type="submit" class="f-btn f-btn-primary">Save</button>
-            <a href="/manage/document_types" class="f-btn f-btn-quiet" data-turbo-frame="document-types-list">Cancel</a>
+            <a href="{{ "/manage/document_types"|vault_url }}" class="f-btn f-btn-quiet" data-turbo-frame="document-types-list">Cancel</a>
         </div>
     </form>
 </div>

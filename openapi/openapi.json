@@ -17,6 +17,17 @@
         ],
         "summary": "List all correspondents",
         "operationId": "listCorrespondents",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "All correspondents",
@@ -30,6 +41,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -49,6 +66,17 @@
         ],
         "summary": "Create a new correspondent",
         "operationId": "createCorrespondent",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -79,6 +107,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "409": {
             "description": "A resource with the same unique value already exists",
@@ -120,6 +154,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -132,6 +175,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -171,6 +217,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -203,6 +258,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -252,11 +310,23 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "The correspondent was deleted"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -288,6 +358,17 @@
         ],
         "summary": "List all document types",
         "operationId": "listDocumentTypes",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "All document types",
@@ -301,6 +382,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -320,6 +407,17 @@
         ],
         "summary": "Create a new document type",
         "operationId": "createDocumentType",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -350,6 +448,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "409": {
             "description": "A resource with the same unique value already exists",
@@ -391,6 +495,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -403,6 +516,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -442,6 +558,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -474,6 +599,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -523,11 +651,23 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
             "description": "The document type was deleted"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -614,6 +754,15 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -637,6 +786,12 @@
               }
             }
           },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -655,6 +810,17 @@
         ],
         "summary": "Create a new document without a file",
         "operationId": "createDocument",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -685,6 +851,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -798,6 +970,15 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -823,6 +1004,9 @@
           },
           "401": {
             "description": "Sign-in required"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -874,6 +1058,15 @@
               "default": 10,
               "minimum": 0
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -886,6 +1079,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -905,6 +1104,17 @@
         ],
         "summary": "Search documents by semantic similarity",
         "operationId": "searchDocumentsByBody",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -926,6 +1136,12 @@
               }
             }
           },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -946,6 +1162,17 @@
         ],
         "summary": "Upload a document file",
         "operationId": "uploadDocument",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "multipart/form-data": {
@@ -976,6 +1203,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "413": {
             "description": "The upload exceeds the 50 MB limit",
@@ -1017,6 +1250,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1029,6 +1271,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1068,11 +1313,23 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "The document was deleted"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1114,6 +1371,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1126,6 +1392,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1157,6 +1426,17 @@
         ],
         "summary": "List ingestion sources",
         "operationId": "listSources",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Configured and managed sources with their latest run",
@@ -1170,6 +1450,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -1190,6 +1476,17 @@
         "summary": "Create an ingestion source",
         "description": "Passwords are stored unencrypted in the database until Folio has a secret key.",
         "operationId": "createSource",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1221,6 +1518,12 @@
               }
             }
           },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -1251,6 +1554,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1263,6 +1575,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1303,6 +1618,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -1335,6 +1659,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1374,6 +1701,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1389,6 +1725,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1431,6 +1770,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1443,6 +1791,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1474,6 +1825,17 @@
         ],
         "summary": "List all tags",
         "operationId": "listTags",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "All tags",
@@ -1487,6 +1849,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -1506,6 +1874,17 @@
         ],
         "summary": "Create a new tag",
         "operationId": "createTag",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1536,6 +1915,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "409": {
             "description": "A resource with the same unique value already exists",
@@ -1577,6 +1962,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1589,6 +1983,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1628,6 +2025,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -1660,6 +2066,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1709,11 +2118,23 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "The tag was deleted"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -1802,6 +2223,26 @@
           },
           "502": {
             "description": "Collector unavailable"
+          }
+        }
+      }
+    },
+    "/api/vaults": {
+      "get": {
+        "tags": [
+          "vaults"
+        ],
+        "operationId": "listVaults",
+        "responses": {
+          "200": {
+            "description": "Accessible vaults and the account default",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultDiscovery"
+                }
+              }
+            }
           }
         }
       }
@@ -1971,6 +2412,17 @@
         ],
         "summary": "List all workflows",
         "operationId": "listWorkflows",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "All workflows; webhook secrets are masked",
@@ -1984,6 +2436,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           },
           "500": {
             "description": "Unexpected server error",
@@ -2003,6 +2461,17 @@
         ],
         "summary": "Create a workflow",
         "operationId": "createWorkflow",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2034,6 +2503,12 @@
               }
             }
           },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -2064,6 +2539,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2076,6 +2560,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2116,6 +2603,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -2148,6 +2644,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2187,11 +2686,23 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "The workflow was deleted"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2246,6 +2757,15 @@
               "maximum": 200,
               "minimum": 0
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2261,6 +2781,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2303,6 +2826,15 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2325,6 +2857,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2369,6 +2904,15 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -2381,6 +2925,12 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           }
         }
       }
@@ -3693,6 +4243,46 @@
               "null"
             ],
             "description": "Document title; defaults to the file name"
+          }
+        }
+      },
+      "VaultDiscovery": {
+        "type": "object",
+        "required": [
+          "vaults",
+          "default_vault_id"
+        ],
+        "properties": {
+          "default_vault_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vaults": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultSummary"
+            }
+          }
+        }
+      },
+      "VaultSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "example": "owner"
           }
         }
       },

@@ -14,7 +14,7 @@
     {% when Some with (label) %}
     <p class="filter-line">
         <span>Showing documents for <strong>{{ label }}</strong>.</span>
-        <a href="/?view=all">Clear filter</a>
+        <a href="{{ "/?view=all"|vault_url }}">Clear filter</a>
     </p>
     {% when None %}
     {% endmatch %}
@@ -25,13 +25,16 @@
 
     <turbo-frame id="document-detail"></turbo-frame>
 
+    {% if sidebar.can_upload %}
     <section class="f-drop dropzone" aria-label="Upload documents">
         <strong>Drop files here or choose them.</strong>
-        <span class="hint">Images and PDFs. Folio reads the text for you.</span>
+        <span class="hint">Images and PDFs. Upload to <strong data-upload-modal-target="destinationLabel"></strong>.</span>
         <div class="drop-actions">
             <button type="button" class="f-btn" data-action="click->dropzone#choose">Choose files</button>
             <button type="button" class="f-btn f-btn-quiet" data-action="click->dropzone#takePhoto">Take a photo</button>
+            <button type="button" class="f-btn f-btn-quiet" data-action="click->upload-modal#open">Change destination</button>
         </div>
     </section>
+    {% endif %}
 </section>
 {% endblock %}

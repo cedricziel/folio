@@ -1,11 +1,11 @@
 <div class="manage-edit-inline">
-    <form action="/manage/correspondents/{{ correspondent.id }}/update" method="post"
+    <form action="{{ "/manage/correspondents"|vault_url }}/{{ correspondent.id }}/update" method="post"
           data-turbo-frame="correspondents-list">
         <label class="sr-only" for="edit-name">Name</label>
         <input class="input" id="edit-name" type="text" name="name" value="{{ correspondent.name }}" required autofocus>
         <div class="manage-edit-actions">
             <button type="submit" class="f-btn f-btn-primary">Save</button>
-            <a href="/manage/correspondents" class="f-btn f-btn-quiet" data-turbo-frame="correspondents-list">Cancel</a>
+            <a href="{{ "/manage/correspondents"|vault_url }}" class="f-btn f-btn-quiet" data-turbo-frame="correspondents-list">Cancel</a>
         </div>
     </form>
 </div>

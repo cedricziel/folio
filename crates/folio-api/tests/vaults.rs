@@ -708,3 +708,417 @@ async fn browse_enforces_the_search_term_limit() {
         assert_eq!(response.status(), expected);
     }
 }
+
+#[tokio::test]
+async fn discovery_lists_accessible_vaults_and_the_default() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "discover-alice").await;
+    let bob = sign_in(&h, "discover-bob").await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", "/api/vaults", &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(body["default_vault_id"], alice.vault.to_string());
+    assert_eq!(body["vaults"].as_array().unwrap().len(), 1);
+    assert_eq!(body["vaults"][0]["id"], alice.vault.to_string());
+    assert_eq!(body["vaults"][0]["role"], "owner");
+    assert!(!body.to_string().contains(&bob.vault.to_string()));
+}
+
+#[tokio::test]
+async fn explicit_vault_upload_uses_selected_scope_without_changing_default() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "select-alice").await;
+    let bob = sign_in(&h, "select-bob").await;
+    h.members
+        .grant(
+            bob.vault,
+            &Principal::User(alice.user.clone()),
+            VaultRole::Contributor,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut req = request(
+        "POST",
+        "/api/documents",
+        &alice,
+        Body::from(r#"{"title":"Shared file","content":"Shared content"}"#),
+    );
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    let response = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created: Document = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(created.vault_id, bob.vault);
+    assert_eq!(created.uploaded_by, Some(alice.user.clone()));
+    assert_eq!(
+        h.vault_repository
+            .default_for_user(&alice.user)
+            .await
+            .unwrap(),
+        Some(alice.vault)
+    );
+    assert!(h
+        .state
+        .document_repo
+        .find_by_id(alice.vault, created.id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn invisible_vault_has_the_same_response_as_unknown_vault() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "hidden-alice").await;
+    let bob = sign_in(&h, "hidden-bob").await;
+    let mut hidden = request("GET", "/api/documents", &alice, Body::empty());
+    hidden
+        .headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    let hidden = h.app.clone().oneshot(hidden).await.unwrap();
+    let mut unknown = request("GET", "/api/documents", &alice, Body::empty());
+    unknown
+        .headers_mut()
+        .insert("x-folio-vault", VaultId::new().to_string().parse().unwrap());
+    let unknown = h.app.clone().oneshot(unknown).await.unwrap();
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(text(hidden).await, text(unknown).await);
+}
+
+#[tokio::test]
+async fn selected_viewer_cannot_create_documents_or_vocabulary() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "viewer-alice").await;
+    let bob = sign_in(&h, "viewer-bob").await;
+    h.members
+        .grant(
+            bob.vault,
+            &Principal::User(alice.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut req = request(
+        "POST",
+        "/api/documents",
+        &alice,
+        Body::from(r#"{"title":"Denied","content":"Denied"}"#),
+    );
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    let response = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(h
+        .state
+        .document_repo
+        .list(bob.vault, None)
+        .await
+        .unwrap()
+        .is_empty());
+    let mut req = request(
+        "POST",
+        "/api/tags",
+        &alice,
+        Body::from(r#"{"name":"Denied"}"#),
+    );
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn scoped_web_navigation_keeps_the_selected_vault() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "web-alice").await;
+    let path = format!("/vaults/{}/?view=all", alice.vault);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains(&format!("/vaults/{}/?view=all", alice.vault)));
+    assert!(html.contains("Personal"));
+}
+
+#[tokio::test]
+async fn malformed_vault_selection_is_not_silently_ignored() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "invalid-selection").await;
+    let mut req = request("GET", "/api/documents", &alice, Body::empty());
+    req.headers_mut()
+        .insert("x-folio-vault", "not-a-uuid".parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn revocation_blocks_the_next_selected_request() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "revoked-alice").await;
+    let bob = sign_in(&h, "revoked-bob").await;
+    let principal = Principal::User(alice.user.clone());
+    h.members
+        .grant(bob.vault, &principal, VaultRole::Viewer, None)
+        .await
+        .unwrap();
+    let mut req = request("GET", "/api/documents", &alice, Body::empty());
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::OK
+    );
+    h.members.revoke(bob.vault, &principal).await.unwrap();
+    let mut req = request("GET", "/api/documents", &alice, Body::empty());
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn contributor_cannot_delete_another_uploaders_document() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "contributor-alice").await;
+    let bob = sign_in(&h, "contributor-bob").await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/documents",
+            &bob,
+            Body::from(r#"{"title":"Bob's file","content":"Private contribution"}"#),
+        ))
+        .await
+        .unwrap();
+    let doc: Document = serde_json::from_str(&text(response).await).unwrap();
+    h.members
+        .grant(
+            bob.vault,
+            &Principal::User(alice.user.clone()),
+            VaultRole::Contributor,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut req = request(
+        "DELETE",
+        &format!("/api/documents/{}", doc.id),
+        &alice,
+        Body::empty(),
+    );
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(h
+        .state
+        .document_repo
+        .find_by_id(bob.vault, doc.id)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn contributor_can_delete_their_own_upload_in_a_shared_vault() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "own-alice").await;
+    let bob = sign_in(&h, "own-bob").await;
+    h.members
+        .grant(
+            bob.vault,
+            &Principal::User(alice.user.clone()),
+            VaultRole::Contributor,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut create = request(
+        "POST",
+        "/api/documents",
+        &alice,
+        Body::from(r#"{"title":"Alice's file","content":"Own contribution"}"#),
+    );
+    create
+        .headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    let response = h.app.clone().oneshot(create).await.unwrap();
+    let doc: Document = serde_json::from_str(&text(response).await).unwrap();
+    let mut delete = request(
+        "DELETE",
+        &format!("/api/documents/{}", doc.id),
+        &alice,
+        Body::empty(),
+    );
+    delete
+        .headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(delete).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(h
+        .state
+        .document_repo
+        .find_by_id(bob.vault, doc.id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn scoped_web_resource_extracts_document_id_and_keeps_redirect_scope() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "scoped-document").await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/documents",
+            &alice,
+            Body::from(r#"{"title":"Scoped page","content":"Scoped content"}"#),
+        ))
+        .await
+        .unwrap();
+    let doc: Document = serde_json::from_str(&text(response).await).unwrap();
+    let path = format!("/vaults/{}/documents/{}", alice.vault, doc.id);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(text(response).await.contains("Scoped page"));
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{path}/delete"),
+            &alice,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        format!("/vaults/{}/", alice.vault)
+    );
+}
+
+#[tokio::test]
+async fn login_preserves_the_scoped_deep_link() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "login-link").await;
+    let path = format!("/vaults/{}/?view=all", alice.vault);
+    let response = h
+        .app
+        .clone()
+        .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION].to_str().unwrap();
+    let parsed = url::Url::parse(&format!("http://localhost{location}")).unwrap();
+    assert_eq!(parsed.path(), "/login");
+    assert_eq!(
+        parsed
+            .query_pairs()
+            .find(|(key, _)| key == "next")
+            .unwrap()
+            .1,
+        path
+    );
+}
+
+#[tokio::test]
+async fn conflicting_url_and_header_vaults_are_rejected() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "conflict-alice").await;
+    for path in [
+        format!("/vaults/{}/api/documents", alice.vault),
+        format!("/api/vaults/{}/documents", alice.vault),
+    ] {
+        let mut req = request("GET", &path, &alice, Body::empty());
+        req.headers_mut()
+            .insert("x-folio-vault", VaultId::new().to_string().parse().unwrap());
+        assert_eq!(
+            h.app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::BAD_REQUEST,
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn scoped_mutations_still_require_same_origin_for_sessions() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "csrf-scope").await;
+    let mut req = request(
+        "POST",
+        &format!("/vaults/{}/api/documents", alice.vault),
+        &alice,
+        Body::from(r#"{"title":"Attack","content":"Attack"}"#),
+    );
+    req.headers_mut()
+        .insert(header::ORIGIN, "https://attacker.invalid".parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(h
+        .state
+        .document_repo
+        .list(alice.vault, None)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn editor_cannot_manage_vault_workflows() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "workflow-editor").await;
+    let bob = sign_in(&h, "workflow-owner").await;
+    h.members
+        .grant(
+            bob.vault,
+            &Principal::User(alice.user.clone()),
+            VaultRole::Editor,
+            None,
+        )
+        .await
+        .unwrap();
+    let mut req = request("GET", "/api/workflows", &alice, Body::empty());
+    req.headers_mut()
+        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+    assert_eq!(
+        h.app.clone().oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}

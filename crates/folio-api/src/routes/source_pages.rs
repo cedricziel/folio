@@ -1,5 +1,6 @@
 //! Server-rendered pages for managing ingestion sources
 
+use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Path, State},

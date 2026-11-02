@@ -64,6 +64,15 @@ const dialogClosed = () => {
   if (!document.querySelector("dialog[open]")) document.body.style.overflow = "";
 };
 
+const vaultURL = (path) => {
+  const scoped = path === "/" || path.startsWith("/?") || /^\/(?:documents|events|manage|workflows|search|api\/(?:documents|tags|correspondents|document_types|workflows|sources)|settings\/sources)(?:[/?]|$)/.test(path);
+  const id = document.body.dataset.vaultId;
+  return scoped && id ? `/vaults/${id}${path}` : path;
+};
+
+const uploadDestination = () => document.getElementById("upload-vault");
+const uploadURL = (id) => `/vaults/${id}/documents/upload`;
+
 const escapeHtml = (text) => {
   const div = document.createElement("div");
   div.textContent = text;
@@ -212,7 +221,7 @@ Stimulus.register(
     open() {
       document.body.classList.add("nav-open");
       this.sync();
-      this.sidebarTarget.querySelector("a[href]")?.focus();
+      this.sidebarTarget.querySelector("select, a[href]")?.focus();
     }
 
     close(restoreFocus = true) {
@@ -231,7 +240,7 @@ Stimulus.register(
 
     trapTab(event) {
       const focusable = [
-        ...this.sidebarTarget.querySelectorAll("a[href], button, summary"),
+        ...this.sidebarTarget.querySelectorAll("a[href], button, summary, select"),
       ].filter((el) => el.offsetParent !== null);
       if (focusable.length === 0) return;
       const first = focusable[0];
@@ -246,6 +255,12 @@ Stimulus.register(
     }
   },
 );
+
+Stimulus.register("vault-picker", class extends Controller {
+  change(event) {
+    Turbo.visit(`/vaults/${event.target.value}/`);
+  }
+});
 
 // Theme: follows the system until the person picks one
 Stimulus.register(
@@ -287,6 +302,9 @@ Stimulus.register(
     static targets = ["modal", "input", "heading", "results", "note"];
 
     connect() {
+      this.active = true;
+      this.vaultId = document.body.dataset.vaultId;
+      this.abortController = new AbortController();
       this.debounceTimeout = null;
       this.selectedIndex = -1;
       this.results = [];
@@ -306,7 +324,14 @@ Stimulus.register(
     }
 
     disconnect() {
+      this.active = false;
+      this.abortController.abort();
+      clearTimeout(this.debounceTimeout);
       document.removeEventListener("keydown", this.onGlobalKeydown);
+    }
+
+    isCurrent() {
+      return this.active && this.vaultId === document.body.dataset.vaultId;
     }
 
     handleGlobalKeydown(event) {
@@ -392,6 +417,7 @@ Stimulus.register(
     }
 
     async search() {
+      if (!this.isCurrent()) return;
       const query = this.inputTarget.value.trim();
 
       if (!query) {
@@ -401,9 +427,10 @@ Stimulus.register(
 
       try {
         const response = await fetch(
-          `/api/documents/search?q=${encodeURIComponent(query)}`,
+          vaultURL(`/api/documents/search?q=${encodeURIComponent(query)}`),
+          { signal: this.abortController.signal },
         );
-        if (query !== this.inputTarget.value.trim()) return;
+        if (!this.isCurrent() || query !== this.inputTarget.value.trim()) return;
         if (response.ok) {
           const data = await response.json();
           this.results = data.results;
@@ -417,8 +444,10 @@ Stimulus.register(
     }
 
     async showRecentDocuments(filterQuery = "") {
+      if (!this.isCurrent()) return;
       try {
-        const response = await fetch("/api/documents");
+        const response = await fetch(vaultURL("/api/documents"), { signal: this.abortController.signal });
+        if (!this.isCurrent() || this.inputTarget.value.trim() !== filterQuery) return;
         if (response.ok) {
           let data = await response.json();
           if (data && data.documents) data = data.documents;
@@ -440,6 +469,7 @@ Stimulus.register(
           );
         }
       } catch (error) {
+        if (!this.isCurrent()) return;
         this.clearResults();
         this.say("Could not load documents.");
       }
@@ -450,15 +480,15 @@ Stimulus.register(
       if (!this.names) {
         const get = async (url) => {
           try {
-            const response = await fetch(url);
+            const response = await fetch(url, { signal: this.abortController.signal });
             return response.ok ? await response.json() : [];
           } catch (error) {
             return [];
           }
         };
         const [from, types] = await Promise.all([
-          get("/api/correspondents"),
-          get("/api/document_types"),
+          get(vaultURL("/api/correspondents")),
+          get(vaultURL("/api/document_types")),
         ]);
         const byId = (list) =>
           new Map((list.items || list).map((item) => [item.id, item.name]));
@@ -468,7 +498,9 @@ Stimulus.register(
     }
 
     async renderResults(results, title) {
+      const query = this.inputTarget.value.trim();
       const names = await this.loadNames();
+      if (!this.isCurrent() || query !== this.inputTarget.value.trim()) return;
       this.clearResults();
 
       if (results.length === 0) {
@@ -489,7 +521,7 @@ Stimulus.register(
           const date = (doc.created_at || "").slice(0, 10);
 
           return `
-                        <a href="/documents/${doc.id}"
+                        <a href="${escapeHtml(vaultURL(`/documents/${doc.id}`))}"
                            id="palette-opt-${index}"
                            class="palette-item"
                            role="option"
@@ -565,9 +597,26 @@ Stimulus.register(
 Stimulus.register(
   "upload-modal",
   class extends Controller {
-    static targets = ["modal", "form", "button", "status", "file", "camera"];
+    static targets = ["modal", "form", "button", "status", "file", "camera", "destination", "destinationLabel"];
+
+    connect() {
+      if (!this.hasDestinationTarget) return;
+      const current = document.body.dataset.vaultId;
+      this.destinationTarget.value = [...this.destinationTarget.options].some((option) => option.value === current)
+        ? current : this.destinationTarget.options[0].value;
+      this.destinationChanged();
+    }
+
+    destinationChanged() {
+      if (!this.hasDestinationTarget) return;
+      this.formTarget.action = uploadURL(this.destinationTarget.value);
+      this.destinationLabelTargets.forEach((label) => {
+        label.textContent = this.destinationTarget.selectedOptions[0].textContent.trim();
+      });
+    }
 
     open() {
+      if (!this.hasModalTarget) return;
       this.opener = document.activeElement;
       openDialog(this.modalTarget);
     }
@@ -599,29 +648,34 @@ Stimulus.register(
       }
     }
 
-    submit() {
-      if (this.hasButtonTarget) {
-        this.buttonTarget.disabled = true;
-        this.buttonTarget.textContent = "Uploading...";
-      }
-      if (this.hasStatusTarget) {
-        this.statusTarget.textContent = "Folio is reading the file.";
-      }
-    }
-
-    reset() {
-      if (this.hasButtonTarget) {
-        this.buttonTarget.disabled = false;
-        this.buttonTarget.textContent = "Upload";
-      }
-      if (this.hasStatusTarget) {
-        this.statusTarget.textContent = "";
-      }
-      if (this.hasFormTarget) {
+    async submit(event) {
+      event.preventDefault();
+      const destination = this.destinationTarget.value;
+      const destinationName = this.destinationTarget.selectedOptions[0].textContent.trim();
+      this.buttonTarget.disabled = true;
+      this.statusTarget.textContent = "Uploading to " + destinationName + "…";
+      try {
+        const response = await fetch(uploadURL(destination), {
+          method: "POST",
+          headers: { Accept: "text/vnd.turbo-stream.html" },
+          body: new FormData(this.formTarget),
+        });
+        if (!response.ok || !response.headers.get("content-type")?.includes("text/vnd.turbo-stream.html")) {
+          throw new Error(`Upload failed: ${response.status}`);
+        }
+        const stream = await response.text();
+        if (destination === document.body.dataset.vaultId) Turbo.renderStreamMessage(stream);
         this.formTarget.reset();
+        this.destinationTarget.value = destination;
+        this.destinationChanged();
+        this.close();
+        this.statusTarget.textContent = "";
+        window.showToast(`Uploaded to ${destinationName}. Folio is reading it.`, "success");
+      } catch (error) {
+        this.statusTarget.textContent = "Couldn't upload. Try again.";
+      } finally {
+        this.buttonTarget.disabled = false;
       }
-      this.close();
-      window.showToast("Uploaded. Folio is reading it.", "success");
     }
   },
 );
@@ -751,6 +805,7 @@ Stimulus.register(
     }
 
     dragenter(event) {
+      if (!uploadDestination()?.value) return;
       event.preventDefault();
       this.dragCounter++;
       if (this.dragCounter === 1) {
@@ -767,6 +822,7 @@ Stimulus.register(
     }
 
     dragover(event) {
+      if (!uploadDestination()?.value) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
     }
@@ -783,22 +839,26 @@ Stimulus.register(
     }
 
     queueFiles(files) {
+      const destination = uploadDestination();
+      if (!destination?.value) return;
+      const vaultId = destination.value;
+      const vaultName = destination.selectedOptions[0].textContent.trim();
       files.forEach((file) => {
         const id = Date.now() + Math.random().toString(36).substr(2, 9);
-        this.uploadQueue.push({ id, file, status: "pending" });
-        this.addToQueueUI(id, file);
+        this.uploadQueue.push({ id, file, vaultId, status: "pending" });
+        this.addToQueueUI(id, file, vaultName);
       });
 
       this.queueTarget.classList.add("active");
       this.processQueue();
     }
 
-    addToQueueUI(id, file) {
+    addToQueueUI(id, file, vaultName) {
       const item = document.createElement("div");
       item.className = "queue-item";
       item.dataset.queueId = id;
       item.innerHTML = `
-                    <span class="queue-item-name">${escapeHtml(file.name)}</span>
+                    <span class="queue-item-name">${escapeHtml(file.name)} <span class="f-meta">to ${escapeHtml(vaultName)}</span></span>
                     <span class="queue-item-status f-meta">Waiting</span>
                     <div class="queue-item-progress"><div class="queue-item-progress-bar" style="width: 0%"></div></div>
                 `;
@@ -841,11 +901,11 @@ Stimulus.register(
         this.updateQueueItemStatus(item.id, "0%");
 
         try {
-          const stream = await this.uploadFile(item.file, item.id);
+          const stream = await this.uploadFile(item.file, item.id, item.vaultId);
           item.status = "done";
           this.updateQueueItemProgress(item.id, 100);
           this.updateQueueItemStatus(item.id, "Uploaded");
-          Turbo.renderStreamMessage(stream);
+          if (item.vaultId === document.body.dataset.vaultId) Turbo.renderStreamMessage(stream);
         } catch (error) {
           item.status = "error";
           this.updateQueueItemStatus(item.id, "Couldn't upload");
@@ -857,7 +917,7 @@ Stimulus.register(
       this.isProcessing = false;
     }
 
-    uploadFile(file, id) {
+    uploadFile(file, id, vaultId) {
       return new Promise((resolve, reject) => {
         const formData = new FormData();
         formData.append("file", file);
@@ -874,7 +934,7 @@ Stimulus.register(
         });
 
         xhr.addEventListener("load", () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
+          if (xhr.status >= 200 && xhr.status < 300 && xhr.getResponseHeader("content-type")?.includes("text/vnd.turbo-stream.html")) {
             resolve(xhr.responseText);
           } else {
             reject(new Error(`Upload failed: ${xhr.status}`));
@@ -885,7 +945,7 @@ Stimulus.register(
           reject(new Error("Upload failed: Network error"));
         });
 
-        xhr.open("POST", "/documents/upload");
+        xhr.open("POST", uploadURL(vaultId));
         xhr.setRequestHeader("Accept", "text/vnd.turbo-stream.html");
         xhr.send(formData);
       });
@@ -898,7 +958,7 @@ Stimulus.register(
   "sse",
   class extends Controller {
     connect() {
-      this.source = new EventSource("/events");
+      this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
     }
 
@@ -942,7 +1002,7 @@ Stimulus.register(
 
       try {
         const response = await fetch(
-          `/documents/${this.documentIdValue}/tags`,
+          vaultURL(`/documents/${this.documentIdValue}/tags`),
           {
             method: "POST",
             body: new URLSearchParams({ tag_id: tagId }),
@@ -966,7 +1026,7 @@ Stimulus.register(
 
       try {
         const response = await fetch(
-          `/documents/${this.documentIdValue}/tags/${tagId}`,
+          vaultURL(`/documents/${this.documentIdValue}/tags/${tagId}`),
           {
             method: "POST",
           },
@@ -1071,7 +1131,7 @@ Stimulus.register(
         this.imageTarget.onload = () => {
           this.imageTarget.style.opacity = "1";
         };
-        this.imageTarget.src = `/documents/${this.documentIdValue}/page/${page}/thumbnail`;
+        this.imageTarget.src = vaultURL(`/documents/${this.documentIdValue}/page/${page}/thumbnail`);
       }
       if (this.hasCurrentPageTarget) {
         this.currentPageTarget.textContent = page;
@@ -1154,7 +1214,7 @@ Stimulus.register(
         const destination = this.constructor.destinations[event.key];
         if (destination) {
           event.preventDefault();
-          Turbo.visit(destination);
+          Turbo.visit(vaultURL(destination));
         }
         return;
       }
@@ -1267,10 +1327,11 @@ Stimulus.register(
     deletable() {
       const page = document.querySelector("[data-hotkey-document]");
       if (page) {
+        if (page.dataset.canEdit !== "true") return null;
         return { id: page.dataset.hotkeyDocument, title: page.dataset.hotkeyTitle };
       }
       const row = this.selectedRow();
-      if (!row) return null;
+      if (!row || row.dataset.canEdit !== "true") return null;
       return {
         id: row.id.replace(/^document-/, ""),
         title: row.querySelector(".f-row-title")?.textContent.trim() ?? "",
@@ -1280,7 +1341,7 @@ Stimulus.register(
     askDelete() {
       const doc = this.deletable();
       if (!doc) return;
-      this.confirmFormTarget.action = `/documents/${doc.id}/delete`;
+      this.confirmFormTarget.action = vaultURL(`/documents/${doc.id}/delete`);
       this.confirmTextTarget.textContent = doc.title
         ? `${doc.title} will be removed from your archive. This cannot be undone.`
         : "It will be removed from your archive. This cannot be undone.";
@@ -1311,7 +1372,8 @@ if ("serviceWorker" in navigator) {
     </script>
   </head>
   <body
-    data-controller="dropzone sse toast upload-modal command-palette nav theme hotkeys"
+    data-vault-id="{{ sidebar.vault_id }}"
+    data-controller="dropzone sse toast upload-modal command-palette nav theme hotkeys vault-picker"
     data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop"
   >
     <a class="skip-link" href="#main">Skip to content</a>
@@ -1325,7 +1387,7 @@ if ("serviceWorker" in navigator) {
     <div class="drop-overlay" data-dropzone-target="overlay">
       <div class="f-drop" data-over="true">
         <strong>Drop files to upload</strong>
-        <span>Images and PDFs.</span>
+        <span>Images and PDFs. Upload to <span data-upload-modal-target="destinationLabel"></span>.</span>
       </div>
     </div>
 
@@ -1364,6 +1426,7 @@ if ("serviceWorker" in navigator) {
       <div class="upload-queue-list" data-dropzone-target="queueList"></div>
     </section>
 
+    {% if sidebar.can_upload %}
     <dialog
       class="f-palette dialog"
       aria-labelledby="upload-title"
@@ -1383,12 +1446,22 @@ if ("serviceWorker" in navigator) {
           </button>
         </div>
         <form
-          action="/documents/upload"
+          action="{{ "/documents/upload"|vault_url }}"
           method="post"
           enctype="multipart/form-data"
           data-upload-modal-target="form"
-          data-action="turbo:submit-start->upload-modal#submit turbo:submit-end->upload-modal#reset"
+          data-turbo="false"
+          data-action="submit->upload-modal#submit"
         >
+          <div class="field">
+            <label for="upload-vault">Upload to</label>
+            <select class="select" id="upload-vault" data-upload-modal-target="destination" data-action="change->upload-modal#destinationChanged" required>
+              {% for vault in sidebar.upload_vaults %}
+              <option value="{{ vault.id }}" {% if vault.selected %}selected{% endif %}>{{ vault.name }}</option>
+              {% endfor %}
+            </select>
+            <span class="hint">Uploads go here, even when you browse another vault.</span>
+          </div>
           <div class="field">
             <label for="modal-title">Title (optional)</label>
             <input
@@ -1452,6 +1525,7 @@ if ("serviceWorker" in navigator) {
       </div>
     </dialog>
 
+    {% endif %}
     <dialog
       class="f-palette dialog palette"
       aria-label="Search documents"
@@ -1589,15 +1663,30 @@ if ("serviceWorker" in navigator) {
         aria-label="Main"
         data-nav-target="sidebar"
       >
-        <a class="brand" href="/">
+        <a class="brand" href="{{ "/"|vault_url }}">
           <span class="brand-mark">{{ icons::mark() }}</span>
           <span class="brand-name">Folio</span>
         </a>
 
+        <div class="vault-context">
+          <span class="f-label">Library</span>
+          {% if sidebar.vaults.len() > 1 %}
+          <label class="sr-only" for="library-vault">Vault</label>
+          <select id="library-vault" class="select vault-select" data-action="change->vault-picker#change">
+            {% for vault in sidebar.vaults %}
+            <option value="{{ vault.id }}" {% if vault.selected %}selected{% endif %}>{{ vault.name }} · {{ vault.role }}</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <span class="vault-name">{{ sidebar.vault_name }}</span>
+          {% endif %}
+          <span class="f-meta">{{ sidebar.vault_role }}</span>
+        </div>
+
         <nav class="side-nav">
           <a
             class="side-link"
-            href="/"
+            href="{{ "/"|vault_url }}"
             title="Inbox (g then i)"
             {% if sidebar.active == "inbox" %}aria-current="page"{% endif %}
           >
@@ -1607,7 +1696,7 @@ if ("serviceWorker" in navigator) {
           </a>
           <a
             class="side-link"
-            href="/?view=all"
+            href="{{ "/?view=all"|vault_url }}"
             title="All documents (g then a)"
             {% if sidebar.active == "all" %}aria-current="page"{% endif %}
           >
@@ -1623,7 +1712,7 @@ if ("serviceWorker" in navigator) {
             <summary>From</summary>
             <ul>
               {% for c in sidebar.correspondents %}
-              <li><a href="/?correspondent_id={{ c.id }}">{{ c.name }}</a></li>
+              <li><a href="{{ "/?correspondent_id="|vault_url }}{{ c.id }}">{{ c.name }}</a></li>
               {% else %}
               <li class="browse-empty">No one yet</li>
               {% endfor %}
@@ -1633,7 +1722,7 @@ if ("serviceWorker" in navigator) {
             <summary>Types</summary>
             <ul>
               {% for t in sidebar.document_types %}
-              <li><a href="/?document_type_id={{ t.id }}">{{ t.name }}</a></li>
+              <li><a href="{{ "/?document_type_id="|vault_url }}{{ t.id }}">{{ t.name }}</a></li>
               {% else %}
               <li class="browse-empty">No types yet</li>
               {% endfor %}
@@ -1643,7 +1732,7 @@ if ("serviceWorker" in navigator) {
             <summary>Tags</summary>
             <div class="side-tags">
               {% for t in sidebar.tags %}
-              <a class="f-tag f-tag-{{ t.tone }}" href="/?tag_id={{ t.id }}"
+              <a class="f-tag f-tag-{{ t.tone }}" href="{{ "/?tag_id="|vault_url }}{{ t.id }}"
                 >{{ t.name }}</a
               >
               {% else %}
@@ -1656,21 +1745,23 @@ if ("serviceWorker" in navigator) {
         <div class="side-foot">
           <a
             class="side-link"
-            href="/manage"
+            href="{{ "/manage"|vault_url }}"
             {% if sidebar.active == "manage" %}aria-current="page"{% endif %}
           >
             {{ icons::tag() }}
             <span class="side-label">Manage</span>
           </a>
+          {% if true|can_workflows %}
           <a
             class="side-link"
-            href="/workflows"
+            href="{{ "/workflows"|vault_url }}"
             title="Workflows (g then w)"
             {% if sidebar.active == "workflows" %}aria-current="page"{% endif %}
           >
             {{ icons::refresh() }}
             <span class="side-label">Workflows</span>
           </a>
+          {% endif %}
           <a
             class="side-link"
             href="/settings"
@@ -1738,6 +1829,7 @@ if ("serviceWorker" in navigator) {
             <span class="search-label">Search documents</span>
             <kbd class="f-kbd">&#8984;K</kbd>
           </button>
+          {% if sidebar.can_upload %}
           <button
             type="button"
             class="f-btn f-btn-primary"
@@ -1749,6 +1841,7 @@ if ("serviceWorker" in navigator) {
             {{ icons::upload() }}
             <span class="upload-label">Upload</span>
           </button>
+          {% endif %}
         </header>
 
         {% block flash %}{% endblock %}

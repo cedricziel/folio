@@ -8,13 +8,13 @@
     {% if total == 0 %}
     <h2 class="display">Your paperwork, filed.</h2>
     <p class="lede">Drop a letter, invoice or contract below and Folio reads it for you.</p>
-    <button type="button" class="f-btn f-btn-primary" data-action="click->upload-modal#open">Upload a document</button>
+    {% if true|can_upload %}<button type="button" class="f-btn f-btn-primary" data-action="click->upload-modal#open">Upload a document</button>{% endif %}
     {% else if view_all %}
     <h2 class="heading">No documents match.</h2>
-    <p class="lede">Try another filter, or <a href="/?view=all">see all documents</a>.</p>
+    <p class="lede">Try another filter, or <a href="{{ "/?view=all"|vault_url }}">see all documents</a>.</p>
     {% else %}
     <h2 class="heading">Nothing waiting.</h2>
-    <p class="lede">Everything is filed. New uploads land here. <a href="/?view=all">See all documents</a>.</p>
+    <p class="lede">Everything is filed. New uploads land here. <a href="{{ "/?view=all"|vault_url }}">See all documents</a>.</p>
     {% endif %}
 </div>
 {% endif %}

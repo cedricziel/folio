@@ -1,6 +1,7 @@
 //! The account and security page: password, TOTP, passkeys, sessions and
 //! connected OAuth clients.
 
+use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},

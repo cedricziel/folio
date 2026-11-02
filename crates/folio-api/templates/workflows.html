@@ -7,7 +7,7 @@
     <header class="page-head">
         <div class="page-head-row">
             <h1 class="title">Workflows</h1>
-            <a href="/workflows/new" class="f-btn f-btn-primary">New workflow</a>
+            <a href="{{ "/workflows/new"|vault_url }}" class="f-btn f-btn-primary">New workflow</a>
         </div>
         <p class="lede">When something happens to a document, Folio can tag it, file it, or notify another service.</p>
     </header>
@@ -21,7 +21,7 @@
         {% for row in rows %}
         <div class="f-row f-row-plain">
             <div class="row-main">
-                <a href="/workflows/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
+                <a href="{{ "/workflows"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
                 <div class="f-row-sub">
                     <span>{{ row.trigger }}</span>
                     {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
@@ -34,7 +34,7 @@
                     {% endmatch %}
                 </div>
             </div>
-            <form action="/workflows/{{ row.id }}/toggle" method="post" data-turbo="false">
+            <form action="{{ "/workflows"|vault_url }}/{{ row.id }}/toggle" method="post" data-turbo="false">
                 <button type="submit" class="f-btn f-btn-quiet">{% if row.enabled %}Turn off{% else %}Turn on{% endif %}</button>
             </form>
         </div>

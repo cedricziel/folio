@@ -6,7 +6,7 @@
 {% block content %}
 <section class="page">
     <header class="page-head">
-        <a href="/workflows" class="back-link">{{ icons::arrow_left() }} Workflows</a>
+        <a href="{{ "/workflows"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Workflows</a>
         <h1 class="title">{% if workflow_id.is_some() %}Edit workflow{% else %}New workflow{% endif %}</h1>
     </header>
 
@@ -19,7 +19,7 @@
     {% endmatch %}
 
     <form method="post" data-turbo="false" data-controller="workflow-form" class="workflow-form"
-          action="{% match workflow_id %}{% when Some with (id) %}/workflows/{{ id }}{% when None %}/workflows{% endmatch %}">
+          action="{{ "/workflows"|vault_url }}{% match workflow_id %}{% when Some with (id) %}/{{ id }}{% when None %}{% endmatch %}">
         <div class="field">
             <label for="name">Name</label>
             <input class="input" type="text" id="name" name="name" value="{{ values.name }}" required>
@@ -117,7 +117,7 @@
                 <div class="action-card">
                     <p class="heading">Add tags</p>
                     {% if action_tags.is_empty() %}
-                    <p class="hint">No tags yet. <a href="/manage">Create one</a>.</p>
+                    <p class="hint">No tags yet. <a href="{{ "/manage"|vault_url }}">Create one</a>.</p>
                     {% else %}
                     <div class="check-list">
                         {% for t in action_tags %}<label class="check"><input type="checkbox" name="action_tag_{{ t.value }}"{% if t.selected %} checked{% endif %}> {{ t.label }}</label>{% endfor %}
@@ -166,8 +166,8 @@
             <button type="submit" class="f-btn f-btn-primary">Save workflow</button>
             {% match workflow_id %}
             {% when Some with (id) %}
-            <button type="submit" class="f-btn" formaction="/workflows/{{ id }}/test" formnovalidate>Send test</button>
-            <button type="submit" class="f-btn f-btn-quiet f-btn-danger push-end" formaction="/workflows/{{ id }}/delete" formnovalidate>Delete workflow</button>
+            <button type="submit" class="f-btn" formaction="{{ "/workflows"|vault_url }}/{{ id }}/test" formnovalidate>Send test</button>
+            <button type="submit" class="f-btn f-btn-quiet f-btn-danger push-end" formaction="{{ "/workflows"|vault_url }}/{{ id }}/delete" formnovalidate>Delete workflow</button>
             {% when None %}
             {% endmatch %}
         </div>
