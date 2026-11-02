@@ -81,6 +81,9 @@ release. These device and visual checks are not covered by the hostless tests.
 
 ## Apple inbox navigation
 
+Allow three minutes per test for cold simulator launch and automation setup.
+Keep the per-element waits bounded independently.
+
 `apple/NavigationTests/project.yml` builds the production workspace, inbox, and
 detail views with a fake service. Its UI test taps a document, returns to the
 list, and opens another document. Model tests alone do not verify row taps.
@@ -96,7 +99,8 @@ xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme F
   -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
   -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
   -parallel-testing-enabled NO -test-timeouts-enabled YES \
-  -maximum-test-execution-time-allowance 45 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
+  -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
 ```
 
 Bound runner startup separately; XCTest's execution timeout does not cover it.
