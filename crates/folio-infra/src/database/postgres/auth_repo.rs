@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use folio_auth::{
     AccessToken, AuthCode, AuthError, AuthStore, ConnectedClient, Group, GroupSource, OAuthClient,
-    OidcLogin, PasskeyRecord, RefreshToken, Session, TotpRecord, User,
+    OidcLogin, PasskeyRecord, PersonalToken, RefreshToken, Session, TotpRecord, User,
 };
 use sqlx::{postgres::PgRow, PgPool, Row};
 
@@ -51,6 +51,21 @@ fn user_from(row: PgRow) -> User {
         is_owner: row.get::<bool, _>("is_owner"),
         auth_source: row.get("auth_source"),
         external_id: row.get("external_id"),
+    }
+}
+
+fn personal_token_from(row: PgRow) -> PersonalToken {
+    PersonalToken {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        name: row.get("name"),
+        token_hash: row.get("token_hash"),
+        prefix: row.get("prefix"),
+        audience: row.get("audience"),
+        scopes: split(row.get("scopes")),
+        created_at: row.get("created_at"),
+        expires_at: row.get("expires_at"),
+        revoked_at: row.get("revoked_at"),
     }
 }
 
@@ -431,6 +446,48 @@ impl AuthStore for PostgresAuthStore {
             expires_at: r.get("expires_at"),
             grant_id: r.get("grant_id"),
         }))
+    }
+
+    async fn insert_personal_token(&self, token: PersonalToken) -> Result<(), AuthError> {
+        sqlx::query("INSERT INTO personal_access_tokens (id, user_id, name, token_hash, prefix, audience, scopes, created_at, expires_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+            .bind(token.id).bind(token.user_id).bind(token.name).bind(token.token_hash)
+            .bind(token.prefix).bind(token.audience).bind(token.scopes.join(" "))
+            .bind(token.created_at).bind(token.expires_at).bind(token.revoked_at)
+            .execute(&self.pool).await.map(|_| ()).map_err(err)
+    }
+
+    async fn find_personal_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<PersonalToken>, AuthError> {
+        sqlx::query("SELECT * FROM personal_access_tokens WHERE token_hash = $1")
+            .bind(token_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map(|row| row.map(personal_token_from))
+            .map_err(err)
+    }
+
+    async fn list_personal_tokens(&self, user_id: &str) -> Result<Vec<PersonalToken>, AuthError> {
+        sqlx::query(
+            "SELECT * FROM personal_access_tokens WHERE user_id = $1 ORDER BY created_at DESC, id",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(personal_token_from).collect())
+        .map_err(err)
+    }
+
+    async fn revoke_personal_token(
+        &self,
+        user_id: &str,
+        id: &str,
+        at: i64,
+    ) -> Result<bool, AuthError> {
+        sqlx::query("UPDATE personal_access_tokens SET revoked_at = COALESCE(revoked_at, $1) WHERE user_id = $2 AND id = $3")
+            .bind(at).bind(user_id).bind(id).execute(&self.pool).await
+            .map(|result| result.rows_affected() > 0).map_err(err)
     }
 
     async fn insert_access_token(&self, t: AccessToken) -> Result<(), AuthError> {

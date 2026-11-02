@@ -155,6 +155,21 @@ pub struct AccessToken {
     pub grant_id: String,
 }
 
+/// A user-managed credential. The full secret is never stored.
+#[derive(Clone)]
+pub struct PersonalToken {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub token_hash: String,
+    pub prefix: String,
+    pub audience: String,
+    pub scopes: Vec<String>,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub revoked_at: Option<i64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RefreshToken {
     pub token_hash: String,
@@ -171,6 +186,7 @@ pub struct RefreshToken {
 /// [`crate::require_bearer`].
 #[derive(Debug, Clone)]
 pub struct AuthContext {
+    pub personal_token_id: Option<String>,
     pub user_id: String,
     pub client_id: String,
     pub scopes: Vec<String>,
