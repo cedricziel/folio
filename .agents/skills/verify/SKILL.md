@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify Folio MCP and Apple changes with isolated protocol, package, macOS authentication, and File Provider regression tests.
+description: Verify Folio server and Apple changes with isolated authentication, authorization, protocol, and native regression tests.
 ---
 
 # Verify Apple changes
@@ -129,6 +129,14 @@ are rejected. Keep current default-vault document Intent coverage separate from
 external identifier parsing.
 Run both the package suite and native provider tests above after these changes.
 These tests do not establish system integration in Files or Finder.
+
+## Verify forward authentication
+
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test auth_flow forward::`.
+The suite uses temporary SQLite databases and in-process router requests.
+It covers identity changes on JSON, fetch, and HTML requests, matching-session
+reuse, cookieless session bounds, trusted proxies, shared secrets, repeated
+headers, and bearer-request isolation. Do not use a live gateway or user session.
 
 ## Verify MCP changes
 

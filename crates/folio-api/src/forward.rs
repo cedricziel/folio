@@ -104,8 +104,15 @@ pub async fn forward_auth(
     };
 
     let has_session = match auth.current_user(request.headers()).await {
-        Some(current) => current.id == user.id,
-        None => false,
+        Some(current) if current.id == user.id => true,
+        Some(_) if !accepts_html(request.headers()) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                "The gateway identity changed. Reload the page to sign in again.",
+            )
+                .into_response();
+        }
+        _ => false,
     };
     // Only page loads can store the cookie; other cookieless requests would
     // each leave a session row behind.
