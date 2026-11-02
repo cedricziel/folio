@@ -237,3 +237,37 @@ async fn enable_gate_does_not_query_settings_per_request() {
         counting.reads.load(Ordering::SeqCst)
     );
 }
+
+#[tokio::test]
+async fn bundled_skills_do_not_grant_document_access() {
+    let fx = Fixture::new().await;
+    let app = with_scopes(
+        folio_mcp::router(
+            fx.library.clone(),
+            fx.vaults.clone(),
+            fx.settings_port(),
+            McpOptions::default(),
+        ),
+        &[],
+    );
+    let client = ().serve(StreamableHttpClientTransport::from_uri(serve(app).await)).await.unwrap();
+    let skill = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            "skill://folio-archive/SKILL.md",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(skill.contents.len(), 1);
+    let documents = client.list_resources(None).await;
+    assert!(documents.is_err());
+    let result = client
+        .send_request(rmcp::model::ClientRequest::CustomRequest(
+            rmcp::model::CustomRequest::new("skills/list", Some(json!({}))),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(result).unwrap()["skills"][0]["frontmatter"]["name"],
+        "folio-archive"
+    );
+}

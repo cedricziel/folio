@@ -31,6 +31,12 @@ Claude Desktop (stdio), in `claude_desktop_config.json`:
 
 Run it from the directory that holds `config.toml`, or set the `FOLIO_*` environment variables. Logs go to stderr. Uploads made over stdio are processed by the background worker of that process, so OCR only runs while the client is connected.
 
+## Skills
+
+Folio serves the `folio-archive` skill with workflows for search, OCR reading,
+metadata changes, and uploads. See [Load Folio workflows through MCP](mcp-skills.md)
+for host usage, consumer implementation, and fallback instructions.
+
 ## Tools
 
 | Tool | Purpose | Access |

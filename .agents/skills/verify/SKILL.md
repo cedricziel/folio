@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify Folio Apple changes with isolated package and macOS authentication and File Provider regression tests.
+description: Verify Folio MCP and Apple changes with isolated protocol, package, macOS authentication, and File Provider regression tests.
 ---
 
 # Verify Apple changes
@@ -53,3 +53,18 @@ Lint changed Swift files with `xcrun swift-format lint --strict`. A package test
 `FolioProviderTests` exercises upload completion using a fake service and temporary files. It does not register a File Provider domain or access shared credentials. `FolioCatalogTests` checks that Inbox retains documents while processing is pending.
 
 `EnumerationTests` checks folder deletions, working-set aliases after restart, classification changes, taxonomy renames, unchanged snapshots, expired anchors, and a consistent initial snapshot. It stores fingerprints under a fresh temporary directory and removes it after each test. Production retains at most 32 snapshots per domain/container cache directory.
+
+## Verify MCP changes
+
+Run `RUSTC_WRAPPER= cargo test -p folio-mcp` for protocol, tool, HTTP, and OAuth
+regressions. The skills suite uses in-memory transports and temporary fixture
+storage. HTTP tests bind loopback port 0, use test identities, and stop with their
+Tokio runtime. They do not start the app or access user archives or credentials.
+
+The skills tests cover modern discovery, direct lookup, manifest digests and
+byte sizes, frontmatter equality, unknown URIs, invalid cursors, legacy resource
+reads, and document-scope separation. Do not launch a server against existing data.
+
+Before a PR, also run `RUSTC_WRAPPER= make format`, `RUSTC_WRAPPER= make lint`, and
+`RUSTC_WRAPPER= make test`. An empty wrapper bypasses a local sccache service when
+the sandbox cannot access it.
