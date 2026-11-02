@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.5.0](https://github.com/cedricziel/folio/compare/v0.4.0...v0.5.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **webhooks:** scope delivery IDs to workflow actions ([#190](https://github.com/cedricziel/folio/issues/190))
+* **webhooks:** X-Folio-Delivery identifies a run/action pair. Use X-Folio-Run for workflow-run correlation and finish pending runs before upgrading when deduplication must span the transition.
+
+### Features
+
+* **config:** honor pipeline startup configuration ([#182](https://github.com/cedricziel/folio/issues/182)) ([c6dbd85](https://github.com/cedricziel/folio/commit/c6dbd857482068de78924a7b98ebb0375857d8c8))
+* **ocr:** add local OCRmyPDF provider ([c38106b](https://github.com/cedricziel/folio/commit/c38106bff5fe9aee1503106e7c04a1204fb8c3b5))
+* **ocr:** add local OCRmyPDF provider ([#185](https://github.com/cedricziel/folio/issues/185)) ([71efbe4](https://github.com/cedricziel/folio/commit/71efbe401128431507f6dd321a5da4d60e726928))
+* **telemetry:** export browser and Apple signals through Folio ([#157](https://github.com/cedricziel/folio/issues/157)) ([939f412](https://github.com/cedricziel/folio/commit/939f412d7c6830419c79813937971b8be2771db2))
+
+
+### Bug Fixes
+
+* **api:** reject invalid classification form values ([a6fc69d](https://github.com/cedricziel/folio/commit/a6fc69d83f5060a664ade9bc41c357bb81a73651))
+* **api:** reject invalid classification form values ([#189](https://github.com/cedricziel/folio/issues/189)) ([1399ecc](https://github.com/cedricziel/folio/commit/1399eccb67fa102853e807008a7601ea40ef93e8))
+* **auth:** exclude security pages from Turbo snapshots ([218b08d](https://github.com/cedricziel/folio/commit/218b08dcbf8d3458a111833d8881a22aa8ec526c))
+* **auth:** exclude security pages from Turbo snapshots ([#187](https://github.com/cedricziel/folio/issues/187)) ([80bde29](https://github.com/cedricziel/folio/commit/80bde29097f09a202d12352c4d3c44bdcce0f83d))
+* **config:** recover interrupted pipeline initialization ([22f7fa2](https://github.com/cedricziel/folio/commit/22f7fa2541902a4a9333d789393a004b6c104b98))
+* **webhooks:** scope delivery IDs to workflow actions ([5a3304c](https://github.com/cedricziel/folio/commit/5a3304c02480b39a64df70d3e606bf5569282b9a))
+* **webhooks:** scope delivery IDs to workflow actions ([#190](https://github.com/cedricziel/folio/issues/190)) ([b01200f](https://github.com/cedricziel/folio/commit/b01200fd052aa93f04a6068f58e12de822efcbd2))
+
 ## [0.4.0](https://github.com/cedricziel/folio/compare/v0.3.1...v0.4.0) (2026-11-02)
 
 
