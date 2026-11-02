@@ -81,9 +81,11 @@ xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme F
   -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
   -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
   -parallel-testing-enabled NO -test-timeouts-enabled YES \
-  -maximum-test-execution-time-allowance 45 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
+  -maximum-test-execution-time-allowance 120 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
 ```
 
+The two-minute test allowance includes cold app launch and automation setup;
+individual navigation assertions still wait only 5–10 seconds.
 Bound runner startup separately; XCTest's execution timeout does not cover it.
 On every exit, shut down and delete only `verify_device`, then remove `verify_dir`.
 An accessibility initialization failure before the test taps a row is an
