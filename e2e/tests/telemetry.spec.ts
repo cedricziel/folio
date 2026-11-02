@@ -60,7 +60,7 @@ const test = base.extend<{ receiver: Receiver }>({
         );
       } else if (url.startsWith("/api/")) {
         response.setHeader("content-type", "application/json");
-        response.end("{}");
+        response.end('{"content":"private-response-content"}');
       } else {
         response.setHeader("content-type", "text/html");
         response.end(
@@ -124,6 +124,14 @@ test("exports real OTLP signals with persistent context and private correlated r
     await fetch("/api/documents/private-document?search=private-query", {
       headers: { authorization: "Bearer private-token" },
     });
+    await fetch("/api/documents/private-document", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "private-title",
+        content: "private-document-content",
+      }),
+    });
     await new Promise<void>((resolve) => {
       const xhr = new XMLHttpRequest();
       xhr.open("GET", "/api/documents/private-xhr?search=private-query");
@@ -183,7 +191,7 @@ test("exports real OTLP signals with persistent context and private correlated r
   expect(
     JSON.stringify(receiver.captures.map((capture) => capture.body)),
   ).not.toMatch(
-    /private-document|private-xhr|private-query|private-fragment|private-token|private-external|test-session|url.full|http.url/,
+    /private-document|private-xhr|private-query|private-fragment|private-token|private-title|private-response-content|private-external|test-session|url.full|http.url/,
   );
   expect(spans(receiver)).toEqual(
     expect.arrayContaining([

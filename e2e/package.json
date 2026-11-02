@@ -5,6 +5,7 @@
   "scripts": {
     "test": "playwright test",
     "test:telemetry": "playwright test --config telemetry.config.ts",
+    "verify:telemetry": "node verify-telemetry.mjs",
     "report": "playwright show-report"
   },
   "devDependencies": {
