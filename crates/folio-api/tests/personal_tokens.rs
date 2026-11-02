@@ -270,3 +270,23 @@ async fn credential_management_does_not_require_an_accessible_vault() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
+
+#[tokio::test]
+async fn read_tokens_can_request_document_thumbnails() {
+    let h = harness().await;
+    let alice = account(&h, "alice").await;
+    let token = create(&h, &alice, creation()).await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(req(
+            "GET",
+            "/api/documents/00000000-0000-0000-0000-000000000001/thumbnail",
+            "",
+            token["token"].as_str().unwrap(),
+            Value::Null,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

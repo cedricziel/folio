@@ -2005,7 +2005,7 @@
             "description": "Missing or invalid authentication for the API resource"
           },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2027,7 +2027,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/sources": {

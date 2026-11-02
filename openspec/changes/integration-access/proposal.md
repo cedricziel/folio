@@ -24,6 +24,6 @@ Touches folio-auth models and AuthStore, folio-infra SQLite and PostgreSQL auth 
 
 Adds HTML GET `/settings/integrations` and JSON GET/POST `/api/auth/tokens`, DELETE `/api/auth/tokens/{id}`. Management requires a signed-in account session, including when instance authentication is optional. Bearer tokens cannot manage tokens.
 
-Add `20261102140000_personal_access_tokens.sql` in both migration directories, adjusting the timestamp if occupied before implementation. Existing rows and OAuth grants remain unchanged. No configuration setting is added.
+Add `20261102160000_personal_access_tokens.sql` in both migration directories, adjusting the timestamp if occupied before implementation. Existing rows and OAuth grants remain unchanged. No configuration setting is added.
 
 Native token-management UI, vault-restricted tokens, new OAuth flows, and new administrative scopes are outside this change.
