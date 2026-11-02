@@ -12,6 +12,8 @@ struct InboxActions {
     var find: () -> Void
     /// Nil while no document is selected.
     var deleteSelected: (() -> Void)?
+    var photos: (() -> Void)? = nil
+    var signOut: (() -> Void)? = nil
 }
 
 extension FocusedValues {
@@ -22,13 +24,19 @@ struct FolioCommands: Commands {
     let lock: AppLock
     @FocusedValue(\.inboxActions) private var focusedActions
 
-    private var actions: InboxActions? { lock.isLocked ? nil : focusedActions }
+    private var actions: InboxActions? {
+        lock.isLocked ? nil : focusedActions
+    }
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Button("Upload…") { actions?.upload?() }
                 .keyboardShortcut("o")
                 .disabled(actions?.upload == nil)
+            #if os(macOS)
+                Button("Import from Photos…") { actions?.photos?() }
+                    .disabled(actions?.photos == nil)
+            #endif
             #if os(iOS)
                 Button("Scan document") { actions?.scan?() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])
@@ -52,5 +60,11 @@ struct FolioCommands: Commands {
                 .keyboardShortcut("f")
                 .disabled(actions == nil)
         }
+        #if os(macOS)
+            CommandGroup(after: .appSettings) {
+                Button("Sign Out") { actions?.signOut?() }
+                    .disabled(actions?.signOut == nil)
+            }
+        #endif
     }
 }

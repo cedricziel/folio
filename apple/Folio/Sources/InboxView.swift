@@ -27,6 +27,7 @@ struct InboxView: View {
     @State private var showFileImporter = false
     @State private var isDropTargeted = false
     @State private var isImporting = false
+    @State private var showPhotosPicker = false
     @State private var photoSelection: [PhotosPickerItem] = []
     @State private var pendingDelete: Document?
     @State private var showScanner = false
@@ -85,6 +86,7 @@ struct InboxView: View {
             trashHistory.invalidate()
         }
         .focusedSceneValue(\.inboxActions, actions)
+        .photosPicker(isPresented: $showPhotosPicker, selection: $photoSelection, matching: .images)
         .onChange(of: router.request, initial: true) { _, request in
             guard let request else { return }
             router.clear()
@@ -133,7 +135,9 @@ struct InboxView: View {
             deleteSelected: canEdit && !trashHistory.isWorking
                 ? session.selection.flatMap { list.document(for: $0) }.map { document in
                     { pendingDelete = document }
-                } : nil
+                } : nil,
+            photos: canAcceptImport ? { showPhotosPicker = true } : nil,
+            signOut: onSignOut
         )
     }
 
@@ -426,10 +430,8 @@ struct InboxView: View {
             Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                 .help("Upload files (\u{2318}O)")
                 .disabled(!canAcceptImport)
-            PhotosPicker(selection: $photoSelection, matching: .images) {
-                Label("Photos", systemImage: "photo")
-            }
-            .disabled(!canAcceptImport)
+            Button("Photos", systemImage: "photo") { showPhotosPicker = true }
+                .disabled(!canAcceptImport)
             Menu("Server", systemImage: "gearshape") {
                 Text(serverURL.absoluteString)
                 Button("Sign out", action: onSignOut)

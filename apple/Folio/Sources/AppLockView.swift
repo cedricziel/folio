@@ -25,58 +25,64 @@ struct AppLockSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle(
-                        "App lock",
-                        isOn: Binding(
-                            get: { lock.isEnabled },
-                            set: { enabled in Task { await lock.setEnabled(enabled) } }
-                        )
-                    )
-                    if lock.isEnabled {
-                        Picker(
-                            "Require unlock",
-                            selection: Binding(
-                                get: { lock.timeout },
-                                set: { timeout in Task { await lock.setTimeout(timeout) } }
-                            )
-                        ) {
-                            ForEach(AppLock.Timeout.allCases) { timeout in
-                                Text(timeout.title).tag(timeout)
-                            }
+        #if os(macOS)
+            settingsForm
+                .padding(FolioTheme.Spacing.space4)
+        #else
+            NavigationStack {
+                settingsForm
+                    .navigationTitle("App lock")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
                         }
                     }
-                } footer: {
-                    Text(
-                        "Use Face ID, Touch ID, or your device passcode or Mac password. The delay starts when you leave Folio. Folio always locks on launch and when your device locks."
-                    )
-                }
-                Section {
-                    Text(
-                        "Locks the Folio app. Documents remain accessible through Files, Finder, and Shortcuts. Sharing to Folio continues to work."
-                    )
-                    .foregroundStyle(Color.inkMuted)
-                }
-                if let problem = lock.problem {
-                    Text(problem).foregroundStyle(Color.danger)
-                }
-                if lock.isAuthenticating { ProgressView("Authenticating…") }
             }
-            .formStyle(.grouped)
-            .disabled(lock.isAuthenticating)
-            .navigationTitle("App lock")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        .padding(FolioTheme.Spacing.space4)
-        #if os(macOS)
-            .frame(minWidth: 400, idealWidth: 480, minHeight: 360, idealHeight: 420)
+            .padding(FolioTheme.Spacing.space4)
         #endif
+    }
+
+    private var settingsForm: some View {
+        Form {
+            Section {
+                Toggle(
+                    "App lock",
+                    isOn: Binding(
+                        get: { lock.isEnabled },
+                        set: { enabled in Task { await lock.setEnabled(enabled) } }
+                    )
+                )
+                if lock.isEnabled {
+                    Picker(
+                        "Require unlock",
+                        selection: Binding(
+                            get: { lock.timeout },
+                            set: { timeout in Task { await lock.setTimeout(timeout) } }
+                        )
+                    ) {
+                        ForEach(AppLock.Timeout.allCases) { timeout in
+                            Text(timeout.title).tag(timeout)
+                        }
+                    }
+                }
+            } footer: {
+                Text(
+                    "Use Face ID, Touch ID, or your device passcode or Mac password. The delay starts when you leave Folio. Folio always locks on launch and when your device locks."
+                )
+            }
+            Section {
+                Text(
+                    "Locks the Folio app. Documents remain accessible through Files, Finder, and Shortcuts. Sharing to Folio continues to work."
+                )
+                .foregroundStyle(Color.inkMuted)
+            }
+            if let problem = lock.problem {
+                Text(problem).foregroundStyle(Color.danger)
+            }
+            if lock.isAuthenticating { ProgressView("Authenticating…") }
+        }
+        .formStyle(.grouped)
+        .disabled(lock.isAuthenticating)
     }
 }
 

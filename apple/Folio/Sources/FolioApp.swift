@@ -36,6 +36,21 @@ struct FolioApp: App {
             FolioCommands(lock: security.lock)
             AppLockCommands(lock: security.lock)
         }
+        #if os(macOS)
+            Settings {
+                Group {
+                    if security.lock.isLocked {
+                        AppLockView(lock: security.lock)
+                    } else {
+                        AppLockSettingsView(lock: security.lock)
+                    }
+                }
+                .navigationTitle("Folio Settings")
+                .frame(minWidth: 400, idealWidth: 480, minHeight: 360, idealHeight: 420)
+                .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
+            }
+            .windowResizability(.contentSize)
+        #endif
     }
 }
 
@@ -138,7 +153,9 @@ final class AppModel {
 struct RootView: View {
     let model: AppModel
     let lock: AppLock
-    @State private var showLockSettings = false
+    #if os(iOS)
+        @State private var showLockSettings = false
+    #endif
 
     var body: some View {
         content
@@ -161,20 +178,22 @@ struct RootView: View {
         } else if case let .signedIn(url) = model.session {
             WorkspaceView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
                 .id(url)
-                .toolbar {
-                    ToolbarItem {
-                        Menu {
-                            Button("App lock settings…") { showLockSettings = true }
-                            if lock.isEnabled {
-                                Button("Lock now", systemImage: "lock") { lock.lockNow() }
+                #if os(iOS)
+                    .toolbar {
+                        ToolbarItem {
+                            Menu {
+                                Button("App lock settings…") { showLockSettings = true }
+                                if lock.isEnabled {
+                                    Button("Lock now", systemImage: "lock") { lock.lockNow() }
+                                }
+                            } label: {
+                                Label("Privacy", systemImage: "lock.shield")
                             }
-                        } label: {
-                            Label("Privacy", systemImage: "lock.shield")
                         }
                     }
-                }
-                .sheet(isPresented: $showLockSettings) { AppLockSettingsView(lock: lock) }
-                .onDisappear { showLockSettings = false }
+                    .sheet(isPresented: $showLockSettings) { AppLockSettingsView(lock: lock) }
+                    .onDisappear { showLockSettings = false }
+                #endif
         } else {
             switch model.session {
             case .restoring:
