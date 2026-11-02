@@ -75,6 +75,7 @@ impl DomainEventEnvelope {
         data: Value,
     ) -> Result<Self> {
         let event_id = Uuid::new_v4();
+        let lineage = crate::mutation::current_lineage();
         let envelope = Self {
             schema_version: 1,
             event_id,
@@ -84,8 +85,8 @@ impl DomainEventEnvelope {
             vault_id,
             subject,
             actor_id: crate::mutation::current_actor(),
-            correlation_id: event_id,
-            causation_id: None,
+            correlation_id: lineage.map_or(event_id, |lineage| lineage.correlation_id),
+            causation_id: lineage.and_then(|lineage| lineage.causation_id),
             document_id,
             audience,
             data,
@@ -245,9 +246,14 @@ impl TryFrom<EnvelopeFields> for DomainEventEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutation::{with_lineage, MutationLineage};
     use serde_json::json;
 
     fn envelope() -> DomainEventEnvelope {
+        try_envelope().unwrap()
+    }
+
+    fn try_envelope() -> crate::Result<DomainEventEnvelope> {
         DomainEventEnvelope::new(
             "tag.created",
             VaultId::new(),
@@ -259,7 +265,51 @@ mod tests {
             EventAudience::Vault,
             json!({"name": "receipts"}),
         )
-        .unwrap()
+    }
+
+    #[test]
+    fn constructor_defaults_to_a_new_causal_chain_without_lineage() {
+        let event = envelope();
+        assert_eq!(event.correlation_id(), event.event_id());
+        assert_eq!(event.causation_id(), None);
+    }
+
+    #[tokio::test]
+    async fn constructor_captures_trusted_server_lineage() {
+        let lineage = MutationLineage {
+            correlation_id: Uuid::from_u128(1),
+            causation_id: Some(Uuid::from_u128(2)),
+        };
+        with_lineage(Some(lineage), async {
+            let event = envelope();
+            assert_eq!(event.correlation_id(), lineage.correlation_id);
+            assert_eq!(event.causation_id(), lineage.causation_id);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn constructor_rejects_nil_correlation_from_scoped_lineage() {
+        let lineage = MutationLineage {
+            correlation_id: Uuid::nil(),
+            causation_id: None,
+        };
+        with_lineage(Some(lineage), async {
+            assert!(matches!(try_envelope(), Err(Error::Validation(_))));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn constructor_rejects_nil_causation_from_scoped_lineage() {
+        let lineage = MutationLineage {
+            correlation_id: Uuid::from_u128(1),
+            causation_id: Some(Uuid::nil()),
+        };
+        with_lineage(Some(lineage), async {
+            assert!(matches!(try_envelope(), Err(Error::Validation(_))));
+        })
+        .await;
     }
 
     #[test]
