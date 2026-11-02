@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify a Folio change in the running app by launching an ephemeral instance (own port, temp DB and storage, no user config), exercising it through the API, SSE and a browser (including a screenshot and axe tour of every screen), then tearing it down. Use after changing routes, templates, the worker, config or storage, and before claiming a feature works. Not for unit tests (use `cargo test`) or for touching a real or deployed Folio.
+description: Verify a Folio change in the running app by launching an ephemeral instance (own port, temp DB and storage, no user config), exercising it through the API, SSE and a browser (including a screenshot and axe tour of every screen), then tearing it down. Use after changing routes, templates, the worker, config or storage, and before claiming a feature works. For Apple share attachments, use the isolated provider regression checks below. Never touch a real or deployed Folio.
 ---
 
 # Verify Folio end to end
@@ -76,6 +76,13 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; a PDF with an existing text layer bypasses the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
 - Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
+## Document tags
+
+Run `FOLIO_BIN=<new binary> npm test --prefix e2e -- tags.spec.ts` against the
+disposable instance. The tests add quoted and attribute-like tag names, check
+literal text and accessible remove labels in both displays, and remove the tag
+through the dialog. Include the document screen in the screenshot and axe tour.
+
 ## Client telemetry
 
 Run `FOLIO_BIN=<new binary> npm run verify:telemetry --prefix e2e` to exercise
@@ -110,3 +117,21 @@ Keep native navigation and immediate privacy locking unchanged.
 Run `xcrun swift test --package-path apple/FolioKit` for native changes. For list and detail loading, the focused suites are `DocumentListViewModelTests`, `DocumentListFailureTests`, and `DocumentDetailViewModelTests`. The detail suite covers cancellation followed by a successful retry. Run `xcrun swift-format lint` on changed Swift files.
 
 Check navigation in a throwaway simulator with test credentials and an isolated server. Open a document, return to the list, and open it again. Check that rows remain visible and the preview loads. Also leave detail before the download finishes and reopen it. Keep list loading on the containing split view so compact navigation does not cancel it when hiding the sidebar. Do not use an existing signed-in simulator or device for this check.
+
+## Apple share attachments
+
+For share attachment changes, run the provider regression suite with isolated build and preference storage. This does not launch Folio or access its server configuration. Do not run the Keychain round-trip suite against a user's keychain.
+
+```bash
+share_verify_dir=$(mktemp -d /private/tmp/folio-share-verify.XXXXXX)
+trap 'rm -rf "$share_verify_dir"' EXIT
+mkdir -p "$share_verify_dir/home"
+CFFIXED_USER_HOME="$share_verify_dir/home" \
+CLANG_MODULE_CACHE_PATH="$share_verify_dir/cache" \
+xcrun swift test --disable-sandbox --package-path apple/FolioKit \
+  --scratch-path "$share_verify_dir/build" --cache-path "$share_verify_dir/spm-cache" \
+  --config-path "$share_verify_dir/spm-config" --security-path "$share_verify_dir/spm-security" \
+  --jobs 2 --filter 'SharedAttachmentLoaderTests|ShareViewModelTests'
+```
+
+The suite covers names with and without extensions, absent suggestions, unsafe basenames, inferred MIME types, duplicate names, mixed and total failures, unsupported types, and retry after a read failure. Compile the share extension locally and require the Apple CI lane, which builds both iOS Simulator and macOS, before merging. Use temporary DerivedData and package storage. Do not launch a user profile or access real server credentials.

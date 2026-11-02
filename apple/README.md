@@ -10,7 +10,7 @@ apple/
 
 ## Run it
 
-Requirements: Xcode 16 or newer (built with 27), [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
+Requirements: Xcode 26.6 (the CI test and release baseline), [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 
 ```sh
 make apple          # from the repo root: test FolioKit, generate the project, build for macOS
@@ -20,6 +20,10 @@ open apple/Folio/Folio.xcodeproj
 Pick the `Folio` scheme and run on a simulator or on My Mac. On first launch, enter the address of a running Folio server (for example `http://localhost:3000`). The scanner needs a physical iPhone or iPad.
 
 Use `xcrun swift …` and `xcrun xcodebuild …` rather than bare `swift`, so the toolchain matches the active SDK. Xcode asks you to trust the OpenAPI generator plugin on first build; command-line builds pass `-skipPackagePluginValidation`.
+
+CI uses the `macos-26` runner and selects `/Applications/Xcode_26.6.app/Contents/Developer` through `DEVELOPER_DIR`. Every Apple job logs the runner OS, Xcode build, Swift compiler and installed SDK versions. The runner OS and SDK versions do not set device requirements: deployment minimums remain iOS 18 and macOS 15. The package uses Swift tools 6.0; the app uses Swift 6 language mode, while File Provider targets use Swift 5 mode.
+
+Both iOS and macOS uploads in [the November 2, 2026 TestFlight run](https://github.com/cedricziel/folio/actions/runs/41461724950) succeeded with Xcode 26.6. Those release logs did not report the Swift compiler and SDK versions separately; new runs do.
 
 ## How it fits together
 
@@ -67,7 +71,7 @@ bundle exec fastlane beta        # match -> build number -> build -> TestFlight 
 bundle exec fastlane beta_mac    # same for macOS
 ```
 
-Every push to `main` that touches `apple/`, `openapi/` or `design/tokens.json` runs `beta` and `beta_mac` in CI (`beta_mac` is allowed to fail until the Mac installer certificate exists). The build number is the latest TestFlight build plus one.
+Pull requests that touch `apple/`, `openapi/`, `design/tokens.json` or the Apple workflow run the test lane. The release workflow calls `beta` and `beta_mac` only when release-please creates a release. You can also dispatch the Apple workflow manually, with an optional app version. The macOS upload is allowed to fail until the Mac installer certificate exists. The build number is the latest TestFlight build plus one.
 
 The lanes need `ASC_KEY_ID`, `ASC_ISSUER_ID` and `ASC_KEY_CONTENT` (the raw `.p8`, or its base64) for the App Store Connect API key, and `MATCH_PASSWORD`. Match clones `git@github.com:cedricziel/certificates.git` over ssh (`MATCH_GIT_URL` overrides it). CI additionally uses `MATCH_DEPLOY_KEY` and `MATCH_KEYCHAIN_PASSWORD`. The team id is in `fastlane/Appfile`.
 

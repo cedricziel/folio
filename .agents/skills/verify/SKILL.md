@@ -48,6 +48,21 @@ The tests exercise authentication completion from a background queue without
 launching the app, opening a browser, or accessing credentials.
 Do not launch the app against existing App Group or keychain state.
 
+## Apple session recovery
+
+The package suite covers Keychain read, write, and delete failures through injected
+operations; it does not access the user’s Keychain. `SessionRestorationTests`
+checks temporary failures, retained server addresses, expiry, and interrupted
+refreshes. `OAuthRecoveryTests` checks concurrent sessions, failed token persistence,
+stale writes after sign-out or another sign-in, offline retry, and lost responses.
+`OAuthRefreshLockTests` uses temporary files to verify exclusion, cancellation,
+and lock release after failure.
+
+On an isolated macOS test account, check startup with unavailable credentials,
+retry after access recovers, and reauthentication after expiry. Confirm that
+activation retries restoration without returning to the server selector. Package
+tests do not establish the visual behavior of these recovery screens.
+
 ## Apple App lock
 
 `FolioAuthTests/AppLockTests` uses unique temporary UserDefaults suites, fake
@@ -66,6 +81,9 @@ release. These device and visual checks are not covered by the hostless tests.
 
 ## Apple inbox navigation
 
+Allow three minutes per test for cold simulator launch and automation setup.
+Keep the per-element waits bounded independently.
+
 `apple/NavigationTests/project.yml` builds the production workspace, inbox, and
 detail views with a fake service. Its UI test taps a document, returns to the
 list, and opens another document. Model tests alone do not verify row taps.
@@ -81,11 +99,10 @@ xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme F
   -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
   -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
   -parallel-testing-enabled NO -test-timeouts-enabled YES \
-  -maximum-test-execution-time-allowance 120 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
+  -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
+  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
 ```
 
-The two-minute test allowance includes cold app launch and automation setup;
-individual navigation assertions still wait only 5–10 seconds.
 Bound runner startup separately; XCTest's execution timeout does not cover it.
 On every exit, shut down and delete only `verify_device`, then remove `verify_dir`.
 An accessibility initialization failure before the test taps a row is an
@@ -206,3 +223,12 @@ container can connect to the temporary macOS app through
 Linux, then use a temporary harness that removes only the host-platform skip in
 `visual.spec.ts`. Keep the same tour fixtures, viewport, masks, and screenshot
 paths. Recheck without updating snapshots, and remove the container and harness.
+
+## Verify bounded MCP originals
+
+Run `RUSTC_WRAPPER= cargo test -p folio-core ports::storage::tests --lib`
+for oversized metadata rejected before reading, missing or understated sizes,
+and successful collection at the exact byte limit. The instrumented stream tests
+check that collection stops before consuming the rest of an oversized original.
+Run the MCP suite above for the small-file resource response and the oversized
+file error that points clients to the text resource.

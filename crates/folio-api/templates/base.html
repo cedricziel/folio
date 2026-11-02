@@ -1106,15 +1106,22 @@ Stimulus.register(
       }
       this.currentTagsTarget.querySelector(".tags-empty")?.remove();
 
-      const tagHtml = `
-                    <span class="f-tag f-tag-${tagTone}" data-tag-id="${tagId}">
-                        ${escapeHtml(tagName)}
-                        <button type="button" class="tag-remove" aria-label="Remove tag ${escapeHtml(tagName)}" data-action="click->tags#removeTag" data-tag-id="${tagId}">&times;</button>
-                    </span>
-                `;
+      const tag = document.createElement("span");
+      tag.className = `f-tag f-tag-${tagTone}`;
+      tag.dataset.tagId = tagId;
+      tag.textContent = tagName;
 
-      this.listTarget.insertAdjacentHTML("beforeend", tagHtml);
-      this.currentTagsTarget.insertAdjacentHTML("beforeend", tagHtml);
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "tag-remove";
+      removeButton.setAttribute("aria-label", `Remove tag ${tagName}`);
+      removeButton.dataset.action = "click->tags#removeTag";
+      removeButton.dataset.tagId = tagId;
+      removeButton.textContent = "×";
+      tag.append(removeButton);
+
+      this.listTarget.append(tag);
+      this.currentTagsTarget.append(tag.cloneNode(true));
 
       const availableTag = this.availableTagsTarget.querySelector(
         `[data-tag-id="${tagId}"]`,

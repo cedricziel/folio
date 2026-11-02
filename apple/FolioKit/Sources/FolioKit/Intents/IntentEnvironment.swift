@@ -5,7 +5,7 @@ import os
 /// loads the app's code, so the address and sign-in come from the App Group and shared keychain
 /// rather than from anything the app holds in memory.
 public enum IntentEnvironment {
-    public typealias ServiceFactory = @Sendable () -> (any FolioService)?
+    public typealias ServiceFactory = @Sendable () throws -> (any FolioService)?
 
     private static let factory = OSAllocatedUnfairLock<ServiceFactory>(initialState: signedInService)
 
@@ -15,7 +15,7 @@ public enum IntentEnvironment {
     }
 
     public static func catalog() throws -> DocumentCatalog {
-        guard let service = factory.withLock({ $0 })() else { throw ShortcutError.notSignedIn }
+        guard let service = try factory.withLock({ $0 })() else { throw ShortcutError.notSignedIn }
         return DocumentCatalog(service: service)
     }
 
@@ -28,8 +28,8 @@ public enum IntentEnvironment {
         }
     }
 
-    @Sendable private static func signedInService() -> (any FolioService)? {
-        guard KeychainCredentialStore().load()?.isSignedIn == true else { return nil }
+    @Sendable private static func signedInService() throws -> (any FolioService)? {
+        guard try KeychainCredentialStore().load()?.isSignedIn == true else { return nil }
         return SharedConfiguration.makeService()
     }
 }

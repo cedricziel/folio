@@ -15,9 +15,17 @@ struct FolioApp: App {
             RootView(model: model, lock: security.lock)
                 .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
                 .tint(.archive)
+                .onReceive(
+                    NotificationCenter.default.publisher(for: Notification.Name("FolioSessionChanged")).receive(
+                        on: DispatchQueue.main)
+                ) { _ in
+                    model.restore()
+                }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
-                    case .active: FolioTelemetry.shared.lifecycle("active")
+                    case .active:
+                        FolioTelemetry.shared.lifecycle("active")
+                        model.restore()
                     case .inactive: FolioTelemetry.shared.lifecycle("inactive")
                     case .background: FolioTelemetry.shared.lifecycle("background")
                     @unknown default: break
@@ -33,13 +41,44 @@ struct FolioApp: App {
 
 @MainActor @Observable
 final class AppModel {
-    private(set) var serverURL: URL?
+    private(set) var session: SessionRestoration = .restoring
+    private(set) var isWorking = false
+    var operationError: String?
+    private var restorationTask: Task<Void, Never>?
+    private var restorationGeneration = 0
     private let store: any ServerConfigStore = UserDefaultsServerConfigStore.shared()
 
-    init() {
-        // Without a sign-in the stored address only prefills onboarding.
-        serverURL = KeychainCredentialStore().load()?.isSignedIn == true ? store.load() : nil
-        if serverURL != nil { FileProviderDomain.register() }
+    init() { restore() }
+
+    func restore() {
+        guard !isWorking else { return }
+        let rememberedServer: URL?
+        switch session {
+        case let .signedIn(url), let .expired(url), let .interrupted(url): rememberedServer = url
+        case let .unavailable(server, _): rememberedServer = server
+        case .signedOut, .restoring: rememberedServer = nil
+        }
+        let server = rememberedServer ?? store.load()
+        restorationTask?.cancel()
+        restorationGeneration += 1
+        let generation = restorationGeneration
+        restorationTask = Task {
+            let restored: SessionRestoration
+            do {
+                try await SharedConfiguration.tokenProvider().retryPendingSave()
+                restored = try await SharedConfiguration.oauthRefreshLock.withLock {
+                    SessionRestoration.restore(from: KeychainCredentialStore(), server: server)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                restored = .unavailable(server: server, message: error.localizedDescription)
+            }
+            guard !Task.isCancelled, generation == restorationGeneration, !isWorking else { return }
+            guard restored != session else { return }
+            session = restored
+            if case .signedIn = restored { FileProviderDomain.register() }
+        }
     }
 
     static func makeService(for url: URL) -> any FolioService {
@@ -47,24 +86,53 @@ final class AppModel {
     }
 
     func connected(to url: URL) {
-        serverURL = url
+        restorationTask?.cancel()
+        restorationGeneration += 1
+        session = .signedIn(url)
         FileProviderDomain.register()
     }
 
     static func signIn(to url: URL) async throws {
         try await OAuthSignIn(
             store: KeychainCredentialStore(), clients: UserDefaultsClientRegistry(),
-            authenticator: SystemWebAuthenticator()
+            authenticator: SystemWebAuthenticator(), refreshLock: SharedConfiguration.oauthRefreshLock
         ).signIn(to: url)
     }
 
-    /// Clears the tokens and returns to onboarding; the address stays to prefill the next sign-in.
-    func signOut() {
-        FolioTelemetry.shared.stop()
-        serverURL = nil
-        Task { await SharedConfiguration.tokenProvider().signOut() }
-        FileProviderDomain.unregister()
+    func reconnect(to url: URL) {
+        guard !isWorking else { return }
+        isWorking = true
+        restorationTask?.cancel()
+        restorationGeneration += 1
+        Task {
+            defer { isWorking = false }
+            do {
+                try await Self.signIn(to: url)
+                connected(to: url)
+            } catch {
+                operationError = error.localizedDescription
+            }
+        }
     }
+
+    func signOut() {
+        guard !isWorking else { return }
+        isWorking = true
+        restorationTask?.cancel()
+        restorationGeneration += 1
+        Task {
+            defer { isWorking = false }
+            do {
+                try await SharedConfiguration.tokenProvider().signOut()
+                FolioTelemetry.shared.stop()
+                session = .signedOut
+                FileProviderDomain.unregister()
+            } catch {
+                operationError = error.localizedDescription
+            }
+        }
+    }
+
 }
 
 struct RootView: View {
@@ -73,9 +141,24 @@ struct RootView: View {
     @State private var showLockSettings = false
 
     var body: some View {
+        content
+            .alert(
+                "Couldn't complete sign-in change",
+                isPresented: Binding(
+                    get: { model.operationError != nil },
+                    set: { if !$0 { model.operationError = nil } }
+                )
+            ) {
+                Button("OK") { model.operationError = nil }
+            } message: {
+                Text(model.operationError ?? "")
+            }
+    }
+
+    @ViewBuilder private var content: some View {
         if lock.isLocked {
             AppLockView(lock: lock)
-        } else if let url = model.serverURL {
+        } else if case let .signedIn(url) = model.session {
             WorkspaceView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
                 .id(url)
                 .toolbar {
@@ -93,7 +176,38 @@ struct RootView: View {
                 .sheet(isPresented: $showLockSettings) { AppLockSettingsView(lock: lock) }
                 .onDisappear { showLockSettings = false }
         } else {
-            OnboardingView(model: model)
+            switch model.session {
+            case .restoring:
+                ProgressView("Restoring sign-in…")
+            case .signedOut:
+                OnboardingView(model: model)
+            case let .expired(url):
+                recovery(
+                    title: "Sign in again", message: "Your session has expired or was revoked. Sign in again.",
+                    server: url, retry: false)
+            case let .interrupted(url):
+                recovery(
+                    title: "Sign in again", message: "Your sign-in could not be renewed safely. Sign in again.",
+                    server: url, retry: true)
+            case let .unavailable(server, message):
+                recovery(title: "Couldn't access your saved sign-in", message: message, server: server, retry: true)
+            case .signedIn:
+                EmptyView()
+            }
         }
+    }
+
+    private func recovery(title: String, message: String, server: URL?, retry: Bool) -> some View {
+        ContentUnavailableView {
+            Label(title, systemImage: "lock.circle")
+        } description: {
+            Text(message)
+            if let server { Text(server.absoluteString) }
+        } actions: {
+            if retry { Button("Try again") { model.restore() } }
+            if let server { Button("Sign in again") { model.reconnect(to: server) } }
+            if model.isWorking { ProgressView() }
+        }
+        .disabled(model.isWorking)
     }
 }
