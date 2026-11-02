@@ -2,9 +2,10 @@
 - [ ] Reconcile this design with merged foundation, revision, and workflow contracts.
 
 ## 2. Atomic processing
+- [ ] In progress: commit OCR state and legacy completion events atomically; verify `ocr_completion_contract` on both databases and `retry_after_empty_ocr_completion_does_not_repeat_ocr_or_its_event`, then merge.
 - [x] Reject incomplete or malformed embedding batches before storage/completion; prove with `missing_embedding_vectors_never_publish_completion` and `embedding_batch`. Merged in PR #268, commit b40a353.
-- [x] Add attempt transition model after failing `processing_attempts` tests for retry, terminal outcomes, stale attempts, duplicate completion, persisted-state restoration, and counter exhaustion. Core suite passes; database integration remains pending.
-- [ ] In progress: write failing shared repository tests for rollback, duplicate completion, lease expiry, stale claims, revision supersession, trash, and vault move; implement fenced transitions in both databases.
+- [x] Add attempt transition model after failing `processing_attempts` tests for retry, terminal outcomes, stale attempts, duplicate completion, persisted-state restoration, and counter exhaustion. Core suite passes; merged in PR #270, commit 2353a4d. Database integration remains pending.
+- [ ] Write failing shared repository tests for rollback, duplicate completion, lease expiry, stale claims, revision supersession, trash, and vault move; implement fenced transitions in both databases.
 - [ ] Write failing worker tests for retry versus terminal failure, disabled providers, empty OCR, and thumbnail skips; replace split state/event writes.
 
 ## 3. Workflow and clients

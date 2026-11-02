@@ -121,7 +121,8 @@ pub trait DocumentRepository: Send + Sync {
         status: ProcessingStatus,
     ) -> Result<()>;
 
-    /// Store OCR output (possibly empty) and mark the OCR stage done
+    /// Store OCR output and atomically announce completion, including empty output.
+    /// Repeating an unchanged successful result is a no-op.
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()>;
 
     /// Every active document of every vault, for storage maintenance and counts

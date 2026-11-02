@@ -308,6 +308,11 @@ These tests exercise models only and do not launch an app or access user data.
 
 ## Verify document repository changes
 
+The shared repository contract covers atomic OCR completion and its outbox event,
+including empty output, concurrent repeats, unchanged results, rejected writes, and
+rollback when the outbox rejects insertion. The worker suite also covers retries
+after an empty OCR completion without repeating OCR or its completion event.
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`
 with Docker available. The shared contract uses disposable SQLite databases and
 PostgreSQL containers; it covers bounded pagination, stable ordering, cursor
