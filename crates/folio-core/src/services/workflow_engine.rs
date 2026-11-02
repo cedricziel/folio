@@ -1,7 +1,6 @@
 //! Turns document events into workflow runs
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -19,10 +18,6 @@ use crate::ports::{
 
 use super::outbox_dispatcher::EventConsumer;
 
-/// How long to wait for an upload to finish storing its file
-const FILE_WAIT_DEFAULT: Duration = Duration::from_secs(3);
-const FILE_POLL: Duration = Duration::from_millis(100);
-
 /// Matches events against enabled workflows and queues a run for each hit
 ///
 /// The engine only decides *what* runs; executing actions (with retries) is
@@ -36,7 +31,6 @@ pub struct WorkflowEngine {
     document_types: Arc<dyn DocumentTypeRepository>,
     files: Arc<dyn FileMetadata>,
     public_url: String,
-    file_wait: Duration,
 }
 
 struct EventContext {
@@ -60,14 +54,7 @@ impl WorkflowEngine {
             document_types,
             files,
             public_url: public_url.into(),
-            file_wait: FILE_WAIT_DEFAULT,
         }
-    }
-
-    /// Override how long an upload may take to store its file
-    pub fn with_file_wait(mut self, wait: Duration) -> Self {
-        self.file_wait = wait;
-        self
     }
 
     /// The trigger an event maps to; internal progress events map to none
@@ -110,7 +97,7 @@ impl WorkflowEngine {
             return Ok(Vec::new());
         }
 
-        let Some(ctx) = self.load_context(vault, event, trigger).await? else {
+        let Some(ctx) = self.load_context(vault, event).await? else {
             debug!("Document {document_id} is gone, skipping {trigger:?}");
             return Ok(Vec::new());
         };
@@ -161,7 +148,6 @@ impl WorkflowEngine {
         &self,
         vault: VaultId,
         event: &DocumentEvent,
-        trigger: WorkflowTrigger,
     ) -> Result<Option<EventContext>> {
         if let DocumentEvent::Deleted { snapshot, .. } = event {
             return Ok(snapshot.as_ref().map(|s| EventContext {
@@ -171,22 +157,7 @@ impl WorkflowEngine {
         }
 
         let id = event.document_id();
-        let mut document = self.documents.find_by_id(vault, id).await?;
-        if trigger == WorkflowTrigger::DocumentUploaded {
-            // An upload creates the record first and stores the file right
-            // after; receivers expect the download link to work.
-            let deadline = tokio::time::Instant::now() + self.file_wait;
-            while let Some(doc) = &document {
-                if doc.original_filename.is_none()
-                    || doc.file_path.is_some()
-                    || tokio::time::Instant::now() >= deadline
-                {
-                    break;
-                }
-                tokio::time::sleep(FILE_POLL).await;
-                document = self.documents.find_by_id(vault, id).await?;
-            }
-        }
+        let document = self.documents.find_by_id(vault, id).await?;
 
         match document {
             Some(document) => Ok(Some(EventContext {

@@ -58,7 +58,10 @@ pub trait DocumentRepository: Send + Sync {
     /// Create a new document
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document>;
 
-    /// Create the reserved identity once while its ledger claim still matches.
+    /// Create an upload without announcing creation until its original is finalized.
+    async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document>;
+
+    /// Create the reserved identity once while its ledger claim still matches, deferring its event.
     async fn create_for_ingest(
         &self,
         vault: VaultId,
@@ -98,6 +101,10 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Remove an explicitly requested document after its storage cleanup succeeds.
     async fn finalize_purge(&self, vault: VaultId, id: Id) -> Result<()>;
+
+    /// Commit a stored original's path and announce creation once, atomically.
+    /// The caller must successfully store the original before finalizing.
+    async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
 
     /// Update the file path for a document
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;

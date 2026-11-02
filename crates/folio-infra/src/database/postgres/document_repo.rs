@@ -542,7 +542,12 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
-        self.create_reserved(vault, Id::new_v4(), None, params)
+        self.create_reserved(vault, Id::new_v4(), None, false, params)
+            .await
+    }
+
+    async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
+        self.create_reserved(vault, Id::new_v4(), None, true, params)
             .await
     }
 
@@ -558,7 +563,8 @@ impl DocumentRepository for PostgresDocumentRepository {
         let id = claim
             .document_id
             .ok_or_else(|| Error::Validation("Ingest claim has no document identity".into()))?;
-        self.create_reserved(vault, id, Some(claim), params).await
+        self.create_reserved(vault, id, Some(claim), true, params)
+            .await
     }
 
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
@@ -836,6 +842,20 @@ impl DocumentRepository for PostgresDocumentRepository {
             },
         )
         .await?;
+        self.commit(tx).await
+    }
+
+    async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let pending: bool = sqlx::query_scalar("SELECT upload_pending FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE")
+            .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?
+            .ok_or_else(|| not_found("Document", id))?;
+        sqlx::query("UPDATE documents SET file_path = $1, upload_pending = FALSE, updated_at = $2 WHERE id = $3 AND vault_id = $4")
+            .bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).execute(&mut *tx).await.map_err(repo_err)?;
+        if pending {
+            self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+                .await?;
+        }
         self.commit(tx).await
     }
 
@@ -1435,6 +1455,7 @@ impl PostgresDocumentRepository {
         vault: VaultId,
         id: Id,
         claim: Option<&folio_core::models::LedgerEntry>,
+        defer_event: bool,
         params: CreateDocument,
     ) -> Result<Document> {
         let now = Utc::now();
@@ -1469,8 +1490,8 @@ impl PostgresDocumentRepository {
         let inserted = sqlx::query(
             "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
                                     mime_type, correspondent_id, document_type_id, ocr_status,
-                                    source_type, source_meta, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13) ON CONFLICT(id) DO NOTHING",
+                                    source_type, source_meta, created_at, updated_at, upload_pending)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $14) ON CONFLICT(id) DO NOTHING",
         )
         .bind(id)
         .bind(vault.0)
@@ -1485,6 +1506,7 @@ impl PostgresDocumentRepository {
         .bind(params.source.kind.as_str())
         .bind(params.source.metadata_json())
         .bind(now)
+        .bind(defer_event)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -1508,8 +1530,10 @@ impl PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
         }
-        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
-            .await?;
+        if !defer_event {
+            self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+                .await?;
+        }
         self.commit(tx).await?;
 
         Ok(Document {

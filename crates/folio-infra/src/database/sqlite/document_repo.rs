@@ -572,7 +572,12 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
-        self.create_reserved(vault, Id::new_v4(), None, params)
+        self.create_reserved(vault, Id::new_v4(), None, false, params)
+            .await
+    }
+
+    async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
+        self.create_reserved(vault, Id::new_v4(), None, true, params)
             .await
     }
 
@@ -588,7 +593,8 @@ impl DocumentRepository for SqliteDocumentRepository {
         let id = claim
             .document_id
             .ok_or_else(|| Error::Validation("Ingest claim has no document identity".into()))?;
-        self.create_reserved(vault, id, Some(claim), params).await
+        self.create_reserved(vault, id, Some(claim), true, params)
+            .await
     }
 
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
@@ -879,6 +885,24 @@ impl DocumentRepository for SqliteDocumentRepository {
             },
         )
         .await?;
+        self.commit(tx).await
+    }
+
+    async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let pending: bool = sqlx::query_scalar("SELECT upload_pending FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
+            .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
+            .ok_or_else(|| not_found("Document", id))?;
+        sqlx::query("UPDATE documents SET file_path = ?, upload_pending = FALSE, updated_at = ? WHERE id = ? AND vault_id = ?")
+            .bind(file_path).bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        if pending {
+            self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+                .await?;
+        }
         self.commit(tx).await
     }
 
@@ -1559,6 +1583,7 @@ impl SqliteDocumentRepository {
         vault: VaultId,
         id: Id,
         claim: Option<&folio_core::models::LedgerEntry>,
+        defer_event: bool,
         params: CreateDocument,
     ) -> Result<Document> {
         let now = Utc::now();
@@ -1605,8 +1630,8 @@ impl SqliteDocumentRepository {
         let inserted = sqlx::query(
             "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
                                     mime_type, correspondent_id, document_type_id, ocr_status,
-                                    source_type, source_meta, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                                    source_type, source_meta, created_at, updated_at, upload_pending)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -1622,6 +1647,7 @@ impl SqliteDocumentRepository {
         .bind(params.source.metadata_json())
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
+        .bind(defer_event)
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -1645,8 +1671,10 @@ impl SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         }
-        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
-            .await?;
+        if !defer_event {
+            self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+                .await?;
+        }
         self.commit(tx).await?;
 
         Ok(Document {

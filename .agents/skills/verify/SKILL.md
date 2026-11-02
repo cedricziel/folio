@@ -165,6 +165,11 @@ The pipeline tests use temporary SQLite databases and in-memory original storage
 The pipeline and importer suites cover recovery before document creation, after
 creation, after original storage, and before ledger completion. They also cover
 stale-owner fencing, failed storage, and purge during a late object write.
+Run `cargo test -p folio-infra --test importer --test workflows --test ingest_pipeline --test repository_contract`
+for upload finalization. Gated PUT tests verify that blocked or failed originals
+emit no Created event; successful finalization emits one event and workflow run
+across retries. The shared contract covers atomic path/event commits, concurrent
+finalization, outbox pruning, and already-announced records on both databases.
 They cover competing source claims, owner success/failure/cancellation, missing
 originals, and retained trash. Folder tests use temporary inputs; IMAP tests use
 loopback fixtures or disposable GreenMail containers. Never point these suites

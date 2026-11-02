@@ -109,7 +109,7 @@ Rules are workflows. They see the source in two places.
 
 ### Reacting to imported documents: `document.uploaded`
 
-Ingested documents fire `document.uploaded` like any other upload. A separate "ingested" event would duplicate it, and a rule would have to be written twice to cover manual and automatic uploads. The source conditions below narrow a workflow to the ingested ones. Tags that come from folders are already attached when the event fires.
+Ingested documents fire `document.uploaded` like any other upload. A separate "ingested" event would duplicate it, and a rule would have to be written twice to cover manual and automatic uploads. The source conditions below narrow a workflow to the ingested ones. Tags that come from folders are already attached when the event fires. Uploads announce this event only after the original is stored and its download path is committed. Failed uploads do not trigger these workflows; a recovered import announces successful completion once.
 
 ### Discarding before import: `ingest.received`
 

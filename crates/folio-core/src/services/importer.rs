@@ -64,7 +64,7 @@ impl DocumentImporter for Importer {
                 self.files.put(&key, upload.data.into()).await?;
             }
             self.documents
-                .set_file_path(vault, document.id, &key)
+                .finalize_upload(vault, document.id, &key)
                 .await?;
             if let Err(e) = self.queue.enqueue_processing(document.id).await {
                 tracing::error!("Failed to queue processing of {}: {e}", document.id);
@@ -102,7 +102,7 @@ impl DocumentImporter for Importer {
     async fn import(&self, vault: VaultId, upload: NewUpload) -> Result<Document> {
         let document = self
             .documents
-            .create(
+            .create_for_upload(
                 vault,
                 CreateDocument {
                     uploaded_by: upload.uploaded_by,
@@ -118,7 +118,11 @@ impl DocumentImporter for Importer {
 
         let key = keys::original(document.id);
         let stored = match self.files.put(&key, upload.data.into()).await {
-            Ok(()) => self.documents.set_file_path(vault, document.id, &key).await,
+            Ok(()) => {
+                self.documents
+                    .finalize_upload(vault, document.id, &key)
+                    .await
+            }
             Err(e) => Err(e),
         };
         if let Err(e) = stored {

@@ -7,6 +7,54 @@ use folio_core::ports::{DocumentImporter, DocumentStore, StoredObject};
 use folio_core::services::{Importer, NewUpload};
 use folio_infra::{Database, JobType, ObjectStoreDocumentStore, Repositories};
 
+async fn created_events(r: &Repositories) -> Vec<folio_core::OutboxEvent> {
+    r.outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| matches!(event.event, folio_core::DocumentEvent::Created { .. }))
+        .collect()
+}
+
+async fn upload_listener(
+    r: &Repositories,
+    vault: VaultId,
+    store: Arc<dyn DocumentStore>,
+) -> (folio_core::services::WorkflowEngine, uuid::Uuid) {
+    use folio_core::models::{WorkflowAction, WorkflowInput, WorkflowTrigger};
+    let workflow = r
+        .workflows
+        .create(
+            vault,
+            WorkflowInput {
+                name: "uploaded".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::DocumentUploaded,
+                conditions: Default::default(),
+                actions: vec![WorkflowAction::Webhook {
+                    url: "http://127.0.0.1:1/unused".into(),
+                    method: Default::default(),
+                    headers: Default::default(),
+                    secret: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    (
+        folio_core::services::WorkflowEngine::new(
+            r.workflows.clone(),
+            r.documents.clone(),
+            r.correspondents.clone(),
+            r.document_types.clone(),
+            Arc::new(folio_infra::StorageFileMetadata::new(store)),
+            "http://folio.test",
+        ),
+        workflow.id,
+    )
+}
+
 struct FailedPutStore;
 
 #[async_trait]
@@ -73,6 +121,7 @@ async fn failed_object_put_schedules_durable_cleanup_of_the_incomplete_upload() 
     let error = importer.import(vault, upload()).await.unwrap_err();
 
     assert!(matches!(error, Error::Storage(_)));
+    assert!(created_events(&r).await.is_empty());
     assert!(r.documents.list(vault, None).await.unwrap().is_empty());
     let trash = r.documents.list_trash(vault).await.unwrap();
     assert_eq!(trash.len(), 1);
@@ -98,6 +147,7 @@ async fn failed_file_path_update_keeps_cleanup_intent_for_the_stored_object() {
     let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
 
     assert!(importer.import(vault, upload()).await.is_err());
+    assert!(created_events(&r).await.is_empty());
 
     assert!(r.documents.list(vault, None).await.unwrap().is_empty());
     let trash = r.documents.list_trash(vault).await.unwrap();
@@ -167,6 +217,7 @@ async fn failed_reserved_upload_keeps_the_document_for_retry_without_cleanup() {
         Err(Error::Storage(_))
     ));
 
+    assert!(created_events(&r).await.is_empty());
     let retained = r.documents.list(vault, None).await.unwrap();
     assert_eq!(retained.len(), 1);
     assert_eq!(Some(retained[0].id), claim.document_id);
@@ -187,6 +238,7 @@ async fn failed_reserved_upload_keeps_the_document_for_retry_without_cleanup() {
         .await
         .unwrap();
     assert_eq!(Some(document.id), claim.document_id);
+    assert_eq!(created_events(&r).await.len(), 1);
     assert_eq!(r.documents.list(vault, None).await.unwrap().len(), 1);
 }
 
@@ -396,4 +448,104 @@ async fn original_written_after_soft_delete_is_preserved_for_restore() {
             .unwrap(),
         b"uploaded document"
     );
+}
+
+#[tokio::test]
+async fn blocked_original_put_emits_no_created_event_until_atomic_finalization() {
+    let (_db, r, vault) = fixture().await;
+    let store = Arc::new(PausedPutStore {
+        inner: ObjectStoreDocumentStore::in_memory(),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let (engine, workflow_id) = upload_listener(&r, vault, store.clone()).await;
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
+    let owner = tokio::spawn(async move { importer.import(vault, upload()).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), store.started.notified())
+        .await
+        .unwrap();
+
+    assert!(created_events(&r).await.is_empty());
+    assert!(r
+        .workflows
+        .list_runs(vault, workflow_id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    store.release.notify_one();
+    let document = tokio::time::timeout(std::time::Duration::from_secs(5), owner)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let events = created_events(&r).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event.document_id(), document.id);
+    assert_eq!(engine.handle(&events[0]).await.unwrap().len(), 1);
+    r.documents
+        .finalize_upload(vault, document.id, document.file_path.as_ref().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(created_events(&r).await.len(), 1);
+    assert!(engine.handle(&events[0]).await.unwrap().is_empty());
+    assert_eq!(
+        r.workflows
+            .list_runs(vault, workflow_id, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn failed_outbox_insert_rolls_back_upload_path_and_can_be_retried_once() {
+    let (db, r, vault) = fixture().await;
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    let claim = folio_core::models::LedgerEntry {
+        key: folio_core::services::content_key(&upload().data),
+        source_id: uuid::Uuid::new_v4(),
+        document_id: Some(uuid::Uuid::new_v4()),
+        outcome: "claimed".into(),
+        created_at: chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+            .unwrap(),
+    };
+    assert!(r.ledger.insert(vault, &claim).await.unwrap());
+    let store = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
+    sqlx::query("CREATE TRIGGER refuse_created BEFORE INSERT ON outbox_events WHEN NEW.type = 'created' BEGIN SELECT RAISE(ABORT, 'refused'); END").execute(pool).await.unwrap();
+
+    assert!(importer
+        .import_reserved(vault, &claim, upload())
+        .await
+        .is_err());
+
+    let document = r
+        .documents
+        .find_by_id(vault, claim.document_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(document.file_path.is_none());
+    assert!(store
+        .exists(&folio_core::ports::keys::original(document.id))
+        .await
+        .unwrap());
+    assert!(created_events(&r).await.is_empty());
+    sqlx::query("DROP TRIGGER refuse_created")
+        .execute(pool)
+        .await
+        .unwrap();
+    importer
+        .import_reserved(vault, &claim, upload())
+        .await
+        .unwrap();
+    importer
+        .import_reserved(vault, &claim, upload())
+        .await
+        .unwrap();
+    assert_eq!(created_events(&r).await.len(), 1);
 }
