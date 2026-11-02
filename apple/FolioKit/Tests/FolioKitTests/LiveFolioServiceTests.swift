@@ -72,6 +72,43 @@ private let documentJSON = """
 @Suite(.serialized) struct LiveFolioServiceTests {
     private let baseURL = URL(string: "https://folio.example.com")!
 
+    @Test func browseSendsTextFiltersCursorAndImmutableVault() async throws {
+        let vault = UUID(), tag = UUID(), correspondent = UUID()
+        let query = DocumentBrowseQuery(
+            text: "insurance policy", filter: .init(tagIDs: [tag], correspondentID: correspondent), sort: .title
+        )
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/documents/browse")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            let value = { (name: String) in items.first { $0.name == name }?.value }
+            #expect(value("q") == "insurance policy")
+            #expect(value("limit") == "50")
+            #expect(value("sort") == "title")
+            #expect(value("cursor") == "next-token")
+            #expect(value("tag_id") == tag.uuidString.lowercased())
+            #expect(value("correspondent_id") == correspondent.uuidString.lowercased())
+            return .init(
+                body: Data("{\"vault_id\":\"\(vault)\",\"documents\":[\(documentJSON)],\"next_cursor\":\"more\"}".utf8))
+        }
+        let page = try await makeService().scoped(to: vault).documentPage(query: query, cursor: "next-token")
+        #expect(page.vaultID == vault)
+        #expect(page.nextCursor == "more")
+        #expect(page.documents.first?.tags.first?.name == "Taxes")
+    }
+
+    @Test func directDocumentLookupKeepsVaultScopeAndTags() async throws {
+        let vault = UUID()
+        let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/documents/\(id.uuidString.lowercased())")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(body: Data(documentJSON.utf8))
+        }
+        let document = try await makeService().scoped(to: vault).document(id: id)
+        #expect(document.tags.first?.name == "Taxes")
+    }
+
     @Test func discoversVaultNamesRolesAndServerDefault() async throws {
         let id = UUID()
         StubURLProtocol.handler = { request, _ in

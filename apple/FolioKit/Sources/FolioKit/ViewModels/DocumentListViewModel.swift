@@ -45,11 +45,38 @@ public final class DocumentListViewModel {
     public private(set) var documentTypes: [DocumentType.ID: String] = [:]
     public var searchText = ""
     public var scope = Scope.all {
-        didSet { rebuildRows() }
+        didSet {
+            guard scope != oldValue else { return }
+            latestFetch += 1
+            nextCursor = nil
+            activeQuery = nil
+            isLoadingMore = false
+            rebuildRows()
+        }
     }
     /// A failed action such as delete; shown transiently, the list stays as it was.
     public private(set) var actionError: String?
 
+    public var filter = DocumentFilter()
+    public var sort = DocumentBrowseQuery.Sort.newest
+    public private(set) var isLoadingMore = false
+    public private(set) var pageError: String?
+
+    public var query: DocumentBrowseQuery {
+        .init(text: searchText.trimmingCharacters(in: .whitespacesAndNewlines), filter: filter, sort: sort)
+    }
+
+    public var canLoadMore: Bool {
+        phase == .loaded && nextCursor != nil && activeQuery == query
+    }
+
+    private var nextCursor: String?
+    private var activeQuery: DocumentBrowseQuery?
+    private var loadedVaultID: UUID?
+    private var resolvedDocument: Document?
+    private var latestLookup = 0
+    private var lookupID: Document.ID?
+    private var lookupError: (id: Document.ID, message: String)?
     private let service: any FolioService
     private let searchDebounce: Duration
     private var documents: [Document] = []
@@ -69,36 +96,78 @@ public final class DocumentListViewModel {
         document.documentTypeID.flatMap { documentTypes[$0] }
     }
 
-    /// Pull to refresh.
     public func load() async {
+        let request = query
+        let ticket = begin(request)
         async let lookups: Void = loadLookups()
-        await fetch(query: searchText)
+        await fetch(request, ticket: ticket)
         await lookups
-        rebuildRows()
+        if isCurrent(ticket) { rebuildRows() }
     }
 
-    /// Call from `.task(id: searchText)`: SwiftUI cancels the previous task when the text changes,
-    /// so only the last keystroke in a burst reaches the server.
     public func search(_ text: String) async {
-        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty {
-            try? await Task.sleep(for: searchDebounce)
+        searchText = text
+        let request = query
+        let ticket = begin(request)
+        if !request.text.isEmpty { try? await Task.sleep(for: searchDebounce) }
+        guard isCurrent(ticket) else { return }
+        if !lookupsLoaded { await loadLookups() }
+        guard isCurrent(ticket) else { return }
+        await fetch(request, ticket: ticket)
+    }
+
+    public func loadNextPage() async {
+        guard canLoadMore, !isLoadingMore, let cursor = nextCursor, let request = activeQuery else { return }
+        let ticket = latestFetch
+        isLoadingMore = true
+        pageError = nil
+        defer { if ticket == latestFetch { isLoadingMore = false } }
+        do {
+            let page = try await readPage(request, cursor: cursor, ticket: ticket, knownIDs: Set(documents.map(\.id)))
+            guard isCurrent(ticket) else { return }
+            documents.append(contentsOf: page.documents)
+            nextCursor = page.nextCursor
+            rebuildRows()
+        } catch {
+            guard isCurrent(ticket) else { return }
+            pageError = error.localizedDescription
         }
-        guard !Task.isCancelled else { return }
-        if rows.isEmpty {
-            phase = .loading
+    }
+
+    public func document(for id: Document.ID) -> Document? {
+        documents.first { $0.id == id } ?? (resolvedDocument?.id == id ? resolvedDocument : nil)
+    }
+
+    public func documentError(for id: Document.ID) -> String? {
+        lookupError?.id == id ? lookupError?.message : nil
+    }
+
+    public func resolveDocument(_ id: Document.ID) async {
+        guard document(for: id) == nil else { return }
+        latestLookup += 1
+        let ticket = latestLookup
+        lookupID = id
+        lookupError = nil
+        do {
+            async let fetched = service.document(id: id)
+            if !lookupsLoaded { await loadLookups() }
+            let document = try await fetched
+            guard document.id == id else { throw FolioError.unreadableResponse }
+            guard !Task.isCancelled, ticket == latestLookup else { return }
+            resolvedDocument = document
+        } catch {
+            guard !Task.isCancelled, ticket == latestLookup else { return }
+            lookupError = (id, error.localizedDescription)
         }
-        if !lookupsLoaded {
-            await loadLookups()
-        }
-        await fetch(query: query)
-        rebuildRows()
     }
 
     public func delete(_ document: Document) async {
         do {
             try await service.deleteDocument(id: document.id)
             documents.removeAll { $0.id == document.id }
+            if resolvedDocument?.id == document.id { resolvedDocument = nil }
+            if lookupID == document.id { latestLookup += 1 }
+            lookupError = (document.id, "This document is no longer available.")
             rebuildRows()
         } catch {
             actionError = error.localizedDescription
@@ -109,18 +178,58 @@ public final class DocumentListViewModel {
         actionError = nil
     }
 
-    private func fetch(query: String) async {
+    private func begin(_ request: DocumentBrowseQuery) -> Int {
         latestFetch += 1
-        let ticket = latestFetch
+        activeQuery = request
+        nextCursor = nil
+        loadedVaultID = nil
+        pageError = nil
+        isLoadingMore = false
+        phase = .loading
+        return latestFetch
+    }
+
+    private func isCurrent(_ ticket: Int) -> Bool {
+        !Task.isCancelled && ticket == latestFetch
+    }
+
+    private func fetch(_ request: DocumentBrowseQuery, ticket: Int) async {
         do {
-            let result = try await service.documents(matching: query)
-            // A newer fetch (another search, a refresh) owns the list now.
-            guard !Task.isCancelled, ticket == latestFetch else { return }
-            documents = result
+            let page = try await readPage(request, cursor: nil, ticket: ticket, knownIDs: [])
+            guard isCurrent(ticket) else { return }
+            documents = page.documents
+            nextCursor = page.nextCursor
+            loadedVaultID = page.vaultID
             phase = .loaded
+            rebuildRows()
         } catch {
-            guard !Task.isCancelled, ticket == latestFetch else { return }
+            guard isCurrent(ticket) else { return }
             phase = .failed(error.localizedDescription)
+        }
+    }
+
+    private func readPage(
+        _ request: DocumentBrowseQuery, cursor initialCursor: String?, ticket: Int, knownIDs: Set<Document.ID>
+    ) async throws -> DocumentPage {
+        var cursor = initialCursor
+        var seen = Set<String>()
+        var vault = loadedVaultID
+        while true {
+            guard isCurrent(ticket) else { throw CancellationError() }
+            if let cursor, !seen.insert(cursor).inserted { throw FolioError.unreadableResponse }
+            let page = try await service.documentPage(query: request, cursor: cursor)
+            guard isCurrent(ticket) else { throw CancellationError() }
+            if let vault, vault != page.vaultID { throw FolioError.unreadableResponse }
+            vault = page.vaultID
+            if let next = page.nextCursor, seen.contains(next) { throw FolioError.unreadableResponse }
+            var ids = knownIDs
+            let fresh = page.documents.filter {
+                (scope == .all || $0.status != .filed) && ids.insert($0.id).inserted
+            }
+            if !fresh.isEmpty || page.nextCursor == nil {
+                return DocumentPage(vaultID: page.vaultID, documents: fresh, nextCursor: page.nextCursor)
+            }
+            cursor = page.nextCursor
         }
     }
 

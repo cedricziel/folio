@@ -29,6 +29,7 @@ struct InboxView: View {
     @State private var problem: String?
     @State private var scannedPages: ScannedPages?
     @State private var pendingUploads: UploadBatch?
+    @State private var pageTask: Task<Void, Never>?
     @FocusState private var searchFocused: Bool
     private let router = IntentRouter.shared
 
@@ -63,24 +64,7 @@ struct InboxView: View {
         NavigationStack(path: $session.path) {
             sidebar
                 .navigationDestination(for: Document.ID.self) { id in
-                    if let row = list.rows.first(where: { $0.id == id }) {
-                        DocumentDetailView(
-                            model: DocumentDetailViewModel(
-                                document: row.document,
-                                correspondent: list.correspondentName(for: row.document),
-                                type: list.typeName(for: row.document),
-                                service: service
-                            ), vaultID: vaultID
-                        )
-                        .id(row.id)
-                    } else if list.phase == .loading || list.phase == .idle {
-                        ProgressView("Loading document…")
-                    } else {
-                        ContentUnavailableView(
-                            "Document unavailable", systemImage: "doc.text",
-                            description: Text("Return to the library and try again.")
-                        )
-                    }
+                    documentDestination(id)
                 }
         }
         .onChange(of: session.path) { _, path in
@@ -89,7 +73,9 @@ struct InboxView: View {
             }
         }
         // Keep loading alive when compact navigation hides the sidebar.
-        .task(id: list.searchText) { await list.search(list.searchText) }
+        .task(id: list.query) { await list.search(list.searchText) }
+        .onChange(of: list.query) { pageTask?.cancel() }
+        .onDisappear { pageTask?.cancel() }
         .focusedSceneValue(\.inboxActions, actions)
         .onChange(of: router.request, initial: true) { _, request in
             guard let request else { return }
@@ -104,6 +90,31 @@ struct InboxView: View {
         }
     }
 
+    private func documentDestination(_ id: Document.ID) -> some View {
+        Group {
+            if let document = list.document(for: id) {
+                DocumentDetailView(
+                    model: DocumentDetailViewModel(
+                        document: document, correspondent: list.correspondentName(for: document),
+                        type: list.typeName(for: document), service: service
+                    ), vaultID: vaultID
+                )
+                .id(id)
+            } else if let message = list.documentError(for: id) {
+                ContentUnavailableView {
+                    Label("Document unavailable", systemImage: "doc.text")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Try again") { Task { await list.resolveDocument(id) } }
+                }
+            } else {
+                ProgressView("Loading document…")
+            }
+        }
+        .task(id: id) { await list.resolveDocument(id) }
+    }
+
     private var actions: InboxActions {
         InboxActions(
             upload: canUpload ? { showFileImporter = true } : nil,
@@ -112,8 +123,8 @@ struct InboxView: View {
             showAll: { onNavigate(.all) },
             find: { searchFocused = true },
             deleteSelected: canEdit
-                ? list.rows.first(where: { $0.id == session.selection }).map { row in
-                    { pendingDelete = row.document }
+                ? session.selection.flatMap { list.document(for: $0) }.map { document in
+                    { pendingDelete = document }
                 } : nil
         )
     }
@@ -164,6 +175,26 @@ struct InboxView: View {
                         }
                     }
                 }
+            }
+            if list.phase == .loading && !list.rows.isEmpty {
+                ProgressView("Loading documents…")
+            } else if list.canLoadMore {
+                VStack(spacing: 8) {
+                    if let message = list.pageError {
+                        Text(message).foregroundStyle(Color.danger)
+                    }
+                    if list.isLoadingMore {
+                        ProgressView("Loading documents…")
+                    } else {
+                        Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
+                            pageTask?.cancel()
+                            pageTask = Task { await list.loadNextPage() }
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.paper)
             }
         }
         .listStyle(.plain)
@@ -262,7 +293,7 @@ struct InboxView: View {
     @ViewBuilder
     private var placeholder: some View {
         switch list.phase {
-        case .loading,
+        case .loading where list.rows.isEmpty,
             .idle where list.rows.isEmpty:
             Text("Reading your inbox…")
                 .font(FolioTheme.Typography.body)

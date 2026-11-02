@@ -11,7 +11,7 @@
 - [x] 3.0 Batch document tag enrichment with shared vault-isolation and duplicate-ID regression tests.
 - [x] 3.1 Implement authorized paged JSON API and default-vault adapter with access-revocation, pagination, and filter regression tests.
 - [x] 3.2 Implement native workspace navigation with failing navigation/restoration tests first.
-- [ ] 3.3 Implement incremental loading, cancellation, and query composition with failing view-model tests first.
+- [x] 3.3 Implement incremental loading, cancellation, and query composition with failing view-model tests first.
 - [x] 3.4a Expose literal text search combined with paged filters and query-bound continuations.
 - [ ] 3.4b Implement native text search and filter controls.
 

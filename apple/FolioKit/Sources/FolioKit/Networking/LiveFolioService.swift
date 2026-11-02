@@ -71,6 +71,31 @@ public struct LiveFolioService: FolioService {
         _ = try await tags()
     }
 
+    public func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage {
+        try await call("documents.browse") {
+            let filter = query.filter
+            let input = Operations.BrowseDocuments.Input.Query(
+                q: query.text.isEmpty ? nil : query.text,
+                limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
+                correspondentId: filter.correspondentID?.uuidString.lowercased(),
+                documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
+                tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
+                createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
+            )
+            let page = try await client.browseDocuments(query: input).ok.body.json
+            return try DocumentPage(
+                vaultID: Self.uuid(page.vaultId), documents: page.documents.map { try Document($0) },
+                nextCursor: page.nextCursor
+            )
+        }
+    }
+
+    public func document(id: Document.ID) async throws -> Document {
+        try await call("documents.get") {
+            try await Document(client.getDocument(path: .init(id: id.uuidString.lowercased())).ok.body.json)
+        }
+    }
+
     public func documents(matching query: String) async throws -> [Document] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await call("documents.list") {

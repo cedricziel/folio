@@ -44,6 +44,18 @@ The native app SHALL provide Library navigation and preserve query and selection
 - **WHEN** a user opens a result and returns to the browser
 - **THEN** the destination, query, and selection remain unchanged
 
+### Requirement: Incremental native browsing
+
+The native browser SHALL fetch bounded pages for its current text, filters, sort, and vault. Continuations SHALL append unique documents without clearing selection. Changing the query SHALL invalidate previous requests. Failed continuations SHALL retain loaded rows and allow retry.
+
+#### Scenario: Inbox lookahead
+- **WHEN** a page contains only filed documents and a continuation exists
+- **THEN** Inbox continues until it finds visible documents or reaches the end, without showing a false empty state
+
+#### Scenario: External document link
+- **WHEN** a document link points outside the loaded pages
+- **THEN** the browser fetches that document directly in the selected vault and shows either its detail or a retryable error
+
 ### Requirement: Explicit review completion
 
 The system SHALL store review completion separately from processing and classification, preserve legacy Filed membership during migration, and keep new imports unreviewed until explicitly reviewed.
