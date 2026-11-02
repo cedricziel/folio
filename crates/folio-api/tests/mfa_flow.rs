@@ -288,12 +288,19 @@ async fn totp_login_accepts_skew_and_refuses_replay() {
     assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
 
     // The code used to enroll is the step already spent.
-    let replayed = totp.generate(now() as u64).to_string();
+    let enrolled_step = w
+        .store
+        .get_totp(&w.user.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .last_step;
+    let replayed = totp.generate((enrolled_step * 30) as u64).to_string();
     assert_eq!(
         b.submit_code(&replayed).await.status,
         StatusCode::UNAUTHORIZED
     );
-    let past = totp.generate(now() as u64 - 30).to_string();
+    let past = totp.generate(((enrolled_step - 1) * 30) as u64).to_string();
     assert_eq!(b.submit_code(&past).await.status, StatusCode::UNAUTHORIZED);
 
     // One step ahead is within the skew.
