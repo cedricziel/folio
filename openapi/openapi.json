@@ -707,6 +707,15 @@
         "operationId": "browseDocuments",
         "parameters": [
           {
+            "name": "q",
+            "in": "query",
+            "description": "Literal words to match in title or content. Every word must match.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "description": "Maximum documents per page, from 1 to 100. Defaults to 50.",
@@ -1812,6 +1821,15 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Literal words to match in title or content. Every word must match.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {

@@ -12,7 +12,8 @@
 - [x] 3.1 Implement authorized paged JSON API and default-vault adapter with access-revocation, pagination, and filter regression tests.
 - [x] 3.2 Implement native workspace navigation with failing navigation/restoration tests first.
 - [ ] 3.3 Implement incremental loading, cancellation, and query composition with failing view-model tests first.
-- [ ] 3.4 Implement text search and filter controls, with combined-filter contract tests first.
+- [x] 3.4a Expose literal text search combined with paged filters and query-bound continuations.
+- [ ] 3.4b Implement native text search and filter controls.
 
 ## 4. Subsequent milestones
 - [ ] 4.1 Expand executable tasks for milestones B–F from the implementation plan before each milestone starts.

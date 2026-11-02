@@ -1,6 +1,6 @@
 # Document workspace implementation plan
 
-Status: implementation started on 2026-11-02. Contracts [#192](https://github.com/cedricziel/folio/pull/192) and pagination [#193](https://github.com/cedricziel/folio/pull/193) are merged. Native navigation [#195](https://github.com/cedricziel/folio/pull/195) is merged.
+Status: implementation started on 2026-11-02. Contracts [#192](https://github.com/cedricziel/folio/pull/192) and pagination [#193](https://github.com/cedricziel/folio/pull/193) are merged. Native navigation [#195](https://github.com/cedricziel/folio/pull/195), batched enrichment [#204](https://github.com/cedricziel/folio/pull/204), and authorized paged browsing [#205](https://github.com/cedricziel/folio/pull/205) are merged.
 
 ## Scope and outcome
 
