@@ -124,8 +124,10 @@ public struct LiveFolioService: FolioService {
             ?? FileManager.default.temporaryDirectory
             .appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let ext = (filename as NSString).pathExtension
+        let suffix = !ext.isEmpty && ext.utf8.count <= 32 ? "." + ext : ""
         let destination = directory.appending(
-            path: downloadDirectory == nil ? filename : "\(UUID().uuidString)-\(filename)")
+            path: downloadDirectory == nil ? filename : UUID().uuidString + suffix)
         do {
             try FileManager.default.moveItem(at: temporary, to: destination)
         } catch {

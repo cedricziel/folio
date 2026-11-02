@@ -86,8 +86,11 @@ targets:
     platform: macOS
     sources:
       - path: ProviderTests
+      - path: ../../e2e/fixtures/sample.pdf
+        group: ProviderTestFixtures
       - path: FileProvider
       - path: ../FolioKit/Tests/FolioKitTests/MockFolioService.swift
+        group: ProviderTestSupport
     dependencies:
       - package: FolioKit
     settings:

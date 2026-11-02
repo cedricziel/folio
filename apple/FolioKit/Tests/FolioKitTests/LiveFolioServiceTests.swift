@@ -262,13 +262,14 @@ private let documentJSON = """
         #expect(try Data(contentsOf: second) == Data("second version".utf8))
     }
 
-    @Test func providerDownloadsUseDistinctFilesInTheSpecifiedDirectory() async throws {
+    @Test func providerDownloadsUseDistinctShortPathsInTheSpecifiedDirectory() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         StubURLProtocol.handler = { _, _ in
             .init(contentType: "application/pdf", body: Data("%PDF-1.4".utf8))
         }
-        let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
+        let document = Document(
+            title: "Bill", originalFilename: String(repeating: "a", count: 240) + ".pdf", mimeType: "application/pdf")
         let service = makeService(downloadDirectory: directory)
         async let firstDownload = service.downloadFile(for: document)
         async let secondDownload = service.downloadFile(for: document)

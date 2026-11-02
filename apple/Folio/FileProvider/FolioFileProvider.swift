@@ -9,16 +9,19 @@ import UniformTypeIdentifiers
 final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
     private let domain: NSFileProviderDomain
     private let service: (any FolioService)?
+    private let temporaryDirectory: (() throws -> URL)?
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         self.service = nil
+        self.temporaryDirectory = nil
         super.init()
     }
 
-    init(domain: NSFileProviderDomain, service: any FolioService) {
+    init(domain: NSFileProviderDomain, service: any FolioService, temporaryDirectory: (() throws -> URL)? = nil) {
         self.domain = domain
         self.service = service
+        self.temporaryDirectory = temporaryDirectory
         super.init()
     }
 
@@ -45,6 +48,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
                 else { return completionHandler(nil, NSFileProviderError(.noSuchItem)) }
                 completionHandler(FolioProviderItem(node), nil)
             } catch {
+                ProviderDiagnostics.failure(operation: "item", phase: "lookup", error: error)
                 completionHandler(nil, error.providerError)
             }
         }
@@ -59,17 +63,27 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
         let progress = Progress(totalUnitCount: 1)
         Task {
             defer { progress.completedUnitCount = 1 }
+            var phase = "staging"
             do {
-                guard let manager = NSFileProviderManager(for: domain) else {
-                    throw NSFileProviderError(.providerNotFound)
+                let directory: URL
+                if let temporaryDirectory {
+                    directory = try temporaryDirectory()
+                } else {
+                    guard let manager = NSFileProviderManager(for: domain) else {
+                        throw NSFileProviderError(.providerNotFound)
+                    }
+                    directory = try manager.temporaryDirectoryURL()
                 }
-                let (catalog, service) = try catalog(downloadDirectory: manager.temporaryDirectoryURL())
+                phase = "lookup"
+                let (catalog, service) = try catalog(downloadDirectory: directory)
                 guard let id = FolioItemID(providerIdentifier: itemIdentifier),
                     let node = try await catalog.node(for: id), let document = node.document
-                else { return completionHandler(nil, nil, NSFileProviderError(.noSuchItem)) }
+                else { throw NSFileProviderError(.noSuchItem) }
+                phase = "download"
                 let url = try await service.downloadFile(for: document)
                 completionHandler(url, FolioProviderItem(node), nil)
             } catch {
+                ProviderDiagnostics.failure(operation: "fetchContents", phase: phase, error: error)
                 completionHandler(nil, nil, error.providerError)
             }
         }
@@ -242,12 +256,5 @@ extension FolioItemID {
         } else {
             self.init(rawValue: providerIdentifier.rawValue)
         }
-    }
-}
-
-extension Error {
-    /// Files shows its sign-in prompt for `.notAuthenticated`.
-    var providerError: any Error {
-        (self as? FolioError) == .signInRequired ? NSFileProviderError(.notAuthenticated) : self
     }
 }
