@@ -4,7 +4,7 @@
 
 ## 2. Paged repository queries
 - [x] 2.1 Add failing contract tests for bounded pages, tied sort values, filters, and query-bound continuations.
-- [x] 2.2 Add typed page/query models and the repository port while preserving legacy list callers.
+- [x] 2.2 Add typed page/query models and the repository port while supporting the current list routes.
 - [x] 2.3 Implement SQLite and PostgreSQL keyset queries and run shared contracts.
 
 ## 3. Library delivery

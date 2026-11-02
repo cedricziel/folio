@@ -98,6 +98,16 @@ The document page SHALL set a correspondent at `POST /documents/:id/corresponden
 - **WHEN** an editor submits the ID of a correspondent from a different vault
 - **THEN** the response status is 404 and the document's correspondent is unchanged
 
+#### Scenario: Reject malformed classification IDs
+
+- **WHEN** a correspondent or document-type form submits a nonempty value that is not a UUID through a page or API route
+- **THEN** the response status is 400 and the document keeps its existing associations
+
+#### Scenario: Missing classification is not a clear request
+
+- **WHEN** a correspondent or document-type form omits its classification field
+- **THEN** the response status is 400 and the document remains unchanged
+
 ## ADDED Requirements
 
 ### Requirement: Classification follows a moved document

@@ -2,7 +2,7 @@
 
 ### Requirement: Bounded document browsing
 
-The system SHALL support vault-scoped paged document queries with chronological or title ordering, stable ID tie-breakers, existing classification/date filters, and limits from 1 through 100. Legacy list callers SHALL retain their existing behavior.
+The system SHALL support vault-scoped paged document queries with chronological or title ordering, stable ID tie-breakers, existing classification/date filters, and limits from 1 through 100. Current HTML and JSON list routes SHALL remain supported.
 
 #### Scenario: Equal primary sort values
 - **WHEN** several matching documents have identical timestamps or titles and the client requests successive pages

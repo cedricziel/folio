@@ -68,9 +68,20 @@ regressions. The skills suite uses in-memory transports and temporary fixture
 storage. HTTP tests bind loopback port 0, use test identities, and stop with their
 Tokio runtime. They do not start the app or access user archives or credentials.
 
-The skills tests cover modern discovery, direct lookup, manifest digests and
-byte sizes, frontmatter equality, unknown URIs, invalid cursors, legacy resource
-reads, and document-scope separation. Do not launch a server against existing data.
+The skills tests cover discovery, direct lookup, manifest digests and
+byte sizes, frontmatter equality, unknown URIs, invalid cursors, standard resource
+reads, and document-scope separation. OAuth tests require the resource-specific
+metadata URL `/.well-known/oauth-protected-resource/mcp`.
+Do not launch a server against existing data.
+
+## Verify configuration, storage, and provisioning
+
+Run `RUSTC_WRAPPER= cargo test -p folio-infra config::tests --lib` for canonical
+environment names, secret files, and ignored obsolete configuration names.
+The `storage_contract` integration suite covers canonical object keys and prefix
+deletion. API `routes` tests cover canonical previews and ignore old preview keys.
+The `vault_isolation` suite checks that provisioning does not claim ownerless
+archives and that retained SQL migrations still preserve existing rows.
 
 Before a PR, also run `RUSTC_WRAPPER= make format`, `RUSTC_WRAPPER= make lint`, and
 `RUSTC_WRAPPER= make test`. An empty wrapper bypasses a local sccache service when
