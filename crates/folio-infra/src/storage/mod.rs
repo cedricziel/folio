@@ -3,7 +3,6 @@
 //! One adapter over the `object_store` crate serves every backend: the local
 //! filesystem, S3-compatible services, and an in-memory store for tests.
 
-mod legacy;
 mod object_store_adapter;
 
 use std::sync::Arc;
@@ -13,7 +12,6 @@ use folio_core::ports::DocumentStore;
 
 use crate::config::{StorageBackend, StorageConfig};
 
-pub use legacy::{cleanup_legacy_layout, migrate_legacy_layout};
 pub use object_store_adapter::ObjectStoreDocumentStore;
 
 /// Build the store selected by `storage.backend`.

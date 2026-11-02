@@ -185,12 +185,7 @@ impl VaultRepository for PostgresVaultRepository {
                 return Ok(Some(stored));
             }
         }
-        Ok(self
-            .list_for_user(user)
-            .await?
-            .into_iter()
-            .next()
-            .map(|(v, _)| v.id))
+        Ok(None)
     }
 
     async fn set_default(&self, user: &UserId, vault: VaultId) -> Result<()> {
@@ -246,20 +241,6 @@ impl VaultRepository for PostgresVaultRepository {
             .await?
             .ok_or_else(|| Error::Repository("no vault".into()))?;
         Ok(VaultId(id))
-    }
-
-    async fn find_ownerless(&self, name: &str) -> Result<Vec<VaultId>> {
-        let rows: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT v.id FROM vaults v WHERE v.name = $1 AND NOT EXISTS (
-                 SELECT 1 FROM vault_members m
-                 WHERE m.vault_id = v.id AND m.role = 'owner' AND m.user_id IS NOT NULL)
-             ORDER BY v.created_at, v.id",
-        )
-        .bind(name)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db)?;
-        Ok(rows.into_iter().map(|(id,)| VaultId(id)).collect())
     }
 }
 

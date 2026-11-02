@@ -185,13 +185,6 @@ impl DocumentStore for ObjectStoreDocumentStore {
         .await
     }
 
-    async fn copy(&self, from: &str, to: &str) -> Result<()> {
-        self.store
-            .copy(&Self::path(from)?, &Self::path(to)?)
-            .await
-            .map_err(|e| Self::map_get_error(from, e))
-    }
-
     async fn delete(&self, key: &str) -> Result<()> {
         self.timed("delete", async {
             match self.store.delete(&Self::path(key)?).await {

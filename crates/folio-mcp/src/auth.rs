@@ -20,17 +20,12 @@ pub const SCOPE_WRITE: &str = "documents:write";
 #[derive(Debug, Clone)]
 pub struct McpAuth {
     pub subject: Option<String>,
-    pub is_owner: bool,
     pub scopes: HashSet<String>,
 }
 
 impl McpAuth {
     pub fn new(subject: Option<String>, scopes: HashSet<String>) -> Self {
-        Self {
-            subject,
-            scopes,
-            is_owner: false,
-        }
+        Self { subject, scopes }
     }
 }
 
@@ -42,16 +37,15 @@ pub async fn bridge_auth_context(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     if let Some(context) = request.extensions().get::<folio_auth::AuthContext>() {
-        let user = match store.find_user_by_id(&context.user_id).await {
-            Ok(Some(user)) => user,
+        match store.find_user_by_id(&context.user_id).await {
+            Ok(Some(_)) => {}
             Ok(None) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
             Err(_) => return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
-        let mut auth = McpAuth::new(
+        let auth = McpAuth::new(
             Some(context.user_id.clone()),
             context.scopes.iter().cloned().collect(),
         );
-        auth.is_owner = user.is_owner;
         request.extensions_mut().insert(auth);
     }
     next.run(request).await
@@ -77,8 +71,4 @@ fn auth_of(extensions: &Extensions) -> Option<&McpAuth> {
 /// The authenticated user, when an auth layer supplied one
 pub(crate) fn subject_of(extensions: &Extensions) -> Option<&str> {
     auth_of(extensions)?.subject.as_deref()
-}
-
-pub(crate) fn owner_of(extensions: &Extensions) -> bool {
-    auth_of(extensions).is_some_and(|auth| auth.is_owner)
 }

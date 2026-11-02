@@ -25,6 +25,7 @@ preserve existing database rows, including values seeded by earlier releases.
 - Prefix `FOLIO_`.
 - Nested keys are separated by a double underscore: `ai.openai_api_key` is
   `FOLIO_AI__OPENAI_API_KEY`. Single underscores stay part of the key name.
+  Names such as `FOLIO_AI_OPENAI_API_KEY` are ignored.
 - Any variable accepts a `_FILE` companion that names a file holding the value,
   for Docker and Kubernetes secrets: `FOLIO_AI__OPENAI_API_KEY_FILE=/run/secrets/openai`.
   A trailing newline is stripped. Setting both the variable and its `_FILE`
@@ -99,18 +100,3 @@ them too. See [ingestion](ingestion.md).
 
 Other variables read directly: `FOLIO_CONFIG` (config file path) and `RUST_LOG`
 (log filter).
-
-## Deprecated names
-
-These single-underscore names still work and log a deprecation warning when
-used. When both forms are set, the new name wins.
-
-| Deprecated | Use instead |
-| --- | --- |
-| `FOLIO_SERVER_HOST` | `FOLIO_SERVER__HOST` |
-| `FOLIO_SERVER_PORT` | `FOLIO_SERVER__PORT` |
-| `FOLIO_DATABASE_URL` | `FOLIO_DATABASE__URL` |
-| `FOLIO_STORAGE_PATH` | `FOLIO_STORAGE__PATH` |
-| `FOLIO_AI_PROVIDER` | `FOLIO_AI__PROVIDER` |
-| `FOLIO_AI_OPENAI_API_KEY` | `FOLIO_AI__OPENAI_API_KEY` |
-| `FOLIO_AI_ANTHROPIC_API_KEY` | `FOLIO_AI__ANTHROPIC_API_KEY` |

@@ -229,9 +229,7 @@ pub trait VaultRepository: Send + Sync {
     /// Fails with [`crate::error::Error::Conflict`] while it holds documents.
     async fn delete(&self, id: VaultId) -> Result<()>;
 
-    /// The user's default vault: the stored choice while they still hold a
-    /// role in it, otherwise the first vault by name where they do, otherwise
-    /// `None`
+    /// The user's stored default while they still hold a role in it, otherwise `None`.
     async fn default_for_user(&self, user: &UserId) -> Result<Option<VaultId>>;
 
     async fn set_default(&self, user: &UserId, vault: VaultId) -> Result<()>;
@@ -243,9 +241,6 @@ pub trait VaultRepository: Send + Sync {
     /// default vault, else the oldest vault. Creates a member-less `Archive`
     /// when no vault exists at all.
     async fn instance_default(&self) -> Result<VaultId>;
-
-    /// Vaults named `name` that have no direct user owner
-    async fn find_ownerless(&self, name: &str) -> Result<Vec<VaultId>>;
 }
 
 /// Repository for grants

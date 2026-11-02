@@ -69,13 +69,10 @@ public struct KeychainInstallationIDStore: InstallationIDStore {
 
 final class InstallationIdentity: @unchecked Sendable {
     private let lock = NSLock()
-    private let defaults: UserDefaults
     private let store: any InstallationIDStore
     private var cached: UUID?
-    private let legacyKey = "folio.telemetry.installationID"
 
-    init(defaults: UserDefaults, store: any InstallationIDStore) {
-        self.defaults = defaults
+    init(store: any InstallationIDStore) {
         self.store = store
     }
 
@@ -87,11 +84,9 @@ final class InstallationIdentity: @unchecked Sendable {
                 if let existing = try store.load() {
                     identifier = existing
                 } else {
-                    let candidate = defaults.string(forKey: legacyKey).flatMap(UUID.init(uuidString:)) ?? UUID()
-                    identifier = try store.insertIfAbsent(candidate)
+                    identifier = try store.insertIfAbsent(UUID())
                 }
                 cached = identifier
-                defaults.removeObject(forKey: legacyKey)
                 return identifier
             } catch {
                 // A locked Keychain must not turn the same installation into a new identity.

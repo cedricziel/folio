@@ -43,11 +43,8 @@ private final class TelemetryCapture: @unchecked Sendable {
     func realRelaySmoke() async throws {
         let environment = ProcessInfo.processInfo.environment
         let url = try #require(environment["FOLIO_TELEMETRY_SMOKE_URL"].flatMap(URL.init(string:)))
-        let suite = "folio-telemetry-smoke-\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
         let provider = SmokeToken(value: environment["FOLIO_TELEMETRY_SMOKE_TOKEN"] ?? "folio-telemetry-smoke")
-        let telemetry = FolioTelemetry(defaults: defaults, installationStore: TestInstallationIDStore())
+        let telemetry = FolioTelemetry(installationStore: TestInstallationIDStore())
         defer { telemetry.stop() }
         await telemetry.configure(baseURL: url, tokenProvider: provider)
         let runtime = try #require(telemetry.current)
@@ -72,11 +69,8 @@ private final class TelemetryCapture: @unchecked Sendable {
     }
 
     @Test func installationResourceSurvivesReconfigurationWithoutDeviceIdentifiers() throws {
-        let suite = "folio-telemetry-\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
         let store = TestInstallationIDStore()
-        let identity = InstallationIdentity(defaults: defaults, store: store)
+        let identity = InstallationIdentity(store: store)
         let installation = try #require(identity.resolve())
         let first = FolioTelemetry.resource(installationID: installation, version: "0.3.4")
         let second = try FolioTelemetry.resource(installationID: #require(identity.resolve()), version: "0.3.5")
@@ -149,11 +143,8 @@ private final class TelemetryCapture: @unchecked Sendable {
             }
             return (200, Data("{}".utf8))
         }
-        let suite = "folio-telemetry-\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
         let telemetry = FolioTelemetry(
-            defaults: defaults, session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
         )
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         let network = URLSession(configuration: config)
@@ -249,13 +240,10 @@ private final class TelemetryCapture: @unchecked Sendable {
             capture.append(request, body)
             return (200, Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8))
         }
-        let suite = "folio-telemetry-keychain-test-\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
         let store = TestInstallationIDStore()
         store.readUnavailable = true
         let telemetry = FolioTelemetry(
-            defaults: defaults, session: URLSession(configuration: config), installationStore: store
+            session: URLSession(configuration: config), installationStore: store
         )
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         #expect(await telemetry.operation("documents.list") { 42 } == 42)
@@ -263,7 +251,6 @@ private final class TelemetryCapture: @unchecked Sendable {
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         #expect(telemetry.current == nil)
         #expect(capture.requests.count == 2)
-        #expect(defaults.string(forKey: "folio.telemetry.installationID") == nil)
     }
 
     @Test(arguments: [200, 503]) func serverDisabledOrUnavailableLeavesOperationsUninstrumented(status: Int)

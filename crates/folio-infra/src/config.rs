@@ -24,7 +24,6 @@ use folio_core::models::{
 use folio_core::redact::Redacted;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::warn;
 
 const ENV_PREFIX: &str = "FOLIO_";
 const FILE_SUFFIX: &str = "_FILE";
@@ -464,8 +463,6 @@ pub struct Setting {
     pub key: &'static str,
     /// Canonical environment variable.
     pub env: &'static str,
-    /// Deprecated environment variables that still work.
-    pub legacy_env: &'static [&'static str],
     pub kind: ValueKind,
 }
 
@@ -473,337 +470,281 @@ pub const SETTINGS: &[Setting] = &[
     Setting {
         key: "server.host",
         env: "FOLIO_SERVER__HOST",
-        legacy_env: &["FOLIO_SERVER_HOST"],
         kind: ValueKind::Str,
     },
     Setting {
         key: "server.port",
         env: "FOLIO_SERVER__PORT",
-        legacy_env: &["FOLIO_SERVER_PORT"],
         kind: ValueKind::Port,
     },
     Setting {
         key: "server.public_url",
         env: "FOLIO_SERVER__PUBLIC_URL",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.required",
         env: "FOLIO_AUTH__REQUIRED",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "auth.forward.enabled",
         env: "FOLIO_AUTH__FORWARD__ENABLED",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "auth.forward.user_header",
         env: "FOLIO_AUTH__FORWARD__USER_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.email_header",
         env: "FOLIO_AUTH__FORWARD__EMAIL_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.name_header",
         env: "FOLIO_AUTH__FORWARD__NAME_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.groups_header",
         env: "FOLIO_AUTH__FORWARD__GROUPS_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.role_header",
         env: "FOLIO_AUTH__FORWARD__ROLE_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.user_id_header",
         env: "FOLIO_AUTH__FORWARD__USER_ID_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.trusted_proxies",
         env: "FOLIO_AUTH__FORWARD__TRUSTED_PROXIES",
-        legacy_env: &[],
         kind: ValueKind::List,
     },
     Setting {
         key: "auth.forward.admin_group",
         env: "FOLIO_AUTH__FORWARD__ADMIN_GROUP",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.admin_role",
         env: "FOLIO_AUTH__FORWARD__ADMIN_ROLE",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.shared_secret",
         env: "FOLIO_AUTH__FORWARD__SHARED_SECRET",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.secret_header",
         env: "FOLIO_AUTH__FORWARD__SECRET_HEADER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.forward.session_ttl_secs",
         env: "FOLIO_AUTH__FORWARD__SESSION_TTL_SECS",
-        legacy_env: &[],
         kind: ValueKind::Int,
     },
     Setting {
         key: "auth.forward.group_separator",
         env: "FOLIO_AUTH__FORWARD__GROUP_SEPARATOR",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.setup_token",
         env: "FOLIO_AUTH__SETUP_TOKEN",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.secret_key",
         env: "FOLIO_AUTH__SECRET_KEY",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.enabled",
         env: "FOLIO_AUTH__OIDC__ENABLED",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "auth.oidc.issuer",
         env: "FOLIO_AUTH__OIDC__ISSUER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.client_id",
         env: "FOLIO_AUTH__OIDC__CLIENT_ID",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.client_secret",
         env: "FOLIO_AUTH__OIDC__CLIENT_SECRET",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.scopes",
         env: "FOLIO_AUTH__OIDC__SCOPES",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.display_name",
         env: "FOLIO_AUTH__OIDC__DISPLAY_NAME",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.groups_claim",
         env: "FOLIO_AUTH__OIDC__GROUPS_CLAIM",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.admin_group",
         env: "FOLIO_AUTH__OIDC__ADMIN_GROUP",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "auth.oidc.allow_local_login",
         env: "FOLIO_AUTH__OIDC__ALLOW_LOCAL_LOGIN",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "auth.oidc.auto_create_users",
         env: "FOLIO_AUTH__OIDC__AUTO_CREATE_USERS",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "database.url",
         env: "FOLIO_DATABASE__URL",
-        legacy_env: &["FOLIO_DATABASE_URL"],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.backend",
         env: "FOLIO_STORAGE__BACKEND",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.path",
         env: "FOLIO_STORAGE__PATH",
-        legacy_env: &["FOLIO_STORAGE_PATH"],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.s3.bucket",
         env: "FOLIO_STORAGE__S3__BUCKET",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.s3.region",
         env: "FOLIO_STORAGE__S3__REGION",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.s3.endpoint",
         env: "FOLIO_STORAGE__S3__ENDPOINT",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.s3.access_key_id",
         env: "FOLIO_STORAGE__S3__ACCESS_KEY_ID",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.s3.secret_access_key",
         env: "FOLIO_STORAGE__S3__SECRET_ACCESS_KEY",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "storage.s3.path_style",
         env: "FOLIO_STORAGE__S3__PATH_STYLE",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "storage.s3.allow_http",
         env: "FOLIO_STORAGE__S3__ALLOW_HTTP",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "storage.s3.prefix",
         env: "FOLIO_STORAGE__S3__PREFIX",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ai.provider",
         env: "FOLIO_AI__PROVIDER",
-        legacy_env: &["FOLIO_AI_PROVIDER"],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ai.openai_api_key",
         env: "FOLIO_AI__OPENAI_API_KEY",
-        legacy_env: &["FOLIO_AI_OPENAI_API_KEY"],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ai.anthropic_api_key",
         env: "FOLIO_AI__ANTHROPIC_API_KEY",
-        legacy_env: &["FOLIO_AI_ANTHROPIC_API_KEY"],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ocr.provider",
         env: "FOLIO_OCR__PROVIDER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ocr.model",
         env: "FOLIO_OCR__MODEL",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ocr.languages",
         env: "FOLIO_OCR__LANGUAGES",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "ocr.base_url",
         env: "FOLIO_OCR__BASE_URL",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "embeddings.provider",
         env: "FOLIO_EMBEDDINGS__PROVIDER",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "embeddings.model",
         env: "FOLIO_EMBEDDINGS__MODEL",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "embeddings.base_url",
         env: "FOLIO_EMBEDDINGS__BASE_URL",
-        legacy_env: &[],
         kind: ValueKind::Str,
     },
     Setting {
         key: "processing.auto_ocr",
         env: "FOLIO_PROCESSING__AUTO_OCR",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "processing.auto_thumbnail",
         env: "FOLIO_PROCESSING__AUTO_THUMBNAIL",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "processing.auto_embed",
         env: "FOLIO_PROCESSING__AUTO_EMBED",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "mcp.enabled",
         env: "FOLIO_MCP__ENABLED",
-        legacy_env: &[],
         kind: ValueKind::Bool,
     },
     Setting {
         key: "mcp.allowed_hosts",
         env: "FOLIO_MCP__ALLOWED_HOSTS",
-        legacy_env: &[],
         kind: ValueKind::List,
     },
 ];
@@ -861,7 +802,7 @@ impl Config {
             Figment::from(Serialized::defaults(Config::default())).merge(Toml::file(path));
 
         for setting in SETTINGS {
-            if let Some(value) = resolve_env(setting, &vars)? {
+            if let Some(value) = read_var(setting.env, &vars)? {
                 figment =
                     figment.merge(Serialized::default(setting.key, to_value(setting, value)?));
             }
@@ -943,29 +884,6 @@ fn parse_loose(raw: &str) -> serde_json::Value {
     raw.parse::<i64>()
         .map(serde_json::Value::from)
         .unwrap_or_else(|_| serde_json::Value::from(raw))
-}
-
-/// Find the value for a setting: canonical name first, then deprecated
-/// aliases, each also accepted with a `_FILE` suffix.
-#[allow(clippy::result_large_err)]
-fn resolve_env(
-    setting: &Setting,
-    vars: &HashMap<String, String>,
-) -> Result<Option<String>, figment::Error> {
-    let names = std::iter::once(setting.env).chain(setting.legacy_env.iter().copied());
-    for name in names {
-        let Some(value) = read_var(name, vars)? else {
-            continue;
-        };
-        if name != setting.env {
-            warn!(
-                "{name} is deprecated and will be removed in a future release; use {} instead",
-                setting.env
-            );
-        }
-        return Ok(Some(value));
-    }
-    Ok(None)
 }
 
 #[allow(clippy::result_large_err)]
@@ -1263,20 +1181,27 @@ mod tests {
     }
 
     #[test]
-    fn legacy_names_still_work() {
-        for setting in SETTINGS {
-            for legacy in setting.legacy_env {
-                let (sample, expected) = match setting.kind {
-                    ValueKind::Str => ("legacy-value", "legacy-value"),
-                    ValueKind::Port => ("4343", "4343"),
-                    ValueKind::Int => ("4343", "4343"),
-                    ValueKind::Bool => ("true", "true"),
-                    ValueKind::List => ("legacy.example", r#"["legacy.example"]"#),
-                };
-                let config = load(&[(legacy, sample)]);
-                assert_eq!(lookup(&config, setting.key).as_deref(), Some(expected));
-            }
-        }
+    fn single_underscore_aliases_and_their_file_variants_are_ignored() {
+        let config = load(&[
+            ("FOLIO_SERVER_HOST", "0.0.0.0"),
+            ("FOLIO_SERVER_PORT", "4343"),
+            ("FOLIO_DATABASE_URL", "sqlite://ignored"),
+            ("FOLIO_STORAGE_PATH", "/ignored"),
+            ("FOLIO_AI_PROVIDER", "ignored"),
+            ("FOLIO_AI_OPENAI_API_KEY", "ignored"),
+            ("FOLIO_AI_ANTHROPIC_API_KEY", "ignored"),
+            ("FOLIO_SERVER_HOST_FILE", "/nonexistent/alias"),
+            ("FOLIO_SERVER_PORT_FILE", "/nonexistent/alias"),
+            ("FOLIO_DATABASE_URL_FILE", "/nonexistent/alias"),
+            ("FOLIO_STORAGE_PATH_FILE", "/nonexistent/alias"),
+            ("FOLIO_AI_PROVIDER_FILE", "/nonexistent/alias"),
+            ("FOLIO_AI_OPENAI_API_KEY_FILE", "/nonexistent/alias"),
+            ("FOLIO_AI_ANTHROPIC_API_KEY_FILE", "/nonexistent/alias"),
+        ]);
+        assert_eq!(
+            serde_json::to_value(config).unwrap(),
+            serde_json::to_value(Config::default()).unwrap()
+        );
     }
 
     #[test]
@@ -1329,15 +1254,6 @@ mod tests {
         assert!(config.auth.oidc.enabled);
         assert_eq!(config.auth.oidc.client_secret.as_deref(), Some("s3cret"));
         assert!(!format!("{:?}", config.auth.oidc).contains("s3cret"));
-    }
-
-    #[test]
-    fn canonical_name_beats_legacy_alias() {
-        let config = load(&[
-            ("FOLIO_AI_OPENAI_API_KEY", "old"),
-            ("FOLIO_AI__OPENAI_API_KEY", "new"),
-        ]);
-        assert_eq!(config.ai.openai_api_key.as_deref(), Some("new"));
     }
 
     #[test]

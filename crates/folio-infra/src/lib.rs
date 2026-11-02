@@ -32,8 +32,6 @@ pub use database::{
 };
 pub use ingest::{EmailSource, FolderSource, SourceFactory};
 pub use queue::{FailOutcome, Job, JobClass, JobQueue, JobStatus, JobType, Worker, WorkerConfig};
-pub use storage::{
-    build_store, cleanup_legacy_layout, migrate_legacy_layout, ObjectStoreDocumentStore,
-};
+pub use storage::{build_store, ObjectStoreDocumentStore};
 pub use thumbnail::ThumbnailService;
 pub use workflow::{StorageFileMetadata, WebhookClient, WorkflowRunner};

@@ -265,7 +265,7 @@ The system SHALL reject, with 409, revoking or downgrading the last owner grant 
 
 ### Requirement: Default vault
 
-Each user SHALL have a default vault: a vault where they hold a role. The first admin created by first-run setup SHALL own a new vault `Personal`, which is their default unless the upgrade created `Archive`. Every user created later SHALL also get an owned `Personal` vault as default. When the default vault is deleted or the user loses access, the default SHALL become the first vault by name where the user has a role, or none.
+Each user SHALL have a default vault: a vault where they hold a role. The first admin created by first-run setup SHALL own a new vault `Personal`, which is their default unless they already have a default vault. Every user created later SHALL also get an owned `Personal` vault as default. When the default vault is deleted or the user loses access, the default SHALL become the first vault by name where the user has a role, or none.
 
 #### Scenario: Fresh install
 
@@ -279,7 +279,7 @@ Each user SHALL have a default vault: a vault where they hold a role. The first 
 
 ### Requirement: Upgrade moves existing data into Archive
 
-The upgrade migration SHALL create a vault named `Archive`, put every existing document, tag, correspondent, document type, embedding, workflow and saved search into it, and make the first instance admin its owner and default vault. When no user exists yet, first-run setup SHALL make the first admin owner of `Archive` in addition to their `Personal` vault.
+The upgrade migration SHALL create a vault named `Archive`, put every existing document, tag, correspondent, document type, embedding, workflow and saved search into it, and make the first instance admin its owner and default vault. When no user exists yet, the archive SHALL remain ownerless. First-run setup SHALL provision only the admin's `Personal` vault; it SHALL NOT claim archives by name.
 
 #### Scenario: Upgrade with existing documents and an admin
 
@@ -289,7 +289,7 @@ The upgrade migration SHALL create a vault named `Archive`, put every existing d
 #### Scenario: Upgrade before any user exists
 
 - **WHEN** an instance with documents but no users is upgraded and first-run setup then creates the first admin
-- **THEN** the admin owns `Archive` and `Personal`, and `Archive` is their default vault
+- **THEN** the admin owns `Personal` as their default vault, and `Archive` remains ownerless
 
 #### Scenario: Upgrade of an empty instance
 

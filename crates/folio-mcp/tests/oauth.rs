@@ -131,7 +131,7 @@ async fn missing_token_gets_401_with_resource_metadata() {
     assert_eq!(res.status(), 401);
     let challenge = res.headers()["www-authenticate"].to_str().unwrap();
     assert!(challenge.starts_with("Bearer resource_metadata=\""));
-    assert!(challenge.ends_with("/.well-known/oauth-protected-resource\""));
+    assert!(challenge.ends_with("/.well-known/oauth-protected-resource/mcp\""));
 }
 
 #[tokio::test]

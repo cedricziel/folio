@@ -26,11 +26,10 @@ public final class FolioTelemetry: @unchecked Sendable {
     private let session: URLSession
 
     public init(
-        defaults: UserDefaults = UserDefaults(suiteName: SharedConfiguration.appGroup) ?? .standard,
         session: URLSession? = nil,
         installationStore: any InstallationIDStore = KeychainInstallationIDStore()
     ) {
-        installationIdentity = InstallationIdentity(defaults: defaults, store: installationStore)
+        installationIdentity = InstallationIdentity(store: installationStore)
         self.session =
             session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
         _ = Self.contextInstalled

@@ -60,17 +60,11 @@ pub async fn resolve_default_vault(
     if user.is_none() && auth.required {
         return next.run(request).await;
     }
-    let who = user.as_ref().map(|u| (UserId(u.id.clone()), u.is_owner));
-    match resolver
-        .vaults
-        .default_vault(who.as_ref().map(|(id, owner)| (id, *owner)))
-        .await
-    {
+    let who = user.as_ref().map(|u| UserId(u.id.clone()));
+    match resolver.vaults.default_vault(who.as_ref()).await {
         Ok(vault) => {
             request.extensions_mut().insert(DefaultVault(vault));
-            request
-                .extensions_mut()
-                .insert(Uploader(who.map(|(id, _)| id)));
+            request.extensions_mut().insert(Uploader(who));
             next.run(request).await
         }
         Err(e) => {
