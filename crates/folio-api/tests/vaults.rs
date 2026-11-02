@@ -22,7 +22,7 @@ struct SignedIn {
 }
 
 async fn sign_in(h: &Harness, name: &str) -> SignedIn {
-    h.auth
+    h.auth_store
         .create_user(User {
             id: name.into(),
             username: name.into(),
@@ -38,11 +38,13 @@ async fn sign_in(h: &Harness, name: &str) -> SignedIn {
         .await
         .unwrap();
     let token = format!("vault-test-session-{name}");
-    h.auth
+    h.auth_store
         .create_session(Session {
             id_hash: hash_token(&token),
             user_id: name.into(),
             expires_at: chrono::Utc::now().timestamp() + 3600,
+            created_at: 1,
+            user_agent: Some("vault regression".into()),
         })
         .await
         .unwrap();

@@ -203,6 +203,7 @@ struct PageQuery {
 
 async fn render_page(
     state: &AppState,
+    vault: folio_core::models::VaultId,
     auth: &AuthState,
     caller: &Caller,
     notice_key: Option<&str>,
@@ -270,7 +271,7 @@ async fn render_page(
         })
         .collect();
     let template = SecurityTemplate {
-        sidebar: Sidebar::load(state, Nav::Settings).await?,
+        sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
         title: "Account and security - Folio".into(),
         csrf: caller.csrf.clone(),
         username: user.username.clone(),
@@ -302,6 +303,7 @@ async fn render_page(
 }
 
 async fn page(
+    crate::vault::DefaultVault(vault): crate::vault::DefaultVault,
     State(state): State<AppState>,
     Extension(auth): Extension<AuthState>,
     headers: HeaderMap,
@@ -311,7 +313,7 @@ async fn page(
         Ok(c) => c,
         Err(r) => return *r,
     };
-    render_page(&state, &auth, &caller, q.n.as_deref(), Vec::new())
+    render_page(&state, vault, &auth, &caller, q.n.as_deref(), Vec::new())
         .await
         .unwrap_or_else(IntoResponse::into_response)
 }
@@ -426,6 +428,7 @@ struct CodeForm {
 }
 
 async fn totp_confirm(
+    crate::vault::DefaultVault(vault): crate::vault::DefaultVault,
     State(state): State<AppState>,
     Extension(auth): Extension<AuthState>,
     headers: HeaderMap,
@@ -460,7 +463,7 @@ async fn totp_confirm(
         .confirm_totp(&user.id, &record.secret_enc, step, &hashes)
         .await
     {
-        Ok(true) => render_page(&state, &auth, &caller, Some("totp-on"), codes)
+        Ok(true) => render_page(&state, vault, &auth, &caller, Some("totp-on"), codes)
             .await
             .unwrap_or_else(IntoResponse::into_response),
         Ok(false) => Redirect::to("/settings/security").into_response(),
@@ -544,6 +547,7 @@ async fn totp_disable(
 }
 
 async fn totp_recovery(
+    crate::vault::DefaultVault(vault): crate::vault::DefaultVault,
     State(state): State<AppState>,
     Extension(auth): Extension<AuthState>,
     headers: HeaderMap,
@@ -563,7 +567,7 @@ async fn totp_recovery(
         tracing::error!("replacing recovery codes failed: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
-    render_page(&state, &auth, &caller, None, codes)
+    render_page(&state, vault, &auth, &caller, None, codes)
         .await
         .unwrap_or_else(IntoResponse::into_response)
 }
