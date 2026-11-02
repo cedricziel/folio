@@ -70,6 +70,7 @@ actor MockFolioService: FolioService {
     }
 
     func downloadFile(for document: Document) async throws -> URL {
+        try Task.checkCancellation()
         if let failure {
             throw failure
         }

@@ -70,3 +70,9 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - Webhooks and workflows: start a local receiver (`python3 -m http.server`, or `nc -l`) on a free port, point the webhook at `http://127.0.0.1:<port>`, run the trigger (upload), and check the receiver log.
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.
 - Real OCR or embeddings: `FOLIO_AI_PROVIDER=local` skips them. Test those providers only with a dedicated test key supplied by the user, never from the environment you inherited.
+
+## Apple navigation
+
+Run `xcrun swift test --package-path apple/FolioKit` for native changes. For list and detail loading, the focused suites are `DocumentListViewModelTests`, `DocumentListFailureTests`, and `DocumentDetailViewModelTests`. The detail suite covers cancellation followed by a successful retry. Run `xcrun swift-format lint` on changed Swift files.
+
+Check navigation in a throwaway simulator with test credentials and an isolated server. Open a document, return to the list, and open it again. Check that rows remain visible and the preview loads. Also leave detail before the download finishes and reopen it. Keep list loading on the containing split view so compact navigation does not cancel it when hiding the sidebar. Do not use an existing signed-in simulator or device for this check.
