@@ -795,6 +795,8 @@ Stimulus.register(
       "cameraInput",
       "queue",
       "queueList",
+      "dismissButton",
+      "cancelButton",
     ];
 
     connect() {
@@ -865,6 +867,7 @@ Stimulus.register(
       });
 
       this.queueTarget.classList.add("active");
+      this.syncQueueActions();
       this.processQueue();
     }
 
@@ -874,7 +877,7 @@ Stimulus.register(
       item.dataset.queueId = id;
       item.innerHTML = `
                     <span class="queue-item-name">${escapeHtml(file.name)} <span class="f-meta">to ${escapeHtml(vaultName)}</span></span>
-                    <span class="queue-item-status f-meta">Waiting</span>
+                    <span><span class="queue-item-status f-meta">Waiting</span> <button type="button" class="f-btn f-btn-quiet" data-action="click->dropzone#retry" hidden>Retry</button></span>
                     <div class="queue-item-progress"><div class="queue-item-progress-bar" style="width: 0%"></div></div>
                 `;
       this.queueListTarget.appendChild(item);
@@ -886,7 +889,10 @@ Stimulus.register(
       );
       if (item) {
         item.querySelector(".queue-item-status").textContent = message;
+        item.querySelector("button").hidden =
+          this.uploadQueue.find((entry) => entry.id === id)?.status !== "error";
       }
+      this.syncQueueActions();
     }
 
     updateQueueItemProgress(id, percent) {
@@ -898,10 +904,41 @@ Stimulus.register(
       }
     }
 
-    clearQueue() {
-      this.uploadQueue = [];
-      this.queueListTarget.innerHTML = "";
-      this.queueTarget.classList.remove("active");
+    syncQueueActions() {
+      this.dismissButtonTarget.disabled = !this.uploadQueue.some(
+        (item) => item.status === "done" || item.status === "cancelled",
+      );
+      this.cancelButtonTarget.disabled = !this.uploadQueue.some(
+        (item) => item.status === "pending",
+      );
+    }
+
+    dismissFinished() {
+      this.uploadQueue = this.uploadQueue.filter((item) => {
+        if (item.status !== "done" && item.status !== "cancelled") return true;
+        this.queueListTarget.querySelector(`[data-queue-id="${item.id}"]`)?.remove();
+        return false;
+      });
+      this.queueTarget.classList.toggle("active", this.uploadQueue.length > 0);
+      this.syncQueueActions();
+    }
+
+    cancelPending() {
+      this.uploadQueue.forEach((item) => {
+        if (item.status !== "pending") return;
+        item.status = "cancelled";
+        this.updateQueueItemStatus(item.id, "Cancelled");
+      });
+    }
+
+    retry(event) {
+      const id = event.currentTarget.closest("[data-queue-id]").dataset.queueId;
+      const item = this.uploadQueue.find((entry) => entry.id === id);
+      if (item?.status !== "error") return;
+      item.status = "pending";
+      this.updateQueueItemProgress(id, 0);
+      this.updateQueueItemStatus(id, "Waiting");
+      this.processQueue();
     }
 
     async processQueue() {
@@ -913,7 +950,7 @@ Stimulus.register(
         if (!item) break;
 
         item.status = "uploading";
-        this.updateQueueItemStatus(item.id, "0%");
+        this.updateQueueItemStatus(item.id, "Uploading 0%");
 
         try {
           const stream = await this.uploadFile(item.file, item.id, item.vaultId);
@@ -944,7 +981,7 @@ Stimulus.register(
           if (e.lengthComputable) {
             const percent = Math.round((e.loaded / e.total) * 100);
             this.updateQueueItemProgress(id, percent);
-            this.updateQueueItemStatus(id, `${percent}%`);
+            this.updateQueueItemStatus(id, `Uploading ${percent}%`);
           }
         });
 
@@ -1469,14 +1506,29 @@ if ("serviceWorker" in navigator) {
       aria-label="Uploads"
     >
       <div class="upload-queue-header">
-        <h2 class="f-label">Uploads</h2>
-        <button
-          type="button"
-          class="f-btn f-btn-quiet"
-          data-action="click->dropzone#clearQueue"
-        >
-          Clear
-        </button>
+        <div class="page-head">
+          <h2 class="f-label">Uploads</h2>
+          <div class="head-actions">
+            <button
+              type="button"
+              class="f-btn f-btn-quiet"
+              data-dropzone-target="dismissButton"
+              data-action="click->dropzone#dismissFinished"
+              disabled
+            >
+              Dismiss finished
+            </button>
+            <button
+              type="button"
+              class="f-btn f-btn-quiet"
+              data-dropzone-target="cancelButton"
+              data-action="click->dropzone#cancelPending"
+              disabled
+            >
+              Cancel pending
+            </button>
+          </div>
+        </div>
       </div>
       <div class="upload-queue-list" data-dropzone-target="queueList"></div>
     </section>
