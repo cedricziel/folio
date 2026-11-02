@@ -346,6 +346,7 @@ async fn documents_contract(r: &Repositories) {
                 content: Some("extracted text".into()),
                 correspondent_id: Some(None),
                 document_type_id: None,
+                tag_ids: None,
             },
         )
         .await
