@@ -363,6 +363,13 @@ packages so stale artifacts from the other checkout cannot satisfy a check.
 
 ## Verify worker leases
 
+Run `cargo test -p folio-infra --test processing_job_context` for enqueue-time vault
+and trusted lineage retention through retry and vault move in both databases.
+Worker `processing_claim` tests cover restored source lineage, system attribution,
+and rejection before work starts in a different vault. This preflight check does
+not establish transactional result fencing for moves during provider execution.
+
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test queue_leases`
 against disposable SQLite and PostgreSQL fixtures. The shared contract covers
 renewal of long-running work, expired-owner recovery, stale renewal and completion,

@@ -19,13 +19,18 @@ pub(crate) async fn insert_job<'e>(
     let id = Uuid::new_v4();
     let now = Utc::now();
     let type_name = job_type.type_name();
+    let lineage =
+        folio_core::mutation::current_lineage().unwrap_or(folio_core::mutation::MutationLineage {
+            correlation_id: Uuid::new_v4(),
+            causation_id: None,
+        });
     let payload = serde_json::to_string(&job_type)
         .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
 
     sqlx::query(
         r#"
-        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at)
-        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id)
+        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, (SELECT vault_id FROM documents WHERE id = ?), ?, ?)
         "#,
     )
     .bind(id.to_string())
@@ -35,6 +40,9 @@ pub(crate) async fn insert_job<'e>(
     .bind(now.to_rfc3339())
     .bind(now.to_rfc3339())
     .bind(scheduled_at.to_rfc3339())
+    .bind(job_type.document_id().map(|id| id.to_string()))
+    .bind(lineage.correlation_id.to_string())
+    .bind(lineage.causation_id.map(|id| id.to_string()))
     .execute(executor)
     .await
     .map_err(|e| Error::Repository(format!("Failed to enqueue job: {}", e)))?;
@@ -228,6 +236,30 @@ impl SqliteJobQueue {
             error!(job.id = %job.id, job.attempt = job.attempts, %error, "Job permanently failed");
             FailOutcome::GaveUp
         })
+    }
+
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<super::JobContext>> {
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT origin_vault_id, correlation_id, causation_id FROM jobs WHERE id = ?",
+        )
+        .bind(job_id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(e.to_string()))?;
+        let Some((vault, Some(correlation), causation)) = row else {
+            return Ok(None);
+        };
+        let parse = |id: String| Uuid::parse_str(&id).map_err(|e| Error::Repository(e.to_string()));
+        Ok(Some(super::JobContext {
+            vault_id: vault
+                .map(parse)
+                .transpose()?
+                .map(folio_core::models::VaultId),
+            lineage: folio_core::mutation::MutationLineage {
+                correlation_id: parse(correlation)?,
+                causation_id: causation.map(parse).transpose()?,
+            },
+        }))
     }
 
     /// Get count of pending jobs
