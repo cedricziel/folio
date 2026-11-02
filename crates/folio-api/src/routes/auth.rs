@@ -19,6 +19,7 @@ use tokio::sync::Semaphore;
 use url::{form_urlencoded, Url};
 
 use super::oidc;
+use super::view::{SidebarUser, CURRENT_USER};
 
 use folio_auth::{
     base_url,
@@ -359,11 +360,12 @@ pub async fn enforce_auth(
         return next.run(request).await;
     }
     let is_api = path == "/api" || path.starts_with("/api/");
-    if auth.current_user(request.headers()).await.is_some() {
+    if let Some((session_id, user)) = auth.session(request.headers()).await {
         if !is_read_method(request.method()) && !auth.is_same_origin(request.headers()) {
             return StatusCode::FORBIDDEN.into_response();
         }
-        return next.run(request).await;
+        let sidebar_user = SidebarUser::new(&user, auth.csrf_session_token(&session_id));
+        return CURRENT_USER.scope(sidebar_user, next.run(request)).await;
     }
     if is_api {
         let validator = auth.validator("/api");
