@@ -379,17 +379,33 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn update(&self, id: Id, params: UpdateDocument) -> Result<Document> {
-        let existing = self.find_by_id(id).await?.ok_or_else(|| Error::NotFound {
-            entity_type: "Document",
-            id: id.to_string(),
-        })?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<DocumentRow> = sqlx::query_as(
+            "SELECT id, title, content, original_filename, file_path, mime_type,
+                    correspondent_id, document_type_id, page_count, source_type, source_meta,
+                    ocr_status, embed_status, created_at, updated_at FROM documents WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let existing: Document =
+            row.map(TryInto::try_into)
+                .transpose()?
+                .ok_or_else(|| Error::NotFound {
+                    entity_type: "Document",
+                    id: id.to_string(),
+                })?;
 
         let title = params.title.unwrap_or_else(|| existing.title.clone());
         let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
         let now = Utc::now();
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
 
         let tags_changed = if let Some(tags) = params.tag_ids {
             self.replace_tags(&mut tx, id, &tags).await?

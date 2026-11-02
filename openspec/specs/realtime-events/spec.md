@@ -50,7 +50,7 @@ Every document event SHALL be written to the `outbox_events` table before it lea
 
 ### Requirement: Event ids and resume
 
-Each SSE message SHALL carry the id of its outbox event. A client that reconnects with a `Last-Event-ID` header SHALL first receive the dispatched events after that id, at most 500 from the last hour, and then the live stream. A client that connects without the header SHALL receive only events dispatched after it connected.
+Each SSE message SHALL carry the id of its outbox event. A client that reconnects with a `Last-Event-ID` header SHALL first receive the newest 500 events from the last hour that may have been missed, then the live stream. Catch-up SHALL include committed events whose consumers are still pending. Replay MAY overlap prior deliveries because consumers can finish out of order; clients SHALL tolerate repeated event IDs. A client that connects without the header SHALL receive only events dispatched after it connected.
 
 #### Scenario: Reconnect
 
@@ -65,3 +65,13 @@ Document changes made by workflow actions SHALL be written to the outbox and rea
 
 - **WHEN** a workflow action tags a document
 - **THEN** subscribers receive `updated` for it and no `document.updated` workflow runs because of it
+
+#### Scenario: Consumers finish out of order
+
+- **WHEN** event A is broadcast before B, but A finishes workflow delivery after B
+- **THEN** reconnecting after A includes B even though B finished first
+
+#### Scenario: Workflow delivery is pending
+
+- **WHEN** a recent committed event has not completed workflow delivery
+- **THEN** reconnecting clients can receive it without waiting for that workflow

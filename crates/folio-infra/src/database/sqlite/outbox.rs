@@ -171,11 +171,10 @@ impl OutboxStore for SqliteOutboxStore {
     ) -> Result<Vec<OutboxEvent>> {
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT id, payload, created_at, attempts FROM outbox_events
-             WHERE dispatched_at IS NOT NULL AND created_at >= ?2 AND id <> ?1
-               AND (dispatched_at >= (SELECT dispatched_at FROM outbox_events WHERE id = ?1)
-                    OR (NOT EXISTS (SELECT 1 FROM outbox_events WHERE id = ?1) AND id > ?1)
-                    OR EXISTS (SELECT 1 FROM outbox_events WHERE id = ?1 AND dispatched_at IS NULL))
-             ORDER BY dispatched_at, id LIMIT ?3",
+             WHERE created_at >= ?2 AND id <> ?1
+               AND (dispatched_at IS NULL OR dispatched_at >=
+                    COALESCE((SELECT created_at FROM outbox_events WHERE id = ?1), ?2))
+             ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC LIMIT ?3",
         )
         .bind(after_id)
         .bind(ts(since))
@@ -183,10 +182,12 @@ impl OutboxStore for SqliteOutboxStore {
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)?;
-        Ok(rows
+        let mut events: Vec<_> = rows
             .into_iter()
             .filter_map(|row| decode(row).ok())
-            .collect())
+            .collect();
+        events.sort_by_key(|event| event.id);
+        Ok(events)
     }
 
     async fn prune(&self, before: DateTime<Utc>) -> Result<u64> {

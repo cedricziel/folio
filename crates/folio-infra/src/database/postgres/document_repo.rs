@@ -347,9 +347,16 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn update(&self, id: Id, params: UpdateDocument) -> Result<Document> {
-        let existing = self
-            .find_by_id(id)
-            .await?
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let row: Option<DocumentRow> =
+            sqlx::query_as(select_documents!("WHERE id = $1 FOR UPDATE"))
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(repo_err)?;
+        let existing: Document = row
+            .map(TryInto::try_into)
+            .transpose()?
             .ok_or_else(|| not_found("Document", id))?;
 
         let title = params.title.unwrap_or_else(|| existing.title.clone());
@@ -357,7 +364,6 @@ impl DocumentRepository for PostgresDocumentRepository {
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
         let now = Utc::now();
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
 
         let tags_changed = if let Some(tags) = params.tag_ids {
             self.replace_tags(&mut tx, id, &tags).await?
