@@ -48,13 +48,14 @@ impl SearchService for SqliteSearchService {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(db_error)?;
 
-        let in_vault: Option<(i64,)> =
-            sqlx::query_as("SELECT 1 FROM documents WHERE id = ? AND vault_id = ?")
-                .bind(document_id.to_string())
-                .bind(vault.to_string())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db_error)?;
+        let in_vault: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM documents WHERE deleted_at IS NULL AND id = ? AND vault_id = ?",
+        )
+        .bind(document_id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_error)?;
         if in_vault.is_none() {
             return Err(Error::NotFound {
                 entity_type: "Document",
@@ -93,7 +94,7 @@ impl SearchService for SqliteSearchService {
     async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()> {
         sqlx::query(
             "DELETE FROM document_chunks WHERE document_id = ?
-               AND document_id IN (SELECT id FROM documents WHERE vault_id = ?)",
+               AND document_id IN (SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ?)",
         )
         .bind(document_id.to_string())
         .bind(vault.to_string())
@@ -135,7 +136,7 @@ impl SearchService for SqliteSearchService {
         let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
             "SELECT c.document_id, c.text, c.embedding
              FROM document_chunks c JOIN documents d ON d.id = c.document_id
-             WHERE d.vault_id = ? AND c.model = ? AND c.stale = 0",
+             WHERE d.deleted_at IS NULL AND d.vault_id = ? AND c.model = ? AND c.stale = 0",
         )
         .bind(vault.to_string())
         .bind(model)

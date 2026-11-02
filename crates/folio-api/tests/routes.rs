@@ -580,7 +580,7 @@ async fn page_thumbnail_route_ignores_objects_outside_the_document_prefix() {
 }
 
 #[tokio::test]
-async fn deleting_a_document_removes_all_of_its_objects() {
+async fn deleting_a_document_retains_original_and_previews_in_trash() {
     let app = test_app().await;
     let id = stored_document(&app, "a.pdf", b"original").await;
     let other = stored_document(&app, "b.pdf", b"keep me").await;
@@ -600,13 +600,35 @@ async fn deleting_a_document_removes_all_of_its_objects() {
     let (status, _) = request(&app, "DELETE", &format!("/api/documents/{id}")).await;
 
     assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.state
+            .store
+            .list(&keys::document_prefix(id))
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
     assert!(app
         .state
-        .store
-        .list(&keys::document_prefix(id))
+        .document_repo
+        .find_by_id(app.vault, id)
         .await
         .unwrap()
-        .is_empty());
+        .is_none());
+    assert!(app
+        .state
+        .document_repo
+        .find_trashed_by_id(app.vault, id)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        raw_get(&app, &format!("/documents/{id}/thumbnail"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
     assert!(app
         .state
         .store

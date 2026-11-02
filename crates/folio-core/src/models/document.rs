@@ -122,6 +122,12 @@ pub struct Document {
     /// State of the embedding stage
     pub embed_status: ProcessingStatus,
 
+    #[serde(default)]
+    pub deleted_at: Option<DateTime<Utc>>,
+
+    #[serde(default)]
+    pub purge_requested_at: Option<DateTime<Utc>>,
+
     /// When the document was created in the system
     pub created_at: DateTime<Utc>,
 
@@ -148,6 +154,8 @@ impl Document {
             source: DocumentSource::default(),
             ocr_status: ProcessingStatus::Pending,
             embed_status: ProcessingStatus::Pending,
+            deleted_at: None,
+            purge_requested_at: None,
             created_at: now,
             updated_at: now,
         }

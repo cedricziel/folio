@@ -36,13 +36,16 @@ test.describe("document lifecycle", () => {
     ).toBeVisible();
   });
 
-  test("delete removes the document", async ({ page }) => {
+  test("moving to Trash removes the document from the archive", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("link", { name: new RegExp(title) }).click();
     page.once("dialog", (dialog) => dialog.accept());
-    await page.getByRole("button", { name: "Delete" }).click();
-    await page.goto("/");
+    await page.getByRole("button", { name: "Move to Trash" }).click();
+    await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
     await expect(page.getByText(title)).toHaveCount(0);
+    await page.getByRole("link", { name: "Trash", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Trash", exact: true })).toBeVisible();
+    await expect(page.getByRole("article").filter({ hasText: title })).toBeVisible();
   });
 });
 

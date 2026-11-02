@@ -1155,6 +1155,56 @@
         }
       }
     },
+    "/api/documents/trash": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "listTrash",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Documents kept in trash, including pending permanent deletions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Document"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/documents/upload": {
       "post": {
         "tags": [
@@ -1301,7 +1351,7 @@
         "tags": [
           "documents"
         ],
-        "summary": "Delete a document",
+        "summary": "Move a document to trash",
         "operationId": "deleteDocument",
         "parameters": [
           {
@@ -1326,7 +1376,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The document was deleted"
+            "description": "The document was moved to trash"
           },
           "403": {
             "description": "The vault role does not allow this action"
@@ -1398,6 +1448,137 @@
           },
           "404": {
             "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/{id}/purge": {
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "purgeDocument",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Trashed document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Permanent deletion queued; retries continue until files and metadata are removed"
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/{id}/restore": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "restoreDocument",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Trashed document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Document restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
             "content": {
               "application/json": {
                 "schema": {
@@ -3118,6 +3299,13 @@
             "format": "date-time",
             "description": "When the document was created in the system"
           },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "document_type_id": {
             "type": [
               "string",
@@ -3168,6 +3356,13 @@
             "format": "int32",
             "description": "Number of pages in the document (for PDFs and multi-page images)",
             "minimum": 0
+          },
+          "purge_requested_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "source": {
             "$ref": "#/components/schemas/DocumentSource",
@@ -3280,7 +3475,47 @@
           },
           {
             "type": "object",
-            "description": "Document was deleted",
+            "description": "Document moved to trash.",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "trashed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Document returned from trash.",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "restored"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Document was permanently deleted",
             "required": [
               "document_id",
               "type"

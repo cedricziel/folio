@@ -159,7 +159,7 @@ struct InboxView: View {
                 .listRowSeparatorTint(.rule)
                 .swipeActions {
                     if canEdit {
-                        Button("Delete", systemImage: "trash", role: .destructive) {
+                        Button("Move to Trash", systemImage: "trash", role: .destructive) {
                             pendingDelete = row.document
                         }
                     }
@@ -239,7 +239,7 @@ struct InboxView: View {
             Task { reviewUploads(await loadPhotos(items)) }
         }
         .confirmationDialog(
-            "Delete this document?",
+            "Move this document to Trash?",
             isPresented: Binding(
                 get: { pendingDelete != nil },
                 set: {
@@ -250,12 +250,17 @@ struct InboxView: View {
             ),
             presenting: pendingDelete
         ) { document in
-            Button("Delete", role: .destructive) {
+            Button("Move to Trash", role: .destructive) {
                 Task { await list.delete(document) }
             }
             Button("Keep", role: .cancel) {}
         } message: { document in
-            Text("\(document.title) will be removed from your archive.")
+            Text(
+                """
+                \(document.title) will stay in Trash until you delete it forever. \
+                You can restore it from Trash in the web app.
+                """
+            )
         }
     }
 

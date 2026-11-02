@@ -26,11 +26,14 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::openapi::{BadRequest, InternalError, NotFound, PayloadTooLarge};
 use crate::state::AppState;
-use crate::vault::DefaultVault;
+use crate::vault::{DefaultVault, Uploader};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_documents).post(create_document))
+        .route("/trash", get(super::trash::list))
+        .route("/{id}/restore", post(super::trash::restore))
+        .route("/{id}/purge", axum::routing::delete(super::trash::purge))
         .route("/{id}", get(get_document).delete(delete_document))
         .route("/{id}/download", get(download_document))
         .route("/{id}/correspondent", post(set_correspondent))
@@ -273,7 +276,7 @@ pub(crate) async fn create_document(
     Ok(Json(document))
 }
 
-/// Delete a document
+/// Move a document to trash
 #[utoipa::path(
     delete,
     path = "/api/documents/{id}",
@@ -281,19 +284,19 @@ pub(crate) async fn create_document(
     tag = "documents",
     params(("id" = Uuid, Path, description = "Document ID")),
     responses(
-        (status = 204, description = "The document was deleted"),
+        (status = 204, description = "The document was moved to trash"),
+        (status = 403, description = "Access denied"),
         NotFound,
         InternalError,
     )
 )]
 pub(crate) async fn delete_document(
     DefaultVault(vault): DefaultVault,
+    user: Uploader,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
-    purge_document_files(DefaultVault(vault), &state, id).await?;
-    state.document_repo.delete(vault, id).await?;
-    folio_infra::telemetry::metrics().documents_changed(-1);
+    super::trash::trash_document(&state, vault, &user, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -666,17 +669,4 @@ async fn remove_tag(
         .await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
-}
-
-/// Remove every stored object of a document in the selected vault.
-pub(crate) async fn purge_document_files(
-    DefaultVault(vault): DefaultVault,
-    state: &AppState,
-    id: Uuid,
-) -> ApiResult<()> {
-    if state.document_repo.find_by_id(vault, id).await?.is_none() {
-        return Ok(());
-    }
-    folio_core::ports::purge_document(state.store.as_ref(), id).await?;
-    Ok(())
 }

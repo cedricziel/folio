@@ -265,7 +265,7 @@ test("viewer controls stay read-only and upload destinations stay writable", asy
   await expect(
     page
       .locator(".doc-actions")
-      .getByRole("button", { name: "Delete", exact: true }),
+      .getByRole("button", { name: "Move to Trash", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Edit tags", exact: true }),
@@ -330,3 +330,54 @@ test("a delayed search from the previous vault cannot populate the next palette"
     personalDocument.title,
   );
 });
+
+test("Trash navigation, restore and live updates stay in the selected vault", async ({ page }) => {
+  const title = uniqueTitle("household-trash");
+  const response = await page.request.post(`/vaults/${household.id}/api/documents`, {
+    data: { title, content: title },
+  });
+  expect(response.ok()).toBeTruthy();
+  const document = await response.json();
+  expect((await page.request.delete(`/vaults/${household.id}/api/documents/${document.id}`)).status()).toBe(204);
+  await page.goto(`/vaults/${household.id}/`);
+  const trash = page.getByRole("link", { name: "Trash", exact: true });
+  await expect(trash).toHaveAttribute("href", `/vaults/${household.id}/trash`);
+  await trash.click();
+  await expect(page).toHaveURL(`${process.env.FOLIO_BASE_URL}/vaults/${household.id}/trash`);
+  const row = page.getByRole("article").filter({ hasText: title });
+  await expect(row).toBeVisible();
+  await expect(row.locator("form").first()).toHaveAttribute("action", `/vaults/${household.id}/documents/${document.id}/restore`);
+  await expect(row.locator("form").last()).toHaveAttribute("action", `/vaults/${household.id}/documents/${document.id}/delete-forever`);
+  await row.getByRole("button", { name: "Restore", exact: true }).click();
+  await expect(page).toHaveURL(`${process.env.FOLIO_BASE_URL}/vaults/${household.id}/trash`);
+  await expect(row).toHaveCount(0);
+  expect((await page.request.get(`/vaults/${household.id}/api/documents/${document.id}`)).status()).toBe(200);
+  expect((await page.request.get(`/vaults/${personal.id}/api/documents/${document.id}`)).status()).toBe(404);
+
+  expect((await page.request.delete(`/vaults/${household.id}/api/documents/${document.id}`)).status()).toBe(204);
+  await expect(row).toBeVisible();
+  await expect(page.locator("#trash-content")).toHaveAttribute("src", `${process.env.FOLIO_BASE_URL}/vaults/${household.id}/trash`);
+});
+
+for (const role of ["viewer", "contributor"]) {
+  test(`${role} cannot restore or permanently delete another uploader's trashed document`, async ({ page }) => {
+    execFileSync("sqlite3", [
+      "-cmd", ".timeout 5000", database,
+      `UPDATE documents SET deleted_at = '2026-11-02T00:00:00Z', uploaded_by = NULL WHERE id = '${referenceDocument.id}';
+       UPDATE vault_members SET role = '${role}' WHERE vault_id = '${reference.id}';`,
+    ]);
+    try {
+      await page.goto(`/vaults/${reference.id}/trash`);
+      const row = page.getByRole("article").filter({ hasText: referenceDocument.title });
+      await expect(row).toBeVisible();
+      await expect(row.getByRole("button", { name: "Restore", exact: true })).toHaveCount(0);
+      await expect(row.getByRole("button", { name: "Delete forever", exact: true })).toHaveCount(0);
+    } finally {
+      execFileSync("sqlite3", [
+        "-cmd", ".timeout 5000", database,
+        `UPDATE documents SET deleted_at = NULL, uploaded_by = (SELECT created_by FROM vaults WHERE id = '${reference.id}') WHERE id = '${referenceDocument.id}';
+         UPDATE vault_members SET role = 'viewer' WHERE vault_id = '${reference.id}';`,
+      ]);
+    }
+  });
+}

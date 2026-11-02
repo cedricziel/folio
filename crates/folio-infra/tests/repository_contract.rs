@@ -512,7 +512,7 @@ async fn documents_contract(r: &Repositories) {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, b.id);
 
-    // Deleting a tag or a document cleans up associations
+    // Deleting a tag cleans up its associations
     r.tags.delete(vault, b.id).await.unwrap();
     assert!(r
         .documents
@@ -531,7 +531,7 @@ async fn documents_contract(r: &Repositories) {
         .await
         .unwrap()
         .is_none());
-    assert!(is_not_found(r.documents.delete(vault, first.id).await));
+    r.documents.delete(vault, first.id).await.unwrap();
     assert!(r.tags.find_by_id(vault, a.id).await.unwrap().is_some());
 
     // Deleting a correspondent keeps the document and clears the link
@@ -780,6 +780,7 @@ fn chunk(index: u32, text: &str, embedding: &[f32]) -> EmbeddedChunk {
 }
 
 async fn search_contract(
+    db: &Database,
     vault: folio_core::models::VaultId,
     documents: &dyn folio_core::ports::DocumentRepository,
     search: &dyn SearchService,
@@ -869,7 +870,7 @@ async fn search_contract(
         .collect();
     assert_eq!(ids, [near.id, mid.id]);
 
-    // Deleting the document removes its chunks
+    // Trashed documents are absent from semantic search
     documents.delete(vault, near.id).await.unwrap();
     let ids: Vec<_> = search
         .search(vault, M, &[1.0, 0.1, 0.0], 10)
@@ -880,6 +881,22 @@ async fn search_contract(
         .collect();
     assert_eq!(ids, [mid.id]);
     documents.delete(vault, mid.id).await.unwrap();
+
+    documents.request_purge(vault, near.id).await.unwrap();
+    documents.finalize_purge(vault, near.id).await.unwrap();
+    documents.request_purge(vault, mid.id).await.unwrap();
+    documents.finalize_purge(vault, mid.id).await.unwrap();
+    // The storage-free fixtures have already been purged; their jobs must not enter queue tests.
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query("DELETE FROM jobs WHERE job_type = 'purge_document' AND json_extract(payload, '$.data.document_id') IN (?, ?)")
+                .bind(near.id.to_string()).bind(mid.id.to_string()).execute(pool).await.unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("DELETE FROM jobs WHERE job_type = 'purge_document' AND payload->'data'->>'document_id' IN ($1, $2)")
+                .bind(near.id.to_string()).bind(mid.id.to_string()).execute(pool).await.unwrap();
+        }
+    }
 }
 
 async fn jobs_contract(r: &Repositories) {
@@ -2059,17 +2076,30 @@ async fn outbox_contract(db: &Database) {
             ("updated", EventOrigin::User), // remove_tag; the repeat changed nothing
             ("updated", EventOrigin::User), // set_tags
             ("updated", EventOrigin::Workflow),
-            ("deleted", EventOrigin::User),
+            ("trashed", EventOrigin::User),
         ]
     );
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
     assert!(events.iter().all(|e| e.event.document_id() == doc.id));
-    let DocumentEvent::Deleted { snapshot, .. } = &events.last().unwrap().event else {
-        panic!("last event is the delete");
+    assert!(matches!(
+        events.last().unwrap().event,
+        DocumentEvent::Trashed { .. }
+    ));
+    r.documents.request_purge(vault, doc.id).await.unwrap();
+    r.documents.finalize_purge(vault, doc.id).await.unwrap();
+    let deleted = flush_outbox(&r).await;
+    assert_eq!(
+        deleted
+            .iter()
+            .map(|event| event.event.event_type())
+            .collect::<Vec<_>>(),
+        ["trashed", "deleted"]
+    );
+    let DocumentEvent::Deleted { snapshot, .. } = &deleted[1].event else {
+        panic!("permanent deletion emits a deleted event");
     };
-    let snapshot = snapshot.as_ref().expect("deletes carry the document");
-    assert_eq!(snapshot.document.title, "renamed");
-    assert!(snapshot.tags.is_empty());
+    assert_eq!(snapshot.as_ref().unwrap().document.title, "renamed");
+    assert!(snapshot.as_ref().unwrap().tags.is_empty());
 
     let atomic = r
         .documents
@@ -2732,6 +2762,267 @@ async fn batch_tags_contract(r: &Repositories) {
         .is_empty());
 }
 
+async fn trash_contract(db: &Database, r: &Repositories) {
+    let vault = r.vaults.create("Trash contract", None).await.unwrap().id;
+    let other = r
+        .vaults
+        .create("Other trash contract", None)
+        .await
+        .unwrap()
+        .id;
+    let tag = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "retained".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    let document = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                tag_ids: vec![tag.id],
+                ..new_document("Trash contract invoice")
+            },
+        )
+        .await
+        .unwrap();
+    r.documents
+        .set_file_path(
+            vault,
+            document.id,
+            &folio_core::ports::keys::original(document.id),
+        )
+        .await
+        .unwrap();
+    r.search
+        .store_chunks(
+            vault,
+            document.id,
+            "trash-model",
+            &[EmbeddedChunk {
+                index: 0,
+                text: "preserved text".into(),
+                embedding: vec![1.0, 0.0],
+            }],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        r.documents.request_purge(vault, document.id).await,
+        Err(Error::Conflict(_))
+    ));
+
+    let persisted = r
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    r.documents.delete(vault, document.id).await.unwrap();
+    r.documents.delete(vault, document.id).await.unwrap();
+
+    assert!(r.documents.locate(document.id).await.unwrap().is_none());
+    assert_eq!(
+        r.documents.locate_retained(document.id).await.unwrap(),
+        Some(vault)
+    );
+    assert!(r
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(r.documents.list(vault, None).await.unwrap().is_empty());
+    assert!(!r
+        .documents
+        .list_all()
+        .await
+        .unwrap()
+        .iter()
+        .any(|doc| doc.id == document.id));
+    assert!(!r
+        .documents
+        .list_pending(folio_core::models::ProcessingStage::Embed)
+        .await
+        .unwrap()
+        .iter()
+        .any(|doc| doc.id == document.id));
+    assert!(!r
+        .documents
+        .reset_embedding_status()
+        .await
+        .unwrap()
+        .contains(&document.id));
+    assert!(r.documents.list_ids(vault, None).await.unwrap().is_empty());
+    assert!(r
+        .documents
+        .page(vault, Default::default())
+        .await
+        .unwrap()
+        .documents
+        .is_empty());
+    assert!(r
+        .documents
+        .get_tags(vault, document.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(r
+        .documents
+        .tags_for_documents(vault, &[document.id])
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(r
+        .search
+        .search(vault, "trash-model", &[1.0, 0.0], 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(is_not_found(
+        r.documents
+            .update(
+                vault,
+                document.id,
+                UpdateDocument {
+                    title: Some("changed".into()),
+                    ..Default::default()
+                }
+            )
+            .await
+    ));
+    assert!(is_not_found(
+        r.documents.add_tag(vault, document.id, tag.id).await
+    ));
+    assert!(r
+        .documents
+        .find_trashed_by_id(other, document.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(r.documents.list_trash(other).await.unwrap().is_empty());
+    assert!(is_not_found(r.documents.restore(other, document.id).await));
+    assert!(is_not_found(
+        r.documents.request_purge(other, document.id).await
+    ));
+    assert_eq!(
+        r.documents.locate_trashed(document.id).await.unwrap(),
+        Some(vault)
+    );
+    assert!(r.documents.list_trash(vault).await.unwrap()[0]
+        .deleted_at
+        .is_some());
+    assert!(matches!(
+        r.vaults.delete(vault).await,
+        Err(Error::Conflict(_))
+    ));
+
+    let restored = r.documents.restore(vault, document.id).await.unwrap();
+    assert_eq!(restored.id, document.id);
+    assert_eq!(restored.content, document.content);
+    assert_eq!(restored.created_at, persisted.created_at);
+    assert!(restored.deleted_at.is_none());
+    assert_eq!(
+        r.documents.locate_retained(document.id).await.unwrap(),
+        Some(vault)
+    );
+    assert_eq!(
+        r.documents.get_tags(vault, document.id).await.unwrap()[0].id,
+        tag.id
+    );
+    assert_eq!(
+        r.search
+            .search(vault, "trash-model", &[1.0, 0.0], 10)
+            .await
+            .unwrap()[0]
+            .document_id,
+        document.id
+    );
+
+    r.documents.delete(vault, document.id).await.unwrap();
+    exec(db,
+        &["CREATE TRIGGER refuse_trash_jobs BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &["CREATE FUNCTION refuse_trash_jobs() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+          "CREATE TRIGGER refuse_trash_jobs BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION refuse_trash_jobs()"]
+    ).await;
+    assert!(r.documents.request_purge(vault, document.id).await.is_err());
+    assert!(r
+        .documents
+        .find_trashed_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .purge_requested_at
+        .is_none());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_trash_jobs"],
+        &[
+            "DROP TRIGGER refuse_trash_jobs ON jobs",
+            "DROP FUNCTION refuse_trash_jobs()",
+        ],
+    )
+    .await;
+    r.documents.request_purge(vault, document.id).await.unwrap();
+    r.documents.request_purge(vault, document.id).await.unwrap();
+    assert!(r
+        .documents
+        .find_trashed_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .purge_requested_at
+        .is_some());
+    assert!(matches!(
+        r.documents.restore(vault, document.id).await,
+        Err(Error::Conflict(_))
+    ));
+    let jobs = r
+        .jobs
+        .find_active_jobs_for_document(document.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| matches!(job.job_type, JobType::PurgeDocument { .. }))
+            .count(),
+        1
+    );
+    r.documents
+        .finalize_purge(vault, document.id)
+        .await
+        .unwrap();
+    r.documents
+        .finalize_purge(vault, document.id)
+        .await
+        .unwrap();
+    assert!(r
+        .documents
+        .locate_trashed(document.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(r.documents.list_trash(vault).await.unwrap().is_empty());
+    assert!(r
+        .documents
+        .locate_retained(document.id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(r
+        .search
+        .search(vault, "trash-model", &[1.0, 0.0], 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 async fn run_contract(db: &Database) {
     let (first, second) = tokio::join!(db.migrate(), db.migrate());
     first.unwrap();
@@ -2748,6 +3039,7 @@ async fn run_contract(db: &Database) {
     batch_tags_contract(&repos).await;
     settings_contract(&repos).await;
     search_contract(
+        db,
         repos.vaults.instance_default().await.unwrap(),
         repos.documents.as_ref(),
         repos.search.as_ref(),
@@ -2763,6 +3055,7 @@ async fn run_contract(db: &Database) {
     run_atomicity_contract(db).await;
     auth_contract(&repos).await;
     mfa_contract(&repos).await;
+    trash_contract(db, &repos).await;
 }
 
 #[tokio::test]
@@ -2771,6 +3064,37 @@ async fn sqlite_satisfies_the_contract() {
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("folio.db").display());
     let db = Database::connect(&url).await.unwrap();
     run_contract(&db).await;
+}
+
+#[tokio::test]
+async fn deleting_a_document_retains_its_record_until_explicit_purge() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    let doc = r
+        .documents
+        .create(vault, new_document("retained"))
+        .await
+        .unwrap();
+
+    r.documents.delete(vault, doc.id).await.unwrap();
+
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM documents WHERE id = ?")
+        .bind(doc.id.to_string())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "trash must preserve the record and its metadata");
+    assert!(r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -2914,6 +3238,7 @@ async fn postgres_satisfies_the_contract() {
     let repos = db.repositories().await;
     let fallback = PostgresSearchService::without_pgvector(pool.clone());
     search_contract(
+        &db,
         repos.vaults.instance_default().await.unwrap(),
         repos.documents.as_ref(),
         &fallback,

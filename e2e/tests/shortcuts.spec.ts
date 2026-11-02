@@ -107,7 +107,7 @@ test.describe("keyboard shortcuts", () => {
     await expect(page).toHaveURL(/\/$/);
   });
 
-  test("# asks before deleting and Keep leaves the document", async ({ page }) => {
+  test("# asks before moving to Trash and Keep leaves the document", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("link", { name: new RegExp(title) }).click();
     await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
@@ -116,7 +116,7 @@ test.describe("keyboard shortcuts", () => {
     page.on("dialog", () => (browserDialog = true));
 
     await page.keyboard.press("#");
-    const confirm = page.getByRole("alertdialog", { name: "Delete this document?" });
+    const confirm = page.getByRole("alertdialog", { name: "Move this document to Trash?" });
     await expect(confirm).toBeVisible();
     await expect(confirm).toContainText(title);
     await page.getByRole("button", { name: "Keep" }).click();
@@ -124,7 +124,7 @@ test.describe("keyboard shortcuts", () => {
 
     await page.keyboard.press("Control+Backspace");
     await expect(confirm).toBeVisible();
-    await confirm.getByRole("button", { name: "Delete" }).click();
+    await confirm.getByRole("button", { name: "Move to Trash" }).click();
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByText(title)).toHaveCount(0);
     expect(browserDialog).toBe(false);

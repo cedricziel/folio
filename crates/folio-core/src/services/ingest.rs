@@ -83,13 +83,13 @@ impl IngestPipeline {
             return self.ledger.insert(vault, &entry).await;
         };
         let alive = match existing.document_id {
-            Some(id) => self.documents.find_by_id(vault, id).await?.is_some(),
+            Some(id) => self.documents.locate_retained(id).await? == Some(vault),
             None => Utc::now() - existing.created_at < STALE_CLAIM,
         };
         if alive {
             return Ok(false);
         }
-        // The earlier document was deleted (or the claim is stale): allow a re-import.
+        // Only permanent deletion or a stale claim allows the content to be imported again.
         self.ledger.delete(vault, key).await?;
         self.ledger.insert(vault, &entry).await
     }

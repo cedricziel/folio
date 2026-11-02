@@ -557,24 +557,13 @@ async fn upload_document(
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
 }
 
-/// Delete a document, then go back to the inbox
 async fn delete_document(
     DefaultVault(vault): DefaultVault,
+    user: Uploader,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
-    // Verify document exists
-    let _ = state
-        .document_repo
-        .find_by_id(vault, id)
-        .await?
-        .ok_or_else(|| ApiError::not_found("Document not found"))?;
-
-    // Delete the stored files first so a failure leaves the row to retry
-    super::documents::purge_document_files(DefaultVault(vault), &state, id).await?;
-    state.document_repo.delete(vault, id).await?;
-    folio_infra::telemetry::metrics().documents_changed(-1);
-
+    super::trash::trash_document(&state, vault, &user, id).await?;
     Ok(Redirect::to("/").into_response())
 }
 

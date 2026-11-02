@@ -65,6 +65,8 @@ pub enum JobType {
     GenerateEmbedding { document_id: Uuid },
     /// Process a newly uploaded document (all steps)
     ProcessDocument { document_id: Uuid },
+    /// Remove objects and metadata after an explicit permanent-deletion request.
+    PurgeDocument { document_id: Uuid },
     /// Execute the actions of a workflow run
     ExecuteWorkflowRun { run_id: Uuid },
 }
@@ -76,6 +78,7 @@ impl JobType {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id }
             | JobType::GenerateEmbedding { document_id }
+            | JobType::PurgeDocument { document_id }
             | JobType::ProcessDocument { document_id } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
         }
@@ -87,6 +90,7 @@ impl JobType {
             JobType::ExtractText { .. } => "extract_text",
             JobType::GenerateEmbedding { .. } => "generate_embedding",
             JobType::ProcessDocument { .. } => "process_document",
+            JobType::PurgeDocument { .. } => "purge_document",
             JobType::ExecuteWorkflowRun { .. } => "execute_workflow_run",
         }
     }

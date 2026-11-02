@@ -285,6 +285,23 @@ impl Worker {
     /// Driven by the per-stage status, never by whether `content` is set, so a
     /// document with legitimately empty OCR output is not picked up again.
     async fn repair_orphaned_documents(&self) -> Result<(), BoxError> {
+        for document in self.document_repo.list_purge_requested().await? {
+            let active = self
+                .queue
+                .find_active_jobs_for_document(document.id)
+                .await?;
+            if !active
+                .iter()
+                .any(|job| matches!(job.job_type, JobType::PurgeDocument { .. }))
+            {
+                self.queue
+                    .enqueue(JobType::PurgeDocument {
+                        document_id: document.id,
+                    })
+                    .await?;
+            }
+        }
+
         let mut repaired_count = 0;
 
         for doc in self
@@ -363,6 +380,14 @@ impl Worker {
 
     /// Process a single job, then clean up after a document that was deleted while it ran
     async fn process_job(&self, job_type: &JobType) -> Result<(), BoxError> {
+        if let Some(document_id) = job_type.document_id() {
+            if !matches!(job_type, JobType::PurgeDocument { .. })
+                && self.document_repo.locate(document_id).await?.is_none()
+            {
+                self.purge_if_deleted(document_id).await?;
+                return Ok(());
+            }
+        }
         let result = self.run_job(job_type).await;
         if let Some(document_id) = job_type.document_id() {
             if let Err(e) = self.purge_if_deleted(document_id).await {
@@ -385,7 +410,12 @@ impl Worker {
     /// Chunks need no purge: they cascade with the document and `store_chunks`
     /// refuses a document that no longer exists.
     async fn purge_if_deleted(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
-        if self.document_repo.locate(document_id).await?.is_some() {
+        if self
+            .document_repo
+            .locate_retained(document_id)
+            .await?
+            .is_some()
+        {
             return Ok(());
         }
         folio_core::ports::purge_document(self.store.as_ref(), document_id).await?;
@@ -403,7 +433,39 @@ impl Worker {
             }
             JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
             JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
+            JobType::PurgeDocument { document_id } => self.purge_requested(*document_id).await,
         }
+    }
+
+    async fn purge_requested(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        let Some(vault) = self.document_repo.locate_trashed(document_id).await? else {
+            return Ok(());
+        };
+        let Some(document) = self
+            .document_repo
+            .find_trashed_by_id(vault, document_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        if document.purge_requested_at.is_none() {
+            return Ok(());
+        }
+        let active = self
+            .queue
+            .find_active_jobs_for_document(document_id)
+            .await?;
+        if active.iter().any(|job| {
+            job.status == super::JobStatus::Processing
+                && !matches!(job.job_type, JobType::PurgeDocument { .. })
+        }) {
+            return Err("document processing is still finishing".into());
+        }
+        folio_core::ports::purge_document(self.store.as_ref(), document_id).await?;
+        self.document_repo
+            .finalize_purge(vault, document_id)
+            .await?;
+        Ok(())
     }
 
     /// Run a workflow; a retryable failure is reported as an error so the queue backs off
@@ -1060,7 +1122,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_document_deleted_mid_job_leaves_no_thumbnail_behind() {
+    async fn a_document_trashed_mid_job_keeps_its_original() {
         let mut f = fixture("text").await;
         f.worker.store = Arc::new(DeleteOnRead {
             inner: f.storage.clone(),
@@ -1085,10 +1147,237 @@ mod tests {
 
         assert!(f
             .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+        assert!(!f
+            .storage
+            .exists(&folio_core::ports::keys::thumbnail(f.doc_id))
+            .await
+            .unwrap());
+        assert!(f
+            .repo
+            .find_trashed_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    struct UnavailableDeleteStore {
+        inner: Arc<dyn DocumentStore>,
+    }
+
+    #[async_trait]
+    impl DocumentStore for UnavailableDeleteStore {
+        fn backend(&self) -> &'static str {
+            self.inner.backend()
+        }
+        async fn put(&self, key: &str, data: bytes::Bytes) -> Result<()> {
+            self.inner.put(key, data).await
+        }
+        async fn get(&self, key: &str) -> Result<folio_core::ports::StoredObject> {
+            self.inner.get(key).await
+        }
+        async fn size(&self, key: &str) -> Result<Option<u64>> {
+            self.inner.size(key).await
+        }
+        async fn exists(&self, key: &str) -> Result<bool> {
+            self.inner.exists(key).await
+        }
+        async fn delete(&self, key: &str) -> Result<()> {
+            self.inner.delete(key).await
+        }
+        async fn delete_prefix(&self, _prefix: &str) -> Result<u64> {
+            Err(folio_core::error::Error::Storage(
+                "storage unavailable".into(),
+            ))
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+            self.inner.list(prefix).await
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_permanent_deletion_keeps_durable_intent_and_repair_retries_it() {
+        let mut f = fixture("text").await;
+        let vault = crate::database::test_vault();
+        f.worker.store = Arc::new(UnavailableDeleteStore {
+            inner: f.storage.clone(),
+        });
+        f.repo.delete(vault, f.doc_id).await.unwrap();
+        f.repo.request_purge(vault, f.doc_id).await.unwrap();
+        let job = f
+            .queue
+            .dequeue_class(JobClass::Processing)
+            .await
+            .unwrap()
+            .unwrap();
+
+        f.worker.handle_job(job).await;
+
+        assert!(f.repo.find_by_id(vault, f.doc_id).await.unwrap().is_none());
+        assert!(f
+            .repo
+            .find_trashed_by_id(vault, f.doc_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .purge_requested_at
+            .is_some());
+        assert!(f
+            .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+        sqlx::query("UPDATE jobs SET status = 'failed'")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        f.worker.repair_orphaned_documents().await.unwrap();
+        let retry = f
+            .queue
+            .dequeue_class(JobClass::Processing)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(retry.job_type, JobType::PurgeDocument { .. }));
+        f.worker.store = f.storage.clone();
+
+        f.worker.handle_job(retry).await;
+
+        assert!(f
+            .repo
+            .find_trashed_by_id(vault, f.doc_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(f
+            .storage
             .list(&folio_core::ports::keys::document_prefix(f.doc_id))
             .await
             .unwrap()
             .is_empty());
+        f.worker
+            .process_job(&JobType::PurgeDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn trash_never_expires_and_queued_processing_preserves_files() {
+        let f = fixture("text").await;
+        let vault = crate::database::test_vault();
+        f.repo.delete(vault, f.doc_id).await.unwrap();
+        sqlx::query("UPDATE documents SET deleted_at = '1970-01-01T00:00:00+00:00'")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+
+        f.worker.repair_orphaned_documents().await.unwrap();
+        f.worker
+            .process_job(&JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        f.worker
+            .process_job(&JobType::PurgeDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(f.queue.pending_count().await.unwrap(), 0);
+        assert!(f
+            .repo
+            .find_trashed_by_id(vault, f.doc_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .purge_requested_at
+            .is_none());
+        assert!(f
+            .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn permanent_deletion_waits_for_running_processing_before_removing_storage() {
+        let f = fixture("text").await;
+        let vault = crate::database::test_vault();
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        let running = f
+            .queue
+            .dequeue_class(JobClass::Processing)
+            .await
+            .unwrap()
+            .unwrap();
+        f.repo.delete(vault, f.doc_id).await.unwrap();
+        f.repo.request_purge(vault, f.doc_id).await.unwrap();
+
+        assert!(f
+            .worker
+            .process_job(&JobType::PurgeDocument {
+                document_id: f.doc_id
+            })
+            .await
+            .is_err());
+        assert!(f
+            .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+        f.queue.complete(running.id).await.unwrap();
+        f.worker
+            .process_job(&JobType::PurgeDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+
+        assert!(f
+            .repo
+            .find_trashed_by_id(vault, f.doc_id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!f
+            .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn post_job_cleanup_preserves_objects_through_trash_and_restore() {
+        let f = fixture("text").await;
+        let vault = crate::database::test_vault();
+        f.repo.delete(vault, f.doc_id).await.unwrap();
+
+        f.worker.purge_if_deleted(f.doc_id).await.unwrap();
+        assert!(f
+            .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+        f.repo.restore(vault, f.doc_id).await.unwrap();
+        f.worker.purge_if_deleted(f.doc_id).await.unwrap();
+
+        assert!(f
+            .storage
+            .exists(&folio_core::ports::keys::original(f.doc_id))
+            .await
+            .unwrap());
+        assert!(f.repo.find_by_id(vault, f.doc_id).await.unwrap().is_some());
     }
 
     struct DeletingEmbeddings(Arc<SqliteDocumentRepository>, uuid::Uuid);

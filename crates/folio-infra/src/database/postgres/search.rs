@@ -103,7 +103,7 @@ impl PostgresSearchService {
                  SELECT DISTINCT ON (c.document_id) c.document_id, c.text,
                         1 - (c.embedding_vec <=> $1::vector) AS score
                  FROM document_chunks c JOIN documents d ON d.id = c.document_id
-                 WHERE d.vault_id = $5 AND c.model = $2 AND NOT c.stale
+                 WHERE d.deleted_at IS NULL AND d.vault_id = $5 AND c.model = $2 AND NOT c.stale
                    AND c.embedding_vec IS NOT NULL AND vector_dims(c.embedding_vec) = $3
                  ORDER BY c.document_id, c.embedding_vec <=> $1::vector
              ) best
@@ -139,7 +139,7 @@ impl PostgresSearchService {
         let rows: Vec<(Uuid, String, Vec<f32>)> = sqlx::query_as(
             "SELECT c.document_id, c.text, c.embedding
              FROM document_chunks c JOIN documents d ON d.id = c.document_id
-             WHERE d.vault_id = $2 AND c.model = $1 AND NOT c.stale",
+             WHERE d.deleted_at IS NULL AND d.vault_id = $2 AND c.model = $1 AND NOT c.stale",
         )
         .bind(model)
         .bind(vault.0)
@@ -183,13 +183,14 @@ impl SearchService for PostgresSearchService {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
 
-        let in_vault: Option<(i32,)> =
-            sqlx::query_as("SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2")
-                .bind(document_id)
-                .bind(vault.0)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(repo_err)?;
+        let in_vault: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM documents WHERE deleted_at IS NULL AND id = $1 AND vault_id = $2",
+        )
+        .bind(document_id)
+        .bind(vault.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
         if in_vault.is_none() {
             return Err(Error::NotFound {
                 entity_type: "Document",
@@ -242,7 +243,7 @@ impl SearchService for PostgresSearchService {
     async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()> {
         sqlx::query(
             "DELETE FROM document_chunks WHERE document_id = $1
-               AND document_id IN (SELECT id FROM documents WHERE vault_id = $2)",
+               AND document_id IN (SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = $2)",
         )
         .bind(document_id)
         .bind(vault.0)

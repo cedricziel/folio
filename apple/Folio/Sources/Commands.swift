@@ -35,7 +35,7 @@ struct FolioCommands: Commands {
                     .disabled(actions?.scan == nil)
             #endif
             Divider()
-            Button("Delete document") { actions?.deleteSelected?() }
+            Button("Move document to Trash") { actions?.deleteSelected?() }
                 .keyboardShortcut(.delete)
                 .disabled(actions?.deleteSelected == nil)
         }

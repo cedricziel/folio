@@ -65,7 +65,7 @@ const dialogClosed = () => {
 };
 
 const vaultURL = (path) => {
-  const scoped = path === "/" || path.startsWith("/?") || /^\/(?:documents|events|manage|workflows|search|api\/(?:documents|tags|correspondents|document_types|workflows|sources)|settings\/sources)(?:[/?]|$)/.test(path);
+  const scoped = path === "/" || path.startsWith("/?") || /^\/(?:documents|trash|events|manage|workflows|search|api\/(?:documents|tags|correspondents|document_types|workflows|sources)|settings\/sources)(?:[/?]|$)/.test(path);
   const id = document.body.dataset.vaultId;
   return scoped && id ? `/vaults/${id}${path}` : path;
 };
@@ -960,11 +960,44 @@ Stimulus.register(
     connect() {
       this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
+      for (const name of ["trashed", "restored", "deleted"]) {
+        this.source.addEventListener(name, () => {
+          if (!document.getElementById("trash-content")) return;
+          if (this.refreshingTrash) {
+            this.trashRefreshQueued = true;
+            return;
+          }
+          clearTimeout(this.refreshTimeout);
+          this.refreshTimeout = setTimeout(() => {
+            this.refreshTrashFrame();
+          }, 250);
+        });
+      }
     }
 
     disconnect() {
+      clearTimeout(this.refreshTimeout);
       Turbo.disconnectStreamSource(this.source);
       this.source.close();
+    }
+
+    async refreshTrashFrame() {
+      const frame = document.getElementById("trash-content");
+      if (!frame) return;
+      this.refreshingTrash = true;
+      try {
+        do {
+          this.trashRefreshQueued = false;
+          if (frame.src) {
+            await frame.reload();
+          } else {
+            frame.src = vaultURL("/trash");
+            await frame.loaded;
+          }
+        } while (this.trashRefreshQueued && frame.isConnected);
+      } finally {
+        this.refreshingTrash = false;
+      }
     }
   },
 );
@@ -1343,8 +1376,8 @@ Stimulus.register(
       if (!doc) return;
       this.confirmFormTarget.action = vaultURL(`/documents/${doc.id}/delete`);
       this.confirmTextTarget.textContent = doc.title
-        ? `${doc.title} will be removed from your archive. This cannot be undone.`
-        : "It will be removed from your archive. This cannot be undone.";
+        ? `${doc.title} will move to Trash. You can restore it later.`
+        : "It will move to Trash. You can restore it later.";
       this.confirmTarget.showModal();
     }
 
@@ -1622,7 +1655,7 @@ if ("serviceWorker" in navigator) {
       <dl class="shortcut-list">
         <div><dt>Edit details</dt><dd><kbd class="f-kbd">e</kbd></dd></div>
         <div><dt>Edit tags</dt><dd><kbd class="f-kbd">t</kbd></dd></div>
-        <div><dt>Delete</dt><dd><kbd class="f-kbd">#</kbd> <kbd class="f-kbd">&#8984;&#9003;</kbd></dd></div>
+        <div><dt>Move to Trash</dt><dd><kbd class="f-kbd">#</kbd> <kbd class="f-kbd">&#8984;&#9003;</kbd></dd></div>
       </dl>
       <p class="hint">
         Shortcuts pause while you type. On Windows and Linux, use Ctrl in
@@ -1638,7 +1671,7 @@ if ("serviceWorker" in navigator) {
       data-hotkeys-target="confirm"
       data-action="click->hotkeys#backdropClick"
     >
-      <h2 class="heading" id="delete-title">Delete this document?</h2>
+      <h2 class="heading" id="delete-title">Move this document to Trash?</h2>
       <p id="delete-text" data-hotkeys-target="confirmText"></p>
       <form method="post" data-hotkeys-target="confirmForm" data-turbo="false">
         <div class="dialog-actions">
@@ -1651,7 +1684,7 @@ if ("serviceWorker" in navigator) {
           >
             Keep
           </button>
-          <button type="submit" class="f-btn f-btn-danger">Delete</button>
+          <button type="submit" class="f-btn f-btn-danger">Move to Trash</button>
         </div>
       </form>
     </dialog>
@@ -1703,6 +1736,14 @@ if ("serviceWorker" in navigator) {
             {{ icons::files() }}
             <span class="side-label">All documents</span>
             {{ counts::all_badge(sidebar.total_count) }}
+          </a>
+          <a
+            class="side-link"
+            href="{{ "/trash"|vault_url }}"
+            {% if sidebar.active == "trash" %}aria-current="page"{% endif %}
+          >
+            {{ icons::trash() }}
+            <span class="side-label">Trash</span>
           </a>
         </nav>
 

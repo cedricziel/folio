@@ -17,7 +17,7 @@ On Windows and Linux, read Cmd as Ctrl.
 | Open the selected document      | `Enter`             | Return                      |
 | Edit details                    | `e`                 | -                           |
 | Edit tags                       | `t`                 | -                           |
-| Delete the document             | `#`, `Cmd Backspace` | `Cmd Backspace`            |
+| Move the document to Trash             | `#`, `Cmd Backspace` | `Cmd Backspace`            |
 | Lock Folio now                  | -                   | `Cmd Shift L` (App lock enabled) |
 | Show the shortcut list          | `?`                 | hold `Cmd` (iPad)           |
 
@@ -25,8 +25,8 @@ On Windows and Linux, read Cmd as Ctrl.
 
 - Single-key shortcuts pause while focus is in an input, textarea, select or editable text, and while a dialog or the palette is open. `Cmd Backspace` follows the same rule, so it never deletes a document while you edit text.
 - `g` starts a two-key chord: press the second key within a second, or the chord is dropped.
-- `j` / `k` select a row in the document list; `Enter` opens it. On a list, `e`, `t` and `#` act on the selected row: `e` and `t` open the document, `#` asks to delete it.
-- Delete always asks first in an in-page dialog. `Keep` is the default button.
+- `j` / `k` select a row in the document list; `Enter` opens it. On a list, `e`, `t` and `#` act on the selected row: `e` and `t` open the document, `#` asks to move it to Trash.
+- Move to Trash always asks first in an in-page dialog. `Keep` is the default button.
 - Keys that exist as a hint are shown as `f-kbd` in the palette footer, the shortcut dialog and tooltips (`title` and `aria-keyshortcuts`).
 
 ## Where it lives

@@ -215,28 +215,29 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
         return Ok(VaultAction::CreateDocument);
     }
     if let Some(tail) = path.strip_prefix("/documents/") {
-        let id = tail
-            .split('/')
-            .next()
-            .unwrap_or("")
+        let (id, operation) = tail.split_once('/').unwrap_or((tail, ""));
+        let id = id
             .parse()
             .map_err(|_| ApiError::not_found("Document not found"))?;
-        let doc = state
-            .document_repo
-            .find_by_id(vault, id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("Document not found"))?;
-        return Ok(
-            if request.method() == Method::DELETE || tail.ends_with("/delete") {
-                VaultAction::DeleteDocument {
-                    uploaded_by: doc.uploaded_by,
-                }
-            } else {
-                VaultAction::EditDocument {
-                    uploaded_by: doc.uploaded_by,
-                }
-            },
-        );
+        let lifecycle = (request.method() == Method::DELETE && matches!(operation, "" | "purge"))
+            || (request.method() == Method::POST
+                && matches!(operation, "delete" | "restore" | "delete-forever"));
+        let document = state.document_repo.find_by_id(vault, id).await?;
+        let document = match document {
+            Some(document) => Some(document),
+            None if lifecycle => state.document_repo.find_trashed_by_id(vault, id).await?,
+            None => None,
+        }
+        .ok_or_else(|| ApiError::not_found("Document not found"))?;
+        return Ok(if lifecycle {
+            VaultAction::DeleteDocument {
+                uploaded_by: document.uploaded_by,
+            }
+        } else {
+            VaultAction::EditDocument {
+                uploaded_by: document.uploaded_by,
+            }
+        });
     }
     if ["/tags", "/correspondents", "/document_types", "/manage"]
         .iter()
