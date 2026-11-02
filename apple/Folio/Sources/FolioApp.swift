@@ -7,11 +7,20 @@ typealias Document = FolioKit.Document
 @main
 struct FolioApp: App {
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView(model: model)
                 .tint(.archive)
+                .onChange(of: scenePhase) { _, phase in
+                    switch phase {
+                    case .active: FolioTelemetry.shared.lifecycle("active")
+                    case .inactive: FolioTelemetry.shared.lifecycle("inactive")
+                    case .background: FolioTelemetry.shared.lifecycle("background")
+                    @unknown default: break
+                    }
+                }
         }
         .commands { FolioCommands() }
     }
@@ -29,7 +38,7 @@ final class AppModel {
     }
 
     static func makeService(for url: URL) -> any FolioService {
-        LiveFolioService(baseURL: url, tokenProvider: SharedConfiguration.tokenProvider())
+        SharedConfiguration.makeService(for: url)
     }
 
     func connected(to url: URL) {
@@ -46,6 +55,7 @@ final class AppModel {
 
     /// Clears the tokens and returns to onboarding; the address stays to prefill the next sign-in.
     func signOut() {
+        FolioTelemetry.shared.stop()
         serverURL = nil
         Task { await SharedConfiguration.tokenProvider().signOut() }
         FileProviderDomain.unregister()

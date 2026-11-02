@@ -14,10 +14,14 @@ public enum SharedConfiguration {
         UserDefaultsServerConfigStore.shared().load()
     }
 
-    public static func makeService(session: URLSession = .shared) -> LiveFolioService? {
-        serverURL().map {
-            LiveFolioService(baseURL: $0, tokenProvider: tokenProvider(), session: session)
-        }
+    public static func makeService(session: URLSession? = nil) -> LiveFolioService? {
+        serverURL().map { makeService(for: $0, session: session) }
+    }
+
+    public static func makeService(for url: URL, session: URLSession? = nil) -> LiveFolioService {
+        let provider = tokenProvider()
+        FolioTelemetry.shared.start(baseURL: url, tokenProvider: provider)
+        return LiveFolioService(baseURL: url, tokenProvider: provider, session: session, telemetry: .shared)
     }
 
     /// The sign-in shared through the keychain access group, refreshed by whichever process needs it first.

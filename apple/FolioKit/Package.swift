@@ -9,6 +9,8 @@ let package = Package(
         .executable(name: "folio-tokengen", targets: ["folio-tokengen"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/open-telemetry/opentelemetry-swift.git", exact: "2.6.0"),
+        .package(url: "https://github.com/open-telemetry/opentelemetry-swift-core.git", exact: "2.6.0"),
         .package(url: "https://github.com/apple/swift-openapi-generator", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-runtime", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-openapi-urlsession", from: "1.0.0"),
@@ -27,6 +29,11 @@ let package = Package(
             name: "FolioKit",
             dependencies: [
                 "FolioAPI",
+                .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
+                .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
+                .product(name: "OpenTelemetryConcurrency", package: "opentelemetry-swift-core"),
+                .product(name: "OpenTelemetryProtocolExporterHTTP", package: "opentelemetry-swift"),
+                .product(name: "URLSessionInstrumentation", package: "opentelemetry-swift"),
                 .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime"),
                 .product(name: "OpenAPIURLSession", package: "swift-openapi-urlsession"),
             ],
