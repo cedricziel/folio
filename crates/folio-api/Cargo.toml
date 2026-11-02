@@ -47,11 +47,14 @@ tracing-opentelemetry = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 url = "2"
+base64 = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
 
 [dev-dependencies]
+totp-rs = { version = "6", features = ["otpauth"] }
+webauthn-authenticator-rs = { version = "0.6", features = ["softpasskey"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 reqwest = { workspace = true }
 sqlx = { workspace = true }

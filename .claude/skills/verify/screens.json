@@ -100,7 +100,7 @@
       "path": "/",
       "phase": "seeded",
       "auth": "any",
-      "wait": "Kündigungsbestätigung Fitnessstudio",
+      "wait": "K\u00fcndigungsbest\u00e4tigung Fitnessstudio",
       "snapshot": true
     },
     {
@@ -148,7 +148,7 @@
     },
     {
       "name": "document-long-title",
-      "path": "{doc:Nebenkostenabrechnung für den Abrechnungszeitraum 01.01.2024 bis 31.12.2024 Venloer Straße}",
+      "path": "{doc:Nebenkostenabrechnung f\u00fcr den Abrechnungszeitraum 01.01.2024 bis 31.12.2024 Venloer Stra\u00dfe}",
       "phase": "seeded",
       "auth": "any",
       "wait": "Text Folio read"
@@ -260,6 +260,13 @@
       "phase": "seeded",
       "auth": "any",
       "status": 404
+    },
+    {
+      "name": "security",
+      "path": "/settings/security",
+      "phase": "seeded",
+      "auth": "on",
+      "wait": "Account and security"
     }
   ]
 }

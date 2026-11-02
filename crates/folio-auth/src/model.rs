@@ -69,6 +69,42 @@ pub struct Session {
     pub id_hash: String,
     pub user_id: String,
     pub expires_at: i64,
+    /// Zero for sessions created before this was recorded.
+    pub created_at: i64,
+    pub user_agent: Option<String>,
+}
+
+/// A user's TOTP enrollment. The seed is encrypted; it counts only once
+/// `confirmed` is set by entering a valid code.
+#[derive(Debug, Clone)]
+pub struct TotpRecord {
+    pub user_id: String,
+    pub secret_enc: String,
+    pub confirmed: bool,
+    /// The newest step already used, so a code cannot be replayed.
+    pub last_step: i64,
+}
+
+/// A registered passkey. `data` is the serialised WebAuthn credential.
+#[derive(Debug, Clone)]
+pub struct PasskeyRecord {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    /// Base64url credential id.
+    pub credential_id: String,
+    pub data: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+/// An OAuth client that holds live tokens of a user.
+#[derive(Debug, Clone)]
+pub struct ConnectedClient {
+    pub client_id: String,
+    pub client_name: String,
+    /// When the newest of its tokens stops working.
+    pub expires_at: i64,
 }
 
 /// An OpenID Connect authorization request in flight. Only hashes of the

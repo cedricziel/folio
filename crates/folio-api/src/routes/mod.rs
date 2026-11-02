@@ -10,9 +10,12 @@ pub(crate) mod events;
 mod file_response;
 mod health;
 mod manage;
+mod mfa;
 mod oidc;
 mod pages;
+mod pending;
 mod pwa;
+mod security;
 mod settings;
 mod source_pages;
 pub(crate) mod sources;
@@ -42,6 +45,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         },
         crate::vault::resolve_default_vault,
     );
+    let security = security::router(auth.clone());
     let auth_routes = auth::router(auth);
 
     let routes = Router::new()
@@ -57,6 +61,8 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(manage::router())
         // Settings routes
         .merge(settings::router())
+        // Account and security
+        .merge(security)
         // Workflow pages
         .merge(workflow_pages::router())
         // Source pages

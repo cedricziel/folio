@@ -10,17 +10,20 @@ pub mod crypto;
 pub mod external;
 pub mod forward;
 pub mod limit;
+pub mod mfa;
 pub mod model;
 pub mod oidc;
+pub mod passkey;
 pub mod redirect;
+pub mod secret;
 pub mod server;
 pub mod store;
 pub mod validator;
 
 pub use forward::{ForwardAuth, ForwardConfig};
 pub use model::{
-    AccessToken, AuthCode, AuthContext, Group, GroupSource, OAuthClient, OidcLogin, RefreshToken,
-    Session, User, SCOPES,
+    AccessToken, AuthCode, AuthContext, ConnectedClient, Group, GroupSource, OAuthClient,
+    OidcLogin, PasskeyRecord, RefreshToken, Session, TotpRecord, User, SCOPES,
 };
 pub use store::{AuthError, AuthStore};
 pub use validator::{base_url, require_bearer, TokenValidator};
