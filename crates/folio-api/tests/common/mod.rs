@@ -28,6 +28,19 @@ pub async fn harness() -> Harness {
     harness_with_sources(Vec::new()).await
 }
 
+/// A harness that requires sign-in; the first account is created through
+/// `/setup?token=`[`SETUP_TOKEN`]
+pub async fn harness_requiring_login() -> Harness {
+    harness_with(Vec::new(), |store| {
+        AuthState::new(store, None)
+            .with_setup_token(SETUP_TOKEN)
+            .with_required(true)
+    })
+    .await
+}
+
+pub const SETUP_TOKEN: &str = "test-setup-token";
+
 /// A harness whose configuration defines `configured` ingestion sources
 pub async fn harness_with_sources(configured: Vec<IngestionSourceDef>) -> Harness {
     harness_with(configured, |store| {
