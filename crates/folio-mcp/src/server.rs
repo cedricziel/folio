@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use folio_core::models::{Document, DocumentSource, Id, SourceKind, Tag, UserId, VaultId};
+use folio_core::models::{
+    Document, DocumentSource, Id, SourceKind, Tag, UserId, VaultAction, VaultId,
+};
 use folio_core::ports::ProcessingStatus;
 use folio_core::services::{
     DocumentDetail, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, VaultService,
@@ -63,10 +65,102 @@ impl FolioMcp {
     /// The caller's default vault; tools get an explicit `vault` argument later
     async fn vault(&self, ctx: &RequestContext<RoleServer>) -> Result<VaultId, String> {
         let user = crate::auth::subject_of(&ctx.extensions).map(UserId::from);
-        self.vaults
+        let vault = self
+            .vaults
             .default_vault(user.as_ref())
             .await
-            .map_err(tool_error)
+            .map_err(tool_error)?;
+        self.authorize(ctx, vault, VaultAction::Read).await?;
+        Ok(vault)
+    }
+
+    async fn authorize(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        vault: VaultId,
+        action: VaultAction,
+    ) -> Result<(), String> {
+        let Some(user) = crate::auth::subject_of(&ctx.extensions).map(UserId::from) else {
+            return Ok(());
+        };
+        let role = self
+            .vaults
+            .list(Some(&user))
+            .await
+            .map_err(tool_error)?
+            .into_iter()
+            .find(|(item, _)| item.id == vault)
+            .map(|(_, role)| role)
+            .ok_or_else(|| "vault access denied".to_string())?;
+        if role.permits(&action, &user) {
+            Ok(())
+        } else {
+            Err("vault role does not allow that action".into())
+        }
+    }
+
+    async fn authorize_edit(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<(), String> {
+        let document = self
+            .library
+            .get_document(vault, id)
+            .await
+            .map_err(tool_error)?
+            .document;
+        self.authorize(
+            ctx,
+            vault,
+            VaultAction::EditDocument {
+                uploaded_by: document.uploaded_by,
+            },
+        )
+        .await
+    }
+
+    async fn authorize_new_vocabulary(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        vault: VaultId,
+        tags: Option<&[String]>,
+        correspondent: Option<&str>,
+        document_type: Option<&str>,
+    ) -> Result<(), String> {
+        let mut creates = false;
+        if let Some(tags) = tags {
+            let existing = self.library.list_tags(vault).await.map_err(tool_error)?;
+            creates |= tags.iter().any(|name| {
+                !existing
+                    .iter()
+                    .any(|item| item.name.eq_ignore_ascii_case(name.trim()))
+            });
+        }
+        if let Some(name) = correspondent.filter(|name| !name.trim().is_empty()) {
+            creates |= !self
+                .library
+                .list_correspondents(vault)
+                .await
+                .map_err(tool_error)?
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(name.trim()));
+        }
+        if let Some(name) = document_type.filter(|name| !name.trim().is_empty()) {
+            creates |= !self
+                .library
+                .list_document_types(vault)
+                .await
+                .map_err(tool_error)?
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(name.trim()));
+        }
+        if creates {
+            self.authorize(ctx, vault, VaultAction::ManageVocabulary)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn names(&self, vault: VaultId) -> Result<Names, String> {
@@ -486,6 +580,15 @@ impl FolioMcp {
         let vault = self.vault(&ctx).await?;
 
         let id = parse_id(&args.id)?;
+        self.authorize_edit(&ctx, vault, id).await?;
+        self.authorize_new_vocabulary(
+            &ctx,
+            vault,
+            args.tags.as_deref(),
+            args.correspondent.as_deref(),
+            args.document_type.as_deref(),
+        )
+        .await?;
         let clearable = |v: Option<String>| {
             v.map(|s| {
                 let s = s.trim().to_string();
@@ -527,6 +630,9 @@ impl FolioMcp {
         require_scope(&ctx, SCOPE_WRITE)?;
         let vault = self.vault(&ctx).await?;
         let id = parse_id(&args.id)?;
+        self.authorize_edit(&ctx, vault, id).await?;
+        self.authorize_new_vocabulary(&ctx, vault, Some(&args.tags), None, None)
+            .await?;
         let detail = self
             .library
             .add_tags(vault, id, &args.tags)
@@ -553,6 +659,7 @@ impl FolioMcp {
         require_scope(&ctx, SCOPE_WRITE)?;
         let vault = self.vault(&ctx).await?;
         let id = parse_id(&args.id)?;
+        self.authorize_edit(&ctx, vault, id).await?;
         let detail = self
             .library
             .remove_tags(vault, id, &args.tags)
@@ -578,6 +685,8 @@ impl FolioMcp {
     ) -> ToolResult<UploadOutput> {
         require_scope(&ctx, SCOPE_WRITE)?;
         let vault = self.vault(&ctx).await?;
+        self.authorize(&ctx, vault, VaultAction::CreateDocument)
+            .await?;
 
         let data = base64::engine::general_purpose::STANDARD
             .decode(args.content_base64.trim())

@@ -24,6 +24,10 @@ struct Server {
 }
 
 async fn serve(fx: &Fixture) -> Server {
+    serve_with_required(fx, true).await
+}
+
+async fn serve_with_required(fx: &Fixture, required: bool) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let store = fx.auth.clone();
 
@@ -43,7 +47,8 @@ async fn serve(fx: &Fixture) -> Server {
         folio_mcp::bridge_auth_context,
     ))
     .layer(from_fn_with_state(
-        TokenValidator::new(store.clone(), Some(format!("http://{addr}")), "/mcp"),
+        TokenValidator::new(store.clone(), Some(format!("http://{addr}")), "/mcp")
+            .with_required(required),
         require_bearer,
     ));
     tokio::spawn(async move { axum::serve(listener, mcp).await.unwrap() });
@@ -91,6 +96,32 @@ async fn issue(server: &Server, token: &str, scopes: &[&str]) {
         .await
         .unwrap();
     server.vault_repo.mark_provisioned(&user).await.unwrap();
+    server
+        .store
+        .create_user(folio_auth::User {
+            id: "other-owner".into(),
+            username: "other-owner".into(),
+            password_hash: "!".into(),
+            created_at: 0,
+            email: None,
+            display_name: None,
+            is_admin: false,
+            is_owner: false,
+            auth_source: "local".into(),
+            external_id: None,
+        })
+        .await
+        .unwrap();
+    server
+        .members
+        .grant(
+            server.vault,
+            &folio_core::models::Principal::User("other-owner".into()),
+            folio_core::models::VaultRole::Owner,
+            None,
+        )
+        .await
+        .unwrap();
     server
         .store
         .insert_client(folio_auth::OAuthClient {
@@ -181,4 +212,342 @@ async fn read_token_can_search_but_not_update() {
             .title,
         "Invoice"
     );
+}
+
+#[tokio::test]
+async fn personal_token_revocation_is_checked_after_mcp_initialization() {
+    let fx = Fixture::new().await;
+    let server = serve(&fx).await;
+    issue(&server, "oauth-token", &["documents:read"]).await;
+    server
+        .store
+        .insert_personal_token(folio_auth::PersonalToken {
+            id: "pat".into(),
+            user_id: "u1".into(),
+            name: "MCP".into(),
+            token_hash: hash_token("folio_pat_test"),
+            prefix: "folio_pat_test".into(),
+            audience: server.url.clone(),
+            scopes: vec!["documents:read".into()],
+            created_at: 1,
+            expires_at: i64::MAX,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+            .auth_header("folio_pat_test"),
+    );
+    let client = ().serve(transport).await.unwrap();
+    let allowed = client
+        .call_tool(CallToolRequestParams::new("list_tags"))
+        .await
+        .unwrap();
+    assert_ne!(allowed.is_error, Some(true));
+    let session = legacy_session(&server, "folio_pat_test").await;
+    server
+        .store
+        .revoke_personal_token("u1", "pat", 2)
+        .await
+        .unwrap();
+    assert!(client
+        .call_tool(CallToolRequestParams::new("list_tags"))
+        .await
+        .is_err());
+    assert_eq!(
+        session_request(&server, reqwest::Method::GET, &session, "folio_pat_test")
+            .await
+            .status(),
+        401
+    );
+    let _ = client.cancel().await;
+}
+
+#[tokio::test]
+async fn live_vault_role_prevents_viewer_mutation_with_write_scope() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Invoice", "total due").await;
+    let server = serve(&fx).await;
+    issue(
+        &server,
+        "write-token",
+        &["documents:read", "documents:write"],
+    )
+    .await;
+    server
+        .members
+        .grant(
+            server.vault,
+            &folio_core::models::Principal::User("u1".into()),
+            folio_core::models::VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let transport = StreamableHttpClientTransport::from_config(
+        StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+            .auth_header("write-token"),
+    );
+    let client = ().serve(transport).await.unwrap();
+    let denied = client
+        .call_tool(
+            CallToolRequestParams::new("update_document").with_arguments(
+                json!({"id":doc.id,"title":"Forbidden"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.is_error, Some(true));
+    assert_eq!(
+        fx.library
+            .get_document(fx.vault, doc.id)
+            .await
+            .unwrap()
+            .document
+            .title,
+        "Invoice"
+    );
+    let _ = client.cancel().await;
+}
+
+async fn legacy_session(server: &Server, token: &str) -> String {
+    let http = reqwest::Client::new();
+    let request = http.post(&server.url);
+    let request = if token.is_empty() {
+        request
+    } else {
+        request.bearer_auth(token)
+    };
+    let response = request.header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .json(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"session-test","version":"1"}}}))
+        .send().await.unwrap();
+    assert!(response.status().is_success());
+    response.headers()["mcp-session-id"]
+        .to_str()
+        .unwrap()
+        .to_string()
+}
+
+async fn session_request(
+    server: &Server,
+    method: reqwest::Method,
+    session: &str,
+    token: &str,
+) -> reqwest::Response {
+    let http = reqwest::Client::new();
+    let request = http.request(method, &server.url);
+    let request = if token.is_empty() {
+        request
+    } else {
+        request.bearer_auth(token)
+    };
+    request
+        .header("mcp-session-id", session)
+        .header("mcp-protocol-version", "2025-06-18")
+        .header("accept", "application/json, text/event-stream")
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn legacy_sessions_bind_identity_allow_oauth_rotation_and_reject_changed_vault_roles() {
+    let fx = Fixture::new().await;
+    let server = serve(&fx).await;
+    issue(&server, "original-token", &["documents:read"]).await;
+    server
+        .store
+        .insert_access_token(AccessToken {
+            token_hash: hash_token("replacement-token"),
+            client_id: "c1".into(),
+            user_id: "u1".into(),
+            scopes: vec!["documents:read".into()],
+            audience: server.url.clone(),
+            expires_at: i64::MAX,
+            grant_id: "g1".into(),
+        })
+        .await
+        .unwrap();
+    server
+        .store
+        .insert_personal_token(folio_auth::PersonalToken {
+            id: "different-credential".into(),
+            user_id: "u1".into(),
+            name: "PAT".into(),
+            token_hash: hash_token("folio_pat_other"),
+            prefix: "folio_pat_other".into(),
+            audience: server.url.clone(),
+            scopes: vec!["documents:read".into()],
+            created_at: 1,
+            expires_at: i64::MAX,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+    let session = legacy_session(&server, "original-token").await;
+    assert_eq!(
+        session_request(&server, reqwest::Method::GET, &session, "folio_pat_other")
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(
+        session_request(
+            &server,
+            reqwest::Method::DELETE,
+            &session,
+            "folio_pat_other"
+        )
+        .await
+        .status(),
+        404
+    );
+    let response =
+        session_request(&server, reqwest::Method::GET, &session, "replacement-token").await;
+    assert!(
+        response.status().is_success(),
+        "OAuth rotation keeps the session"
+    );
+    drop(response);
+    server
+        .members
+        .grant(
+            server.vault,
+            &folio_core::models::Principal::User("u1".into()),
+            folio_core::models::VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        session_request(&server, reqwest::Method::GET, &session, "replacement-token")
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(
+        session_request(
+            &server,
+            reqwest::Method::DELETE,
+            &session,
+            "replacement-token"
+        )
+        .await
+        .status(),
+        404
+    );
+}
+
+#[tokio::test]
+async fn optional_auth_distinguishes_anonymous_and_authenticated_legacy_sessions() {
+    let fx = Fixture::new().await;
+    let server = serve_with_required(&fx, false).await;
+    issue(&server, "user-token", &["documents:read"]).await;
+    let anonymous = legacy_session(&server, "").await;
+    assert_eq!(
+        session_request(&server, reqwest::Method::GET, &anonymous, "user-token")
+            .await
+            .status(),
+        404
+    );
+    let authenticated = legacy_session(&server, "user-token").await;
+    assert_eq!(
+        session_request(&server, reqwest::Method::GET, &authenticated, "")
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(
+        session_request(&server, reqwest::Method::GET, &authenticated, "invalid")
+            .await
+            .status(),
+        401
+    );
+}
+
+#[tokio::test]
+async fn contributors_edit_own_documents_but_cannot_create_vocabulary_or_edit_others() {
+    use folio_core::models::{CreateDocument, Principal, UserId, VaultRole};
+    let fx = Fixture::new().await;
+    let other = fx.insert("Other", "private").await;
+    let server = serve(&fx).await;
+    issue(
+        &server,
+        "contributor-token",
+        &["documents:read", "documents:write"],
+    )
+    .await;
+    let user = UserId::from("u1");
+    let own = fx
+        .documents
+        .create(
+            server.vault,
+            CreateDocument {
+                title: "Own".into(),
+                uploaded_by: Some(user.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    server
+        .members
+        .grant(
+            server.vault,
+            &Principal::User(user),
+            VaultRole::Contributor,
+            None,
+        )
+        .await
+        .unwrap();
+    let client = ()
+        .serve(StreamableHttpClientTransport::from_config(
+            StreamableHttpClientTransportConfig::with_uri(server.url.clone())
+                .auth_header("contributor-token"),
+        ))
+        .await
+        .unwrap();
+    let renamed = client
+        .call_tool(
+            CallToolRequestParams::new("update_document").with_arguments(
+                json!({"id":own.id,"title":"Renamed"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_ne!(renamed.is_error, Some(true));
+    let new_tag = client
+        .call_tool(
+            CallToolRequestParams::new("add_tags").with_arguments(
+                json!({"id":own.id,"tags":["forbidden-new-tag"]})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_tag.is_error, Some(true));
+    assert!(fx.library.list_tags(server.vault).await.unwrap().is_empty());
+    let other_edit = client
+        .call_tool(
+            CallToolRequestParams::new("update_document").with_arguments(
+                json!({"id":other.id,"title":"Denied"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_edit.is_error, Some(true));
+    let _ = client.cancel().await;
 }
