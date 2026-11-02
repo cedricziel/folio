@@ -506,10 +506,6 @@ where
         .route("/auth/oidc/callback", get(oidc::callback))
         .route("/.well-known/oauth-authorization-server", get(as_metadata))
         .route(
-            "/.well-known/oauth-protected-resource",
-            get(mcp_resource_metadata),
-        )
-        .route(
             "/.well-known/oauth-protected-resource/mcp",
             get(mcp_resource_metadata),
         )

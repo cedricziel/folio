@@ -81,7 +81,7 @@ and `Cache-Control: no-store`. Authorization responses include `iss`
 
 Add `https://folio.example.com/mcp` as a remote MCP server in Claude Desktop,
 Claude Code or claude.ai. The client discovers the authorization server from
-`/.well-known/oauth-protected-resource`, registers itself at
+`/.well-known/oauth-protected-resource/mcp`, registers itself at
 `/oauth/register`, and opens `/oauth/authorize`. Sign in, review the consent
 page and allow. Access tokens last one hour; clients renew them with a
 rotating refresh token.
@@ -363,7 +363,7 @@ per process.
 | Path | Purpose |
 | --- | --- |
 | `/.well-known/oauth-authorization-server` | RFC 8414 metadata |
-| `/.well-known/oauth-protected-resource[/mcp\|/api]` | RFC 9728 metadata; `/api` challenges point at the `/api` document |
+| `/.well-known/oauth-protected-resource/mcp`, `/.well-known/oauth-protected-resource/api` | RFC 9728 metadata for each protected resource |
 | `POST /oauth/register` | RFC 7591 dynamic client registration (public clients) |
 | `/oauth/authorize` | authorization code with PKCE (S256 only), consent page |
 | `POST /oauth/token` | `authorization_code` and `refresh_token` grants |
@@ -388,6 +388,6 @@ let mcp = mcp_router.layer(axum::middleware::from_fn_with_state(
 ```
 
 Missing or invalid tokens get `401` with
-`WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`.
+`WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource/mcp"`.
 Handlers can read the caller from the `folio_auth::AuthContext` request
 extension. For cookie-based pages use the `folio_api::RequireUser` extractor.

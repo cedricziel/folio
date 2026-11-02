@@ -249,16 +249,16 @@ async fn metadata_documents_have_expected_shape() {
         meta["token_endpoint_auth_methods_supported"],
         json!(["none"])
     );
-    for path in [
-        "/.well-known/oauth-protected-resource",
-        "/.well-known/oauth-protected-resource/mcp",
-    ] {
-        let prm = send(&app, Request::get(path).body(Body::empty()).unwrap())
-            .await
-            .json();
-        assert_eq!(prm["resource"], format!("{BASE}/mcp"));
-        assert_eq!(prm["authorization_servers"], json!([BASE]));
-    }
+    let prm = send(
+        &app,
+        Request::get("/.well-known/oauth-protected-resource/mcp")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+    .json();
+    assert_eq!(prm["resource"], format!("{BASE}/mcp"));
+    assert_eq!(prm["authorization_servers"], json!([BASE]));
 }
 
 /// Requests as sent by a client that forges the headers a proxy would set.
@@ -278,7 +278,7 @@ async fn urls_come_from_public_url_never_from_request_headers() {
         .await
         .json();
     assert_eq!(meta["issuer"], BASE);
-    let prm = send(&app, spoofed("/.well-known/oauth-protected-resource"))
+    let prm = send(&app, spoofed("/.well-known/oauth-protected-resource/mcp"))
         .await
         .json();
     assert_eq!(prm["resource"], format!("{BASE}/mcp"));
@@ -886,7 +886,7 @@ async fn full_flow_yields_a_token_the_validator_accepts() {
     assert_eq!(no_token.status, StatusCode::UNAUTHORIZED);
     assert_eq!(
         no_token.headers[header::WWW_AUTHENTICATE],
-        format!("Bearer resource_metadata=\"{BASE}/.well-known/oauth-protected-resource\"")
+        format!("Bearer resource_metadata=\"{BASE}/.well-known/oauth-protected-resource/mcp\"")
             .as_str()
     );
 
@@ -1185,7 +1185,7 @@ mod enforcement {
             "/mcp",
             "/auth/theme.css",
             "/.well-known/oauth-authorization-server",
-            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/mcp",
         ] {
             assert_eq!(status(&app, path).await, StatusCode::OK, "{path}");
         }
@@ -1309,6 +1309,15 @@ mod enforcement {
         )
         .await;
         assert_eq!(res.status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unsuffixed_resource_metadata_is_not_routed() {
+        let app = guarded(false).await;
+        assert_eq!(
+            status(&app, "/.well-known/oauth-protected-resource").await,
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[tokio::test]

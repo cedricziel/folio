@@ -69,7 +69,7 @@ By default only loopback `Host` headers are accepted, which protects a local ser
 
 ## Authentication
 
-`/mcp` requires an OAuth 2.1 bearer token from Folio's own authorization server (see [auth.md](auth.md)). A request without a valid token gets `401` with `WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`, which is how MCP clients discover where to log in. Tokens must be issued for the `/mcp` resource.
+`/mcp` requires an OAuth 2.1 bearer token from Folio's own authorization server (see [auth.md](auth.md)). A request without a valid token gets `401` with `WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource/mcp"`, which is how MCP clients discover where to log in. Tokens must be issued for the `/mcp` resource.
 
 Read tools need the `documents:read` scope and write tools `documents:write`; clients get both unless the user narrows them. The validated caller reaches the tools as a `folio_mcp::McpAuth` request extension. stdio has no authentication: the client is a local process you started.
 

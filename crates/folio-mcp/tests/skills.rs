@@ -155,7 +155,7 @@ async fn manifest_matches_every_served_file_and_frontmatter() {
 }
 
 #[tokio::test]
-async fn legacy_clients_can_still_read_skill_resources() {
+async fn resources_read_returns_skill_content() {
     let fx = Fixture::new().await;
     let client = fx.in_process_client().await;
     let read = client
