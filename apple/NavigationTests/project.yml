@@ -1,0 +1,56 @@
+---
+name: InboxNavigation
+options:
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    CODE_SIGNING_ALLOWED: "NO"
+packages:
+  FolioKit:
+    path: "../FolioKit"
+targets:
+  Fixture:
+    type: application
+    platform: iOS
+    sources:
+      - Fixture
+      - "../FolioKit/Tests/FolioKitTests/MockFolioService.swift"
+      - "../Folio/Sources/WorkspaceView.swift"
+      - "../Folio/Sources/InboxView.swift"
+      - "../Folio/Sources/DocumentDetailView.swift"
+      - "../Folio/Sources/DocumentRowView.swift"
+      - "../Folio/Sources/QuickLookPreview.swift"
+      - "../Folio/Sources/Commands.swift"
+      - "../Folio/Sources/AppLock.swift"
+      - "../Folio/Sources/ScanReviewView.swift"
+      - "../Folio/Sources/DocumentScanner.swift"
+      - "../Folio/Sources/UploadReviewView.swift"
+    dependencies:
+      - package: FolioKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.folio.tests.inboxfixture
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+  NavigationTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: Fixture
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.folio.tests.inboxnavigation
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  Fixture:
+    build:
+      targets:
+        Fixture: all
+        NavigationTests: test
+    test:
+      targets:
+        - NavigationTests

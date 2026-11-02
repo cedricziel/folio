@@ -38,7 +38,7 @@ public final class DocumentBrowserSession {
 @MainActor @Observable
 public final class WorkspaceViewModel {
     public var destination = WorkspaceDestination.inbox
-    public private(set) var catalog = VaultCatalog.legacy
+    public private(set) var catalog = VaultCatalog.empty
     public private(set) var selectedVaultID: UUID?
     public private(set) var isReady = false
     public private(set) var discoveryError: String?
@@ -62,11 +62,11 @@ public final class WorkspaceViewModel {
     }
 
     public var canEdit: Bool {
-        selectedVault?.role.canEdit ?? catalog.vaults.isEmpty
+        isReady && selectedVault?.role.canEdit == true
     }
 
     public var canUpload: Bool {
-        catalog.vaults.isEmpty || catalog.vaults.contains { $0.role.canUpload }
+        isReady && catalog.vaults.contains { $0.role.canUpload }
     }
 
     public func loadVaults() async {
@@ -105,7 +105,7 @@ public final class WorkspaceViewModel {
         destination == .inbox ? inbox : all
     }
 
-    /// Opens an external link in its vault, or in the server default for legacy UUID-only links.
+    /// Opens a document in the supplied vault or the server default used by document intents.
     public func open(_ id: Document.ID, vaultID: UUID? = nil) {
         if let vaultID = vaultID ?? catalog.defaultVaultID {
             guard catalog.vaults.contains(where: { $0.id == vaultID }) else {

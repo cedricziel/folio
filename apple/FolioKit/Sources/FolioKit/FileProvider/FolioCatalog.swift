@@ -22,10 +22,9 @@ public struct FolioCatalog: Sendable {
 
     private struct Context {
         let service: any FolioService
-        let vault: Vault?
+        let vault: Vault
 
         func folder(_ folder: FolioItemID.Folder) -> FolioItemID.Folder {
-            guard let vault else { return folder }
             return folder == .root ? .vault(vault.id) : .scoped(vault.id, folder)
         }
 
@@ -36,28 +35,22 @@ public struct FolioCatalog: Sendable {
                 id: .folder(self.folder(folder)), parent: .folder(self.folder(parent)),
                 name: FolioCatalog.sanitized(name), isFolder: true, modified: .distantPast,
                 contentType: nil, document: nil,
-                canUpload: folder.acceptsUploads && (vault?.role.canUpload ?? true)
+                canUpload: folder.acceptsUploads && vault.role.canUpload
             )
         }
     }
 
     private func context(for folder: FolioItemID.Folder) async throws -> Context? {
+        guard let id = folder.vaultID else { return nil }
         let catalog = try await service.vaults()
-        if let id = folder.vaultID {
-            guard let vault = catalog.vaults.first(where: { $0.id == id }) else { return nil }
-            return Context(service: service.scoped(to: id), vault: vault)
-        }
-        guard catalog == .legacy else { return nil }
-        return Context(service: service, vault: nil)
+        guard let vault = catalog.vaults.first(where: { $0.id == id }) else { return nil }
+        return Context(service: service.scoped(to: id), vault: vault)
     }
 
     public func children(of folder: FolioItemID.Folder) async throws -> [FolioNode] {
         if folder == .root {
             let catalog = try await service.vaults()
-            if catalog != .legacy {
-                return vaultNodes(catalog.vaults)
-            }
-            return try await children(of: .root, context: Context(service: service, vault: nil))
+            return vaultNodes(catalog.vaults)
         }
         guard let context = try await context(for: folder) else { return [] }
         let content: FolioItemID.Folder
@@ -88,10 +81,10 @@ public struct FolioCatalog: Sendable {
         }
     }
 
-    public func upload(_ file: UploadFile, to folder: FolioItemID.Folder = .inbox) async throws -> FolioNode {
+    public func upload(_ file: UploadFile, to folder: FolioItemID.Folder) async throws -> FolioNode {
         guard folder.acceptsUploads else { throw FolioError.server(status: 403, message: nil) }
         guard let context = try await context(for: folder) else { throw FolioError.server(status: 404, message: nil) }
-        guard context.vault?.role.canUpload != false else { throw FolioError.server(status: 403, message: nil) }
+        guard context.vault.role.canUpload else { throw FolioError.server(status: 403, message: nil) }
         let document = try await context.service.upload(file)
         return documentNodes([document], in: folder)[0]
     }
@@ -105,9 +98,6 @@ public struct FolioCatalog: Sendable {
 
     public func allNodes() async throws -> [FolioNode] {
         let catalog = try await service.vaults()
-        if catalog == .legacy {
-            return try await allNodes(context: Context(service: service, vault: nil))
-        }
         let roots = vaultNodes(catalog.vaults)
         var nodes: [FolioNode] = []
         for vault in catalog.vaults.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {

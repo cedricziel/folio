@@ -1,4 +1,5 @@
-import { expect, test, uniqueTitle, uploadViaUi } from "./fixtures";
+import { readFileSync } from "node:fs";
+import { expect, test, uniqueTitle, uploadViaUi, samplePdf } from "./fixtures";
 
 test("inbox loads", async ({ page }) => {
   await page.goto("/");
@@ -7,6 +8,36 @@ test("inbox loads", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: "Upload document", exact: true }),
   ).toBeVisible();
+});
+
+test("dropping multiple files uploads each document", async ({ page, request }) => {
+  const names = [uniqueTitle("drop-first") + ".pdf", uniqueTitle("drop-second") + ".pdf"];
+  await page.goto("/");
+  const transfer = await page.evaluateHandle(({ bytes, names }) => {
+    const data = new DataTransfer();
+    for (const name of names) {
+      data.items.add(new File([new Uint8Array(bytes)], name, { type: "application/pdf" }));
+    }
+    return data;
+  }, { bytes: Array.from(readFileSync(samplePdf)), names });
+
+  try {
+    await page.locator("body").dispatchEvent("dragenter", { dataTransfer: transfer });
+    await expect(page.getByText("Drop files to upload", { exact: true })).toBeVisible();
+    await page.locator("body").dispatchEvent("drop", { dataTransfer: transfer });
+    await expect(page.getByText("Drop files to upload", { exact: true })).toBeHidden();
+    for (const name of names) {
+      await expect(page.getByRole("link", { name: new RegExp(name) })).toBeVisible();
+    }
+    await expect(page.locator(".queue-item-status").filter({ hasText: "Uploaded" })).toHaveCount(2);
+  } finally {
+    await transfer.dispose();
+    const response = await request.get("/api/documents");
+    const { documents } = await response.json();
+    for (const document of documents.filter((item: { title: string }) => names.includes(item.title))) {
+      await request.delete(`/api/documents/${document.id}`);
+    }
+  }
 });
 
 test.describe("document lifecycle", () => {

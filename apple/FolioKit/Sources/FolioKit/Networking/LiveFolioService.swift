@@ -55,9 +55,6 @@ public struct LiveFolioService: FolioService {
         try await call("vaults.list") {
             let request = URLRequest(url: endpoint("api/vaults"))
             let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
-            if (response as? HTTPURLResponse)?.statusCode == 404 {
-                return .legacy
-            }
             try check(response, body: data)
             guard let catalog = try? JSONDecoder().decode(VaultCatalog.self, from: data),
                 let defaultID = catalog.defaultVaultID,

@@ -6,6 +6,22 @@ How documents enter Folio, where their files are stored, and how they are listed
 
 ## Requirements
 
+### Requirement: Apple document list accepts dropped files
+
+The Apple app SHALL accept local PDF and image files dropped onto the document list in Inbox or All documents, including an empty list. It SHALL show a drop indicator and open the same upload review and library selection flow as the file chooser. It SHALL reject drops without upload permission or while an import or upload review is in progress.
+
+#### Scenario: Drop multiple documents
+
+- **WHEN** a user drops a PDF and an image onto the document list
+- **THEN** the app presents both files for review and library selection
+- **AND** confirming the upload files both documents and refreshes the list
+
+#### Scenario: Drop includes unreadable or unsupported items
+
+- **WHEN** a drop contains readable documents alongside folders, unsupported files, or unreadable files
+- **THEN** the app presents the readable documents for upload review and reports the rejected items
+- **AND** it does not fetch remote URLs
+
 ### Requirement: Web upload queues processing
 
 The system SHALL accept a multipart upload at `POST /documents/upload` with a required `file` part and an optional `title` part. It SHALL create the document without content, store the file, enqueue a document-processing job, and respond with a Turbo Stream (`text/vnd.turbo-stream.html`).

@@ -46,17 +46,17 @@ struct WorkspaceView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
             .disabled(!workspace.isReady)
         } detail: {
-            if workspace.isReady {
+            if workspace.isReady, let vaultID = workspace.selectedVaultID {
                 InboxView(
                     serverURL: serverURL, service: workspace.service, session: workspace.session,
-                    vaultID: workspace.selectedVaultID,
+                    vaultID: vaultID,
                     canEdit: workspace.canEdit, canUpload: workspace.canUpload,
                     makeUploadDestination: workspace.uploadDestination,
                     onSignOut: onSignOut,
                     onNavigate: { workspace.destination = $0 },
                     onOpenDocument: { workspace.open($0, vaultID: $1) }
                 )
-                .id("\(workspace.selectedVaultID?.uuidString ?? "legacy")-\(workspace.destination.rawValue)")
+                .id("\(vaultID.uuidString)-\(workspace.destination.rawValue)")
             } else if let error = workspace.discoveryError {
                 ContentUnavailableView {
                     Label("Couldn't load vaults", systemImage: "exclamationmark.triangle")

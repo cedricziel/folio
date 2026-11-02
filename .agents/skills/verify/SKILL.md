@@ -22,6 +22,8 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 ```
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
+`DocumentImportTests` covers mixed PDF and image imports, unsupported files, directories, missing files, and remote URL rejection using temporary files. File-type resolution requires access to macOS type services. For a manual drop check, use an isolated account or simulator and a throwaway server, then drop multiple PDFs and images into the document list, including when it is empty. Check the hover indicator, upload progress, and refreshed list.
+`e2e/tests/documents.spec.ts` covers dropping two files onto the web page, the hover indicator, and completion of both uploads. Run it only against the disposable instance started by the E2E setup.
 `WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
 `PagingTests` covers continuation deduplication, selection retention, Inbox lookahead,
 cancellation, stale queries, retry, vault consistency, and direct document lookup.
@@ -77,6 +79,31 @@ both short and long absences. macOS screen lock also uses the distributed
 `com.apple.screenIsLocked` notification, so verify it on each supported macOS
 release. These device and visual checks are not covered by the hostless tests.
 
+## Apple inbox navigation
+
+`apple/NavigationTests/project.yml` builds the production workspace, inbox, and
+detail views with a fake service. Its UI test taps a document, returns to the
+list, and opens another document. Model tests alone do not verify row taps.
+
+Generate the fixture outside the checkout with
+`xcodegen generate --spec apple/NavigationTests/project.yml --project "$verify_dir"`.
+Create a fresh iPhone simulator with an installed iOS runtime and save its ID as
+`verify_device`. Run:
+
+```sh
+xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
+  -destination "platform=iOS Simulator,id=$verify_device" \
+  -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
+  -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
+  -parallel-testing-enabled NO -test-timeouts-enabled YES \
+  -maximum-test-execution-time-allowance 45 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
+```
+
+Bound runner startup separately; XCTest's execution timeout does not cover it.
+On every exit, shut down and delete only `verify_device`, then remove `verify_dir`.
+An accessibility initialization failure before the test taps a row is an
+infrastructure failure, not a navigation regression or a passing check.
+
 ## Apple File Provider
 
 Run `xcrun swift test --package-path apple/FolioKit --scratch-path /tmp/folio-provider-build`.
@@ -111,6 +138,10 @@ The Apple package suite covers immutable scoped services, independent upload
 destinations, and external document links. File Provider tests must cover stable
 vault-qualified identifiers, scoped downloads and Inbox uploads, read-only
 capabilities, membership revocation, and transient failures that retain entries.
+Verify that vault discovery 404 remains an error, unloaded catalogs grant no
+write capabilities, and UUID-only Spotlight and unscoped provider identifiers
+are rejected. Keep current default-vault document Intent coverage separate from
+external identifier parsing.
 Run both the package suite and native provider tests above after these changes.
 These tests do not establish system integration in Files or Finder.
 

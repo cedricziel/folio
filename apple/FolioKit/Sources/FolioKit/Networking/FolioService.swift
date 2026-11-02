@@ -22,12 +22,6 @@ public protocol FolioService: Sendable {
     func documentTypes() async throws -> [DocumentType]
 }
 
-public extension FolioService {
-    func vaults() async throws -> VaultCatalog {
-        .legacy
-    }
-}
-
 public enum FolioError: Error, Equatable, LocalizedError {
     case invalidServerURL
     case server(status: Int, message: String?)

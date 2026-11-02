@@ -20,10 +20,13 @@ struct DocumentLinkTests {
         #expect(item.attributeSet.title == "Household letter")
     }
 
-    @Test func legacySpotlightEntityIdentifierUsesTheDefaultVault() {
-        let link = DocumentLink(spotlightIdentifier: "DocumentEntity/3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")
-
-        #expect(link == DocumentLink(documentID: documentID))
+    @Test(arguments: [
+        "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f",
+        "DocumentEntity/3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f",
+        "unrelated:3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f",
+    ])
+    func unscopedIdentifiersAreRejected(identifier: String) {
+        #expect(DocumentLink(spotlightIdentifier: identifier) == nil)
     }
 
     @Test(arguments: [

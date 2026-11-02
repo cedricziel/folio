@@ -38,7 +38,7 @@ import Testing
         #expect(workspace.navigationError == "This vault is no longer available.")
     }
 
-    @Test func uuidOnlyExternalLinkOpensInTheServerDefaultVault() async {
+    @Test func documentIntentOpensInTheServerDefaultVault() async {
         let document = Document(title: "Default-vault letter")
         let source = MockFolioService(
             vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
@@ -143,10 +143,24 @@ import Testing
         #expect(workspace.discoveryError == "Couldn't reach the server.")
     }
 
+    @Test func emptyCatalogDoesNotGrantUploadOrEditing() async {
+        let service = MockFolioService(vaults: .empty)
+        let workspace = WorkspaceViewModel(service: service)
+        await workspace.loadVaults()
+        let destination = workspace.uploadDestination()
+
+        #expect(!workspace.canEdit)
+        #expect(!workspace.canUpload)
+        #expect(!destination.canUpload)
+        #expect(!destination.canTag)
+    }
+
     @Test func firstSessionOpensInbox() {
         let workspace = WorkspaceViewModel(service: MockFolioService())
         #expect(workspace.destination == .inbox)
         #expect(workspace.session.list.scope == .inbox)
+        #expect(!workspace.canEdit)
+        #expect(!workspace.canUpload)
     }
 
     @Test func switchingDestinationsPreservesEachBrowser() {
@@ -173,8 +187,9 @@ import Testing
         #expect(workspace.session.list.searchText == "insurance")
     }
 
-    @Test func openingDocumentUsesUnfilteredLibraryWithoutErasingInbox() {
+    @Test func openingDocumentUsesUnfilteredLibraryWithoutErasingInbox() async {
         let workspace = WorkspaceViewModel(service: MockFolioService())
+        await workspace.loadVaults()
         workspace.session.list.searchText = "inbox search"
         let documentID = UUID()
         workspace.open(documentID)

@@ -285,12 +285,8 @@ public enum FolioIntentsPackage: AppIntentsPackage {}
 
 /// Re-indexes a document in Spotlight when someone opens it.
 public enum SpotlightDonor {
-    public static func donate(_ summary: DocumentSummary, vaultID: UUID? = nil) async {
-        if let vaultID {
-            try? await CSSearchableIndex.default().indexSearchableItems([searchableItem(summary, vaultID: vaultID)])
-        } else {
-            try? await CSSearchableIndex.default().indexAppEntities([DocumentEntity(summary)])
-        }
+    public static func donate(_ summary: DocumentSummary, vaultID: UUID) async {
+        try? await CSSearchableIndex.default().indexSearchableItems([searchableItem(summary, vaultID: vaultID)])
     }
 
     static func searchableItem(_ summary: DocumentSummary, vaultID: UUID) -> CSSearchableItem {

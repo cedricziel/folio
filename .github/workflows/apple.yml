@@ -47,6 +47,28 @@ jobs:
           bundler-cache: true
       - run: brew install xcodegen
       - run: bundle exec fastlane test
+      - name: Test inbox navigation on iPhone
+        timeout-minutes: 15
+        run: |
+          verify_dir=$(mktemp -d)
+          verify_device=""
+          cleanup() {
+            if [ -n "$verify_device" ]; then
+              xcrun simctl shutdown "$verify_device" || true
+              xcrun simctl delete "$verify_device" || true
+            fi
+            rm -rf "$verify_dir"
+          }
+          trap cleanup EXIT
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
+          verify_device=$(xcrun simctl create Folio-Navigation-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          xcodegen generate --spec NavigationTests/project.yml --project "$verify_dir"
+          xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
+            -destination "platform=iOS Simulator,id=$verify_device" \
+            -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
+            -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -maximum-test-execution-time-allowance 45 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
 
   beta:
     name: TestFlight (iOS)
