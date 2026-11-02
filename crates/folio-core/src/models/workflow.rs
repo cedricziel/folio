@@ -392,7 +392,7 @@ impl RunStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WorkflowRun {
-    /// Also sent as `X-Folio-Delivery`, so receivers can de-duplicate retries
+    /// Sent as `X-Folio-Run`; deliveries have separate per-action IDs.
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]

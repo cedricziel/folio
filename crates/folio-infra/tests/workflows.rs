@@ -40,6 +40,7 @@ struct Received {
 #[derive(Default)]
 struct ServerState {
     received: Mutex<Vec<Received>>,
+    effects: Mutex<HashMap<String, String>>,
     /// Status codes to answer with per path, consumed in order; 200 once empty
     script: Mutex<HashMap<String, VecDeque<u16>>>,
 }
@@ -64,6 +65,16 @@ impl TestServer {
                 .get_mut(&path)
                 .and_then(|q| q.pop_front())
                 .unwrap_or(200);
+            if let (Some(delivery), Some(route)) =
+                (headers.get("x-folio-delivery"), headers.get("x-route"))
+            {
+                state
+                    .effects
+                    .lock()
+                    .unwrap()
+                    .entry(delivery.to_str().unwrap().to_string())
+                    .or_insert_with(|| route.to_str().unwrap().to_string());
+            }
             state.received.lock().unwrap().push(Received {
                 path,
                 headers,
@@ -613,7 +624,8 @@ async fn webhook_is_signed_over_timestamp_and_body() {
         );
         assert!(header("x-folio-signature").starts_with("sha256="));
         assert_eq!(header("x-folio-event"), "document.uploaded");
-        assert_eq!(header("x-folio-delivery"), run.id.to_string());
+        assert!(Uuid::parse_str(&header("x-folio-delivery")).is_ok());
+        assert_eq!(header("x-folio-run"), run.id.to_string());
         assert!(header("user-agent").starts_with("Folio-Webhooks/"));
         assert_eq!(header("content-type"), "application/json");
         assert_eq!(header("x-custom"), "yes");
@@ -868,7 +880,8 @@ async fn client_refuses_non_http_urls() {
                 headers: &headers,
                 secret: None,
                 event: WorkflowTrigger::DocumentUploaded,
-                delivery_id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                action_index: 0,
                 body: "{}",
             })
             .await;
@@ -1037,4 +1050,68 @@ async fn editing_a_workflow_does_not_change_queued_runs() {
 
     assert_eq!(server.hits("before"), 1);
     assert_eq!(server.hits("after"), 0);
+}
+
+#[tokio::test]
+async fn webhook_actions_have_independent_ids_and_retries_deduplicate() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    server.script("hook", &[200, 503]);
+    let actions = ["alpha", "beta"]
+        .into_iter()
+        .map(|route| WorkflowAction::Webhook {
+            url: server.url("hook"),
+            method: WebhookMethod::Post,
+            headers: BTreeMap::from([
+                ("X-Route".into(), route.into()),
+                ("X-Folio-Run".into(), "spoofed".into()),
+                ("X-Folio-Delivery".into(), "spoofed".into()),
+            ]),
+            secret: None,
+        })
+        .collect();
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUploaded,
+            WorkflowConditions::default(),
+            actions,
+        )
+        .await;
+    let document = h.document("invoice.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, document.id).await;
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Retry);
+    assert_eq!(
+        h.runner.execute(run.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+    let mut effects: Vec<_> = server
+        .state
+        .effects
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
+    effects.sort();
+    assert_eq!(effects, vec!["alpha", "beta"]);
+    let received = server.state.received.lock().unwrap();
+    assert_eq!(received.len(), 3);
+    for request in received.iter() {
+        assert_eq!(request.headers["x-folio-run"], run.id.to_string());
+    }
+    assert_ne!(
+        received[0].headers["x-folio-delivery"],
+        received[1].headers["x-folio-delivery"]
+    );
+    assert_eq!(
+        received[1].headers["x-folio-delivery"],
+        received[2].headers["x-folio-delivery"]
+    );
+    assert_eq!(
+        received
+            .iter()
+            .map(|r| r.headers["x-route"].to_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "beta", "beta"]
+    );
 }

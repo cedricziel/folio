@@ -3809,7 +3809,7 @@
           "id": {
             "type": "string",
             "format": "uuid",
-            "description": "Also sent as `X-Folio-Delivery`, so receivers can de-duplicate retries"
+            "description": "Sent as `X-Folio-Run`; deliveries have separate per-action IDs."
           },
           "last_error": {
             "type": [
