@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.0](https://github.com/cedricziel/folio/compare/v0.3.1...v0.4.0) (2026-11-02)
+
+
+### Features
+
+* **mcp:** serve archive workflow skills ([5213781](https://github.com/cedricziel/folio/commit/5213781ff8f89aa6a03cd9bf03f75e94939a37c8))
+* **mcp:** serve archive workflow skills ([#183](https://github.com/cedricziel/folio/issues/183)) ([7b0caba](https://github.com/cedricziel/folio/commit/7b0cabafd024e19086791edaf7271e9a1ff7ccea))
+
+
+### Bug Fixes
+
+* **apple:** bound File Provider staging filenames ([24cb80d](https://github.com/cedricziel/folio/commit/24cb80de6a5368be4543a03c329bb47ab340efdf))
+* **apple:** derive document status from pipeline stages ([c3119ac](https://github.com/cedricziel/folio/commit/c3119ac0519aa9008ceafbb21ecec6f6b861edeb))
+* **apple:** derive document status from pipeline stages ([#158](https://github.com/cedricziel/folio/issues/158)) ([599d81e](https://github.com/cedricziel/folio/commit/599d81e986a94ab18240580a5d13fdce46994e50))
+* **apple:** isolate File Provider download handoffs ([5bbcc04](https://github.com/cedricziel/folio/commit/5bbcc04a02ab0d27594420482f76ca50ce4b8eae))
+* **apple:** isolate File Provider download handoffs ([#179](https://github.com/cedricziel/folio/issues/179)) ([c809d9f](https://github.com/cedricziel/folio/commit/c809d9f402f89685e8a919c8a0fecd8ae8081b8f))
+* **apple:** persist File Provider enumeration snapshots ([dc28896](https://github.com/cedricziel/folio/commit/dc288961135fb67ad241a0f7be3312d37d7ec64a))
+* **apple:** persist File Provider enumeration snapshots ([#181](https://github.com/cedricziel/folio/issues/181)) ([1a5dc83](https://github.com/cedricziel/folio/commit/1a5dc83e0ea45cf338b5ff549587f6a31274431f))
+* **apple:** report actionable File Provider download errors ([1a46a2c](https://github.com/cedricziel/folio/commit/1a46a2cae092657fc2099b116d9ae0965c43ce5d))
+* **apple:** report actionable File Provider download errors ([#184](https://github.com/cedricziel/folio/issues/184)) ([d1cab5a](https://github.com/cedricziel/folio/commit/d1cab5a386c5018aaa7541cfb33bd3cc614416b5))
+* **apple:** return uploaded File Provider items before processing ([8f7fde8](https://github.com/cedricziel/folio/commit/8f7fde81c21e571ce14a9873bf0b380f02e0ca97))
+* **apple:** return uploaded File Provider items before processing ([#180](https://github.com/cedricziel/folio/issues/180)) ([4abb936](https://github.com/cedricziel/folio/commit/4abb936a7af4f3a6151d0aff98e1327e0c8e3615))
+
 ## [0.3.1](https://github.com/cedricziel/folio/compare/v0.3.0...v0.3.1) (2026-11-02)
 
 ### Fixed
