@@ -27,7 +27,7 @@ public struct FolioCatalog: Sendable {
                 folderNode(.correspondents, "Correspondents"), folderNode(.types, "Types"),
             ]
         case .inbox:
-            let documents = try await service.documents(matching: "").filter { $0.status == .needsReview }
+            let documents = try await service.documents(matching: "").filter { $0.status != .filed }
             return documentNodes(documents, in: .inbox)
         case .all:
             return try documentNodes(await service.documents(matching: ""), in: .all)
@@ -63,6 +63,11 @@ public struct FolioCatalog: Sendable {
         case let .document(documentID, folder):
             return try await children(of: folder).first { $0.id == .document(documentID, in: folder) }
         }
+    }
+
+    public func upload(_ file: UploadFile) async throws -> FolioNode {
+        let document = try await service.upload(file)
+        return documentNodes([document], in: .inbox)[0]
     }
 
     /// Every document under All documents plus the virtual folders: what the working set tracks.

@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify Folio Apple changes with isolated package and macOS authentication regression tests.
+description: Verify Folio Apple changes with isolated package and macOS authentication and File Provider regression tests.
 ---
 
 # Verify Apple changes
@@ -20,7 +20,7 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
 
-Build the app and run the macOS authentication tests:
+Build the app and run the macOS authentication and File Provider tests:
 
 ```sh
 xcrun xcodebuild test -project apple/Folio/Folio.xcodeproj -scheme Folio \
@@ -28,7 +28,7 @@ xcrun xcodebuild test -project apple/Folio/Folio.xcodeproj -scheme Folio \
   -clonedSourcePackagesDirPath "$verify_dir/xcode-packages" \
   -packageCachePath "$verify_dir/xcode-cache" \
   -skipPackagePluginValidation -skipMacroValidation \
-  -only-testing:FolioAuthTests CODE_SIGNING_ALLOWED=NO
+  -only-testing:FolioAuthTests -only-testing:FolioProviderTests CODE_SIGNING_ALLOWED=NO
 ```
 
 The tests exercise authentication completion from a background queue without
@@ -50,3 +50,4 @@ xcrun xcodebuild build -project apple/Folio/Folio.xcodeproj -scheme Folio \
 ```
 
 Lint changed Swift files with `xcrun swift-format lint --strict`. A package test or unsigned build does not prove system materialization. For Files or Finder checks, use a new simulator or isolated test account, a separate test domain, and a throwaway server. Verify download bytes and reopening, then remove the domain, simulator, and server. Never register a test domain in the user's signed-in environment.
+`FolioProviderTests` exercises upload completion using a fake service and temporary files. It does not register a File Provider domain or access shared credentials. `FolioCatalogTests` checks that Inbox retains documents while processing is pending.

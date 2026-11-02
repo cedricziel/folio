@@ -8,16 +8,24 @@ import UniformTypeIdentifiers
 /// with a clean "unsupported" error. Thumbnails are not provided: the API has no thumbnail endpoint yet.
 final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
     private let domain: NSFileProviderDomain
+    private let service: (any FolioService)?
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
+        self.service = nil
+        super.init()
+    }
+
+    init(domain: NSFileProviderDomain, service: any FolioService) {
+        self.domain = domain
+        self.service = service
         super.init()
     }
 
     func invalidate() {}
 
     private func catalog(downloadDirectory: URL? = nil) throws -> (FolioCatalog, any FolioService) {
-        guard let service = SharedConfiguration.makeService(downloadDirectory: downloadDirectory) else {
+        guard let service = service ?? SharedConfiguration.makeService(downloadDirectory: downloadDirectory) else {
             throw NSFileProviderError(.notAuthenticated)
         }
         return (FolioCatalog(service: service), service)
@@ -84,13 +92,11 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
         Task {
             defer { progress.completedUnitCount = 1 }
             do {
-                let (catalog, service) = try catalog()
+                let (catalog, _) = try catalog()
                 var file = try UploadFile(contentsOf: url)
                 file.filename = itemTemplate.filename
-                let document = try await service.upload(file)
-                let id = FolioItemID.document(document.id, in: .inbox)
-                let node = try await catalog.node(for: id)
-                completionHandler(node.map(FolioProviderItem.init), [], false, nil)
+                let node = try await catalog.upload(file)
+                completionHandler(FolioProviderItem(node), [], false, nil)
             } catch {
                 completionHandler(nil, [], false, error.providerError)
             }
