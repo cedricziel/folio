@@ -54,6 +54,20 @@ step "GET /api/documents/$id"
 curl -fsS "$BASE_URL/api/documents/$id" |
   jqpy "'ok' if d['id']=='$id' and d['title']=='$title' and d['mime_type']=='application/pdf' else sys.exit('unexpected shape: %r' % d)"
 
+step "generated thumbnail"
+curl -fsS -D "$VERIFY_DIR/thumbnail.headers" -o "$VERIFY_DIR/thumbnail.jpg" \
+  "$BASE_URL/api/documents/$id/thumbnail"
+python3 - "$VERIFY_DIR" <<'PYTHUMB'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+headers = (root / "thumbnail.headers").read_text().lower()
+image = (root / "thumbnail.jpg").read_bytes()
+assert "content-type: image/jpeg" in headers
+assert "cache-control: private, no-store" in headers
+assert image.startswith(b"\xff\xd8\xff") and image.endswith(b"\xff\xd9")
+PYTHUMB
+
 step "download"
 curl -fsS -o "$download" "$BASE_URL/api/documents/$id/download"
 cmp -s "$download" "$fixture" || fail "downloaded bytes differ from fixture"

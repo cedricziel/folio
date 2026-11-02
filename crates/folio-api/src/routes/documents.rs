@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::{Multipart, Path, RawQuery, State},
-    http::{header, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/purge", axum::routing::delete(super::trash::purge))
         .route("/{id}", get(get_document).delete(delete_document))
         .route("/{id}/download", get(download_document))
+        .route("/{id}/thumbnail", get(document_thumbnail))
         .route("/{id}/correspondent", post(set_correspondent))
         .route("/{id}/document_type", post(set_document_type))
         .route("/{id}/tags", post(add_tag))
@@ -445,6 +446,62 @@ pub(crate) async fn search_documents_get(
 #[schema(value_type = String, format = Binary)]
 #[allow(dead_code)]
 pub struct FileContent(Vec<u8>);
+
+/// Return the generated JPEG thumbnail, or 404 while no thumbnail is available.
+#[utoipa::path(
+    get,
+    path = "/api/documents/{id}/thumbnail",
+    operation_id = "getDocumentThumbnail",
+    tag = "documents",
+    params(("id" = Uuid, Path, description = "Document ID")),
+    responses(
+        (status = 200, description = "Generated JPEG thumbnail; private and not stored in HTTP caches",
+            body = FileContent, content_type = "image/jpeg"),
+        (status = 401, description = "Missing or invalid authentication for the API resource"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn document_thumbnail(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> Response {
+    let result: ApiResult<Response> = async {
+        state
+            .document_repo
+            .find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| ApiError::not_found("Document not found"))?;
+        let bytes = state
+            .store
+            .get_bytes(&folio_core::ports::keys::thumbnail(id))
+            .await
+            .map_err(|error| match error {
+                folio_core::Error::NotFound { .. } => {
+                    ApiError::not_found("Thumbnail not available")
+                }
+                error => {
+                    tracing::error!("Failed to read thumbnail for {id}: {error}");
+                    ApiError::internal("Failed to read thumbnail")
+                }
+            })?;
+        Response::builder()
+            .header(header::CONTENT_TYPE, "image/jpeg")
+            .header(header::CONTENT_DISPOSITION, "inline")
+            .header(header::CONTENT_LENGTH, bytes.len())
+            .body(Body::from(bytes))
+            .map_err(|_| ApiError::internal("Failed to build response"))
+    }
+    .await;
+    let mut response = result.into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-store"),
+    );
+    super::file_response::harden(&mut response);
+    response
+}
 
 /// Download the original file of a document
 #[utoipa::path(

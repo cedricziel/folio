@@ -223,6 +223,15 @@ Before a PR, also run `RUSTC_WRAPPER= make format`, `RUSTC_WRAPPER= make lint`, 
 `RUSTC_WRAPPER= make test`. An empty wrapper bypasses a local sccache service when
 the sandbox cannot access it.
 
+## Verify document thumbnails
+
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test thumbnails` with isolated build
+storage. The real-router tests cover generated JPEG bytes, unavailable thumbnails,
+store failures, bearer authentication, read scope, and vault/account isolation.
+The server smoke test in `.claude/skills/verify/scripts/smoke.sh` also retrieves
+the processed fixture's thumbnail and checks its JPEG bytes and private no-store
+headers. Use that skill's disposable instance wrapper, never a user archive.
+
 ## Verify document repository changes
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`
