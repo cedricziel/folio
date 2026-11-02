@@ -1784,3 +1784,123 @@ async fn webhook_test_run_without_a_document_still_sends() {
 
     assert_eq!(server.hits("sample"), 1);
 }
+
+#[tokio::test]
+async fn precise_metadata_dispatch_preserves_snapshot_identity_and_action_lineage() {
+    use folio_core::models::UserId;
+    use folio_core::mutation::with_actor;
+
+    let h = Harness::new().await;
+    let original_tag = h.tag("original condition").await;
+    let action_tag = h.tag("workflow action").await;
+    let doc = h.document("original.pdf", "application/pdf").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentTagsChanged,
+            WorkflowConditions {
+                tag_id: Some(original_tag),
+                ..Default::default()
+            },
+            vec![WorkflowAction::AddTags {
+                tag_ids: vec![action_tag],
+            }],
+        )
+        .await;
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                tag_ids: Some(vec![original_tag]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let source = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type() == "document.tags_changed")
+        })
+        .unwrap();
+    assert!(source.event.is_none());
+    let envelope = source.envelope.as_ref().unwrap();
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("later title".into()),
+                tag_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let runs = h.engine.handle(&source).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, workflow.id);
+    assert!(h.engine.handle(&source).await.unwrap().is_empty());
+    let stored = h.run(runs[0].id).await;
+    let payload: serde_json::Value = serde_json::from_str(&stored.payload).unwrap();
+    assert_eq!(payload["document"]["title"], "original.pdf");
+    assert_eq!(
+        payload["document"]["tags"][0]["id"],
+        original_tag.to_string()
+    );
+    assert_eq!(
+        payload["source_event"]["event_id"],
+        envelope.event_id().to_string()
+    );
+    assert_eq!(
+        payload["source_event"]["mutation_id"],
+        envelope.mutation_id().to_string()
+    );
+    assert_eq!(
+        payload["occurred_at"],
+        serde_json::to_value(envelope.occurred_at()).unwrap()
+    );
+    sqlx::query("DELETE FROM outbox_events WHERE id = ?")
+        .bind(source.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    let outcome = with_actor(
+        Some(UserId::from("must-not-be-inherited")),
+        h.runner.execute(stored.id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, RunOutcome::Succeeded);
+    let emitted = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|event| event.causation_id() == Some(envelope.event_id()))
+        })
+        .expect("workflow action must retain source lineage after outbox cleanup");
+    assert_eq!(emitted.origin, EventOrigin::Workflow);
+    let emitted_envelope = emitted.envelope.as_ref().unwrap();
+    assert_eq!(emitted_envelope.correlation_id(), envelope.correlation_id());
+    assert_eq!(emitted_envelope.actor_id(), None);
+    h.engine.consume(&emitted).await.unwrap();
+    assert_eq!(
+        h.workflows
+            .list_runs(h.vault, workflow.id, 50)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}

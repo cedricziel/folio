@@ -56,7 +56,9 @@ pub use vault::{
     Access, AuditEvent, GroupId, NewAuditEvent, Principal, UserId, Vault, VaultAction, VaultId,
     VaultMember, VaultRole,
 };
-pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOAD_VERSION};
+pub use webhook::{
+    NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
+};
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,

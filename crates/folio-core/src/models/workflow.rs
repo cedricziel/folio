@@ -21,6 +21,14 @@ pub enum WorkflowTrigger {
     /// A document's metadata changed
     #[serde(rename = "document.updated")]
     DocumentUpdated,
+    #[serde(rename = "document.title_changed")]
+    DocumentTitleChanged,
+    #[serde(rename = "document.tags_changed")]
+    DocumentTagsChanged,
+    #[serde(rename = "document.correspondent_changed")]
+    DocumentCorrespondentChanged,
+    #[serde(rename = "document.document_type_changed")]
+    DocumentTypeChanged,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -31,10 +39,14 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 5] = [
+    pub const ALL: [WorkflowTrigger; 9] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
+        Self::DocumentTitleChanged,
+        Self::DocumentTagsChanged,
+        Self::DocumentCorrespondentChanged,
+        Self::DocumentTypeChanged,
         Self::DocumentDeleted,
         Self::IngestReceived,
     ];
@@ -45,6 +57,10 @@ impl WorkflowTrigger {
             Self::DocumentUploaded => "document.uploaded",
             Self::DocumentProcessed => "document.processed",
             Self::DocumentUpdated => "document.updated",
+            Self::DocumentTitleChanged => "document.title_changed",
+            Self::DocumentTagsChanged => "document.tags_changed",
+            Self::DocumentCorrespondentChanged => "document.correspondent_changed",
+            Self::DocumentTypeChanged => "document.document_type_changed",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
         }
@@ -56,6 +72,10 @@ impl WorkflowTrigger {
             Self::DocumentUploaded => "When a document is added",
             Self::DocumentProcessed => "When a document has been read",
             Self::DocumentUpdated => "When a document's details change",
+            Self::DocumentTitleChanged => "When a document title changes",
+            Self::DocumentTagsChanged => "When document tags change",
+            Self::DocumentCorrespondentChanged => "When a document correspondent changes",
+            Self::DocumentTypeChanged => "When a document type changes",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
         }
@@ -63,9 +83,13 @@ impl WorkflowTrigger {
 
     pub fn target(&self) -> WorkflowTarget {
         match self {
-            Self::DocumentUploaded | Self::DocumentProcessed | Self::DocumentUpdated => {
-                WorkflowTarget::Document
-            }
+            Self::DocumentUploaded
+            | Self::DocumentProcessed
+            | Self::DocumentUpdated
+            | Self::DocumentTitleChanged
+            | Self::DocumentTagsChanged
+            | Self::DocumentCorrespondentChanged
+            | Self::DocumentTypeChanged => WorkflowTarget::Document,
             Self::DocumentDeleted => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
@@ -559,6 +583,14 @@ mod tests {
         Document::new(VaultId::new(), "t")
             .with_filename(filename)
             .with_mime_type(mime)
+    }
+
+    #[test]
+    fn metadata_transition_triggers_are_selectable() {
+        assert!(WorkflowTrigger::parse("document.title_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.tags_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.correspondent_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.document_type_changed").is_some());
     }
 
     #[test]

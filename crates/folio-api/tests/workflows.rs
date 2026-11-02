@@ -433,6 +433,21 @@ async fn pages_render_and_the_form_creates_a_workflow() {
 }
 
 #[tokio::test]
+async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["trigger"] = json!("document.tags_changed");
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["trigger"], "document.tags_changed");
+    let id = created["id"].as_str().unwrap();
+    let (status, html) = send(&app, "GET", &format!("/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("value=\"document.tags_changed\" selected"));
+    assert!(html.contains("When document tags change"));
+}
+
+#[tokio::test]
 async fn the_form_explains_rejected_input() {
     let app = test_app().await;
     let form = "name=Bad&trigger=document.uploaded&webhook_url=ftp%3A%2F%2Fexample.com";
