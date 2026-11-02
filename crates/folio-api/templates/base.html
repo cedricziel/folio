@@ -1695,6 +1695,19 @@ if ("serviceWorker" in navigator) {
               >Theme: System</span
             >
           </button>
+          {% match sidebar.user %} {% when Some with (user) %}
+          <div class="side-user">
+            <span class="side-avatar" aria-hidden="true">{{ user.initials }}</span>
+            <span class="side-who">
+              <span class="side-name">{{ user.name }}</span>
+              {% if !user.role.is_empty() %}<span class="side-role">{{ user.role }}</span>{% endif %}
+            </span>
+            <form action="/logout" method="post" data-turbo="false">
+              <input type="hidden" name="csrf" value="{{ user.csrf }}" />
+              <button type="submit" class="f-btn f-btn-quiet">Sign out</button>
+            </form>
+          </div>
+          {% when None %} {% endmatch %}
         </div>
       </aside>
       <div class="scrim" data-action="click->nav#close"></div>
