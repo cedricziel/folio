@@ -44,6 +44,13 @@ pub trait DocumentRepository: Send + Sync {
     /// List all documents with optional filtering
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;
 
+    /// Read a bounded, stably ordered page within a vault; reject mismatched cursors.
+    async fn page(
+        &self,
+        vault: VaultId,
+        query: crate::models::DocumentPageQuery,
+    ) -> Result<crate::models::DocumentPage>;
+
     /// Ids of the documents [`list`](Self::list) would return, without loading their content
     async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>>;
 

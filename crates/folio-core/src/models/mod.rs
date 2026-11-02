@@ -2,6 +2,7 @@
 
 mod correspondent;
 mod document;
+mod document_page;
 mod document_type;
 mod ingest;
 mod settings;
@@ -16,6 +17,7 @@ pub use document::{
     CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
     UpdateDocument,
 };
+pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
