@@ -181,6 +181,10 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 
 Folder regressions cover replacement during import, staged retry and restart,
 cancellation, concurrent source instances, and symlink-safe recovery.
+Observation regressions also cover stable keys across staging restart and mailbox
+retry, new keys for replacements and UIDVALIDITY resets, and attachment identity
+when allowed content types change. Core identity tests cover length-prefixed
+hashing and the Message-ID fallback without publishing raw locators.
 
 Run `cargo test -p folio-infra --test ingest_pipeline --test ingest_folder --test ingest_email`
 with a task-specific temporary `CARGO_TARGET_DIR` and bounded `CARGO_BUILD_JOBS`.
