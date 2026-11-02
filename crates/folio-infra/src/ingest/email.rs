@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_imap::Session;
+use async_imap::{types::Capability, Session};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
@@ -259,33 +259,49 @@ impl EmailSource {
 
     async fn finish_message(&self, session: &mut ImapSession, uid: u32) -> Result<()> {
         let uid = uid.to_string();
-        match self.config.after_import {
-            MailAfterImport::MarkRead => {
-                store(session, &uid, "+FLAGS (\\Seen)").await?;
-            }
-            MailAfterImport::Move => {
-                let target = self.config.move_to.as_deref().unwrap_or_default();
-                // COPY + delete works on servers without the MOVE extension.
-                session
-                    .uid_copy(&uid, target)
-                    .await
-                    .map_err(|e| imap_err("copy", e))?;
-                self.delete(session, &uid).await?;
-            }
-            MailAfterImport::Delete => self.delete(session, &uid).await?,
+        if self.config.after_import == MailAfterImport::MarkRead {
+            return store(session, &uid, "+FLAGS (\\Seen)").await;
         }
-        Ok(())
+
+        let capabilities = session
+            .capabilities()
+            .await
+            .map_err(|e| imap_err("capabilities", e))?;
+        let supports = |extension: &str| {
+            capabilities.iter().any(|capability| {
+                matches!(capability, Capability::Atom(name) if name.eq_ignore_ascii_case(extension))
+            })
+        };
+        if self.config.after_import == MailAfterImport::Move && supports("MOVE") {
+            return session
+                .uid_mv(&uid, self.config.move_to.as_deref().unwrap_or_default())
+                .await
+                .map_err(|e| imap_err("UID move", e));
+        }
+        if !supports("UIDPLUS") {
+            return Err(imap_err(
+                "cleanup",
+                "server lacks UIDPLUS for safe deletion; leaving message unchanged",
+            ));
+        }
+        if self.config.after_import == MailAfterImport::Move {
+            session
+                .uid_copy(&uid, self.config.move_to.as_deref().unwrap_or_default())
+                .await
+                .map_err(|e| imap_err("copy", e))?;
+        }
+        self.delete(session, &uid).await
     }
 
     async fn delete(&self, session: &mut ImapSession, uid: &str) -> Result<()> {
         store(session, uid, "+FLAGS (\\Deleted)").await?;
         session
-            .expunge()
+            .uid_expunge(uid)
             .await
-            .map_err(|e| imap_err("expunge", e))?
+            .map_err(|e| imap_err("UID expunge", e))?
             .try_collect::<Vec<_>>()
             .await
-            .map_err(|e| imap_err("expunge", e))?;
+            .map_err(|e| imap_err("UID expunge", e))?;
         Ok(())
     }
 
