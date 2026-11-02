@@ -6,6 +6,8 @@
 
 ## 2. Domain and persistence
 
+- [ ] Publish typed field/option definitions. Eight test-first `metadata_fields` regressions, all 76 core tests, core clippy, and workspace make lint pass.
+
 - [x] Write failing `metadata_validation` tests for exact decimals, false/null, date validity, currency, URL, and type mismatches; implement domain types and validation. All 22 regressions and 46 existing core tests pass with the openapi feature. Workspace make lint and make format also pass.
 - [ ] Write failing shared `metadata_repository_contract` tests for audit actors, live uniqueness, option identity, atomic patches, concurrent edits, vault isolation, trash/purge, and move rejection; implement new SQLite/PostgreSQL migrations and adapters.
 - [ ] Run relevant checks and commit the independently usable persistence unit.
@@ -23,6 +25,8 @@
 - [ ] Add native management, typed editor/display, required-field states, and logical link navigation; verify viewer restrictions and narrow layouts in an isolated fixture.
 
 ## 5. Verification and delivery
+
+- [x] Merge the independent validation increment as PR #259, merge commit d35618363509284c41bed910aca362d07c7f158b. CI, e2e, fastembed, and title lint passed. The full metadata feature remains incomplete.
 
 - [ ] Update the project verify skill with new meaningful regressions.
 - [ ] Run make format, make lint, make test, required PostgreSQL contracts, isolated Apple tests/build, and isolated web checks.

@@ -256,9 +256,14 @@ pub struct UpdateDocument {
 
 /// Filter criteria for listing documents
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DocumentFilter {
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub correspondent_id: Option<Id>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub document_type_id: Option<Id>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Vec<uuid::Uuid>>))]
     pub tag_ids: Option<Vec<Id>>,
     pub search_query: Option<String>,
     /// Only documents created at or after this instant

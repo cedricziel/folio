@@ -601,14 +601,28 @@ impl Worker {
             .await?
             .ok_or("Document not found")?;
 
+        if document.ocr_status == ProcessingStatus::Done {
+            let has_text = document
+                .content
+                .as_deref()
+                .is_some_and(|content| !content.is_empty());
+            return self.schedule_embedding(vault, document_id, has_text).await;
+        }
+
         let set_status = |status| {
             self.document_repo
                 .set_stage_status(vault, document_id, ProcessingStage::Ocr, status)
         };
 
-        if document.content.as_deref().is_some_and(|c| !c.is_empty()) {
+        if let Some(content) = document
+            .content
+            .as_deref()
+            .filter(|content| !content.is_empty())
+        {
             debug!("Document {} already has content, skipping OCR", document_id);
-            set_status(ProcessingStatus::Done).await?;
+            self.document_repo
+                .complete_ocr(vault, document_id, content)
+                .await?;
             return self.schedule_embedding(vault, document_id, true).await;
         }
 
@@ -643,10 +657,6 @@ impl Worker {
         );
 
         let has_text = !output.text.is_empty();
-        if has_text {
-            self.emit(vault, DocumentEvent::OcrComplete { document_id })
-                .await?;
-        }
         self.schedule_embedding(vault, document_id, has_text).await
     }
 
@@ -724,6 +734,7 @@ impl Worker {
             for (batch_no, batch_texts) in chunks.chunks(EMBED_BATCH_SIZE).enumerate() {
                 let texts: Vec<&str> = batch_texts.iter().map(String::as_str).collect();
                 let batch = self.embedding_service.embed(&texts).await?;
+                batch.validate(texts.len())?;
                 model = batch.model;
                 for (i, (text, embedding)) in batch_texts.iter().zip(batch.vectors).enumerate() {
                     embedded.push(EmbeddedChunk {
@@ -962,6 +973,63 @@ mod tests {
         async fn health(&self) -> Result<()> {
             Ok(())
         }
+    }
+
+    struct MissingEmbeddings;
+
+    #[async_trait]
+    impl EmbeddingService for MissingEmbeddings {
+        async fn embed(&self, _: &[&str]) -> Result<EmbeddingBatch> {
+            Ok(EmbeddingBatch {
+                vectors: Vec::new(),
+                model: "test:model".into(),
+                dimensions: 2,
+            })
+        }
+        async fn model_id(&self) -> Result<String> {
+            Ok("test:model".into())
+        }
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_embedding_vectors_never_publish_completion() {
+        let mut f = fixture("invoice").await;
+        f.worker.embedding_service = Arc::new(MissingEmbeddings);
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        f.repo
+            .complete_ocr(crate::database::test_vault(), f.doc_id, "invoice")
+            .await
+            .unwrap();
+
+        assert!(f.worker.process_embedding(f.doc_id).await.is_err());
+
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc.embed_status, ProcessingStatus::Failed);
+        let (chunks,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM document_chunks WHERE document_id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(chunks, 0);
+        let (completed,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE type = 'processed'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(completed, 0);
     }
 
     struct Fixture {
@@ -1291,6 +1359,29 @@ mod tests {
         f.worker.repair_orphaned_documents().await.unwrap();
         f.worker.repair_orphaned_documents().await.unwrap();
         assert_eq!(f.queue.pending_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn retry_after_empty_ocr_completion_does_not_repeat_ocr_or_its_event() {
+        let mut f = fixture("").await;
+        f.worker.process_ocr(f.doc_id).await.unwrap();
+        f.worker.ocr_service = Arc::new(FixedOcr("unexpected recomputation"));
+
+        f.worker.process_ocr(f.doc_id).await.unwrap();
+
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc.content.as_deref(), Some(""));
+        let (events,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM outbox_events WHERE type = 'ocr_complete'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(events, 1);
     }
 
     #[tokio::test]

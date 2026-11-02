@@ -4,8 +4,8 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::models::{
-    Document, Id, IngestItem, IngestOutcome, IngestionSourceDef, IngestionSourceInput, LedgerEntry,
-    PollReport, SourceStatus, VaultId,
+    Document, Id, IngestItem, IngestItemKey, IngestOutcome, IngestionSourceDef,
+    IngestionSourceInput, LedgerEntry, PollReport, SourceStatus, VaultId,
 };
 use crate::services::NewUpload;
 
@@ -13,6 +13,15 @@ use crate::services::NewUpload;
 #[async_trait]
 pub trait IngestSink: Send + Sync {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome>;
+
+    async fn ingest_observed(
+        &self,
+        source_id: Id,
+        _key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        self.ingest(source_id, item).await
+    }
 }
 
 /// Receives items for a known vault; the scheduler binds each source to its
@@ -25,6 +34,16 @@ pub trait VaultIngest: Send + Sync {
         source_id: Id,
         item: IngestItem,
     ) -> Result<IngestOutcome>;
+
+    async fn ingest_observed(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        _key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        self.ingest(vault, source_id, item).await
+    }
 }
 
 /// A place documents arrive from, such as a folder or a mailbox
