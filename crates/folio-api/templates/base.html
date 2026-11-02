@@ -305,6 +305,7 @@ Stimulus.register(
       this.active = true;
       this.vaultId = document.body.dataset.vaultId;
       this.abortController = new AbortController();
+      this.requestGeneration = (this.requestGeneration ?? 0) + 1;
       this.debounceTimeout = null;
       this.selectedIndex = -1;
       this.results = [];
@@ -330,8 +331,10 @@ Stimulus.register(
       document.removeEventListener("keydown", this.onGlobalKeydown);
     }
 
-    isCurrent() {
-      return this.active && this.vaultId === document.body.dataset.vaultId;
+    isCurrent(generation) {
+      return this.active && this.modalTarget.open &&
+        this.vaultId === document.body.dataset.vaultId &&
+        generation === this.requestGeneration;
     }
 
     handleGlobalKeydown(event) {
@@ -360,6 +363,7 @@ Stimulus.register(
     // Runs on every way out: Escape, backdrop, result click
     closed() {
       dialogClosed();
+      this.requestGeneration += 1;
       this.inputTarget.value = "";
       this.clearResults();
       clearTimeout(this.debounceTimeout);
@@ -391,8 +395,9 @@ Stimulus.register(
     }
 
     input() {
+      this.requestGeneration += 1;
+      this.clearResults();
       if (this.inputTarget.value.trim()) {
-        this.clearResults();
         this.say("Searching…");
       }
       this.debouncedSearch();
@@ -417,11 +422,12 @@ Stimulus.register(
     }
 
     async search() {
-      if (!this.isCurrent()) return;
+      const generation = ++this.requestGeneration;
+      if (!this.isCurrent(generation)) return;
       const query = this.inputTarget.value.trim();
 
       if (!query) {
-        this.showRecentDocuments();
+        this.showRecentDocuments("", generation);
         return;
       }
 
@@ -430,57 +436,61 @@ Stimulus.register(
           vaultURL(`/api/documents/search?q=${encodeURIComponent(query)}`),
           { signal: this.abortController.signal },
         );
-        if (!this.isCurrent() || query !== this.inputTarget.value.trim()) return;
+        if (!this.isCurrent(generation)) return;
         if (response.ok) {
           const data = await response.json();
-          this.results = data.results;
-          await this.renderResults(this.results, "Search results");
+          if (!this.isCurrent(generation)) return;
+          await this.renderResults(data.results, "Search results", generation);
         } else {
-          this.showRecentDocuments(query);
+          this.showRecentDocuments(query, generation);
         }
       } catch (error) {
-        this.showRecentDocuments(query);
+        this.showRecentDocuments(query, generation);
       }
     }
 
-    async showRecentDocuments(filterQuery = "") {
-      if (!this.isCurrent()) return;
+    async showRecentDocuments(filterQuery = "", generation = ++this.requestGeneration) {
+      if (!this.isCurrent(generation)) return;
       try {
         const response = await fetch(vaultURL("/api/documents"), { signal: this.abortController.signal });
-        if (!this.isCurrent() || this.inputTarget.value.trim() !== filterQuery) return;
-        if (response.ok) {
-          let data = await response.json();
-          if (data && data.documents) data = data.documents;
+        if (!this.isCurrent(generation)) return;
+        if (!response.ok) throw new Error("Could not load recent documents");
+        let data = await response.json();
+        if (!this.isCurrent(generation)) return;
+        if (data && data.documents) data = data.documents;
 
-          if (filterQuery) {
-            const q = filterQuery.toLowerCase();
-            data = data.filter(
-              (doc) =>
-                doc.title.toLowerCase().includes(q) ||
-                (doc.content && doc.content.toLowerCase().includes(q)),
-            );
-          }
-
-          data = data.slice(0, 10);
-          this.results = data.map((doc) => ({ document: doc, score: 1.0 }));
-          await this.renderResults(
-            this.results,
-            filterQuery ? "Matching documents" : "Recent documents",
+        if (filterQuery) {
+          const q = filterQuery.toLowerCase();
+          data = data.filter(
+            (doc) =>
+              doc.title.toLowerCase().includes(q) ||
+              (doc.content && doc.content.toLowerCase().includes(q)),
           );
         }
+
+        data = data.slice(0, 10);
+        await this.renderResults(
+          data.map((doc) => ({ document: doc, score: 1.0 })),
+          filterQuery ? "Matching recent documents" : "Recent documents",
+          generation,
+          Boolean(filterQuery),
+        );
       } catch (error) {
-        if (!this.isCurrent()) return;
+        if (!this.isCurrent(generation)) return;
         this.clearResults();
-        this.say("Could not load documents.");
+        this.say(filterQuery
+          ? "Search is unavailable. Could not load recent documents."
+          : "Could not load recent documents.");
       }
     }
 
     // id -> name for correspondents and document types, loaded once per page
     async loadNames() {
       if (!this.names) {
+        const controller = this.abortController;
         const get = async (url) => {
           try {
-            const response = await fetch(url, { signal: this.abortController.signal });
+            const response = await fetch(url, { signal: controller.signal });
             return response.ok ? await response.json() : [];
           } catch (error) {
             return [];
@@ -492,22 +502,27 @@ Stimulus.register(
         ]);
         const byId = (list) =>
           new Map((list.items || list).map((item) => [item.id, item.name]));
-        this.names = { from: byId(from), types: byId(types) };
+        const names = { from: byId(from), types: byId(types) };
+        if (this.abortController === controller) this.names = names;
+        return names;
       }
       return this.names;
     }
 
-    async renderResults(results, title) {
-      const query = this.inputTarget.value.trim();
+    async renderResults(results, title, generation, fallback = false) {
       const names = await this.loadNames();
-      if (!this.isCurrent() || query !== this.inputTarget.value.trim()) return;
+      if (!this.isCurrent(generation)) return;
       this.clearResults();
+      this.results = results;
 
       if (results.length === 0) {
-        this.say("No documents found.");
+        this.say(fallback
+          ? "Search is unavailable. No recent matches found."
+          : "No documents found.");
         return;
       }
 
+      if (fallback) this.say("Search is unavailable. Showing recent matches.");
       this.headingTarget.textContent = title;
       this.resultsTarget.innerHTML = results
         .map((result, index) => {
