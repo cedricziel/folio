@@ -412,3 +412,8 @@ These regressions cover server-derived session, OAuth, and personal-token actors
 forged input, optional authentication, concurrent requests, cancellation, and
 system task isolation. HTTP/MCP fixtures use temporary databases, test identities,
 and local transports; they do not access user sessions or credentials.
+
+The core suite also covers trusted event lineage: nested clearing and restoration,
+cancellation, concurrent scopes, detached tasks, actor independence, and envelope
+validation. Workflow actions must scope server-owned correlation and causation
+before repository mutations; request bodies cannot establish this context.
