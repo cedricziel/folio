@@ -223,7 +223,12 @@ impl ThumbnailService {
 
     /// Get the number of pages in a PDF on local disk
     pub async fn get_pdf_page_count(&self, pdf: &Path) -> Result<u32> {
-        match Command::new("pdfinfo").arg(pdf).output().await {
+        match Command::new("pdfinfo")
+            .kill_on_drop(true)
+            .arg(pdf)
+            .output()
+            .await
+        {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let pages = stdout
@@ -276,6 +281,7 @@ async fn render_pdf_page(pdf: &Path, page: u32, width: u32, height: u32) -> Opti
     let page_str = page.to_string();
     let out_prefix = dir.path().join("out");
     let result = Command::new("pdftoppm")
+        .kill_on_drop(true)
         .args(["-jpeg", "-f", &page_str, "-l", &page_str, "-scale-to"])
         .arg(width.to_string())
         .arg(pdf)
@@ -299,6 +305,7 @@ async fn render_pdf_page(pdf: &Path, page: u32, width: u32, height: u32) -> Opti
 
     let fallback = dir.path().join("fallback.jpg");
     let result = Command::new("convert")
+        .kill_on_drop(true)
         .args(["-density", "150"])
         // ImageMagick uses a 0-based page index
         .arg(format!("{}[{}]", pdf.display(), page.saturating_sub(1)))

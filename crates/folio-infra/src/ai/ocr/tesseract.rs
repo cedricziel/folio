@@ -54,6 +54,7 @@ impl PageEngine for Tesseract {
             .map_err(|e| Error::Storage(format!("Failed to write temp image: {e}")))?;
 
         let output = Command::new("tesseract")
+            .kill_on_drop(true)
             .arg(&path)
             .arg("stdout")
             .args(["-l", &self.languages, "tsv"])
@@ -73,6 +74,7 @@ impl PageEngine for Tesseract {
 
     async fn health(&self) -> Result<()> {
         let output = Command::new("tesseract")
+            .kill_on_drop(true)
             .arg("--list-langs")
             .output()
             .await

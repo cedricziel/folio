@@ -1,12 +1,13 @@
 //! Background job worker
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::watch;
 use tokio::time::sleep;
-use tracing::{debug, error, info, info_span, Instrument};
+use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use folio_core::events::{DocumentEvent, EventOrigin};
 use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
@@ -15,7 +16,7 @@ use folio_core::ports::{
     SearchService,
 };
 
-use super::{FailOutcome, Job, JobClass, JobQueue, JobType};
+use super::{FailOutcome, Job, JobClass, JobQueue, JobType, HEARTBEAT_SECONDS};
 use crate::ai::chunker::{chunk_text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS};
 use crate::ai::PipelineContext;
 use crate::telemetry::metrics;
@@ -27,6 +28,47 @@ const EMBED_BATCH_SIZE: usize = 16;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+async fn run_with_lease<T>(
+    queue: &JobQueue,
+    job: &Job,
+    work: impl Future<Output = T>,
+    period: Duration,
+    renewal_timeout: Duration,
+) -> Option<T> {
+    if !renew_claim(queue, job, renewal_timeout).await {
+        return None;
+    }
+    let heartbeats = async {
+        let mut heartbeat = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            heartbeat.tick().await;
+            if !renew_claim(queue, job, renewal_timeout).await {
+                return;
+            }
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = heartbeats => None,
+        result = work => Some(result),
+    }
+}
+
+async fn renew_claim(queue: &JobQueue, job: &Job, timeout: Duration) -> bool {
+    match tokio::time::timeout(timeout, queue.renew(job)).await {
+        Ok(Ok(owned)) => owned,
+        Ok(Err(error)) => {
+            error!(job.id = %job.id, %error, "Failed to renew job lease");
+            false
+        }
+        Err(_) => {
+            error!(job.id = %job.id, "Job lease renewal timed out");
+            false
+        }
+    }
+}
+
 /// Configuration for the job worker
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -34,8 +76,6 @@ pub struct WorkerConfig {
     pub poll_interval_ms: u64,
     /// How often to reset stuck jobs (in seconds)
     pub stuck_check_interval_secs: u64,
-    /// Jobs processing for longer than this are considered stuck (in minutes)
-    pub stuck_threshold_mins: i64,
     /// How often to check for orphaned documents (in seconds)
     pub repair_check_interval_secs: u64,
     /// Workflow runs executed at the same time, apart from OCR and thumbnails
@@ -47,7 +87,6 @@ impl Default for WorkerConfig {
         Self {
             poll_interval_ms: 1000,
             stuck_check_interval_secs: 60,
-            stuck_threshold_mins: 5,
             repair_check_interval_secs: 300, // Every 5 minutes
             workflow_concurrency: 4,
         }
@@ -150,11 +189,7 @@ impl Worker {
             stuck_check_counter += self.config.poll_interval_ms;
             if stuck_check_counter >= self.config.stuck_check_interval_secs * 1000 {
                 stuck_check_counter = 0;
-                if let Err(e) = self
-                    .queue
-                    .reset_stuck(self.config.stuck_threshold_mins)
-                    .await
-                {
+                if let Err(e) = self.queue.reset_stuck().await {
                     error!("Failed to reset stuck jobs: {}", e);
                 }
             }
@@ -240,28 +275,39 @@ impl Worker {
             document.id = job.job_type.document_id().map(tracing::field::display),
         );
         let started = Instant::now();
-        let result = self
-            .process_job(&job.job_type)
-            .instrument(span.clone())
-            .await;
+        let Some(result) = run_with_lease(
+            &self.queue,
+            &job,
+            self.process_job(&job.job_type).instrument(span.clone()),
+            Duration::from_secs(HEARTBEAT_SECONDS),
+            Duration::from_secs(HEARTBEAT_SECONDS),
+        )
+        .await
+        else {
+            warn!(job.id = %job.id, "Stopped job after losing its lease");
+            return;
+        };
         metrics().job_finished(type_name, result.is_ok(), started);
 
         match result {
-            Ok(()) => {
-                if let Err(e) = self.queue.complete(job.id).instrument(span.clone()).await {
-                    error!("Failed to mark job {} as complete: {}", job.id, e);
-                }
-            }
+            Ok(()) => match self.queue.complete(&job).instrument(span.clone()).await {
+                Ok(true) => {}
+                Ok(false) => warn!(job.id = %job.id, "Completion rejected after losing job lease"),
+                Err(e) => error!("Failed to mark job {} as complete: {}", job.id, e),
+            },
             Err(e) => {
                 let error_msg = e.to_string();
                 match self
                     .queue
-                    .fail(job.id, &error_msg, true)
+                    .fail(&job, &error_msg, true)
                     .instrument(span.clone())
                     .await
                 {
                     Ok(FailOutcome::GaveUp) => self.abandon_run(&job.job_type, &error_msg).await,
                     Ok(FailOutcome::Retrying) => {}
+                    Ok(FailOutcome::LostLease) => {
+                        warn!(job.id = %job.id, "Failure rejected after losing job lease")
+                    }
                     Err(e) => error!("Failed to mark job {} as failed: {}", job.id, e),
                 }
             }
@@ -997,8 +1043,225 @@ mod tests {
     async fn drain(f: &Fixture) {
         while let Some(job) = f.queue.dequeue().await.unwrap() {
             f.worker.process_job(&job.job_type).await.unwrap();
-            f.queue.complete(job.id).await.unwrap();
+            f.queue.complete(&job).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn long_work_renews_its_lease_while_pending() {
+        let f = fixture("OCR").await;
+        f.queue
+            .enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        let shortened_expiry = job.lease_expires_at.unwrap() - 200;
+        let work = async {
+            sqlx::query("UPDATE jobs SET lease_expires_at = ? WHERE id = ?")
+                .bind(shortened_expiry)
+                .bind(job.id.to_string())
+                .execute(&f.pool)
+                .await
+                .unwrap();
+            loop {
+                let (expiry,): (i64,) =
+                    sqlx::query_as("SELECT lease_expires_at FROM jobs WHERE id = ?")
+                        .bind(job.id.to_string())
+                        .fetch_one(&f.pool)
+                        .await
+                        .unwrap();
+                if expiry > shortened_expiry {
+                    assert_eq!(f.queue.reset_stuck().await.unwrap(), 0);
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            run_with_lease(
+                &f.queue,
+                &job,
+                work,
+                Duration::from_millis(100),
+                Duration::from_secs(5)
+            )
+        )
+        .await
+        .unwrap()
+        .is_some());
+    }
+
+    #[tokio::test]
+    async fn pending_renewal_does_not_stop_work_releasing_its_connection() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::database::run_migrations(&pool).await.unwrap();
+        let queue = JobQueue::sqlite(pool.clone());
+        queue
+            .enqueue(JobType::ExtractText {
+                document_id: uuid::Uuid::new_v4(),
+            })
+            .await
+            .unwrap();
+        let job = queue.dequeue().await.unwrap().unwrap();
+        let shortened_expiry = job.lease_expires_at.unwrap() - 200;
+        let work = async {
+            let mut connection = pool.acquire().await.unwrap();
+            sqlx::query("UPDATE jobs SET lease_expires_at = ?")
+                .bind(shortened_expiry)
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+            sleep(Duration::from_millis(200)).await;
+            drop(connection);
+            loop {
+                let (expiry,): (i64,) =
+                    sqlx::query_as("SELECT lease_expires_at FROM jobs WHERE id = ?")
+                        .bind(job.id.to_string())
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                if expiry > shortened_expiry {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            run_with_lease(
+                &queue,
+                &job,
+                work,
+                Duration::from_millis(100),
+                Duration::from_secs(5)
+            ),
+        )
+        .await
+        .unwrap()
+        .is_some());
+    }
+
+    #[tokio::test]
+    async fn renewal_timeout_cancels_work_and_releases_its_connection() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        crate::database::run_migrations(&pool).await.unwrap();
+        let queue = JobQueue::sqlite(pool.clone());
+        queue
+            .enqueue(JobType::ExtractText {
+                document_id: uuid::Uuid::new_v4(),
+            })
+            .await
+            .unwrap();
+        let job = queue.dequeue().await.unwrap().unwrap();
+        let started = std::cell::Cell::new(false);
+        let work = async {
+            let _connection = pool.acquire().await.unwrap();
+            started.set(true);
+            std::future::pending::<()>().await;
+        };
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            run_with_lease(
+                &queue,
+                &job,
+                work,
+                Duration::from_millis(100),
+                Duration::from_millis(200)
+            ),
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert!(started.get());
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), queue.renew(&job))
+                .await
+                .unwrap()
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_claim_does_not_start_work() {
+        let f = fixture("OCR").await;
+        f.queue
+            .enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        sqlx::query("UPDATE jobs SET lease_expires_at = 0 WHERE id = ?")
+            .bind(job.id.to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        let work = async {
+            panic!("expired claim must never start work");
+        };
+        assert!(run_with_lease(
+            &f.queue,
+            &job,
+            work,
+            Duration::from_secs(60),
+            Duration::from_secs(5)
+        )
+        .await
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn losing_a_lease_drops_pending_work() {
+        struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for DropFlag {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let f = fixture("OCR").await;
+        f.queue
+            .enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = DropFlag(dropped.clone());
+        let work = async {
+            let _guard = guard;
+            sqlx::query("UPDATE jobs SET lease_expires_at = 0 WHERE id = ?")
+                .bind(job.id.to_string())
+                .execute(&f.pool)
+                .await
+                .unwrap();
+            std::future::pending::<()>().await;
+        };
+        assert!(tokio::time::timeout(
+            Duration::from_secs(5),
+            run_with_lease(
+                &f.queue,
+                &job,
+                work,
+                Duration::from_millis(100),
+                Duration::from_secs(5)
+            )
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -1336,7 +1599,7 @@ mod tests {
             .exists(&folio_core::ports::keys::original(f.doc_id))
             .await
             .unwrap());
-        f.queue.complete(running.id).await.unwrap();
+        f.queue.complete(&running).await.unwrap();
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,

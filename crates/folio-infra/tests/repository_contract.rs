@@ -899,7 +899,7 @@ async fn search_contract(
     }
 }
 
-async fn jobs_contract(r: &Repositories) {
+async fn jobs_contract(db: &Database, r: &Repositories) {
     let doc = Id::new_v4();
     let other = Id::new_v4();
     let jobs = &r.jobs;
@@ -937,7 +937,8 @@ async fn jobs_contract(r: &Repositories) {
     assert!(matches!(claimed.job_type, JobType::ExtractText { document_id } if document_id == doc));
     assert_eq!(claimed.status.to_string(), "processing");
     assert!(claimed.started_at.is_some());
-    assert_eq!(jobs.dequeue().await.unwrap().unwrap().id, second);
+    let second_claim = jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(second_claim.id, second);
     assert!(jobs.dequeue().await.unwrap().is_none());
 
     // Processing jobs still count as active; completing removes them
@@ -948,7 +949,7 @@ async fn jobs_contract(r: &Repositories) {
             .len(),
         1
     );
-    jobs.complete(second).await.unwrap();
+    jobs.complete(&second_claim).await.unwrap();
     assert!(jobs
         .find_active_jobs_for_document(other)
         .await
@@ -956,28 +957,46 @@ async fn jobs_contract(r: &Repositories) {
         .is_empty());
 
     // Retry puts it back with a delay
-    jobs.fail(first, "boom", true).await.unwrap();
+    jobs.fail(&claimed, "boom", true).await.unwrap();
     assert!(jobs.dequeue().await.unwrap().is_none());
     assert!(!jobs.has_failed_jobs_for_document(doc).await.unwrap());
     assert_eq!(jobs.pending_count().await.unwrap(), 2);
 
     // Permanent failure
-    jobs.fail(first, "fatal", false).await.unwrap();
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query("UPDATE jobs SET scheduled_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+                .bind(first.to_string())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query("UPDATE jobs SET scheduled_at = '2000-01-01T00:00:00Z' WHERE id = $1")
+                .bind(first)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    let fatal_claim = jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(fatal_claim.id, first);
+    assert_ne!(fatal_claim.claim_id, claimed.claim_id);
+    jobs.fail(&fatal_claim, "fatal", false).await.unwrap();
     assert!(jobs.has_failed_jobs_for_document(doc).await.unwrap());
     assert!(!jobs.has_failed_jobs_for_document(other).await.unwrap());
 
-    // Stuck processing jobs are reset; recent ones are left alone
+    // Live claims are not recovered
     let stuck = jobs
         .enqueue(JobType::ProcessDocument { document_id: other })
         .await
         .unwrap();
-    assert_eq!(jobs.dequeue().await.unwrap().unwrap().id, stuck);
-    assert_eq!(jobs.reset_stuck(60).await.unwrap(), 0);
-    assert_eq!(jobs.reset_stuck(-1).await.unwrap(), 1);
-    assert_eq!(jobs.dequeue().await.unwrap().unwrap().id, stuck);
+    let stuck_claim = jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(stuck_claim.id, stuck);
+    assert_eq!(jobs.reset_stuck().await.unwrap(), 0);
 
     // Cleanup only removes old completed jobs
-    jobs.complete(stuck).await.unwrap();
+    jobs.complete(&stuck_claim).await.unwrap();
     assert_eq!(jobs.cleanup(1).await.unwrap(), 0);
     assert_eq!(jobs.cleanup(-1).await.unwrap(), 2);
 }
@@ -989,9 +1008,10 @@ async fn processing_recovery_contract(r: &Repositories) {
         .enqueue(JobType::ProcessDocument { document_id: id })
         .await
         .unwrap();
-    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, failed);
+    let failed_claim = r.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(failed_claim.id, failed);
     r.jobs
-        .fail(failed, "unreadable upload", false)
+        .fail(&failed_claim, "unreadable upload", false)
         .await
         .unwrap();
     assert_eq!(
@@ -1003,8 +1023,9 @@ async fn processing_recovery_contract(r: &Repositories) {
         .enqueue(JobType::GenerateEmbedding { document_id: id })
         .await
         .unwrap();
-    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, unrelated);
-    r.jobs.complete(unrelated).await.unwrap();
+    let unrelated_claim = r.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(unrelated_claim.id, unrelated);
+    r.jobs.complete(&unrelated_claim).await.unwrap();
     assert_eq!(
         r.jobs.processing_status(id).await.unwrap(),
         folio_core::ports::ProcessingStatus::Failed,
@@ -1019,8 +1040,9 @@ async fn processing_recovery_contract(r: &Repositories) {
         r.jobs.processing_status(id).await.unwrap(),
         folio_core::ports::ProcessingStatus::Pending
     );
-    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, retry);
-    r.jobs.complete(retry).await.unwrap();
+    let retry_claim = r.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(retry_claim.id, retry);
+    r.jobs.complete(&retry_claim).await.unwrap();
     assert_eq!(
         r.jobs.processing_status(id).await.unwrap(),
         folio_core::ports::ProcessingStatus::Completed
@@ -3046,7 +3068,7 @@ async fn run_contract(db: &Database) {
     )
     .await;
     // Before the workflow contracts, which leave queued run jobs behind
-    jobs_contract(&repos).await;
+    jobs_contract(db, &repos).await;
     processing_recovery_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
     workflows_contract(&repos).await;

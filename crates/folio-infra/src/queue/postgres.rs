@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS};
+use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
 pub(crate) async fn insert_job<'e>(
@@ -63,12 +63,14 @@ struct JobRow {
     scheduled_at: DateTime<Utc>,
     started_at: Option<DateTime<Utc>>,
     completed_at: Option<DateTime<Utc>>,
+    claim_id: Option<Uuid>,
+    lease_expires_at: Option<i64>,
 }
 
 macro_rules! job_columns {
     () => {
         "id, status, payload::text AS payload, attempts, max_attempts, error, \
-         created_at, updated_at, scheduled_at, started_at, completed_at"
+         created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at"
     };
 }
 
@@ -90,6 +92,8 @@ impl TryFrom<JobRow> for Job {
             scheduled_at: row.scheduled_at,
             started_at: row.started_at,
             completed_at: row.completed_at,
+            claim_id: row.claim_id,
+            lease_expires_at: row.lease_expires_at,
         })
     }
 }
@@ -134,7 +138,8 @@ impl PostgresJobQueue {
 
         let row: Option<JobRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "UPDATE jobs
-             SET status = 'processing', started_at = $1, updated_at = $1, attempts = attempts + 1
+             SET status = 'processing', started_at = $1, updated_at = $1, attempts = attempts + 1,
+                 claim_id = $2, lease_expires_at = floor(extract(epoch FROM clock_timestamp()))::bigint + $3
              WHERE id = (
                  SELECT id FROM jobs
                  WHERE status = 'pending' AND scheduled_at <= $1 AND {class_filter}
@@ -146,6 +151,8 @@ impl PostgresJobQueue {
             columns = job_columns!()
         )))
         .bind(now)
+        .bind(Uuid::new_v4())
+        .bind(LEASE_SECONDS)
         .fetch_optional(&self.pool)
         .await
         .map_err(repo_err("Failed to dequeue job"))?;
@@ -153,77 +160,73 @@ impl PostgresJobQueue {
         row.map(TryInto::try_into).transpose()
     }
 
-    #[instrument(skip(self))]
-    pub async fn complete(&self, job_id: Uuid) -> Result<()> {
+    pub async fn complete(&self, job: &Job) -> Result<bool> {
         let now = Utc::now();
-
-        sqlx::query(
-            "UPDATE jobs SET status = 'completed', completed_at = $1, updated_at = $1
-             WHERE id = $2",
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'completed', completed_at = $1, updated_at = $2, claim_id = NULL, lease_expires_at = NULL WHERE id = $3 AND claim_id = $4 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint",
         )
         .bind(now)
-        .bind(job_id)
+        .bind(now)
+        .bind(job.id)
+        .bind(job.claim_id)
         .execute(&self.pool)
         .await
-        .map_err(repo_err("Failed to complete job"))?;
-
-        debug!("Completed job {}", job_id);
-        Ok(())
+        .map_err(|e| Error::Repository(format!("Failed to complete job: {e}")))?;
+        Ok(result.rows_affected() == 1)
     }
 
-    #[instrument(skip(self))]
-    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<FailOutcome> {
+    pub async fn renew(&self, job: &Job) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE jobs SET lease_expires_at = floor(extract(epoch FROM clock_timestamp()))::bigint + $1 WHERE id = $2 AND claim_id = $3 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint",
+        )
+        .bind(LEASE_SECONDS)
+        .bind(job.id)
+        .bind(job.claim_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(format!("Failed to renew job lease: {e}")))?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
         let now = Utc::now();
-
-        let row: Option<(i32, i32)> =
-            sqlx::query_as("SELECT attempts, max_attempts FROM jobs WHERE id = $1")
-                .bind(job_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err("Failed to get job"))?;
-
-        let (attempts, max_attempts) = row.unwrap_or((1, 3));
-
-        if retry && attempts < max_attempts {
-            let delay_seconds = (2_i64).pow(attempts as u32) * 10; // 20s, 40s, ...
+        let retrying = retry && job.attempts < job.max_attempts;
+        let result = if retrying {
+            let delay_seconds = 2_i64.pow(job.attempts as u32) * 10;
             let retry_at = now + Duration::seconds(delay_seconds);
-
             sqlx::query(
-                "UPDATE jobs SET status = 'pending', error = $1, scheduled_at = $2, updated_at = $3
-                 WHERE id = $4",
+                "UPDATE jobs SET status = 'pending', error = $1, scheduled_at = $2, updated_at = $3, claim_id = NULL, lease_expires_at = NULL WHERE id = $4 AND claim_id = $5 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint",
             )
             .bind(error)
             .bind(retry_at)
             .bind(now)
-            .bind(job_id)
+            .bind(job.id)
+            .bind(job.claim_id)
             .execute(&self.pool)
             .await
-            .map_err(repo_err("Failed to retry job"))?;
-
-            warn!(
-                "Job {} failed (attempt {}/{}), retrying in {}s: {}",
-                job_id, attempts, max_attempts, delay_seconds, error
-            );
-            return Ok(FailOutcome::Retrying);
         } else {
             sqlx::query(
-                "UPDATE jobs SET status = 'failed', error = $1, completed_at = $2, updated_at = $2
-                 WHERE id = $3",
+                "UPDATE jobs SET status = 'failed', error = $1, completed_at = $2, updated_at = $3, claim_id = NULL, lease_expires_at = NULL WHERE id = $4 AND claim_id = $5 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint",
             )
             .bind(error)
             .bind(now)
-            .bind(job_id)
+            .bind(now)
+            .bind(job.id)
+            .bind(job.claim_id)
             .execute(&self.pool)
             .await
-            .map_err(repo_err("Failed to fail job"))?;
-
-            error!(
-                "Job {} permanently failed after {} attempts: {}",
-                job_id, attempts, error
-            );
         }
-
-        Ok(FailOutcome::GaveUp)
+        .map_err(|e| Error::Repository(format!("Failed to fail job: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Ok(FailOutcome::LostLease);
+        }
+        Ok(if retrying {
+            warn!(job.id = %job.id, job.attempt = job.attempts, %error, "Job failed; scheduled retry");
+            FailOutcome::Retrying
+        } else {
+            error!(job.id = %job.id, job.attempt = job.attempts, %error, "Job permanently failed");
+            FailOutcome::GaveUp
+        })
     }
 
     pub async fn pending_count(&self) -> Result<i64> {
@@ -246,24 +249,18 @@ impl PostgresJobQueue {
         Ok(result.rows_affected() as i64)
     }
 
-    pub async fn reset_stuck(&self, minutes: i64) -> Result<i64> {
+    pub async fn reset_stuck(&self) -> Result<i64> {
         let now = Utc::now();
-        let cutoff = now - Duration::minutes(minutes);
-
         let result = sqlx::query(
-            "UPDATE jobs SET status = 'pending', updated_at = $1
-             WHERE status = 'processing' AND started_at < $2",
+            "UPDATE jobs SET status = 'pending', updated_at = $1, claim_id = NULL, lease_expires_at = NULL WHERE status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= floor(extract(epoch FROM clock_timestamp()))::bigint)",
         )
         .bind(now)
-        .bind(cutoff)
         .execute(&self.pool)
         .await
-        .map_err(repo_err("Failed to reset stuck jobs"))?;
-
+        .map_err(|e| Error::Repository(format!("Failed to recover expired jobs: {e}")))?;
         if result.rows_affected() > 0 {
-            info!("Reset {} stuck jobs", result.rows_affected());
+            info!("Recovered {} expired jobs", result.rows_affected());
         }
-
         Ok(result.rows_affected() as i64)
     }
 

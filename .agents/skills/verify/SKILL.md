@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify Folio server and Apple changes with isolated authentication, authorization, protocol, and native regression tests.
+description: Verify Folio server and Apple changes with isolated authentication, authorization, queue, database, protocol, and native regression tests.
 ---
 
 # Verify Apple changes
@@ -217,6 +217,21 @@ sequentially. Use `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` consist
 for the Rust run and a task-specific `CARGO_TARGET_DIR`; remove that target after
 verification before starting the Apple build. These settings omit debug symbols,
 not tests.
+Before reusing a Rust target directory from another checkout, run `cargo clean -p PACKAGE`
+for each workspace package, replacing `PACKAGE` with its name. Retain the dependency cache, but rebuild workspace
+packages so stale artifacts from the other checkout cannot satisfy a check.
+
+## Verify worker leases
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test queue_leases`
+against disposable SQLite and PostgreSQL fixtures. The shared contract covers
+renewal of long-running work, expired-owner recovery, stale renewal and completion,
+stale retry and failure, and recovery of processing rows created before leases.
+Run `RUSTC_WRAPPER= cargo test -p folio-infra --lib queue::worker::tests`
+for heartbeat renewal, rejection before expired work starts, cancellation on
+lease loss or renewal timeout, and progress while renewal waits for a connection.
+Run the repository contract as well after changes to queue method signatures.
+These tests use temporary or in-memory data.
 
 ## Verify document trash
 
