@@ -158,7 +158,6 @@ impl WebhookDocument {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::VaultId;
 
     #[test]
     fn payload_matches_the_documented_shape() {

@@ -155,7 +155,7 @@ async fn index_page(
         lede,
         view_all,
         active_filter,
-        rows: view::rows(&state, documents).await?,
+        rows: view::rows(DefaultVault(vault), &state, documents).await?,
         total: counts.total,
         counts,
     };
@@ -183,7 +183,7 @@ async fn documents_list(
     let total = documents.len();
 
     let template = DocumentsFrameTemplate {
-        rows: view::rows(&state, documents).await?,
+        rows: view::rows(DefaultVault(vault), &state, documents).await?,
         total,
         view_all: true,
     };
@@ -591,7 +591,7 @@ async fn delete_document(
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
     // Delete the stored files first so a failure leaves the row to retry
-    super::documents::purge_document_files(&state, id).await?;
+    super::documents::purge_document_files(DefaultVault(vault), &state, id).await?;
     state.document_repo.delete(vault, id).await?;
     folio_infra::telemetry::metrics().documents_changed(-1);
 
@@ -671,7 +671,7 @@ async fn search_documents(
     }
 
     let template = SearchResultsTemplate {
-        rows: view::rows(&state, documents).await?,
+        rows: view::rows(DefaultVault(vault), &state, documents).await?,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {

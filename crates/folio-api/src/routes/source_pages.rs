@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Form, Router,
 };
+use folio_core::models::VaultId;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -66,8 +67,8 @@ fn summary(def: &IngestionSourceDef) -> String {
 
 async fn rows(DefaultVault(vault): DefaultVault, state: &AppState) -> ApiResult<Vec<Row>> {
     let mut rows = Vec::new();
-    for def in all_sources(state).await? {
-        let status = state.ingestion.managed.status(vault, def.id).await?;
+    for def in all_sources(DefaultVault(vault), state).await? {
+        let status = state.ingestion.managed.status(def.id).await?;
         rows.push(Row {
             id: def.id.to_string(),
             kind: match def.config {
@@ -97,25 +98,29 @@ async fn rows(DefaultVault(vault): DefaultVault, state: &AppState) -> ApiResult<
     Ok(rows)
 }
 
-async fn list_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
+async fn list_page(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
     render(ListTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Sources - Folio".into(),
-        rows: rows(&state).await?,
+        rows: rows(DefaultVault(vault), &state).await?,
         notice: None,
     })
 }
 
 async fn test_saved(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
-    let def = find(&state, id).await?;
+    let def = find(vault, &state, id).await?;
     let result = run_test(&state, &def).await;
     render(ListTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Sources - Folio".into(),
-        rows: rows(&state).await?,
+        rows: rows(DefaultVault(vault), &state).await?,
         notice: Some(Notice {
             danger: !result.ok,
             text: format!("{}: {}", def.name, result.message),
@@ -304,6 +309,7 @@ struct FormTemplate {
 }
 
 async fn form(
+    vault: VaultId,
     state: &AppState,
     source_id: Option<String>,
     values: FormValues,
@@ -338,10 +344,12 @@ struct NewQuery {
 }
 
 async fn new_page(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<NewQuery>,
 ) -> ApiResult<Html<String>> {
     form(
+        vault,
         &state,
         None,
         FormValues::blank(q.kind.as_deref().unwrap_or("folder")),
@@ -350,10 +358,15 @@ async fn new_page(
     .await
 }
 
-async fn edit_page(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Html<String>> {
-    let def = find(&state, id).await?;
+async fn edit_page(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let def = find(vault, &state, id).await?;
     require_managed(&def)?;
     form(
+        vault,
         &state,
         Some(id.to_string()),
         FormValues::from_config(&def.config, &def.name, def.enabled),
@@ -376,6 +389,7 @@ async fn try_connection(
         return danger(e.to_string());
     }
     let def = IngestionSourceDef {
+        vault_id: existing.and_then(|d| d.vault_id),
         id: existing.map(|d| d.id).unwrap_or_else(Uuid::new_v4),
         name: input.name,
         enabled: true,
@@ -396,7 +410,9 @@ async fn create(
 ) -> ApiResult<Response> {
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), None).await;
-        return Ok(form(&state, None, values, notice).await?.into_response());
+        return Ok(form(vault, &state, None, values, notice)
+            .await?
+            .into_response());
     }
     let saved = match values.clone().into_input() {
         Ok(mut input) => match prepare_input(&mut input, None) {
@@ -412,7 +428,7 @@ async fn create(
     };
     match saved {
         Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(form(&state, None, values, danger(message))
+        Err(message) => Ok(form(vault, &state, None, values, danger(message))
             .await?
             .into_response()),
     }
@@ -424,11 +440,11 @@ async fn update(
     Path(id): Path<Uuid>,
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
-    let existing = find(&state, id).await?;
+    let existing = find(vault, &state, id).await?;
     require_managed(&existing)?;
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), Some(&existing)).await;
-        return Ok(form(&state, Some(id.to_string()), values, notice)
+        return Ok(form(vault, &state, Some(id.to_string()), values, notice)
             .await?
             .into_response());
     }
@@ -446,9 +462,11 @@ async fn update(
     };
     match saved {
         Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(form(&state, Some(id.to_string()), values, danger(message))
-            .await?
-            .into_response()),
+        Err(message) => Ok(
+            form(vault, &state, Some(id.to_string()), values, danger(message))
+                .await?
+                .into_response(),
+        ),
     }
 }
 
@@ -457,7 +475,7 @@ async fn toggle(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
-    let def = find(&state, id).await?;
+    let def = find(vault, &state, id).await?;
     require_managed(&def)?;
     state
         .ingestion
@@ -480,7 +498,7 @@ async fn delete(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
-    let def = find(&state, id).await?;
+    let def = find(vault, &state, id).await?;
     require_managed(&def)?;
     state.ingestion.managed.delete(vault, id).await?;
     Ok(Redirect::to("/settings/sources"))

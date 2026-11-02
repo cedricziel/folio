@@ -8,9 +8,8 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, Id, NewAuditEvent, ProcessingStage,
-    ProcessingStatus, Tag, UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag,
-    UserId, VaultId,
+    DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,

@@ -28,8 +28,17 @@ pub async fn turbo_streams_for(
     event: &DocumentEvent,
 ) -> ApiResult<String> {
     let streams = match event {
-        DocumentEvent::Deleted { document_id, .. } => {
-            DocumentStreams::removed(state, *document_id).await?
+        DocumentEvent::Deleted {
+            document_id,
+            snapshot,
+        } => {
+            if snapshot
+                .as_ref()
+                .is_none_or(|s| s.document.vault_id != vault)
+            {
+                return Ok(String::new());
+            }
+            DocumentStreams::removed(state, vault, *document_id).await?
         }
         _ => {
             let Some(document) = state
@@ -63,6 +72,7 @@ pub async fn turbo_streams_for(
     )
 )]
 pub(crate) async fn sse_handler(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.event_broadcaster.subscribe();
@@ -72,11 +82,17 @@ pub(crate) async fn sse_handler(
         async move {
             // Lagged messages are skipped
             let event = result.ok()?;
+            let html = turbo_streams_for(DefaultVault(vault), &state, &event)
+                .await
+                .ok()?;
+            if html.is_empty() {
+                return None;
+            }
             let mut out = Vec::with_capacity(2);
             if let Ok(data) = serde_json::to_string(&event) {
                 out.push(Ok(Event::default().event(event.event_type()).data(data)));
             }
-            match turbo_streams_for(&state, &event).await {
+            match turbo_streams_for(DefaultVault(vault), &state, &event).await {
                 Ok(html) if !html.is_empty() => out.push(Ok(Event::default().data(html))),
                 Ok(_) => {}
                 Err(e) => tracing::warn!("Failed to render turbo streams: {:?}", e),

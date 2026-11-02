@@ -8,6 +8,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use folio_core::models::VaultId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::{IntoParams, ToSchema};
@@ -118,17 +119,21 @@ pub struct DocumentListResponse {
     count: usize,
 }
 
-async fn present(state: &AppState, documents: Vec<Document>) -> ApiResult<Vec<DocumentView>> {
+async fn present(
+    vault: VaultId,
+    state: &AppState,
+    documents: Vec<Document>,
+) -> ApiResult<Vec<DocumentView>> {
     let correspondents: HashMap<_, _> = state
         .correspondent_repo
-        .list()
+        .list(vault)
         .await?
         .into_iter()
         .map(|c| (c.id, c.name))
         .collect();
     let types: HashMap<_, _> = state
         .document_type_repo
-        .list()
+        .list(vault)
         .await?
         .into_iter()
         .map(|t| (t.id, t.name))
@@ -140,7 +145,7 @@ async fn present(state: &AppState, documents: Vec<Document>) -> ApiResult<Vec<Do
         async move {
             let tags = state
                 .document_repo
-                .get_tags(document.id)
+                .get_tags(vault, document.id)
                 .await?
                 .into_iter()
                 .map(|t| DocumentTag {
@@ -183,7 +188,12 @@ pub(crate) async fn list_documents(
     RawQuery(query): RawQuery,
 ) -> ApiResult<Json<DocumentListResponse>> {
     let filter = ListDocumentsQuery::filter(query.as_deref())?;
-    let documents = present(&state, state.document_repo.list(filter).await?).await?;
+    let documents = present(
+        vault,
+        &state,
+        state.document_repo.list(vault, filter).await?,
+    )
+    .await?;
     let count = documents.len();
 
     Ok(Json(DocumentListResponse { documents, count }))
@@ -212,7 +222,7 @@ pub(crate) async fn get_document(
         .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
-    let view = present(&state, vec![document]).await?.remove(0);
+    let view = present(vault, &state, vec![document]).await?.remove(0);
 
     Ok(Json(view))
 }
@@ -280,7 +290,7 @@ pub(crate) async fn delete_document(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
-    purge_document_files(&state, id).await?;
+    purge_document_files(DefaultVault(vault), &state, id).await?;
     state.document_repo.delete(vault, id).await?;
     folio_infra::telemetry::metrics().documents_changed(-1);
     Ok(StatusCode::NO_CONTENT)
@@ -313,10 +323,11 @@ pub struct UploadDocumentRequest {
 )]
 pub(crate) async fn upload_document(
     DefaultVault(vault): DefaultVault,
+    crate::vault::Uploader(uploader): crate::vault::Uploader,
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Json<Document>> {
-    let document = store_upload(&state, multipart, SourceKind::Api).await?;
+    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Api).await?;
     Ok(Json(document))
 }
 
@@ -367,11 +378,11 @@ async fn semantic_search(
     limit: usize,
 ) -> ApiResult<Vec<SearchResultWithDocument>> {
     let facade = SearchServiceFacade::new(
-        state.document_repo.clone(vault),
+        state.document_repo.clone(),
         state.embedding_service.clone(),
         state.search_service.clone(),
     );
-    let hits = facade.hybrid_search(query, limit).await?;
+    let hits = facade.hybrid_search(vault, query, limit).await?;
     Ok(hits
         .into_iter()
         .map(|h| SearchResultWithDocument {
@@ -394,10 +405,11 @@ async fn semantic_search(
     )
 )]
 pub(crate) async fn search_documents(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiJson(req): ApiJson<SearchRequest>,
 ) -> ApiResult<Json<SearchResponse>> {
-    let results = semantic_search(&state, &req.query, req.limit).await?;
+    let results = semantic_search(DefaultVault(vault), &state, &req.query, req.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }
@@ -415,10 +427,11 @@ pub(crate) async fn search_documents(
     )
 )]
 pub(crate) async fn search_documents_get(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiQuery(params): ApiQuery<SearchQueryParams>,
 ) -> ApiResult<Json<SearchResponse>> {
-    let results = semantic_search(&state, &params.q, params.limit).await?;
+    let results = semantic_search(DefaultVault(vault), &state, &params.q, params.limit).await?;
 
     Ok(Json(SearchResponse { results }))
 }

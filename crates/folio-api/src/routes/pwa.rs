@@ -50,7 +50,12 @@ async fn service_worker() -> Response {
 }
 
 /// Receives files shared to the installed app and files them into the inbox
-async fn share_target(State(state): State<AppState>, multipart: Multipart) -> ApiResult<Response> {
-    store_upload(&state, multipart, SourceKind::Upload).await?;
+async fn share_target(
+    crate::vault::DefaultVault(vault): crate::vault::DefaultVault,
+    crate::vault::Uploader(uploader): crate::vault::Uploader,
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> ApiResult<Response> {
+    store_upload(&state, vault, uploader, multipart, SourceKind::Upload).await?;
     Ok(Redirect::to("/").into_response())
 }

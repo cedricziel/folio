@@ -276,7 +276,9 @@ pub async fn rows(
 
 /// Builds the row for a single document
 pub async fn row(state: &AppState, document: Document) -> ApiResult<DocumentRow> {
-    Ok(rows(state, vec![document]).await?.remove(0))
+    Ok(rows(DefaultVault(document.vault_id), state, vec![document])
+        .await?
+        .remove(0))
 }
 
 fn row_from(

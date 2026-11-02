@@ -595,14 +595,21 @@ fn danger(text: impl Into<String>) -> Option<Notice> {
     })
 }
 
-async fn new_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    render(build_form(&state, None, FormValues::blank(), None).await?)
+async fn new_page(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
+    render(build_form(DefaultVault(vault), &state, None, FormValues::blank(), None).await?)
 }
 
-async fn edit_page(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Html<String>> {
-    let workflow = find(&*state.workflow_repo, id).await?;
+async fn edit_page(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let workflow = find(vault, &*state.workflow_repo, id).await?;
     let values = FormValues::from_workflow(&workflow);
-    render(build_form(&state, Some(&workflow), values, None).await?)
+    render(build_form(DefaultVault(vault), &state, Some(&workflow), values, None).await?)
 }
 
 async fn create(
@@ -620,9 +627,10 @@ async fn create(
     };
     match saved {
         Ok(workflow) => Ok(Redirect::to(&format!("/workflows/{}", workflow.id)).into_response()),
-        Err(message) => {
-            Ok(render(build_form(&state, None, values, danger(message)).await?)?.into_response())
-        }
+        Err(message) => Ok(render(
+            build_form(DefaultVault(vault), &state, None, values, danger(message)).await?,
+        )?
+        .into_response()),
     }
 }
 
@@ -632,7 +640,7 @@ async fn update(
     Path(id): Path<Uuid>,
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
-    let workflow = find(&*state.workflow_repo, id).await?;
+    let workflow = find(vault, &*state.workflow_repo, id).await?;
     let saved = match values.clone().into_input(Some(&workflow)) {
         Ok(input) => state
             .workflow_repo
@@ -644,7 +652,14 @@ async fn update(
     match saved {
         Ok(_) => Ok(Redirect::to(&format!("/workflows/{id}")).into_response()),
         Err(message) => Ok(render(
-            build_form(&state, Some(&workflow), values, danger(message)).await?,
+            build_form(
+                DefaultVault(vault),
+                &state,
+                Some(&workflow),
+                values,
+                danger(message),
+            )
+            .await?,
         )?
         .into_response()),
     }
@@ -655,7 +670,7 @@ async fn toggle(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
-    let workflow = find(&*state.workflow_repo, id).await?;
+    let workflow = find(vault, &*state.workflow_repo, id).await?;
     state
         .workflow_repo
         .update(
@@ -682,8 +697,12 @@ async fn delete(
     Ok(Redirect::to("/workflows"))
 }
 
-async fn test(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Html<String>> {
-    let workflow = find(&*state.workflow_repo, id).await?;
+async fn test(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let workflow = find(vault, &*state.workflow_repo, id).await?;
     let notice = match send_test(&state.webhook_client, &workflow, &state.public_url).await {
         Ok(result) => Notice {
             danger: result.deliveries.iter().any(|d| !d.success),
@@ -708,7 +727,16 @@ async fn test(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<
         },
     };
     let values = FormValues::from_workflow(&workflow);
-    render(build_form(&state, Some(&workflow), values, Some(notice)).await?)
+    render(
+        build_form(
+            DefaultVault(vault),
+            &state,
+            Some(&workflow),
+            values,
+            Some(notice),
+        )
+        .await?,
+    )
 }
 
 fn render<T: Template>(template: T) -> ApiResult<Html<String>> {

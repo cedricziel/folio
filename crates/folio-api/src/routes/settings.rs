@@ -65,6 +65,7 @@ struct SettingsQuery {
 
 /// Settings page
 async fn settings_page(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<SettingsQuery>,
 ) -> ApiResult<Html<String>> {
@@ -277,14 +278,14 @@ async fn test_processing_settings(
 
 /// Re-embed every document with the active embedding model
 async fn reembed_all(
-    DefaultVault(vault): DefaultVault,
+    DefaultVault(_vault): DefaultVault,
     State(state): State<AppState>,
 ) -> ApiResult<Response> {
     if let Ok(model) = state.embedding_service.model_id().await {
         state.search_service.mark_stale_except(&model).await?;
     }
 
-    let ids = state.document_repo.reset_embedding_status(vault).await?;
+    let ids = state.document_repo.reset_embedding_status().await?;
     for document_id in &ids {
         if let Err(e) = state
             .job_queue
