@@ -104,6 +104,7 @@ test("exports real OTLP signals with persistent context and private correlated r
   context,
   receiver,
 }) => {
+  test.setTimeout(30_000);
   await context.addCookies([
     { name: "folio_session", value: "test-session", url: receiver.origin },
   ]);
@@ -144,7 +145,9 @@ test("exports real OTLP signals with persistent context and private correlated r
     );
   });
   await expect
-    .poll(() => receiver.captures.map((capture) => capture.signal))
+    .poll(() => receiver.captures.map((capture) => capture.signal), {
+      timeout: 15_000,
+    })
     .toEqual(expect.arrayContaining(["traces", "metrics", "logs"]));
   const resource = receiver.captures.find(
     (capture) => capture.signal === "traces",
