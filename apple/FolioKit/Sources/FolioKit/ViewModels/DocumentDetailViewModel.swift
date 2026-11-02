@@ -51,8 +51,11 @@ public final class DocumentDetailViewModel {
     public func loadPreview() async {
         preview = .loading
         do {
-            preview = try .ready(await service.downloadFile(for: document))
+            let url = try await service.downloadFile(for: document)
+            guard !Task.isCancelled else { return }
+            preview = .ready(url)
         } catch {
+            guard !Task.isCancelled else { return }
             preview = .failed(error.localizedDescription)
         }
     }

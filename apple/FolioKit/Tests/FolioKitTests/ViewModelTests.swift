@@ -208,6 +208,22 @@ struct DocumentStatusTests {
         await model.loadPreview()
         #expect(model.preview == .failed("Document has no file"))
     }
+
+    @Test func cancelledPreviewDoesNotReportAServerFailureAndCanReload() async {
+        let model = DocumentDetailViewModel(
+            document: Document(title: "Bill", originalFilename: "bill.pdf"),
+            correspondent: nil, type: nil, service: MockFolioService()
+        )
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await model.loadPreview()
+        }
+        await task.value
+        #expect(model.preview == .loading)
+
+        await model.loadPreview()
+        #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
+    }
 }
 
 @MainActor struct UploadViewModelTests {

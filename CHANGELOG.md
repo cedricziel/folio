@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.3.0](https://github.com/cedricziel/folio/compare/v0.2.0...v0.3.0) (2026-11-02)
+
+
+### Features
+
+* **auth:** add TOTP two-factor and passkeys ([#80](https://github.com/cedricziel/folio/issues/80)) ([5f2a102](https://github.com/cedricziel/folio/commit/5f2a102d22cc06043f5a74b6c6dd479fc10abbfe))
+* **events:** persist events in a transactional outbox ([#86](https://github.com/cedricziel/folio/issues/86)) ([98c455b](https://github.com/cedricziel/folio/commit/98c455b88ea94bc6ab4bd29a0a94efbe92987307))
+* **settings:** add an mcp.enabled toggle to /settings ([44c015f](https://github.com/cedricziel/folio/commit/44c015f72b816e8f64cc36a44cd5d98ee978f321))
+* **vaults:** add vault isolation and access-policy foundations ([#78](https://github.com/cedricziel/folio/issues/78)) ([9e3d017](https://github.com/cedricziel/folio/commit/9e3d017e03727942a372f6127bca61c83c4855af))
+* **web:** show the signed-in user in the sidebar ([#99](https://github.com/cedricziel/folio/issues/99)) ([09462d7](https://github.com/cedricziel/folio/commit/09462d701bcd5a26f36fecdee99f9c7cba241a81))
+
+
+### Bug Fixes
+
+* **auth:** integrate current crypto and MCP changes ([107bdb8](https://github.com/cedricziel/folio/commit/107bdb8010be44746a3359cb01b8b799fa957ec3))
+* **auth:** integrate MFA with current main ([bf204fe](https://github.com/cedricziel/folio/commit/bf204fef451915bf93e225b24d37e939a7031d89))
+* **auth:** keep optional passkey autofill quiet ([92b321e](https://github.com/cedricziel/folio/commit/92b321ebad9d7c02dd1066dc004a157c3940b0ae))
+* **auth:** make TOTP enrollment updates conditional ([19448d4](https://github.com/cedricziel/folio/commit/19448d4d4b1feadf379ddf7f0422920f3472730b))
+* **auth:** report the actual MFA retry delay ([435b4e8](https://github.com/cedricziel/folio/commit/435b4e81f9f1c720ca14618d7d43340a0f1ff1c2))
+* **auth:** require fresh proof before passkey enrollment ([5d719c6](https://github.com/cedricziel/folio/commit/5d719c6789389fce955055ddf6bf41d5903880d5))
+* **auth:** use current OS random source API ([7dfa39d](https://github.com/cedricziel/folio/commit/7dfa39dc0e02ddec9cc9a61e20e004d55f82c914))
+* **auth:** warn when configured secret replaces stored key ([96eeaae](https://github.com/cedricziel/folio/commit/96eeaae0ce68a425409737e2a8d693bf378826d6))
+* **config:** redact auth.secret_key in Debug output ([f6a8399](https://github.com/cedricziel/folio/commit/f6a83990da8bfdbf2b6e08668de851e3602783ed))
+* **events:** broadcast before running workflows ([4fcd65b](https://github.com/cedricziel/folio/commit/4fcd65b310018b3c540131f3cb4af303ff257271))
+* **events:** emit one event per metadata save ([5674108](https://github.com/cedricziel/folio/commit/56741080efd87b0e4ead4f1549aa3d76a26198c6))
+* **events:** recover concurrent broadcasts safely ([#109](https://github.com/cedricziel/folio/issues/109)) ([81faf21](https://github.com/cedricziel/folio/commit/81faf211bb3cbee78804c78b28d409507365d0e7))
+* **events:** recover overlapping and pending broadcasts ([3734a03](https://github.com/cedricziel/folio/commit/3734a03293fbcd0e5d7ab859cd5fa456f5ac9500))
+* **events:** replay events in dispatch order ([9d01b4e](https://github.com/cedricziel/folio/commit/9d01b4e3261f0dfe53e8dab4282056a7923d6be9))
+* **infra:** serialize metadata reads with their writes ([4588fd5](https://github.com/cedricziel/folio/commit/4588fd5ef3e63dfc3f9f42e44749fab74a715a50))
+* **mcp:** address the MCP review follow-ups ([#107](https://github.com/cedricziel/folio/issues/107)) ([66583c8](https://github.com/cedricziel/folio/commit/66583c808d8b464296d1c79ff120e99c8071b0b3))
+* **mcp:** clear historical failures after reprocessing ([929caa9](https://github.com/cedricziel/folio/commit/929caa9111eb453784082df3b17d5a4ac1ec3d0a))
+* **mcp:** integrate the transactional outbox ([813c0a2](https://github.com/cedricziel/folio/commit/813c0a27bb5710b63c2a0bf448a26c6b7624327f))
+* **mcp:** preserve failures in unrelated processing stages ([ca5cf8f](https://github.com/cedricziel/folio/commit/ca5cf8fa26b353643d291102f60af4032456c5bb))
+* **mcp:** preserve failures in unrelated processing stages ([#110](https://github.com/cedricziel/folio/issues/110)) ([1ae557d](https://github.com/cedricziel/folio/commit/1ae557d3f2d40535a18ab170e1664cced272f0bf))
+* **vaults:** complete scoped repository integration ([44c2da8](https://github.com/cedricziel/folio/commit/44c2da8ee2470c104367e0ad33d686b6fb965b5a))
+* **vaults:** integrate account security page context ([b9dc506](https://github.com/cedricziel/folio/commit/b9dc506ff87b5af0fa4aff414d1bfe5787991ba8))
+* **vaults:** integrate durable events and bootstrap access ([9ac88c8](https://github.com/cedricziel/folio/commit/9ac88c81a0fcf53b5ef259e2ce815a6992587be9))
+* **vaults:** integrate scoped MCP search ([b52feed](https://github.com/cedricziel/folio/commit/b52feed78b513486b2942aac621cc1728f16c92b))
+* **vaults:** pass default vault through existing routes ([8875c7b](https://github.com/cedricziel/folio/commit/8875c7bf7a24a22023cbda18b1910d0785f2ec1c))
+* **vaults:** pass vault context to resource rendering ([8702475](https://github.com/cedricziel/folio/commit/87024755cbf12115f5ddfb00c3f74f9676953f0c))
+* **vaults:** preserve deletion snapshots across upgrades ([f419678](https://github.com/cedricziel/folio/commit/f419678000524cbb94d77efd3e351178a740c649))
+* **vaults:** resolve integration with current main ([c29078e](https://github.com/cedricziel/folio/commit/c29078e60b3d3890ce6c0403cbd542ff082bac19))
+
+
+### Performance Improvements
+
+* **mcp:** cache the mcp.enabled setting instead of reading it per request ([41f3c2b](https://github.com/cedricziel/folio/commit/41f3c2b3a38d34c6927dd0d0a264d8645881922f))
+* **mcp:** search by ids and read the tag table once ([0147fed](https://github.com/cedricziel/folio/commit/0147fed4199df6e9bd966970ac53646c7827c352))
+
 ## [0.2.0](https://github.com/cedricziel/folio/compare/v0.1.1...v0.2.0) (2026-11-01)
 
 
