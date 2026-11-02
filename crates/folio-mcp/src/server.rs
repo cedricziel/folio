@@ -63,7 +63,10 @@ impl FolioMcp {
     async fn vault(&self, ctx: &RequestContext<RoleServer>) -> Result<VaultId, String> {
         let user = crate::auth::subject_of(&ctx.extensions).map(UserId::from);
         self.vaults
-            .default_vault(user.as_ref().map(|u| (u, false)))
+            .default_vault(
+                user.as_ref()
+                    .map(|u| (u, crate::auth::owner_of(&ctx.extensions))),
+            )
             .await
             .map_err(tool_error)
     }
@@ -598,6 +601,7 @@ impl FolioMcp {
                     title: args.title,
                     mime_type: args.mime_type,
                     source: DocumentSource::of(SourceKind::Mcp),
+                    uploaded_by: crate::auth::subject_of(&ctx.extensions).map(UserId::from),
                     ..Default::default()
                 },
             )

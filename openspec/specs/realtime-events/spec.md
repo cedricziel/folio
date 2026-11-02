@@ -34,11 +34,34 @@ The background worker SHALL emit `thumbnail_ready` when a document's first thumb
 - **WHEN** a document is processed while the provider is `local`
 - **THEN** subscribers receive `thumbnail_ready` and `updated`, and no `ocr_complete`
 
-### Requirement: Slow subscribers miss events
+### Requirement: Events are persisted before they are announced
 
-Events SHALL be broadcast through a buffer of 100 events. A subscriber that falls behind SHALL skip the events it missed instead of disconnecting, and events sent while nobody is subscribed SHALL be dropped.
+Every document event SHALL be written to the `outbox_events` table before it leaves the process. Lifecycle events (created, updated, deleted) SHALL be written in the same database transaction as the change they describe, so a change cannot commit without its event and a rolled back change leaves none. A dispatcher SHALL deliver committed events to the workflow engine and to live SSE connections and mark them dispatched, retrying failures with backoff. Events SHALL survive a restart: one written but not yet dispatched is delivered after the next start, exactly once to each consumer's effect. Dispatched events SHALL be deleted after seven days.
 
-#### Scenario: No subscribers
+#### Scenario: Restart before dispatch
 
-- **WHEN** a document is processed while no client is connected
-- **THEN** its events are discarded and are not replayed to later subscribers
+- **WHEN** a document is created and the server stops before the dispatcher ran
+- **THEN** after the next start subscribers receive `created` once and the `document.uploaded` workflows have one run each
+
+#### Scenario: Slow subscribers
+
+- **WHEN** a subscriber falls behind the 100-event live buffer
+- **THEN** it receives the events it missed from the outbox instead of skipping them, and no workflow run is lost
+
+### Requirement: Event ids and resume
+
+Each SSE message SHALL carry the id of its outbox event. A client that reconnects with a `Last-Event-ID` header SHALL first receive the dispatched events after that id, at most 500 from the last hour, and then the live stream. A client that connects without the header SHALL receive only events dispatched after it connected.
+
+#### Scenario: Reconnect
+
+- **WHEN** a client that last saw event 10 reconnects with `Last-Event-ID: 10` after events 11 and 12 were dispatched
+- **THEN** it receives events 11 and 12, then live events
+
+### Requirement: Workflow edits are announced
+
+Document changes made by workflow actions SHALL be written to the outbox and reach SSE clients as `updated` events. They SHALL NOT trigger workflows.
+
+#### Scenario: Workflow adds a tag
+
+- **WHEN** a workflow action tags a document
+- **THEN** subscribers receive `updated` for it and no `document.updated` workflow runs because of it

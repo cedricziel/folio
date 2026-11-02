@@ -11,6 +11,9 @@ use folio_core::models::{
 };
 use folio_core::ports::WorkflowRepository;
 
+use crate::queue::{insert_job_sqlite as insert_job, JobType};
+use crate::workflow::MAX_ATTEMPTS;
+
 /// SQLite-backed workflow repository
 #[derive(Clone)]
 pub struct SqliteWorkflowRepository {
@@ -70,6 +73,8 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
             .get::<Option<i64>, _>("response_status")
             .map(|s| s as u16),
         payload: row.get("payload"),
+        actions: serde_json::from_str(row.get("actions")).map_err(repo_err)?,
+        source_event_id: row.get("source_event_id"),
         created_at: parse_time(row.get("created_at"))?,
         finished_at: finished_at.map(parse_time).transpose()?,
     })
@@ -204,10 +209,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
-             last_error, response_status, payload, created_at, finished_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+             last_error, response_status, payload, actions, source_event_id, created_at, finished_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
         )
         .bind(run.id.to_string())
         .bind(run.workflow_id.to_string())
@@ -219,12 +225,25 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(&run.last_error)
         .bind(run.response_status)
         .bind(&run.payload)
+        .bind(serde_json::to_string(&run.actions).map_err(repo_err)?)
+        .bind(run.source_event_id)
         .bind(run.created_at.to_rfc3339())
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        Ok(result.rows_affected() > 0)
+        if result.rows_affected() == 0 {
+            return Ok(false);
+        }
+        insert_job(
+            &mut *tx,
+            JobType::ExecuteWorkflowRun { run_id: run.id },
+            Utc::now(),
+            MAX_ATTEMPTS as i32,
+        )
+        .await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(true)
     }
 
     #[instrument(skip(self))]

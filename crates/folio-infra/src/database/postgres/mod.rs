@@ -3,6 +3,7 @@
 mod auth_repo;
 mod document_repo;
 mod ingest_repo;
+mod outbox;
 mod search;
 mod settings_repo;
 mod vault_repo;
@@ -19,6 +20,7 @@ pub use document_repo::{
     PostgresTagRepository,
 };
 pub use ingest_repo::{PostgresIngestLedger, PostgresSourceRepository};
+pub use outbox::PostgresOutboxStore;
 pub use search::PostgresSearchService;
 pub use settings_repo::PostgresSettingsRepository;
 pub use vault_repo::PostgresVaultRepository;

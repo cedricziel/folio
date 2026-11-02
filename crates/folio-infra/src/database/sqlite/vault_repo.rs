@@ -198,6 +198,24 @@ impl VaultRepository for SqliteVaultRepository {
         Ok(())
     }
 
+    async fn provisioned(&self, user: &UserId) -> Result<bool> {
+        sqlx::query_scalar("SELECT vaults_provisioned <> 0 FROM users WHERE id = $1")
+            .bind(user.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)
+            .map(|v| v.unwrap_or(false))
+    }
+
+    async fn mark_provisioned(&self, user: &UserId) -> Result<()> {
+        sqlx::query("UPDATE users SET vaults_provisioned = 1 WHERE id = $1")
+            .bind(user.as_str())
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
     async fn instance_default(&self) -> Result<VaultId> {
         let owners: Option<(String,)> = sqlx::query_as(
             "SELECT default_vault_id FROM users

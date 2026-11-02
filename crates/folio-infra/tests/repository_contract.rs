@@ -6,6 +6,9 @@
 
 mod common;
 
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use folio_core::error::Error;
 use folio_core::models::{
@@ -18,6 +21,8 @@ use folio_core::models::{
     SourceStatus,
 };
 use folio_core::ports::{EmbeddedChunk, SearchService};
+use folio_core::services::{DispatcherConfig, EventConsumer, OutboxDispatcher};
+use folio_core::{DocumentEvent, EventOrigin, OutboxEvent};
 use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
@@ -341,6 +346,7 @@ async fn documents_contract(r: &Repositories) {
                 content: Some("extracted text".into()),
                 correspondent_id: Some(None),
                 document_type_id: None,
+                tag_ids: None,
             },
         )
         .await
@@ -1430,6 +1436,465 @@ async fn auth_contract(r: &Repositories) {
     assert!(auth.take_oidc_login("stale").await.unwrap().is_none());
 }
 
+/// Records the id of every event it is handed
+#[derive(Default)]
+struct Recorder(Mutex<Vec<i64>>);
+
+impl Recorder {
+    fn ids(&self) -> Vec<i64> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl EventConsumer for Recorder {
+    async fn consume(&self, event: &OutboxEvent) -> folio_core::Result<()> {
+        self.0.lock().unwrap().push(event.id);
+        Ok(())
+    }
+}
+
+fn lease() -> Duration {
+    Duration::seconds(30)
+}
+
+/// Take every event that is due and mark it dispatched
+async fn flush_outbox(r: &Repositories) -> Vec<OutboxEvent> {
+    let mut all = Vec::new();
+    loop {
+        let batch = r.outbox.claim(100, lease(), 10).await.unwrap();
+        if batch.is_empty() {
+            return all;
+        }
+        for event in batch {
+            r.outbox.mark_dispatched(event.id).await.unwrap();
+            all.push(event);
+        }
+    }
+}
+
+fn dispatcher(r: &Repositories, consumer: Arc<Recorder>, batch_size: u32) -> OutboxDispatcher {
+    OutboxDispatcher::new(
+        r.outbox.clone(),
+        vec![consumer],
+        DispatcherConfig {
+            batch_size,
+            concurrency: 2,
+            ..Default::default()
+        },
+    )
+}
+
+/// Run raw DDL in the dialect of the connected backend
+async fn exec(db: &Database, sqlite: &[&str], postgres: &[&str]) {
+    match db {
+        Database::Sqlite(pool) => {
+            for sql in sqlite {
+                sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+        Database::Postgres(pool) => {
+            for sql in postgres {
+                sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+}
+
+async fn outbox_contract(db: &Database) {
+    let r = db.repositories().await;
+    flush_outbox(&r).await;
+
+    // Lifecycle changes leave their event in the transaction that made them.
+    let doc = r.documents.create(new_document("outbox")).await.unwrap();
+    let tag = r
+        .tags
+        .create(CreateTag {
+            name: "outbox-tag".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    r.documents.add_tag(doc.id, tag.id).await.unwrap();
+    r.documents.add_tag(doc.id, tag.id).await.unwrap();
+    r.documents
+        .update(
+            doc.id,
+            UpdateDocument {
+                title: Some("renamed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    r.documents.set_file_path(doc.id, "a/b.pdf").await.unwrap();
+    r.documents.set_page_count(doc.id, 2).await.unwrap();
+    r.documents.remove_tag(doc.id, tag.id).await.unwrap();
+    r.documents.remove_tag(doc.id, tag.id).await.unwrap();
+    r.documents.set_tags(doc.id, &[tag.id]).await.unwrap();
+    r.workflow_documents
+        .remove_tag(doc.id, tag.id)
+        .await
+        .unwrap();
+    assert!(is_not_found(
+        r.documents
+            .update(Id::new_v4(), UpdateDocument::default())
+            .await
+    ));
+    assert!(is_not_found(r.documents.delete(Id::new_v4()).await));
+    r.documents.delete(doc.id).await.unwrap();
+
+    let events = flush_outbox(&r).await;
+    let seen: Vec<_> = events
+        .iter()
+        .map(|e| (e.event.event_type(), e.origin))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("created", EventOrigin::User),
+            ("updated", EventOrigin::User), // add_tag; the repeat changed nothing
+            ("updated", EventOrigin::User), // update
+            ("updated", EventOrigin::User), // remove_tag; the repeat changed nothing
+            ("updated", EventOrigin::User), // set_tags
+            ("updated", EventOrigin::Workflow),
+            ("deleted", EventOrigin::User),
+        ]
+    );
+    assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
+    assert!(events.iter().all(|e| e.event.document_id() == doc.id));
+    let DocumentEvent::Deleted { snapshot, .. } = &events.last().unwrap().event else {
+        panic!("last event is the delete");
+    };
+    let snapshot = snapshot.as_ref().expect("deletes carry the document");
+    assert_eq!(snapshot.document.title, "renamed");
+    assert!(snapshot.tags.is_empty());
+
+    let atomic = r.documents.create(new_document("metadata")).await.unwrap();
+    flush_outbox(&r).await;
+    r.documents
+        .update(
+            atomic.id,
+            UpdateDocument {
+                title: Some("metadata changed".into()),
+                tag_ids: Some(vec![tag.id, tag.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        flush_outbox(&r).await.len(),
+        1,
+        "one metadata save emits one event"
+    );
+    r.documents.set_tags(atomic.id, &[tag.id]).await.unwrap();
+    r.documents
+        .update(
+            atomic.id,
+            UpdateDocument {
+                title: Some("metadata changed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        flush_outbox(&r).await.is_empty(),
+        "unchanged metadata emits no event"
+    );
+    assert!(r
+        .documents
+        .update(
+            atomic.id,
+            UpdateDocument {
+                title: Some("must roll back".into()),
+                tag_ids: Some(vec![Id::new_v4()]),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        r.documents
+            .find_by_id(atomic.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "metadata changed"
+    );
+    assert_eq!(r.documents.get_tags(atomic.id).await.unwrap()[0].id, tag.id);
+    assert!(flush_outbox(&r).await.is_empty());
+
+    // A change whose event cannot be written does not happen either.
+    let survivor = r.documents.create(new_document("survivor")).await.unwrap();
+    flush_outbox(&r).await;
+    exec(
+        db,
+        &["CREATE TRIGGER refuse_outbox BEFORE INSERT ON outbox_events
+           BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &[
+            "CREATE FUNCTION refuse_outbox() RETURNS trigger AS $$
+             BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+            "CREATE TRIGGER refuse_outbox BEFORE INSERT ON outbox_events
+             FOR EACH ROW EXECUTE FUNCTION refuse_outbox()",
+        ],
+    )
+    .await;
+    assert!(r.documents.create(new_document("doomed")).await.is_err());
+    assert!(r
+        .documents
+        .update(
+            survivor.id,
+            UpdateDocument {
+                title: Some("doomed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .is_err());
+    assert!(r.documents.delete(survivor.id).await.is_err());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_outbox"],
+        &[
+            "DROP TRIGGER refuse_outbox ON outbox_events",
+            "DROP FUNCTION refuse_outbox()",
+        ],
+    )
+    .await;
+    let titles: Vec<_> = r
+        .documents
+        .list(None)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|d| d.title)
+        .collect();
+    assert!(!titles.contains(&"doomed".to_string()));
+    let kept = r.documents.find_by_id(survivor.id).await.unwrap().unwrap();
+    assert_eq!(kept.title, "survivor", "the update was rolled back");
+    assert!(
+        flush_outbox(&r).await.is_empty(),
+        "no event for a rolled back change"
+    );
+
+    // Written, never dispatched, process gone: the restart delivers it exactly once.
+    let orphan = r.documents.create(new_document("orphan")).await.unwrap();
+    drop(r);
+    let restarted = db.repositories().await;
+    let recorder = Arc::new(Recorder::default());
+    let after_restart = dispatcher(&restarted, recorder.clone(), 10);
+    assert_eq!(after_restart.dispatch_once().await.unwrap(), 1);
+    assert_eq!(after_restart.dispatch_once().await.unwrap(), 0);
+    assert_eq!(recorder.ids().len(), 1);
+    let replayed = restarted
+        .outbox
+        .replay(recorder.ids()[0] - 1, Utc::now() - Duration::hours(1), 10)
+        .await
+        .unwrap();
+    assert_eq!(replayed.len(), 1);
+    assert!(
+        matches!(replayed[0].event, DocumentEvent::Created { document_id } if document_id == orphan.id)
+    );
+
+    // Claimed but never finished: after the lease it is handed out again, then done for good.
+    let r = restarted;
+    r.documents
+        .create(new_document("interrupted"))
+        .await
+        .unwrap();
+    let first = r.outbox.claim(10, Duration::seconds(-1), 10).await.unwrap();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].attempts, 1);
+    let recorder = Arc::new(Recorder::default());
+    let dispatch = dispatcher(&r, recorder.clone(), 10);
+    assert_eq!(dispatch.dispatch_once().await.unwrap(), 1);
+    assert_eq!(dispatch.dispatch_once().await.unwrap(), 0);
+    assert_eq!(recorder.ids(), [first[0].id]);
+
+    // Several dispatchers at once never deliver an event twice.
+    flush_outbox(&r).await;
+    for i in 0..40 {
+        r.documents
+            .create(new_document(&format!("burst-{i}")))
+            .await
+            .unwrap();
+    }
+    let recorder = Arc::new(Recorder::default());
+    let mut dispatchers = Vec::new();
+    for _ in 0..4 {
+        let dispatch = dispatcher(&db.repositories().await, recorder.clone(), 5);
+        dispatchers.push(tokio::spawn(async move {
+            while dispatch.dispatch_once().await.unwrap() > 0 {}
+        }));
+    }
+    for handle in dispatchers {
+        handle.await.unwrap();
+    }
+    let mut delivered = recorder.ids();
+    delivered.sort_unstable();
+    let total = delivered.len();
+    delivered.dedup();
+    assert_eq!(total, 40);
+    assert_eq!(delivered.len(), 40, "no event was delivered twice");
+
+    // Failures back off, and an event stops being retried once it used its attempts.
+    r.documents.create(new_document("flaky")).await.unwrap();
+    let past = || Utc::now() - Duration::seconds(1);
+    let first = r.outbox.claim(10, lease(), 3).await.unwrap().remove(0);
+    assert!(r.outbox.claim(10, lease(), 3).await.unwrap().is_empty());
+    r.outbox
+        .release(first.id, "boom", Utc::now() + Duration::hours(1))
+        .await
+        .unwrap();
+    assert!(r.outbox.claim(10, lease(), 3).await.unwrap().is_empty());
+    r.outbox.release(first.id, "boom", past()).await.unwrap();
+    let second = r.outbox.claim(10, lease(), 3).await.unwrap().remove(0);
+    assert_eq!((second.id, second.attempts), (first.id, 2));
+    r.outbox.release(first.id, "boom", past()).await.unwrap();
+    let third = r.outbox.claim(10, lease(), 3).await.unwrap().remove(0);
+    assert_eq!(third.attempts, 3);
+    r.outbox.release(first.id, "boom", past()).await.unwrap();
+    assert!(r.outbox.claim(10, lease(), 3).await.unwrap().is_empty());
+    r.outbox.mark_dispatched(first.id).await.unwrap();
+
+    // Replay serves dispatched events only, and old ones are pruned.
+    for title in ["replay-1", "replay-2", "replay-3"] {
+        r.documents.create(new_document(title)).await.unwrap();
+    }
+    let ids: Vec<_> = r
+        .outbox
+        .claim(10, lease(), 10)
+        .await
+        .unwrap()
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids.len(), 3);
+    r.outbox.mark_dispatched(ids[0]).await.unwrap();
+    r.outbox.mark_dispatched(ids[1]).await.unwrap();
+    let hour_ago = Utc::now() - Duration::hours(1);
+    let replay_ids = |after: i64, since| {
+        let outbox = r.outbox.clone();
+        async move {
+            outbox
+                .replay(after, since, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(replay_ids(ids[0] - 1, hour_ago).await, [ids[0], ids[1]]);
+    assert_eq!(replay_ids(ids[0], hour_ago).await, [ids[1]]);
+    assert!(replay_ids(0, Utc::now() + Duration::hours(1))
+        .await
+        .is_empty());
+    let limited = r.outbox.replay(ids[0] - 1, hour_ago, 1).await.unwrap();
+    assert_eq!(limited.len(), 1);
+
+    assert!(r.outbox.prune(hour_ago).await.unwrap() == 0);
+    assert!(
+        r.outbox
+            .prune(Utc::now() + Duration::hours(1))
+            .await
+            .unwrap()
+            >= 2
+    );
+    assert!(replay_ids(ids[0] - 1, hour_ago).await.is_empty());
+    r.outbox.mark_dispatched(ids[2]).await.unwrap();
+
+    r.documents
+        .create(new_document("delayed-first"))
+        .await
+        .unwrap();
+    r.documents
+        .create(new_document("delivered-second"))
+        .await
+        .unwrap();
+    let batch = r.outbox.claim(10, lease(), 10).await.unwrap();
+    let earlier = batch[0].id;
+    let later = batch[1].id;
+    r.outbox.mark_dispatched(later).await.unwrap();
+    r.outbox.mark_dispatched(earlier).await.unwrap();
+    assert_eq!(
+        replay_ids(later, hour_ago).await,
+        [earlier],
+        "reconnect must recover a lower id delivered after the acknowledged event"
+    );
+}
+
+async fn run_atomicity_contract(db: &Database) {
+    let r = db.repositories().await;
+    let workflow = r
+        .workflows
+        .create(workflow_input("atomic", WorkflowTrigger::DocumentUpdated))
+        .await
+        .unwrap();
+    let document = Id::new_v4();
+    let run_for = |event: i64| {
+        WorkflowRun::new(
+            workflow.id,
+            WorkflowTrigger::DocumentUpdated,
+            Some(document),
+            "{}".into(),
+        )
+        .with_actions(workflow.actions.clone())
+        .with_source_event(event)
+    };
+    let queued = r.jobs.pending_count().await.unwrap();
+
+    // A run and its job appear together, once per outbox event.
+    let run = run_for(42);
+    assert!(r.workflows.create_run(&run).await.unwrap());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 1);
+    assert!(!r.workflows.create_run(&run_for(42)).await.unwrap());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 1);
+    assert!(r.workflows.create_run(&run_for(43)).await.unwrap());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 2);
+
+    let stored = r.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(stored.actions, workflow.actions);
+    assert_eq!(stored.source_event_id, Some(42));
+
+    // When the job cannot be queued the run is not created either.
+    exec(
+        db,
+        &["CREATE TRIGGER refuse_jobs BEFORE INSERT ON jobs
+           BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &[
+            "CREATE FUNCTION refuse_jobs() RETURNS trigger AS $$
+             BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+            "CREATE TRIGGER refuse_jobs BEFORE INSERT ON jobs
+             FOR EACH ROW EXECUTE FUNCTION refuse_jobs()",
+        ],
+    )
+    .await;
+    let doomed = run_for(44);
+    assert!(r.workflows.create_run(&doomed).await.is_err());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_jobs"],
+        &[
+            "DROP TRIGGER refuse_jobs ON jobs",
+            "DROP FUNCTION refuse_jobs()",
+        ],
+    )
+    .await;
+    assert!(r.workflows.find_run(doomed.id).await.unwrap().is_none());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 2);
+    assert!(r.workflows.create_run(&run_for(44)).await.unwrap());
+}
+
 async fn run_contract(db: &Database) {
     db.migrate().await.unwrap();
     // Migrating twice is a no-op
@@ -1443,10 +1908,13 @@ async fn run_contract(db: &Database) {
     document_filter_contract(&repos).await;
     settings_contract(&repos).await;
     search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
-    workflows_contract(&repos).await;
-    ingestion_contract(&repos).await;
+    // Before the workflow contracts, which leave queued run jobs behind
     jobs_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
+    workflows_contract(&repos).await;
+    ingestion_contract(&repos).await;
+    outbox_contract(db).await;
+    run_atomicity_contract(db).await;
     auth_contract(&repos).await;
 }
 

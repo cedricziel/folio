@@ -3,19 +3,21 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use chrono::Utc;
-use tokio::sync::{broadcast, watch};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
-use crate::error::Result;
-use crate::events::DocumentEvent;
+use crate::error::{Error, Result};
+use crate::events::{DocumentEvent, EventOrigin, OutboxEvent};
 use crate::models::{
     Document, Id, Tag, VaultId, WebhookDocument, WebhookPayload, WorkflowRun, WorkflowTrigger,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
-    WorkflowJobQueue, WorkflowRepository,
+    WorkflowRepository,
 };
+
+use super::outbox_dispatcher::EventConsumer;
 
 /// How long to wait for an upload to finish storing its file
 const FILE_WAIT_DEFAULT: Duration = Duration::from_secs(3);
@@ -25,12 +27,13 @@ const FILE_POLL: Duration = Duration::from_millis(100);
 ///
 /// The engine only decides *what* runs; executing actions (with retries) is
 /// the job worker's concern, so a slow webhook never blocks event handling.
+/// It is fed by the outbox dispatcher, so every committed event is seen even
+/// across restarts. Handling an event twice creates no second run.
 pub struct WorkflowEngine {
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
     correspondents: Arc<dyn CorrespondentRepository>,
     document_types: Arc<dyn DocumentTypeRepository>,
-    jobs: Arc<dyn WorkflowJobQueue>,
     files: Arc<dyn FileMetadata>,
     public_url: String,
     file_wait: Duration,
@@ -47,7 +50,6 @@ impl WorkflowEngine {
         documents: Arc<dyn DocumentRepository>,
         correspondents: Arc<dyn CorrespondentRepository>,
         document_types: Arc<dyn DocumentTypeRepository>,
-        jobs: Arc<dyn WorkflowJobQueue>,
         files: Arc<dyn FileMetadata>,
         public_url: impl Into<String>,
     ) -> Self {
@@ -56,7 +58,6 @@ impl WorkflowEngine {
             documents,
             correspondents,
             document_types,
-            jobs,
             files,
             public_url: public_url.into(),
             file_wait: FILE_WAIT_DEFAULT,
@@ -80,40 +81,13 @@ impl WorkflowEngine {
         }
     }
 
-    /// Consume events until the channel closes or shutdown is signalled
-    pub async fn run(
-        self: Arc<Self>,
-        mut events: broadcast::Receiver<DocumentEvent>,
-        mut shutdown: watch::Receiver<bool>,
-    ) {
-        loop {
-            tokio::select! {
-                received = events.recv() => match received {
-                    Ok(event) => {
-                        // Handled off-loop: an upload may wait for its file to land.
-                        let engine = Arc::clone(&self);
-                        tokio::spawn(async move {
-                            if let Err(e) = engine.handle(&event).await {
-                                error!("Workflow engine failed on {}: {}", event.event_type(), e);
-                            }
-                        });
-                    }
-                    Err(broadcast::error::RecvError::Lagged(missed)) => {
-                        warn!("Workflow engine missed {missed} events");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                },
-                _ = shutdown.changed() => {
-                    if *shutdown.borrow() {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
     /// Queue a run for every enabled workflow that matches the event
-    pub async fn handle(&self, event: &DocumentEvent) -> Result<Vec<WorkflowRun>> {
+    ///
+    /// A failure for one workflow does not stop the others. The first error
+    /// is returned once all were tried, so the dispatcher retries the event;
+    /// runs created in the meantime are not duplicated.
+    pub async fn handle(&self, outbox_event: &OutboxEvent) -> Result<Vec<WorkflowRun>> {
+        let event = &outbox_event.event;
         let Some(trigger) = Self::trigger_for(event) else {
             return Ok(Vec::new());
         };
@@ -141,27 +115,43 @@ impl WorkflowEngine {
 
         let mut payload_json: Option<String> = None;
         let mut runs = Vec::new();
+        let mut first_error: Option<Error> = None;
         for workflow in candidates {
             if !workflow.conditions.matches(&ctx.document, &tag_ids) {
                 continue;
             }
-            let body = match &payload_json {
-                Some(body) => body.clone(),
-                None => {
-                    let body = self.build_payload(vault, trigger, &ctx).await?;
-                    payload_json = Some(body.clone());
-                    body
-                }
-            };
-            let run = WorkflowRun::new(workflow.id, trigger, Some(document_id), body);
-            if !self.workflows.create_run(&run).await? {
-                debug!("Workflow {} already ran for {document_id}", workflow.id);
-                continue;
+            let outcome = async {
+                let body = match &payload_json {
+                    Some(body) => body.clone(),
+                    None => {
+                        let body = self.build_payload(vault, trigger, &ctx).await?;
+                        payload_json = Some(body.clone());
+                        body
+                    }
+                };
+                let run = WorkflowRun::new(workflow.id, trigger, Some(document_id), body)
+                    .with_actions(workflow.actions.clone())
+                    .with_source_event(outbox_event.id);
+                Ok::<_, Error>(self.workflows.create_run(&run).await?.then_some(run))
             }
-            self.jobs.enqueue_run(run.id).await?;
-            runs.push(run);
+            .await;
+            match outcome {
+                Ok(Some(run)) => runs.push(run),
+                Ok(None) => debug!("Workflow {} already ran for {document_id}", workflow.id),
+                Err(e) => {
+                    error!(
+                        "Workflow {} failed on {}: {e}",
+                        workflow.id,
+                        event.event_type()
+                    );
+                    first_error.get_or_insert(e);
+                }
+            }
         }
-        Ok(runs)
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(runs),
+        }
     }
 
     async fn load_context(
@@ -237,5 +227,15 @@ impl WorkflowEngine {
         );
         serde_json::to_string(&payload)
             .map_err(|e| crate::error::Error::Repository(format!("Failed to encode payload: {e}")))
+    }
+}
+
+#[async_trait]
+impl EventConsumer for WorkflowEngine {
+    async fn consume(&self, event: &OutboxEvent) -> Result<()> {
+        if event.origin == EventOrigin::Workflow {
+            return Ok(());
+        }
+        self.handle(event).await.map(|_| ())
     }
 }

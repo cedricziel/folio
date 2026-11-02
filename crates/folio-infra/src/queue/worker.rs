@@ -3,17 +3,19 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::watch;
 use tokio::time::sleep;
 use tracing::{debug, error, info, info_span, Instrument};
 
-use folio_core::events::{DocumentEvent, EventBroadcaster};
+use folio_core::events::{DocumentEvent, EventOrigin};
 use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
 use folio_core::ports::{
-    DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, SearchService,
+    DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, OutboxStore,
+    SearchService,
 };
 
-use super::{JobQueue, JobType};
+use super::{FailOutcome, Job, JobClass, JobQueue, JobType};
 use crate::ai::chunker::{chunk_text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS};
 use crate::ai::PipelineContext;
 use crate::telemetry::metrics;
@@ -36,6 +38,8 @@ pub struct WorkerConfig {
     pub stuck_threshold_mins: i64,
     /// How often to check for orphaned documents (in seconds)
     pub repair_check_interval_secs: u64,
+    /// Workflow runs executed at the same time, apart from OCR and thumbnails
+    pub workflow_concurrency: usize,
 }
 
 impl Default for WorkerConfig {
@@ -45,6 +49,7 @@ impl Default for WorkerConfig {
             stuck_check_interval_secs: 60,
             stuck_threshold_mins: 5,
             repair_check_interval_secs: 300, // Every 5 minutes
+            workflow_concurrency: 4,
         }
     }
 }
@@ -60,7 +65,7 @@ pub struct Worker {
     thumbnail_service: Arc<ThumbnailService>,
     store: Arc<dyn DocumentStore>,
     config: WorkerConfig,
-    event_broadcaster: EventBroadcaster,
+    outbox: Arc<dyn OutboxStore>,
     workflow_runner: Option<Arc<WorkflowRunner>>,
 }
 
@@ -77,7 +82,7 @@ impl Worker {
         thumbnail_service: Arc<ThumbnailService>,
         store: Arc<dyn DocumentStore>,
         config: WorkerConfig,
-        event_broadcaster: EventBroadcaster,
+        outbox: Arc<dyn OutboxStore>,
     ) -> Self {
         Self {
             queue,
@@ -89,7 +94,7 @@ impl Worker {
             thumbnail_service,
             store,
             config,
-            event_broadcaster,
+            outbox,
             workflow_runner: None,
         }
     }
@@ -100,10 +105,32 @@ impl Worker {
         self
     }
 
-    /// Start the worker (runs until shutdown signal)
-    pub async fn run(&self, mut shutdown: watch::Receiver<bool>) {
-        info!("Job worker started");
+    /// Persist an event, to be announced to clients and workflows by the dispatcher
+    async fn emit(&self, event: DocumentEvent) -> Result<(), BoxError> {
+        self.outbox.append(&event, EventOrigin::User).await?;
+        Ok(())
+    }
 
+    /// Like [`emit`](Self::emit) for a progress hint that must not fail the step it follows
+    async fn emit_logged(&self, event: DocumentEvent) {
+        if let Err(e) = self.emit(event).await {
+            error!("Failed to persist event: {e}");
+        }
+    }
+
+    /// Start the worker (runs until shutdown signal)
+    ///
+    /// Document processing and workflow runs are separate loops, so a
+    /// webhook target that never answers cannot hold up OCR.
+    pub async fn run(&self, shutdown: watch::Receiver<bool>) {
+        info!("Job worker started");
+        tokio::join!(
+            self.run_processing(shutdown.clone()),
+            self.run_workflows(shutdown)
+        );
+    }
+
+    async fn run_processing(&self, mut shutdown: watch::Receiver<bool>) {
         // Run repair immediately on startup to catch any orphaned documents
         if let Err(e) = self.repair_orphaned_documents().await {
             error!("Failed initial document repair: {}", e);
@@ -142,48 +169,8 @@ impl Worker {
             }
 
             // Try to get a job
-            match self.queue.dequeue().await {
-                Ok(Some(job)) => {
-                    debug!("Processing job {}: {:?}", job.id, job.job_type.type_name());
-
-                    let type_name = job.job_type.type_name();
-                    let span = info_span!(
-                        "job",
-                        otel.name = %format!("job {type_name}"),
-                        otel.kind = "consumer",
-                        job.id = %job.id,
-                        job.r#type = type_name,
-                        job.attempt = job.attempts,
-                        document.id = job.job_type.document_id().map(tracing::field::display),
-                    );
-                    let started = Instant::now();
-                    let result = self
-                        .process_job(&job.job_type)
-                        .instrument(span.clone())
-                        .await;
-                    metrics().job_finished(type_name, result.is_ok(), started);
-
-                    match result {
-                        Ok(()) => {
-                            if let Err(e) =
-                                self.queue.complete(job.id).instrument(span.clone()).await
-                            {
-                                error!("Failed to mark job {} as complete: {}", job.id, e);
-                            }
-                        }
-                        Err(e) => {
-                            let error_msg = e.to_string();
-                            if let Err(e) = self
-                                .queue
-                                .fail(job.id, &error_msg, true)
-                                .instrument(span.clone())
-                                .await
-                            {
-                                error!("Failed to mark job {} as failed: {}", job.id, e);
-                            }
-                        }
-                    }
-                }
+            match self.queue.dequeue_class(JobClass::Processing).await {
+                Ok(Some(job)) => self.handle_job(job).await,
                 Ok(None) => {
                     // No jobs available, wait before polling again
                     tokio::select! {
@@ -201,6 +188,95 @@ impl Worker {
                     sleep(Duration::from_millis(self.config.poll_interval_ms)).await;
                 }
             }
+        }
+    }
+
+    /// Execute workflow runs, several at a time
+    async fn run_workflows(&self, mut shutdown: watch::Receiver<bool>) {
+        let poll = Duration::from_millis(self.config.poll_interval_ms);
+        let mut in_flight = FuturesUnordered::new();
+        loop {
+            if *shutdown.borrow() {
+                break;
+            }
+            while in_flight.len() < self.config.workflow_concurrency {
+                match self.queue.dequeue_class(JobClass::Workflow).await {
+                    Ok(Some(job)) => in_flight.push(self.handle_job(job)),
+                    Ok(None) => break,
+                    Err(e) => {
+                        error!("Failed to dequeue workflow job: {}", e);
+                        break;
+                    }
+                }
+            }
+            if in_flight.is_empty() {
+                tokio::select! {
+                    _ = sleep(poll) => {}
+                    _ = shutdown.changed() => {}
+                }
+            } else {
+                tokio::select! {
+                    _ = in_flight.next() => {}
+                    _ = sleep(poll) => {}
+                    _ = shutdown.changed() => {}
+                }
+            }
+        }
+        while in_flight.next().await.is_some() {}
+    }
+
+    /// Run a claimed job and record how it went
+    async fn handle_job(&self, job: Job) {
+        debug!("Processing job {}: {:?}", job.id, job.job_type.type_name());
+
+        let type_name = job.job_type.type_name();
+        let span = info_span!(
+            "job",
+            otel.name = %format!("job {type_name}"),
+            otel.kind = "consumer",
+            job.id = %job.id,
+            job.r#type = type_name,
+            job.attempt = job.attempts,
+            document.id = job.job_type.document_id().map(tracing::field::display),
+        );
+        let started = Instant::now();
+        let result = self
+            .process_job(&job.job_type)
+            .instrument(span.clone())
+            .await;
+        metrics().job_finished(type_name, result.is_ok(), started);
+
+        match result {
+            Ok(()) => {
+                if let Err(e) = self.queue.complete(job.id).instrument(span.clone()).await {
+                    error!("Failed to mark job {} as complete: {}", job.id, e);
+                }
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                match self
+                    .queue
+                    .fail(job.id, &error_msg, true)
+                    .instrument(span.clone())
+                    .await
+                {
+                    Ok(FailOutcome::GaveUp) => self.abandon_run(&job.job_type, &error_msg).await,
+                    Ok(FailOutcome::Retrying) => {}
+                    Err(e) => error!("Failed to mark job {} as failed: {}", job.id, e),
+                }
+            }
+        }
+    }
+
+    /// A workflow job that gave up leaves its run pending forever unless the run is closed
+    async fn abandon_run(&self, job_type: &JobType, reason: &str) {
+        let (JobType::ExecuteWorkflowRun { run_id }, Some(runner)) =
+            (job_type, &self.workflow_runner)
+        else {
+            return;
+        };
+        if let Err(e) = runner.abandon(*run_id, reason).await {
+            error!("Failed to mark workflow run {run_id} as failed: {e}");
         }
     }
 
@@ -374,8 +450,8 @@ impl Worker {
         info!("Generated thumbnail for document {}", document_id);
 
         // Emit event
-        self.event_broadcaster
-            .send(DocumentEvent::ThumbnailReady { document_id });
+        self.emit(DocumentEvent::ThumbnailReady { document_id })
+            .await?;
 
         Ok(())
     }
@@ -458,8 +534,8 @@ impl Worker {
 
         let has_text = !output.text.is_empty();
         if has_text {
-            self.event_broadcaster
-                .send(DocumentEvent::OcrComplete { document_id });
+            self.emit(DocumentEvent::OcrComplete { document_id })
+                .await?;
         }
         self.schedule_embedding(vault, document_id, has_text).await
     }
@@ -474,8 +550,7 @@ impl Worker {
         self.document_repo
             .set_stage_status(vault, document_id, ProcessingStage::Embed, status)
             .await?;
-        self.event_broadcaster
-            .send(DocumentEvent::Processed { document_id });
+        self.emit(DocumentEvent::Processed { document_id }).await?;
         Ok(())
     }
 
@@ -645,8 +720,8 @@ impl Worker {
                 {
                     Ok(_) => {
                         if page == 1 {
-                            self.event_broadcaster
-                                .send(DocumentEvent::ThumbnailReady { document_id });
+                            self.emit_logged(DocumentEvent::ThumbnailReady { document_id })
+                                .await;
                             success = true;
                         }
                     }
@@ -666,8 +741,8 @@ impl Worker {
                 .await
             {
                 Ok(_) => {
-                    self.event_broadcaster
-                        .send(DocumentEvent::ThumbnailReady { document_id });
+                    self.emit_logged(DocumentEvent::ThumbnailReady { document_id })
+                        .await;
                     true
                 }
                 Err(e) => {
@@ -733,12 +808,19 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::config::AiConfig;
-    use crate::database::{test_pool, SqliteDocumentRepository, SqliteSettingsRepository};
+    use crate::database::{
+        test_pool, SqliteDocumentRepository, SqliteOutboxStore, SqliteSettingsRepository,
+        SqliteWorkflowRepository,
+    };
+    use crate::workflow::WebhookClient;
     use crate::SqliteSearchService;
     use async_trait::async_trait;
     use folio_core::error::Result;
-    use folio_core::models::CreateDocument;
-    use folio_core::ports::{EmbeddingBatch, OcrOutput, SettingsRepository};
+    use folio_core::models::{
+        CreateDocument, RunStatus, WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun,
+        WorkflowTrigger,
+    };
+    use folio_core::ports::{EmbeddingBatch, OcrOutput, SettingsRepository, WorkflowRepository};
 
     struct FixedOcr(&'static str);
 
@@ -772,6 +854,7 @@ mod tests {
     }
 
     struct Fixture {
+        pool: sqlx::SqlitePool,
         worker: Worker,
         repo: Arc<SqliteDocumentRepository>,
         settings: Arc<SqliteSettingsRepository>,
@@ -827,10 +910,11 @@ mod tests {
             thumbnails,
             storage.clone(),
             WorkerConfig::default(),
-            EventBroadcaster::new(16),
+            Arc::new(SqliteOutboxStore::new(pool.clone())),
         );
 
         Fixture {
+            pool,
             worker,
             repo,
             settings,
@@ -1104,5 +1188,130 @@ mod tests {
         assert_eq!(doc.ocr_status, ProcessingStatus::Failed);
         f.worker.repair_orphaned_documents().await.unwrap();
         assert_eq!(f.queue.pending_count().await.unwrap(), 0);
+    }
+
+    /// Give the fixture's worker a workflow runner and queue a run that cannot succeed
+    async fn queue_unreachable_run(
+        f: &mut Fixture,
+    ) -> (Arc<SqliteWorkflowRepository>, WorkflowRun) {
+        let workflows = Arc::new(SqliteWorkflowRepository::new(f.pool.clone()));
+        let runner = Arc::new(WorkflowRunner::new(
+            workflows.clone(),
+            f.repo.clone(),
+            WebhookClient::new(),
+        ));
+        f.worker.workflow_runner = Some(runner);
+
+        let workflow = workflows
+            .create(WorkflowInput {
+                name: "hook".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::DocumentUploaded,
+                conditions: WorkflowConditions::default(),
+                actions: vec![WorkflowAction::Webhook {
+                    url: "http://127.0.0.1:1/hook".into(),
+                    method: Default::default(),
+                    headers: Default::default(),
+                    secret: None,
+                }],
+            })
+            .await
+            .unwrap();
+        let run = WorkflowRun::new(
+            workflow.id,
+            WorkflowTrigger::DocumentUploaded,
+            Some(f.doc_id),
+            "{}".into(),
+        )
+        .with_actions(workflow.actions);
+        assert!(workflows.create_run(&run).await.unwrap());
+        (workflows, run)
+    }
+
+    #[tokio::test]
+    async fn a_run_fails_when_its_job_gives_up() {
+        let mut f = fixture("text").await;
+        let (workflows, run) = queue_unreachable_run(&mut f).await;
+        // The job was picked up and lost before, so it is on its last attempt
+        // while the run has only tried once.
+        sqlx::query("UPDATE jobs SET attempts = max_attempts - 1")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+
+        let job = f
+            .queue
+            .dequeue_class(JobClass::Workflow)
+            .await
+            .unwrap()
+            .unwrap();
+        f.worker.handle_job(job).await;
+
+        let run = workflows.find_run(run.id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        assert!(run.finished_at.is_some());
+        assert!(run.last_error.is_some());
+        assert_eq!(f.queue.pending_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stuck_webhook_does_not_hold_up_document_processing() {
+        let mut f = fixture("text").await;
+        let (workflows, run) = queue_unreachable_run(&mut f).await;
+        // A target that accepts connections and never answers
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/hook", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let mut stuck = workflows
+            .find_by_id(run.workflow_id)
+            .await
+            .unwrap()
+            .unwrap();
+        stuck.actions = vec![WorkflowAction::Webhook {
+            url,
+            method: Default::default(),
+            headers: Default::default(),
+            secret: None,
+        }];
+        sqlx::query("UPDATE workflow_runs SET actions = ?")
+            .bind(serde_json::to_string(&stuck.actions).unwrap())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+
+        let (_stop, shutdown) = watch::channel(false);
+        let processed = async {
+            loop {
+                let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+                if doc.ocr_status == ProcessingStatus::Done {
+                    return;
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        };
+        tokio::select! {
+            _ = f.worker.run(shutdown) => panic!("the worker stopped on its own"),
+            done = tokio::time::timeout(Duration::from_secs(5), processed) => {
+                done.expect("OCR finished while the webhook was still hanging");
+            }
+        }
+
+        let run = workflows.find_run(run.id).await.unwrap().unwrap();
+        assert_eq!(
+            run.status,
+            RunStatus::Pending,
+            "the webhook is still in flight"
+        );
     }
 }

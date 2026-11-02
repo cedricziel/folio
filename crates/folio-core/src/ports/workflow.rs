@@ -30,7 +30,11 @@ pub trait WorkflowRepository: Send + Sync {
     /// Delete a workflow and its runs
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;
 
-    /// Insert a run; returns false when a once-per-document run already exists
+    /// Insert a run and queue its execution job in one transaction
+    ///
+    /// Returns false, queueing nothing, when the run already exists: either
+    /// the same outbox event was handled before or a once-per-document run
+    /// is already there.
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool>;
 
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>>;
@@ -45,12 +49,6 @@ pub trait WorkflowRepository: Send + Sync {
         workflow_id: Id,
         limit: u32,
     ) -> Result<Vec<WorkflowRun>>;
-}
-
-/// Hands a run to the background worker
-#[async_trait]
-pub trait WorkflowJobQueue: Send + Sync {
-    async fn enqueue_run(&self, run_id: Id) -> Result<()>;
 }
 
 /// Facts about stored files that the document model does not carry

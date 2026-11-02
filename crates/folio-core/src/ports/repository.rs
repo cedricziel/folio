@@ -219,6 +219,9 @@ pub trait VaultRepository: Send + Sync {
 
     async fn set_default(&self, user: &UserId, vault: VaultId) -> Result<()>;
 
+    async fn provisioned(&self, user: &UserId) -> Result<bool>;
+    async fn mark_provisioned(&self, user: &UserId) -> Result<()>;
+
     /// The vault used for requests and sources that have no user: the owner's
     /// default vault, else the oldest vault. Creates a member-less `Archive`
     /// when no vault exists at all.

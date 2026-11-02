@@ -251,6 +251,7 @@ pub struct CreateDocumentRequest {
 )]
 pub(crate) async fn create_document(
     DefaultVault(vault): DefaultVault,
+    crate::vault::Uploader(uploader): crate::vault::Uploader,
     State(state): State<AppState>,
     ApiJson(req): ApiJson<CreateDocumentRequest>,
 ) -> ApiResult<Json<Document>> {
@@ -264,6 +265,7 @@ pub(crate) async fn create_document(
                 correspondent_id: req.correspondent_id,
                 document_type_id: req.document_type_id,
                 source: DocumentSource::of(SourceKind::Api),
+                uploaded_by: uploader,
                 ..Default::default()
             },
         )

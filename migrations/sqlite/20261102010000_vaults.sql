@@ -22,6 +22,7 @@ CREATE TABLE vaults (
 );
 
 ALTER TABLE users ADD COLUMN default_vault_id TEXT REFERENCES vaults(id) ON DELETE SET NULL;
+ALTER TABLE users ADD COLUMN vaults_provisioned INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE vault_members (
     vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
@@ -74,7 +75,8 @@ WHERE EXISTS (SELECT 1 FROM documents)
    OR EXISTS (SELECT 1 FROM correspondents)
    OR EXISTS (SELECT 1 FROM document_types)
    OR EXISTS (SELECT 1 FROM workflows)
-   OR EXISTS (SELECT 1 FROM ingestion_sources);
+   OR EXISTS (SELECT 1 FROM ingestion_sources)
+   OR EXISTS (SELECT 1 FROM ingest_ledger);
 
 INSERT INTO vault_members (vault_id, principal_type, user_id, role, granted_at)
 SELECT id, 'user', created_by, 'owner', created_at FROM vaults WHERE created_by IS NOT NULL;
