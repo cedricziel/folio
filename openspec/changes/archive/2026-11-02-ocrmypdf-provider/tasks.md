@@ -6,4 +6,4 @@
 ## 2. Verification
 
 - [x] 2.1 Update provider documentation and the project verify skill; exercise an isolated upload and settings screen tour.
-- [ ] 2.2 Run `make format`, `make lint`, `make test`, and changed-spec validation; commit and archive the change as the final commit.
+- [x] 2.2 Run `make format`, `make lint`, `make test`, and changed-spec validation; commit and archive the change as the final commit.
