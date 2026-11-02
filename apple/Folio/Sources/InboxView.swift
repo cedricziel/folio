@@ -21,6 +21,8 @@ struct InboxView: View {
         session.list
     }
 
+    @Environment(\.undoManager) private var undoManager
+    @State private var trashHistory: DocumentTrashHistory
     @State private var uploads: UploadViewModel
     @State private var showFileImporter = false
     @State private var isDropTargeted = false
@@ -55,6 +57,7 @@ struct InboxView: View {
         self.onNavigate = onNavigate
         self.onOpenDocument = onOpenDocument
         let list = session.list
+        _trashHistory = State(initialValue: DocumentTrashHistory(list: list))
         _uploads = State(
             initialValue: UploadViewModel(service: service) {
                 Task { await list.load() }
@@ -77,7 +80,10 @@ struct InboxView: View {
         // Keep loading alive when compact navigation hides the sidebar.
         .task(id: list.query) { await list.search(list.searchText) }
         .onChange(of: list.query) { pageTask?.cancel() }
-        .onDisappear { pageTask?.cancel() }
+        .onDisappear {
+            pageTask?.cancel()
+            trashHistory.invalidate()
+        }
         .focusedSceneValue(\.inboxActions, actions)
         .onChange(of: router.request, initial: true) { _, request in
             guard let request else { return }
@@ -124,7 +130,7 @@ struct InboxView: View {
             showInbox: { onNavigate(.inbox) },
             showAll: { onNavigate(.all) },
             find: { searchFocused = true },
-            deleteSelected: canEdit
+            deleteSelected: canEdit && !trashHistory.isWorking
                 ? session.selection.flatMap { list.document(for: $0) }.map { document in
                     { pendingDelete = document }
                 } : nil
@@ -293,8 +299,14 @@ struct InboxView: View {
             presenting: pendingDelete
         ) { document in
             Button("Move to Trash", role: .destructive) {
-                Task { await list.delete(document) }
+                Task {
+                    if await trashHistory.moveToTrash(document, undoManager: undoManager) {
+                        if session.selection == document.id { session.selection = nil }
+                        session.path.removeAll { $0 == document.id }
+                    }
+                }
             }
+            .disabled(trashHistory.isWorking)
             Button("Keep", role: .cancel) {}
         } message: { document in
             Text(
@@ -303,6 +315,9 @@ struct InboxView: View {
                 You can restore it from Trash in the web app.
                 """
             )
+            if undoManager != nil {
+                Text("You can also undo this action.")
+            }
         }
     }
 

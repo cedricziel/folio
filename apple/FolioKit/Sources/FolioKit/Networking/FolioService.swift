@@ -12,6 +12,8 @@ public protocol FolioService: Sendable {
     /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.
     func documents(filter: DocumentFilter) async throws -> [Document]
     func deleteDocument(id: Document.ID) async throws
+    /// Restores a trashed document in this service's vault and returns its current metadata.
+    func restoreDocument(id: Document.ID) async throws -> Document
     /// Downloads the original file to a temporary location whose extension matches the file type.
     func downloadFile(for document: Document) async throws -> URL
     func upload(_ file: UploadFile) async throws -> Document
