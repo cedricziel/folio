@@ -8,23 +8,28 @@ private let invoice = DocumentType(name: "Invoice")
 
 private func document(
     _ title: String, content: String? = "text", correspondent: Correspondent? = nil,
-    type: DocumentType? = nil, pages: Int? = 3
+    type: DocumentType? = nil, pages: Int? = 3, ocr: Document.ProcessingStatus = .done
 ) -> Document {
     Document(
         title: title, content: content, correspondentID: correspondent?.id,
         documentTypeID: type?.id, pageCount: pages,
+        ocrStatus: ocr, embedStatus: .skipped,
         createdAt: Date(timeIntervalSince1970: 1_741_950_000)
     )
 }
 
 struct DocumentStatusTests {
-    @Test func documentWithoutTextIsStillBeingRead() {
-        #expect(document("a", content: nil, pages: 3).status == .reading(pages: 3))
-        #expect(document("a", content: "  \n", pages: nil).status == .reading(pages: nil))
+    @Test func pendingOcrIsStillBeingRead() {
+        #expect(document("a", content: nil, pages: 3, ocr: .pending).status == .reading(pages: 3))
+        #expect(document("a", content: "text", pages: nil, ocr: .running).status == .reading(pages: nil))
     }
 
     @Test func readDocumentWithoutCorrespondentOrTypeNeedsAGlance() {
         #expect(document("a").status == .needsReview)
+    }
+
+    @Test func skippedOcrWithoutTextNeedsReview() {
+        #expect(document("a", content: nil, ocr: .skipped).status == .needsReview)
     }
 
     @Test func documentWithAnyClassificationIsFiled() {
@@ -48,8 +53,9 @@ struct DocumentStatusTests {
         let service = MockFolioService(
             documents: [
                 document("Unfiled"), document("Filed", correspondent: stadtwerke),
-                document("Reading", content: nil),
-            ], correspondents: [stadtwerke])
+                document("Reading", content: nil, ocr: .pending),
+            ], correspondents: [stadtwerke]
+        )
         let model = makeModel(service)
         await model.load()
         #expect(model.rows.count == 3)
@@ -65,7 +71,7 @@ struct DocumentStatusTests {
         let service = MockFolioService(
             documents: [
                 document("Jahresabrechnung", correspondent: stadtwerke, type: invoice),
-                document("Scan", content: nil, pages: 3),
+                document("Scan", content: nil, pages: 3, ocr: .pending),
                 document("Letter"),
             ],
             correspondents: [stadtwerke], types: [invoice]
@@ -84,7 +90,7 @@ struct DocumentStatusTests {
     }
 
     @Test func singlePageReadingUsesSingular() async {
-        let model = makeModel(MockFolioService(documents: [document("x", content: nil, pages: 1)]))
+        let model = makeModel(MockFolioService(documents: [document("x", content: nil, pages: 1, ocr: .pending)]))
         await model.load()
         #expect(model.rows[0].statusText == "Reading 1 page…")
     }
@@ -254,7 +260,9 @@ struct DocumentStatusTests {
         await service.setUploadDelay(.milliseconds(50))
         let model = UploadViewModel(service: service) {}
         let first = Task { await model.upload([file("a.pdf"), file("b.pdf")]) }
-        while model.state == .idle { await Task.yield() }
+        while model.state == .idle {
+            await Task.yield()
+        }
         await model.upload([file("c.pdf")])
         await first.value
         #expect(await service.uploads.map(\.filename).contains("c.pdf") == false)
