@@ -52,6 +52,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: Folio uses the camera to scan paper documents.
+        NSFaceIDUsageDescription: Folio uses Face ID to unlock your documents when App lock is enabled.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         ITSAppUsesNonExemptEncryption: false
@@ -76,6 +77,8 @@ targets:
     sources:
       - path: Tests
       - path: Sources/WebAuthenticator.swift
+      - path: Sources/AppLock.swift
+      - path: Sources/DeviceAuthenticator.swift
     dependencies:
       - package: FolioKit
     settings:

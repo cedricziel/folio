@@ -32,6 +32,24 @@ Use `xcrun swift …` and `xcrun xcodebuild …` rather than bare `swift`, so th
 - **Shortcuts and Siri.** App Intents live in `FolioKit/Sources/FolioKit/Intents`, on top of `DocumentCatalog` (`Shortcuts/`), which holds the logic and knows nothing about AppIntents, so a watchOS or visionOS target can reuse it. Intents: Scan a document, Upload to Folio, Search documents, Find documents, Get the latest document, Open a document, Add and Remove a tag, Get a document's file. Entities: Document, Tag, Correspondent, Document type, and an inactive Vault stub. Service-backed intents continue to use the server's default vault. The Scan intent opens the app's review flow, where you choose a destination without changing the library. The vault feature flag remains disabled until service-backed intents support explicit vault selection. They read the server address and sign-in from the App Group and shared keychain, so they work while the app is closed; failures become plain sentences (`ShortcutError`). `Folio/Sources/FolioShortcuts.swift` declares the Siri phrases and pulls the package's intents into the app's metadata. Opening a document in the app records it in Spotlight. Spotlight links retain the document's vault, and legacy UUID-only links open the server's default vault. Keyboard commands (File, View, Find) are in `Commands.swift`; the bindings are listed in `docs/shortcuts.md`.
 - **Shared state.** The app and extensions share the server address through the `group.com.cedricziel.folio` App Group and the bearer token through a keychain access group. Both need a signing team with that group registered before they work on a device.
 
+## App lock
+
+Open the Privacy menu in the workspace toolbar and choose **App lock settings**.
+App lock is off by default and applies to this installation. Enabling or disabling
+it requires system authentication. Face ID or Touch ID is used when available,
+with the device passcode or Mac password as fallback.
+
+Choose **Immediately**, **After 1 minute** (the default), or **After 5 minutes**
+for the time away before another unlock is required. Folio covers its windows
+while inactive, even within that grace period. Launching Folio, a device-lock
+notification, or **Lock now** requires authentication again. On Mac and iPad,
+Command-Shift-L locks Folio. Cancelling authentication leaves the app locked.
+
+App lock protects the Folio interface. Files, Finder, Shortcuts, Spotlight
+results, and the share extension keep their existing access. It does not encrypt
+cached files or change server permissions. App lock preferences stay outside the
+shared App Group and do not alter the shared sign-in.
+
 ## Tests
 
 ```sh

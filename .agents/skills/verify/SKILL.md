@@ -8,6 +8,9 @@ description: Verify Folio MCP and Apple changes with isolated protocol, package,
 From the repository root, run `make apple-project`.
 Create `verify_dir` with `mktemp -d /private/tmp/folio-verify.XXXXXX`.
 Remove that directory after verification, including on failure.
+On a host with limited disk space, run suites sequentially and remove each
+completed suite's scratch build before starting the next. Keep logs until all
+checks finish.
 
 Run the package suite for document status mapping, view models, and API adapters:
 
@@ -39,6 +42,22 @@ xcrun xcodebuild test -project apple/Folio/Folio.xcodeproj -scheme Folio \
 The tests exercise authentication completion from a background queue without
 launching the app, opening a browser, or accessing credentials.
 Do not launch the app against existing App Group or keychain state.
+
+## Apple App lock
+
+`FolioAuthTests/AppLockTests` uses unique temporary UserDefaults suites, fake
+authentication, and an injected clock. It covers persisted launch locking,
+setting authentication, timeout boundaries, inactive privacy state, and stale
+authentication results after backgrounding or device lock. It never invokes
+LocalAuthentication or accesses the user's app preferences.
+
+Before release, use an isolated simulator or test account to check the Privacy
+menu, Lock now, every timeout, multiple windows, and inactive snapshots with a
+preview or sheet open. Check Face ID or Touch ID and credential fallback on a
+test device. Cancel a prompt, lock the device during a prompt, and return after
+both short and long absences. macOS screen lock also uses the distributed
+`com.apple.screenIsLocked` notification, so verify it on each supported macOS
+release. These device and visual checks are not covered by the hostless tests.
 
 ## Apple File Provider
 

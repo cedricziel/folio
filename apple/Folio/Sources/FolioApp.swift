@@ -7,11 +7,13 @@ typealias Document = FolioKit.Document
 @main
 struct FolioApp: App {
     @State private var model = AppModel()
+    @State private var security = AppLockLifecycle()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
-            RootView(model: model)
+            RootView(model: model, lock: security.lock)
+                .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
                 .tint(.archive)
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
@@ -22,7 +24,10 @@ struct FolioApp: App {
                     }
                 }
         }
-        .commands { FolioCommands() }
+        .commands {
+            FolioCommands(lock: security.lock)
+            AppLockCommands(lock: security.lock)
+        }
     }
 }
 
@@ -64,11 +69,29 @@ final class AppModel {
 
 struct RootView: View {
     let model: AppModel
+    let lock: AppLock
+    @State private var showLockSettings = false
 
     var body: some View {
-        if let url = model.serverURL {
+        if lock.isLocked {
+            AppLockView(lock: lock)
+        } else if let url = model.serverURL {
             WorkspaceView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
                 .id(url)
+                .toolbar {
+                    ToolbarItem {
+                        Menu {
+                            Button("App lock settings…") { showLockSettings = true }
+                            if lock.isEnabled {
+                                Button("Lock now", systemImage: "lock") { lock.lockNow() }
+                            }
+                        } label: {
+                            Label("Privacy", systemImage: "lock.shield")
+                        }
+                    }
+                }
+                .sheet(isPresented: $showLockSettings) { AppLockSettingsView(lock: lock) }
+                .onDisappear { showLockSettings = false }
         } else {
             OnboardingView(model: model)
         }
