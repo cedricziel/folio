@@ -1540,7 +1540,26 @@ mod forward {
         let auth = AuthState::new(store.clone(), Some(base.into()))
             .with_setup_token(SETUP_TOKEN)
             .with_forward(forward);
+        let identity_store = store.clone();
         let router = auth_router(auth.clone())
+            .route(
+                "/session-user",
+                get(move |headers: HeaderMap| async move {
+                    let token = headers[header::COOKIE]
+                        .to_str()
+                        .unwrap()
+                        .split(';')
+                        .map(str::trim)
+                        .find_map(|cookie| cookie.strip_prefix("folio_session="))
+                        .unwrap();
+                    identity_store
+                        .find_session(&folio_auth::crypto::hash_token(token))
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .user_id
+                }),
+            )
             .merge(Router::new().route("/", get(|| async { "home" })).route(
                 "/static/echo",
                 get(|headers: HeaderMap| async move {
@@ -2006,6 +2025,77 @@ mod forward {
             .await;
         }
         assert_eq!(session_count(&f).await, 1);
+    }
+
+    async fn rejects_changed_identity(accept: &str) {
+        let f = fwd_app(|_| {}).await;
+        let login = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let req = Request::get("/")
+            .header("Accept", accept)
+            .header("Remote-User", "bob")
+            .header("Cookie", session_cookie(&login))
+            .body(Body::empty())
+            .unwrap();
+
+        let res = send_from(&f.app, TRUSTED, req).await;
+
+        assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+        assert_ne!(res.body, "home");
+        assert_eq!(session_count(&f).await, 1);
+    }
+
+    #[tokio::test]
+    async fn changed_identity_rejects_json_with_the_previous_session() {
+        rejects_changed_identity("application/json").await;
+    }
+
+    #[tokio::test]
+    async fn changed_identity_rejects_fetch_with_the_previous_session() {
+        rejects_changed_identity("*/*").await;
+    }
+
+    #[tokio::test]
+    async fn matching_identity_keeps_json_requests_authenticated() {
+        let f = fwd_app(|_| {}).await;
+        let login = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let req = Request::get("/")
+            .header("Accept", "application/json")
+            .header("Remote-User", "alice")
+            .header("Cookie", session_cookie(&login))
+            .body(Body::empty())
+            .unwrap();
+
+        let res = send_from(&f.app, TRUSTED, req).await;
+
+        assert_eq!(res.status, StatusCode::OK);
+        assert_eq!(res.body, "home");
+        assert!(res.cookies().is_empty());
+        assert_eq!(session_count(&f).await, 1);
+    }
+
+    #[tokio::test]
+    async fn changed_identity_replaces_the_session_on_html_navigation() {
+        let f = fwd_app(|_| {}).await;
+        let login = send_from(&f.app, TRUSTED, with_identity("/", "alice", &[])).await;
+        let previous = session_cookie(&login);
+
+        let res = send_from(
+            &f.app,
+            TRUSTED,
+            with_identity("/session-user", "bob", &[("Cookie", &previous)]),
+        )
+        .await;
+
+        assert_eq!(res.status, StatusCode::OK);
+        let replacement = session_cookie(&res);
+        assert_ne!(replacement, previous);
+        let bob = f
+            .store
+            .find_user_by_external("forward", "bob")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(res.body, bob.id);
     }
 
     #[tokio::test]
