@@ -271,6 +271,7 @@ impl Harness {
             id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             event,
             origin: EventOrigin::User,
+            context: None,
             created_at: chrono::Utc::now(),
             attempts: 1,
         }

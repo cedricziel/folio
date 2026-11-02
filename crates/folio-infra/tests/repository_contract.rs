@@ -2159,6 +2159,302 @@ async fn exec(db: &Database, sqlite: &[&str], postgres: &[&str]) {
     }
 }
 
+async fn event_context_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.create("Captured origin", None).await.unwrap().id;
+    let outside = r
+        .vaults
+        .create("Captured destination", None)
+        .await
+        .unwrap()
+        .id;
+    let sender = r
+        .correspondents
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: "Original sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let kind = r
+        .document_types
+        .create(
+            vault,
+            CreateDocumentType {
+                name: "Original type".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let alpha = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "alpha".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    let beta = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "beta".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    flush_outbox(&r).await;
+    let source = DocumentSource::folder(
+        "captured folder",
+        folio_core::models::FolderOrigin {
+            relative_path: "records/original.pdf".into(),
+            original_filename: "original.pdf".into(),
+        },
+    );
+    let doc = r
+        .documents
+        .create_for_upload(
+            vault,
+            CreateDocument {
+                title: "Original title".into(),
+                original_filename: Some("original.pdf".into()),
+                mime_type: Some("application/pdf".into()),
+                content: Some("large OCR text".repeat(100_000)),
+                correspondent_id: Some(sender.id),
+                document_type_id: Some(kind.id),
+                tag_ids: vec![beta.id, alpha.id],
+                source: source.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(flush_outbox(&r).await.is_empty());
+    r.documents
+        .finalize_upload(vault, doc.id, "immutable/original")
+        .await
+        .unwrap();
+    let created = flush_outbox(&r).await.pop().unwrap();
+    let original = created.context.as_ref().unwrap();
+    assert_eq!(original.document_id, doc.id);
+    assert_eq!(original.vault_id, vault);
+    assert_eq!(original.title, "Original title");
+    assert_eq!(original.original_filename.as_deref(), Some("original.pdf"));
+    assert_eq!(original.mime_type.as_deref(), Some("application/pdf"));
+    assert_eq!(original.file_path.as_deref(), Some("immutable/original"));
+    assert_eq!(original.source, source);
+    assert_eq!(original.correspondent_id, Some(sender.id));
+    assert_eq!(
+        original.correspondent_name.as_deref(),
+        Some("Original sender")
+    );
+    assert_eq!(original.document_type_id, Some(kind.id));
+    assert_eq!(
+        original.document_type_name.as_deref(),
+        Some("Original type")
+    );
+    let mut expected_tags = vec![
+        folio_core::models::NamedRef {
+            id: alpha.id,
+            name: "alpha".into(),
+        },
+        folio_core::models::NamedRef {
+            id: beta.id,
+            name: "beta".into(),
+        },
+    ];
+    expected_tags.sort_by_key(|tag| tag.id);
+    assert_eq!(original.tags, expected_tags);
+    let payload = folio_core::events::encode_outbox_payload_with_context(
+        &created.event,
+        created.origin,
+        Some(original),
+    );
+    assert!(
+        payload.len() < 4096,
+        "OCR text must not enter the event payload"
+    );
+    assert!(!payload.contains("large OCR text"));
+    r.correspondents
+        .update(
+            vault,
+            sender.id,
+            UpdateCorrespondent {
+                name: Some("Later sender".into()),
+            },
+        )
+        .await
+        .unwrap();
+    r.document_types
+        .update(
+            vault,
+            kind.id,
+            UpdateDocumentType {
+                name: Some("Later type".into()),
+            },
+        )
+        .await
+        .unwrap();
+    r.tags
+        .update(
+            vault,
+            alpha.id,
+            UpdateTag {
+                name: Some("later alpha".into()),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    exec(db,
+        &["CREATE TRIGGER refuse_capture BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &["CREATE FUNCTION refuse_capture() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+          "CREATE TRIGGER refuse_capture BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION refuse_capture()"],
+    ).await;
+    assert!(r
+        .documents
+        .update(
+            vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("must roll back".into()),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_capture"],
+        &[
+            "DROP TRIGGER refuse_capture ON outbox_events",
+            "DROP FUNCTION refuse_capture()",
+        ],
+    )
+    .await;
+    assert_eq!(
+        r.documents
+            .find_by_id(vault, doc.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "Original title"
+    );
+    assert!(flush_outbox(&r).await.is_empty());
+    r.workflow_documents
+        .update(
+            vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("Later title".into()),
+                tag_ids: Some(vec![alpha.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let updated = flush_outbox(&r).await.pop().unwrap();
+    assert_eq!(updated.origin, EventOrigin::Workflow);
+    let later = updated.context.as_ref().unwrap();
+    assert_eq!(later.title, "Later title");
+    assert_eq!(later.correspondent_name.as_deref(), Some("Later sender"));
+    assert_eq!(later.document_type_name.as_deref(), Some("Later type"));
+    assert_eq!(later.tags[0].name, "later alpha");
+    let replayed = r
+        .outbox
+        .replay(created.id - 1, created.created_at, 10)
+        .await
+        .unwrap();
+    assert_eq!(replayed[0].context, created.context);
+    assert_eq!(replayed[0].created_at, created.created_at);
+    assert!(updated.created_at >= created.created_at);
+    let progress = DocumentEvent::Processed {
+        document_id: doc.id,
+    };
+    assert!(r
+        .outbox
+        .append_document(outside, &progress, EventOrigin::User)
+        .await
+        .is_err());
+    assert!(r
+        .outbox
+        .append_document(
+            vault,
+            &DocumentEvent::Processed {
+                document_id: Id::new_v4()
+            },
+            EventOrigin::User
+        )
+        .await
+        .is_err());
+    assert!(flush_outbox(&r).await.is_empty());
+    r.outbox
+        .append_document(vault, &progress, EventOrigin::User)
+        .await
+        .unwrap();
+    assert_eq!(
+        flush_outbox(&r).await[0].context.as_ref().unwrap().title,
+        "Later title"
+    );
+    r.documents
+        .move_to(doc.id, vault, outside, None)
+        .await
+        .unwrap();
+    flush_outbox(&r).await;
+    assert!(r
+        .outbox
+        .append_document(vault, &progress, EventOrigin::User)
+        .await
+        .is_err());
+    assert!(flush_outbox(&r).await.is_empty());
+    r.outbox
+        .append_document(outside, &progress, EventOrigin::User)
+        .await
+        .unwrap();
+    assert_eq!(
+        flush_outbox(&r).await[0].context.as_ref().unwrap().vault_id,
+        outside
+    );
+    r.documents.delete(outside, doc.id).await.unwrap();
+    flush_outbox(&r).await;
+    assert!(r
+        .outbox
+        .append_document(outside, &progress, EventOrigin::User)
+        .await
+        .is_err());
+    assert!(flush_outbox(&r).await.is_empty());
+    r.documents.request_purge(outside, doc.id).await.unwrap();
+    r.documents.finalize_purge(outside, doc.id).await.unwrap();
+    let deleted = flush_outbox(&r).await.pop().unwrap();
+    assert_eq!(deleted.context.as_ref().unwrap().vault_id, outside);
+    assert_eq!(deleted.context.as_ref().unwrap().title, "Later title");
+    let DocumentEvent::Deleted {
+        snapshot: Some(ref fallback),
+        ..
+    } = deleted.event
+    else {
+        panic!("deletion snapshot")
+    };
+    assert!(fallback.document.content.is_none());
+    assert!(
+        folio_core::events::encode_outbox_payload_with_context(
+            &deleted.event,
+            deleted.origin,
+            deleted.context.as_deref()
+        )
+        .len()
+            < 8192
+    );
+}
+
 async fn upload_finalization_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r
@@ -3308,6 +3604,7 @@ async fn run_contract(db: &Database) {
     concurrent_dequeue_contract(&repos).await;
     workflows_contract(&repos).await;
     ingestion_contract(&repos).await;
+    event_context_contract(db).await;
     upload_finalization_contract(db).await;
     outbox_contract(db).await;
     run_atomicity_contract(db).await;
@@ -3528,4 +3825,131 @@ async fn postgres_without_the_vector_extension_falls_back() {
     assert!(!PostgresSearchService::new(pool.clone())
         .await
         .uses_pgvector());
+}
+
+#[tokio::test]
+async fn postgres_scoped_capture_after_lock_wait_sees_one_complete_metadata_version() {
+    let started = Postgres::default().with_tag("17-alpine").start().await;
+    let Some(container) = common::container_or_skip("PostgreSQL capture lock wait", started) else {
+        return;
+    };
+    let host = container.get_host().await.unwrap();
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let db = Database::connect(&format!(
+        "postgres://postgres:postgres@{host}:{port}/postgres"
+    ))
+    .await
+    .unwrap();
+    db.migrate().await.unwrap();
+    let Database::Postgres(pool) = &db else {
+        unreachable!()
+    };
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    let old_tag = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "before".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    let new_tag = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "after".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    let doc = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                tag_ids: vec![old_tag.id],
+                ..new_document("before")
+            },
+        )
+        .await
+        .unwrap();
+    let mut writer = pool.begin().await.unwrap();
+    let writer_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE documents SET title = 'after' WHERE id = $1")
+        .bind(doc.id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM document_tags WHERE document_id = $1")
+        .bind(doc.id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)")
+        .bind(doc.id)
+        .bind(new_tag.id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let outbox = r.outbox.clone();
+    let append = tokio::spawn(async move {
+        outbox
+            .append_document(
+                vault,
+                &DocumentEvent::Processed {
+                    document_id: doc.id,
+                },
+                EventOrigin::User,
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                AND wait_event_type = 'Lock' AND $1 = ANY(pg_blocking_pids(pid)))",
+            )
+            .bind(writer_pid)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if waiting {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("scoped append must wait for the writer's document lock");
+    writer.commit().await.unwrap();
+
+    let id = tokio::time::timeout(std::time::Duration::from_secs(5), append)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let events = r
+        .outbox
+        .replay(id - 1, Utc::now() - Duration::days(1), 10)
+        .await
+        .unwrap();
+    let snapshot = events[0].context.as_ref().unwrap();
+    assert_eq!(snapshot.title, "after");
+    assert_eq!(
+        snapshot.tags,
+        vec![folio_core::models::NamedRef {
+            id: new_tag.id,
+            name: "after".into()
+        }]
+    );
 }

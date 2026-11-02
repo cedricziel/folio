@@ -145,14 +145,16 @@ impl Worker {
     }
 
     /// Persist an event, to be announced to clients and workflows by the dispatcher
-    async fn emit(&self, event: DocumentEvent) -> Result<(), BoxError> {
-        self.outbox.append(&event, EventOrigin::User).await?;
+    async fn emit(&self, vault: VaultId, event: DocumentEvent) -> Result<(), BoxError> {
+        self.outbox
+            .append_document(vault, &event, EventOrigin::User)
+            .await?;
         Ok(())
     }
 
     /// Like [`emit`](Self::emit) for a progress hint that must not fail the step it follows
-    async fn emit_logged(&self, event: DocumentEvent) {
-        if let Err(e) = self.emit(event).await {
+    async fn emit_logged(&self, vault: VaultId, event: DocumentEvent) {
+        if let Err(e) = self.emit(vault, event).await {
             error!("Failed to persist event: {e}");
         }
     }
@@ -558,7 +560,7 @@ impl Worker {
         info!("Generated thumbnail for document {}", document_id);
 
         // Emit event
-        self.emit(DocumentEvent::ThumbnailReady { document_id })
+        self.emit(vault, DocumentEvent::ThumbnailReady { document_id })
             .await?;
 
         Ok(())
@@ -642,7 +644,7 @@ impl Worker {
 
         let has_text = !output.text.is_empty();
         if has_text {
-            self.emit(DocumentEvent::OcrComplete { document_id })
+            self.emit(vault, DocumentEvent::OcrComplete { document_id })
                 .await?;
         }
         self.schedule_embedding(vault, document_id, has_text).await
@@ -658,7 +660,8 @@ impl Worker {
         self.document_repo
             .set_stage_status(vault, document_id, ProcessingStage::Embed, status)
             .await?;
-        self.emit(DocumentEvent::Processed { document_id }).await?;
+        self.emit(vault, DocumentEvent::Processed { document_id })
+            .await?;
         Ok(())
     }
 
@@ -828,7 +831,7 @@ impl Worker {
                 {
                     Ok(_) => {
                         if page == 1 {
-                            self.emit_logged(DocumentEvent::ThumbnailReady { document_id })
+                            self.emit_logged(vault, DocumentEvent::ThumbnailReady { document_id })
                                 .await;
                             success = true;
                         }
@@ -849,7 +852,7 @@ impl Worker {
                 .await
             {
                 Ok(_) => {
-                    self.emit_logged(DocumentEvent::ThumbnailReady { document_id })
+                    self.emit_logged(vault, DocumentEvent::ThumbnailReady { document_id })
                         .await;
                     true
                 }

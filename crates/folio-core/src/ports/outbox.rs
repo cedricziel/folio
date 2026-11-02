@@ -8,6 +8,7 @@ use tokio::sync::Notify;
 
 use crate::error::Result;
 use crate::events::{DocumentEvent, EventOrigin, OutboxEvent};
+use crate::models::VaultId;
 
 /// Durable queue of domain events
 ///
@@ -21,6 +22,14 @@ use crate::events::{DocumentEvent, EventOrigin, OutboxEvent};
 pub trait OutboxStore: Send + Sync {
     /// Persist an event on its own and wake the dispatcher
     async fn append(&self, event: &DocumentEvent, origin: EventOrigin) -> Result<i64>;
+
+    /// Capture an active document in the expected vault and persist its event atomically.
+    async fn append_document(
+        &self,
+        vault: VaultId,
+        event: &DocumentEvent,
+        origin: EventOrigin,
+    ) -> Result<i64>;
 
     /// Claim up to `limit` due, undispatched events for `lease`
     ///
