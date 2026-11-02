@@ -10,5 +10,5 @@
 
 ## 3. Verification
 
-- [ ] 3.1 Run make format, make lint, make test, and relevant isolated project verify suites.
-- [ ] 3.2 Validate and archive this change.
+- [x] 3.1 Run make format, make lint, make test, and relevant isolated project verify suites.
+- [x] 3.2 Validate and archive this change.
