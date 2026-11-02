@@ -21,9 +21,9 @@
         {% if document|can_edit_document %}
         <form action="{{ "/documents"|vault_url }}/{{ document.id }}/delete" method="post"
               data-controller="confirm"
-              data-confirm-message-value="Delete this document?"
+              data-confirm-message-value="Move this document to Trash?"
               data-action="submit->confirm#confirm">
-            <button type="submit" class="f-btn f-btn-quiet f-btn-danger">Delete</button>
+            <button type="submit" class="f-btn f-btn-quiet f-btn-danger">Move to Trash</button>
         </form>
         {% endif %}
     </div>

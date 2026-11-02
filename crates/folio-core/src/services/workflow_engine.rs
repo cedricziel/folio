@@ -77,7 +77,10 @@ impl WorkflowEngine {
             DocumentEvent::Processed { .. } => Some(WorkflowTrigger::DocumentProcessed),
             DocumentEvent::Updated { .. } => Some(WorkflowTrigger::DocumentUpdated),
             DocumentEvent::Deleted { .. } => Some(WorkflowTrigger::DocumentDeleted),
-            DocumentEvent::ThumbnailReady { .. } | DocumentEvent::OcrComplete { .. } => None,
+            DocumentEvent::ThumbnailReady { .. }
+            | DocumentEvent::OcrComplete { .. }
+            | DocumentEvent::Trashed { .. }
+            | DocumentEvent::Restored { .. } => None,
         }
     }
 

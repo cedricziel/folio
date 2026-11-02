@@ -1,0 +1,69 @@
+{% extends "base.html" %} {% block title %}Trash - Folio{% endblock %} {% block
+content %}
+<section class="page" data-view="trash">
+  <header class="page-head">
+    <h1 class="title">Trash</h1>
+    <p class="lede">
+      Documents stay here until you choose Delete forever. Restore them whenever
+      you need them.
+    </p>
+  </header>
+
+  <turbo-frame id="trash-content">
+    {% if rows.is_empty() %}
+    <div class="empty-state">
+      <h2 class="heading">Trash is empty.</h2>
+      <p class="lede">Documents you move to Trash appear here.</p>
+      <a href="{{ "/?view=all"|vault_url }}" class="f-btn" data-turbo-frame="_top"
+        >See all documents</a
+      >
+    </div>
+    {% else %}
+    <div class="f-list">
+      {% for row in rows %}
+      <article
+        class="f-row f-row-plain trash-row"
+        aria-labelledby="trash-title-{{ row.id }}"
+      >
+        <div class="row-main">
+          <h2 class="f-row-title" id="trash-title-{{ row.id }}">
+            {{ row.title }}
+          </h2>
+          {% if !row.subline.is_empty() %}
+          <div class="f-row-sub">{{ row.subline }}</div>
+          {% endif %}
+        </div>
+        {% if row.purge_pending %}
+        <span class="f-status f-status-pending" role="status"
+          >Deleting permanently</span
+        >
+        {% else if row.can_delete %}
+        <div class="doc-actions">
+          <form
+            action="{{ "/documents"|vault_url }}/{{ row.id }}/restore"
+            method="post"
+            data-turbo="false"
+          >
+            <button type="submit" class="f-btn">Restore</button>
+          </form>
+          <form
+            action="{{ "/documents"|vault_url }}/{{ row.id }}/delete-forever"
+            method="post"
+            data-turbo="false"
+            data-controller="confirm"
+            data-confirm-message-value="Delete '{{ row.title }}' forever? This permanently deletes the document and its files. This cannot be undone."
+            data-action="submit->confirm#confirm"
+          >
+            <button type="submit" class="f-btn f-btn-quiet f-btn-danger">
+              Delete forever
+            </button>
+          </form>
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </turbo-frame>
+</section>
+{% endblock %}

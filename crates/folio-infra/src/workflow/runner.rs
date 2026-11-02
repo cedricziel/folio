@@ -88,6 +88,18 @@ impl WorkflowRunner {
             return Ok(RunOutcome::Failed);
         };
 
+        if let Some(document_id) = run.document_id {
+            if self.documents.locate_trashed(document_id).await?.is_some() {
+                self.finish(
+                    &mut run,
+                    RunStatus::Failed,
+                    Some("Document is in trash".into()),
+                )
+                .await?;
+                return Ok(RunOutcome::Failed);
+            }
+        }
+
         run.attempts += 1;
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();

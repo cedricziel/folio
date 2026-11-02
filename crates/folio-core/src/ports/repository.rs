@@ -15,7 +15,8 @@ use crate::models::{
 ///
 /// Every method that addresses a document or vocabulary entry takes the vault
 /// it must live in; a row of another vault behaves as if it did not exist. The
-/// exceptions are explicit: [`DocumentRepository::locate`] and the
+/// exceptions are explicit: [`DocumentRepository::locate`], [`DocumentRepository::locate_retained`],
+/// [`DocumentRepository::locate_trashed`], [`DocumentRepository::list_purge_requested`] and the
 /// background-work queries ([`DocumentRepository::list_all`], [`DocumentRepository::list_pending`],
 /// [`DocumentRepository::reset_embedding_status`]), which span all vaults.
 #[async_trait]
@@ -60,8 +61,32 @@ pub trait DocumentRepository: Send + Sync {
     /// Update an existing document
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document>;
 
-    /// Delete a document by ID
+    /// Move a document to trash without deleting stored objects. Repeats succeed.
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;
+
+    /// Locate a retained document regardless of trash state, in one read.
+    async fn locate_retained(&self, id: Id) -> Result<Option<VaultId>>;
+
+    /// Locate a trashed document, including one awaiting permanent deletion.
+    async fn locate_trashed(&self, id: Id) -> Result<Option<VaultId>>;
+
+    /// Read a trashed document within its vault.
+    async fn find_trashed_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
+
+    /// List trash newest first, including pending permanent deletions.
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Document>>;
+
+    /// Restore a trashed document; conflicts once permanent deletion was requested.
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Document>;
+
+    /// Persist irreversible deletion intent and a cleanup job atomically. Repeats succeed.
+    async fn request_purge(&self, vault: VaultId, id: Id) -> Result<()>;
+
+    /// Documents explicitly awaiting permanent deletion, across all vaults.
+    async fn list_purge_requested(&self) -> Result<Vec<Document>>;
+
+    /// Remove an explicitly requested document after its storage cleanup succeeds.
+    async fn finalize_purge(&self, vault: VaultId, id: Id) -> Result<()>;
 
     /// Update the file path for a document
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
@@ -81,7 +106,7 @@ pub trait DocumentRepository: Send + Sync {
     /// Store OCR output (possibly empty) and mark the OCR stage done
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()>;
 
-    /// Every document of every vault, for storage maintenance and counts
+    /// Every active document of every vault, for storage maintenance and counts
     async fn list_all(&self) -> Result<Vec<Document>>;
 
     /// List documents whose given stage is still pending, in every vault

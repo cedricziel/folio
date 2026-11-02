@@ -59,8 +59,18 @@ impl DocumentImporter for Importer {
             Err(e) => Err(e),
         };
         if let Err(e) = stored {
-            // A record without its file is useless; do not leave one behind.
-            let _ = self.documents.delete(vault, document.id).await;
+            // Failed creation can leave an object behind even when its path was not saved.
+            let cleanup = async {
+                self.documents.delete(vault, document.id).await?;
+                self.documents.request_purge(vault, document.id).await
+            }
+            .await;
+            if let Err(cleanup_error) = cleanup {
+                tracing::error!(
+                    "Failed to schedule cleanup of incomplete upload {}: {cleanup_error}",
+                    document.id
+                );
+            }
             return Err(e);
         }
         // The file is stored, so a failed enqueue leaves a usable document

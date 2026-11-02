@@ -41,7 +41,7 @@ async fn imports_with_source_tags_and_the_stored_file() {
 }
 
 #[tokio::test]
-async fn the_same_content_is_not_imported_twice_until_its_document_is_gone() {
+async fn the_same_content_is_deduplicated_until_its_document_is_permanently_deleted() {
     let h = Harness::new().await;
     let IngestOutcome::Imported(first) = h.ingest(file_item(b"same", &[])).await else {
         panic!("imported")
@@ -55,8 +55,38 @@ async fn the_same_content_is_not_imported_twice_until_its_document_is_gone() {
     h.documents.delete(h.vault, first.id).await.unwrap();
     assert!(matches!(
         h.ingest(file_item(b"same", &[])).await,
-        IngestOutcome::Imported(_)
+        IngestOutcome::Duplicate
     ));
+    assert_eq!(h.documents.list_trash(h.vault).await.unwrap().len(), 1);
+    assert!(h.documents.list(h.vault, None).await.unwrap().is_empty());
+
+    h.documents.restore(h.vault, first.id).await.unwrap();
+    assert!(matches!(
+        h.ingest(file_item(b"same", &[])).await,
+        IngestOutcome::Duplicate
+    ));
+    assert_eq!(
+        h.documents.list(h.vault, None).await.unwrap()[0].id,
+        first.id
+    );
+    assert_eq!(h.documents.list(h.vault, None).await.unwrap().len(), 1);
+
+    h.documents.delete(h.vault, first.id).await.unwrap();
+    h.documents.request_purge(h.vault, first.id).await.unwrap();
+    assert!(matches!(
+        h.ingest(file_item(b"same", &[])).await,
+        IngestOutcome::Duplicate
+    ));
+    folio_core::ports::purge_document(h.store.as_ref(), first.id)
+        .await
+        .unwrap();
+    h.documents.finalize_purge(h.vault, first.id).await.unwrap();
+
+    let IngestOutcome::Imported(reimported) = h.ingest(file_item(b"same", &[])).await else {
+        panic!("permanently deleted content may be imported again");
+    };
+    assert_ne!(reimported.id, first.id);
+    assert_eq!(h.documents.list(h.vault, None).await.unwrap().len(), 1);
 }
 
 #[tokio::test]

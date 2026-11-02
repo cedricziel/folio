@@ -14,6 +14,7 @@ use crate::vault::{DefaultVault, CURRENT_VAULT};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nav {
     Inbox,
+    Trash,
     All,
     Manage,
     Settings,
@@ -25,6 +26,7 @@ impl Nav {
     pub fn as_str(self) -> &'static str {
         match self {
             Nav::Inbox => "inbox",
+            Nav::Trash => "trash",
             Nav::All => "all",
             Nav::Manage => "manage",
             Nav::Settings => "settings",

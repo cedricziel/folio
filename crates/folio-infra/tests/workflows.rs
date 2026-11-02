@@ -572,6 +572,15 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .unwrap();
 
     h.documents.delete(h.vault, doc.id).await.unwrap();
+    let trash_event = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|e| matches!(e.event, DocumentEvent::Trashed { .. }))
+        .unwrap();
+    assert!(h.engine.handle(&trash_event).await.unwrap().is_empty());
+    h.documents.request_purge(h.vault, doc.id).await.unwrap();
+    h.documents.finalize_purge(h.vault, doc.id).await.unwrap();
     let event = h
         .pending_events()
         .await
@@ -587,6 +596,28 @@ async fn deleted_runs_carry_the_document_as_it_was() {
     assert_eq!(payload["document"]["id"], doc.id.to_string());
     assert_eq!(payload["document"]["filename"], "gone.pdf");
     assert_eq!(payload["document"]["correspondent"]["name"], "ACME");
+}
+
+#[tokio::test]
+async fn queued_workflow_does_not_send_a_trashed_document() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let workflow = h.webhook_workflow(server.url("trashed"), None).await;
+    let document = h.document("private.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, document.id).await;
+    h.documents.delete(h.vault, document.id).await.unwrap();
+
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    assert_eq!(server.hits("trashed"), 0);
+    assert!(h
+        .workflows
+        .find_run(run.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .finished_at
+        .is_some());
 }
 
 #[tokio::test]

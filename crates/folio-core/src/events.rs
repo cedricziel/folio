@@ -32,7 +32,11 @@ pub enum DocumentEvent {
     ThumbnailReady { document_id: Uuid },
     /// Document OCR completed
     OcrComplete { document_id: Uuid },
-    /// Document was deleted
+    /// Document moved to trash.
+    Trashed { document_id: Uuid },
+    /// Document returned from trash.
+    Restored { document_id: Uuid },
+    /// Document was permanently deleted
     Deleted {
         document_id: Uuid,
         #[serde(skip)]
@@ -51,6 +55,8 @@ impl DocumentEvent {
             | Self::Updated { document_id }
             | Self::ThumbnailReady { document_id }
             | Self::OcrComplete { document_id }
+            | Self::Trashed { document_id }
+            | Self::Restored { document_id }
             | Self::Deleted { document_id, .. }
             | Self::Processed { document_id } => *document_id,
         }
@@ -63,6 +69,8 @@ impl DocumentEvent {
             Self::Updated { .. } => "updated",
             Self::ThumbnailReady { .. } => "thumbnail_ready",
             Self::OcrComplete { .. } => "ocr_complete",
+            Self::Trashed { .. } => "trashed",
+            Self::Restored { .. } => "restored",
             Self::Deleted { .. } => "deleted",
             Self::Processed { .. } => "processed",
         }

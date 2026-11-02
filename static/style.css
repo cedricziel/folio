@@ -442,6 +442,14 @@ a:not([class]):hover,
   align-self: start;
   text-align: right;
 }
+.trash-row .f-row-title {
+  margin: 0;
+}
+@media (max-width: 768px) {
+  .trash-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .f-row .f-thumb img {
   display: block;
   width: 100%;

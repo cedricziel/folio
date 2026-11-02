@@ -32,6 +32,17 @@ pub async fn turbo_streams_for(
     event: &DocumentEvent,
 ) -> ApiResult<String> {
     let streams = match event {
+        DocumentEvent::Trashed { document_id } => {
+            if state
+                .document_repo
+                .find_trashed_by_id(vault, *document_id)
+                .await?
+                .is_none()
+            {
+                return Ok(String::new());
+            }
+            DocumentStreams::removed(state, vault, *document_id).await?
+        }
         DocumentEvent::Deleted {
             document_id,
             snapshot,
@@ -53,7 +64,9 @@ pub async fn turbo_streams_for(
                 return Ok(String::new());
             };
             match event {
-                DocumentEvent::Created { .. } => DocumentStreams::added(state, document).await?,
+                DocumentEvent::Created { .. } | DocumentEvent::Restored { .. } => {
+                    DocumentStreams::added(state, document).await?
+                }
                 _ => DocumentStreams::changed(state, document).await?,
             }
         }

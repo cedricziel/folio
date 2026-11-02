@@ -42,13 +42,14 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
 
 /// The document must exist in `vault`
 async fn require_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Result<()> {
-    let found: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2 FOR UPDATE")
-            .bind(id)
-            .bind(vault.0)
-            .fetch_optional(conn)
-            .await
-            .map_err(repo_err)?;
+    let found: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE",
+    )
+    .bind(id)
+    .bind(vault.0)
+    .fetch_optional(conn)
+    .await
+    .map_err(repo_err)?;
     found.map(|_| ()).ok_or_else(|| not_found("Document", id))
 }
 
@@ -112,7 +113,7 @@ macro_rules! select_documents {
             "SELECT id, vault_id, uploaded_by, title, content, original_filename, file_path, ",
             "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
-            "ocr_status, embed_status, ",
+            "ocr_status, embed_status, deleted_at, purge_requested_at, ",
             "created_at, updated_at ",
             "FROM documents ",
             $tail
@@ -137,6 +138,8 @@ struct DocumentRow {
     source_meta: Option<String>,
     ocr_status: String,
     embed_status: String,
+    deleted_at: Option<DateTime<Utc>>,
+    purge_requested_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -160,6 +163,8 @@ impl TryFrom<DocumentRow> for Document {
             source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
             ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
             embed_status: row.embed_status.parse().map_err(Error::Repository)?,
+            deleted_at: row.deleted_at,
+            purge_requested_at: row.purge_requested_at,
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
@@ -319,11 +324,12 @@ fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) {
 #[async_trait]
 impl DocumentRepository for PostgresDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
-        let row: Option<(Uuid,)> = sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1 AND deleted_at IS NULL")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(repo_err)?;
         Ok(row.map(|(v,)| VaultId(v)))
     }
 
@@ -336,7 +342,7 @@ impl DocumentRepository for PostgresDocumentRepository {
     ) -> Result<Document> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let doc: DocumentRow = sqlx::query_as(select_documents!(
-            "WHERE id = $1 AND vault_id = $2 FOR UPDATE"
+            "WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE"
         ))
         .bind(id)
         .bind(from.0)
@@ -433,19 +439,22 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
-        let row: Option<DocumentRow> =
-            sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))
-                .bind(id)
-                .bind(vault.0)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err)?;
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL"
+        ))
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
 
         row.map(TryInto::try_into).transpose()
     }
 
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
-        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE vault_id = "));
+        let mut qb = QueryBuilder::<Postgres>::new(select_documents!(
+            "WHERE deleted_at IS NULL AND vault_id = "
+        ));
         qb.push_bind(vault.0);
 
         if let Some(filter) = filter {
@@ -470,7 +479,9 @@ impl DocumentRepository for PostgresDocumentRepository {
     ) -> Result<folio_core::models::DocumentPage> {
         use folio_core::models::DocumentSort;
         query.validate(vault)?;
-        let mut qb = QueryBuilder::<Postgres>::new(select_documents!("WHERE vault_id = "));
+        let mut qb = QueryBuilder::<Postgres>::new(select_documents!(
+            "WHERE deleted_at IS NULL AND vault_id = "
+        ));
         qb.push_bind(vault.0);
         push_filter(&mut qb, query.filter.clone());
         let (column, direction, comparison) = match query.sort {
@@ -515,7 +526,9 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT id FROM documents WHERE vault_id = ");
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+        );
         qb.push_bind(vault.0);
         if let Some(filter) = filter {
             push_filter(&mut qb, filter);
@@ -601,6 +614,8 @@ impl DocumentRepository for PostgresDocumentRepository {
             source: params.source,
             ocr_status,
             embed_status: ProcessingStatus::Pending,
+            deleted_at: None,
+            purge_requested_at: None,
             created_at: now,
             updated_at: now,
         })
@@ -609,7 +624,7 @@ impl DocumentRepository for PostgresDocumentRepository {
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
-            "WHERE id = $1 AND vault_id = $2 FOR UPDATE"
+            "WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE"
         ))
         .bind(id)
         .bind(vault.0)
@@ -652,7 +667,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
                                   document_type_id = $4, updated_at = $5
-             WHERE id = $6 AND vault_id = $7",
+             WHERE id = $6 AND vault_id = $7 AND deleted_at IS NULL",
         )
         .bind(&title)
         .bind(&content)
@@ -683,35 +698,186 @@ impl DocumentRepository for PostgresDocumentRepository {
             source: existing.source,
             ocr_status: existing.ocr_status,
             embed_status: existing.embed_status,
+            deleted_at: None,
+            purge_requested_at: None,
             created_at: existing.created_at,
             updated_at: now,
         })
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let snapshot = match self.find_by_id(vault, id).await? {
-            Some(document) => Some(Arc::new(DeletedDocument {
-                tags: self.get_tags(vault, id).await?,
-                document,
-            })),
-            None => None,
-        };
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
-        let result = sqlx::query("DELETE FROM documents WHERE id = $1 AND vault_id = $2")
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 FOR UPDATE"
+        ))
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.deleted_at.is_some() {
+            return Ok(());
+        }
+        let now = Utc::now();
+        sqlx::query("UPDATE documents SET deleted_at = $3, updated_at = $3 WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL")
+            .bind(id).bind(vault.0).bind(now).execute(&mut *tx).await.map_err(repo_err)?;
+        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
+            .await?;
+        self.commit(tx).await
+    }
+
+    async fn locate_retained(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(Uuid,)> = sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1")
             .bind(id)
-            .bind(vault.0)
-            .execute(&mut *tx)
+            .fetch_optional(&self.pool)
             .await
             .map_err(repo_err)?;
+        Ok(row.map(|(v,)| VaultId(v)))
+    }
 
-        if result.rows_affected() == 0 {
-            return Err(not_found("Document", id));
+    async fn locate_trashed(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT vault_id FROM documents
+             WHERE id = $1 AND deleted_at IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        Ok(row.map(|(v,)| VaultId(v)))
+    }
+
+    async fn find_trashed_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 AND deleted_at IS NOT NULL"
+        ))
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Document>> {
+        let rows: Vec<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE vault_id = $1 AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC"
+        ))
+        .bind(vault.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Document> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 FOR UPDATE"
+        ))
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.purge_requested_at.is_some() {
+            return Err(Error::Conflict(
+                "permanent deletion has already been requested".into(),
+            ));
         }
+        if document.deleted_at.is_none() {
+            return Ok(document);
+        }
+        sqlx::query("UPDATE documents SET deleted_at = NULL,
+                 ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
+                 embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
+                 updated_at = $3 WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NULL")
+            .bind(id).bind(vault.0).bind(Utc::now()).execute(&mut *tx).await.map_err(repo_err)?;
+        if document.file_path.is_some() {
+            crate::queue::insert_job_postgres(
+                &mut *tx,
+                crate::queue::JobType::ProcessDocument { document_id: id },
+                Utc::now(),
+                crate::queue::DEFAULT_MAX_ATTEMPTS,
+            )
+            .await?;
+        }
+        self.emit_in(&mut tx, DocumentEvent::Restored { document_id: id })
+            .await?;
+        self.commit(tx).await?;
+        self.find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| not_found("Document", id))
+    }
+
+    async fn request_purge(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 FOR UPDATE"
+        ))
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.deleted_at.is_none() {
+            return Err(Error::Conflict(
+                "move the document to trash before deleting it forever".into(),
+            ));
+        }
+        if document.purge_requested_at.is_some() {
+            return Ok(());
+        }
+        let now = Utc::now();
+        sqlx::query("UPDATE documents SET purge_requested_at = $3, updated_at = $3 WHERE id = $1 AND vault_id = $2")
+            .bind(id).bind(vault.0).bind(now).execute(&mut *tx).await.map_err(repo_err)?;
+        crate::queue::insert_job_postgres(
+            &mut *tx,
+            crate::queue::JobType::PurgeDocument { document_id: id },
+            now,
+            crate::queue::DEFAULT_MAX_ATTEMPTS,
+        )
+        .await?;
+        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
+            .await?;
+        self.commit(tx).await
+    }
+
+    async fn list_purge_requested(&self) -> Result<Vec<Document>> {
+        let rows: Vec<DocumentRow> = sqlx::query_as(select_documents!("WHERE deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL ORDER BY purge_requested_at, id"))
+            .fetch_all(&self.pool).await.map_err(repo_err)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn finalize_purge(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2 AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL FOR UPDATE"))
+            .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let document: Document = row.try_into()?;
+        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
+             WHERE dt.document_id = $1 AND t.vault_id = $2")
+            .bind(id).bind(vault.0).fetch_all(&mut *tx).await.map_err(repo_err)?;
+        let tags = tags.into_iter().map(Into::into).collect();
+        sqlx::query(
+            "DELETE FROM documents
+             WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NOT NULL",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
         self.emit_in(
             &mut tx,
             DocumentEvent::Deleted {
                 document_id: id,
-                snapshot,
+                snapshot: Some(Arc::new(DeletedDocument { document, tags })),
             },
         )
         .await?;
@@ -722,7 +888,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         self.touch_one(
             id,
             sqlx::query(
-                "UPDATE documents SET file_path = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4",
+                "UPDATE documents SET file_path = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
             )
             .bind(file_path.to_string())
             .bind(Utc::now())
@@ -736,7 +902,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         self.touch_one(
             id,
             sqlx::query(
-                "UPDATE documents SET page_count = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4",
+                "UPDATE documents SET page_count = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
             )
             .bind(page_count as i32)
             .bind(Utc::now())
@@ -755,10 +921,10 @@ impl DocumentRepository for PostgresDocumentRepository {
     ) -> Result<()> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                "UPDATE documents SET ocr_status = $1 WHERE id = $2 AND vault_id = $3"
+                "UPDATE documents SET ocr_status = $1 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL"
             }
             ProcessingStage::Embed => {
-                "UPDATE documents SET embed_status = $1 WHERE id = $2 AND vault_id = $3"
+                "UPDATE documents SET embed_status = $1 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL"
             }
         };
         sqlx::query(sql)
@@ -776,7 +942,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             id,
             sqlx::query(
                 "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
-                 WHERE id = $3 AND vault_id = $4",
+                 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
             )
             .bind(content.to_string())
             .bind(Utc::now())
@@ -787,20 +953,26 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {
-        let rows: Vec<DocumentRow> = sqlx::query_as(select_documents!("ORDER BY created_at DESC"))
-            .fetch_all(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let rows: Vec<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE deleted_at IS NULL ORDER BY created_at DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn list_pending(&self, stage: ProcessingStage) -> Result<Vec<Document>> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                select_documents!("WHERE ocr_status = 'pending' ORDER BY created_at")
+                select_documents!(
+                    "WHERE deleted_at IS NULL AND ocr_status = 'pending' ORDER BY created_at"
+                )
             }
             ProcessingStage::Embed => {
-                select_documents!("WHERE embed_status = 'pending' ORDER BY created_at")
+                select_documents!(
+                    "WHERE deleted_at IS NULL AND embed_status = 'pending' ORDER BY created_at"
+                )
             }
         };
         let rows: Vec<DocumentRow> = sqlx::query_as(sql)
@@ -813,7 +985,7 @@ impl DocumentRepository for PostgresDocumentRepository {
     async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
         sqlx::query_scalar(
             "UPDATE documents SET embed_status = 'pending'
-             WHERE content IS NOT NULL AND content != ''
+             WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''
              RETURNING id",
         )
         .fetch_all(&self.pool)
@@ -827,7 +999,7 @@ impl DocumentRepository for PostgresDocumentRepository {
              FROM tags t
              INNER JOIN document_tags dt ON t.id = dt.tag_id
              INNER JOIN documents d ON d.id = dt.document_id
-             WHERE dt.document_id = $1 AND d.vault_id = $2 AND t.vault_id = d.vault_id",
+             WHERE dt.document_id = $1 AND d.deleted_at IS NULL AND d.vault_id = $2 AND t.vault_id = d.vault_id",
         )
         .bind(document_id)
         .bind(vault.0)
@@ -853,7 +1025,7 @@ impl DocumentRepository for PostgresDocumentRepository {
                 "SELECT dt.document_id, t.id, t.name, t.color, t.created_at
                  FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
                  JOIN documents d ON d.id = dt.document_id
-                 WHERE t.vault_id = d.vault_id AND d.vault_id = ",
+                 WHERE t.vault_id = d.vault_id AND d.deleted_at IS NULL AND d.vault_id = ",
             );
             qb.push_bind(vault.0).push(" AND d.id IN (");
             let mut separated = qb.separated(", ");

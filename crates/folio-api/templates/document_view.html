@@ -24,9 +24,9 @@
                 {% if document|can_edit_document %}
                 <form action="{{ "/documents"|vault_url }}/{{ document.id }}/delete" method="post"
                       data-controller="confirm"
-                      data-confirm-message-value="Delete '{{ document.title }}'? This cannot be undone."
+                      data-confirm-message-value="Move '{{ document.title }}' to Trash? You can restore it later."
                       data-action="submit->confirm#confirm">
-                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{{ icons::trash() }} Delete</button>
+                    <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{{ icons::trash() }} Move to Trash</button>
                 </form>
                 {% endif %}
             </div>
@@ -159,7 +159,7 @@
                 {% when None %}
                 {% if failed %}
                 <div class="f-notice f-notice-danger" role="status">
-                    <p>Folio couldn't read this file. It may be damaged or in a format Folio doesn't know. Read it again, or delete it.</p>
+                    <p>Folio couldn't read this file. It may be damaged or in a format Folio doesn't know. Read it again, or move it to Trash.</p>
                 </div>
                 {% else %}
                 <p><span class="f-status f-status-pending">{{ reading }}</span></p>

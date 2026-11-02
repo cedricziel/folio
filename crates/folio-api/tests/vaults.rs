@@ -1122,3 +1122,471 @@ async fn editor_cannot_manage_vault_workflows() {
         StatusCode::FORBIDDEN
     );
 }
+
+#[tokio::test]
+async fn trash_actions_enforce_vault_and_document_permissions() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "trash-owner").await;
+    let viewer = sign_in(&h, "trash-viewer").await;
+    let outsider = sign_in(&h, "trash-outsider").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            Some(&owner.user),
+        )
+        .await
+        .unwrap();
+    h.vault_repository
+        .set_default(&viewer.user, owner.vault)
+        .await
+        .unwrap();
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Private recoverable document".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let path = format!("/api/documents/{}", doc.id);
+    assert_eq!(
+        h.app
+            .clone()
+            .oneshot(request("DELETE", &path, &viewer, Body::empty()))
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        h.app
+            .clone()
+            .oneshot(request("DELETE", &path, &outsider, Body::empty()))
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
+    assert_eq!(
+        h.app
+            .clone()
+            .oneshot(request("DELETE", &path, &owner, Body::empty()))
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    for (method, suffix) in [("POST", "restore"), ("DELETE", "purge")] {
+        assert_eq!(
+            h.app
+                .clone()
+                .oneshot(request(
+                    method,
+                    &format!("{path}/{suffix}"),
+                    &viewer,
+                    Body::empty()
+                ))
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            h.app
+                .clone()
+                .oneshot(request(
+                    method,
+                    &format!("{path}/{suffix}"),
+                    &outsider,
+                    Body::empty()
+                ))
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+    let hidden = h
+        .app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/documents/trash",
+            &outsider,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(hidden.status(), 200);
+    assert!(!text(hidden).await.contains(&doc.id.to_string()));
+    assert!(folio_api::routes::turbo_streams_for(
+        folio_api::vault::DefaultVault(outsider.vault),
+        &h.state,
+        &DocumentEvent::Trashed {
+            document_id: doc.id
+        }
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    assert!(!folio_api::routes::turbo_streams_for(
+        folio_api::vault::DefaultVault(owner.vault),
+        &h.state,
+        &DocumentEvent::Trashed {
+            document_id: doc.id
+        }
+    )
+    .await
+    .unwrap()
+    .is_empty());
+}
+
+fn selected_vault_request(
+    method: &str,
+    path: &str,
+    signed_in: &SignedIn,
+    vault: VaultId,
+    body: Body,
+) -> Request<Body> {
+    let mut req = request(method, path, signed_in, body);
+    req.headers_mut()
+        .insert("x-folio-vault", vault.to_string().parse().unwrap());
+    req
+}
+
+#[tokio::test]
+async fn selected_vault_trash_supports_idempotent_delete_restore_and_scoped_forms() {
+    let h = harness_requiring_login().await;
+    let editor = sign_in(&h, "selected-trash-editor").await;
+    let owner = sign_in(&h, "selected-trash-owner").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(editor.user.clone()),
+            VaultRole::Editor,
+            None,
+        )
+        .await
+        .unwrap();
+    let document = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Selected recoverable document".into(),
+                uploaded_by: Some(editor.user.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let api = format!("/api/documents/{}", document.id);
+    let scoped = format!("/vaults/{}/documents/{}", owner.vault, document.id);
+    let trash = format!("/vaults/{}/trash", owner.vault);
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "DELETE",
+            &api,
+            &editor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "DELETE",
+            &api,
+            &editor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "PUT",
+            &api,
+            &editor,
+            owner.vault,
+            Body::from(r#"{"title":"Must stay in trash"}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &trash, &editor, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = text(response).await;
+    assert!(html.contains("Selected recoverable document"));
+    assert!(html.contains(&format!("{scoped}/restore")));
+    assert!(html.contains(&format!("{scoped}/delete-forever")));
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "POST",
+            &format!("{api}/restore"),
+            &editor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let restored: Document = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(restored.id, document.id);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{scoped}/delete"),
+            &editor,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{scoped}/restore"),
+            &editor,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], trash);
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "DELETE",
+            &api,
+            &editor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "DELETE",
+            &format!("{api}/purge"),
+            &editor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{scoped}/delete-forever"),
+            &editor,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], trash);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &format!("{scoped}/restore"),
+            &editor,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        h.vault_repository
+            .default_for_user(&editor.user)
+            .await
+            .unwrap(),
+        Some(editor.vault)
+    );
+}
+
+async fn assert_selected_trash_mutations_forbidden(
+    h: &Harness,
+    user: &SignedIn,
+    vault: VaultId,
+    id: uuid::Uuid,
+) {
+    let api = format!("/api/documents/{id}");
+    for (method, path) in [
+        ("DELETE", api.clone()),
+        ("POST", format!("{api}/restore")),
+        ("DELETE", format!("{api}/purge")),
+        (
+            "POST",
+            format!("/vaults/{vault}/documents/{id}/delete-forever"),
+        ),
+    ] {
+        let response = h
+            .app
+            .clone()
+            .oneshot(selected_vault_request(
+                method,
+                &path,
+                user,
+                vault,
+                Body::empty(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+    }
+}
+
+#[tokio::test]
+async fn selected_vault_trash_keeps_viewer_and_contributor_ownership_restrictions() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "trash-permission-owner").await;
+    let contributor = sign_in(&h, "trash-permission-contributor").await;
+    let viewer = sign_in(&h, "trash-permission-viewer").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(contributor.user.clone()),
+            VaultRole::Contributor,
+            None,
+        )
+        .await
+        .unwrap();
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let owned = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Contributor upload".into(),
+                uploaded_by: Some(contributor.user.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let other = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Owner upload".into(),
+                uploaded_by: Some(owner.user.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .delete(owner.vault, owned.id)
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .delete(owner.vault, other.id)
+        .await
+        .unwrap();
+
+    assert_selected_trash_mutations_forbidden(&h, &viewer, owner.vault, owned.id).await;
+    assert_selected_trash_mutations_forbidden(&h, &contributor, owner.vault, other.id).await;
+
+    let api = format!("/api/documents/{}", owned.id);
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "POST",
+            &format!("{api}/restore"),
+            &contributor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "DELETE",
+            &api,
+            &contributor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = h
+        .app
+        .clone()
+        .oneshot(selected_vault_request(
+            "DELETE",
+            &format!("{api}/purge"),
+            &contributor,
+            owner.vault,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(h
+        .state
+        .document_repo
+        .find_trashed_by_id(owner.vault, other.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .purge_requested_at
+        .is_none());
+}

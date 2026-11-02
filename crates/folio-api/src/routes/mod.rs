@@ -21,6 +21,7 @@ mod settings;
 mod source_pages;
 pub(crate) mod sources;
 pub(crate) mod tags;
+pub(crate) mod trash;
 pub(crate) mod vaults;
 mod view;
 mod workflow_pages;
@@ -75,6 +76,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(crate::openapi::router())
         // Page routes (HTMX)
         .merge(pages::router())
+        .merge(trash::router())
         // Manifest, service worker and share target
         .merge(pwa::router())
         // Management routes (correspondents, document types, tags)

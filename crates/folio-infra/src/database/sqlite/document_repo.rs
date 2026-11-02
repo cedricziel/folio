@@ -103,7 +103,7 @@ fn parse_optional_uuid(s: Option<String>) -> Result<Option<Uuid>> {
 /// Columns of `documents` read into a [`DocumentRow`]
 const DOC_COLS: &str = "id, vault_id, uploaded_by, title, content, original_filename, file_path,
     mime_type, correspondent_id, document_type_id, page_count, source_type, source_meta,
-    ocr_status, embed_status, created_at, updated_at";
+    ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at";
 
 fn not_found(entity_type: &'static str, id: Id) -> Error {
     Error::NotFound {
@@ -114,13 +114,14 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
 
 /// The document must exist in `vault`
 async fn require_document(conn: &mut SqliteConnection, vault: VaultId, id: Id) -> Result<()> {
-    let found: Option<(i64,)> =
-        sqlx::query_as("SELECT 1 FROM documents WHERE id = ? AND vault_id = ?")
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .fetch_optional(conn)
-            .await
-            .map_err(map_sqlx_error)?;
+    let found: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+    )
+    .bind(id.to_string())
+    .bind(vault.to_string())
+    .fetch_optional(conn)
+    .await
+    .map_err(map_sqlx_error)?;
     found.map(|_| ()).ok_or_else(|| not_found("Document", id))
 }
 
@@ -161,6 +162,8 @@ struct DocumentRow {
     source_meta: Option<String>,
     ocr_status: String,
     embed_status: String,
+    deleted_at: Option<DateTime<Utc>>,
+    purge_requested_at: Option<DateTime<Utc>>,
     created_at: String,
     updated_at: String,
 }
@@ -184,6 +187,8 @@ impl TryFrom<DocumentRow> for Document {
             source: DocumentSource::from_stored(&row.source_type, row.source_meta.as_deref()),
             ocr_status: row.ocr_status.parse().map_err(Error::Repository)?,
             embed_status: row.embed_status.parse().map_err(Error::Repository)?,
+            deleted_at: row.deleted_at,
+            purge_requested_at: row.purge_requested_at,
             created_at: row
                 .created_at
                 .parse::<DateTime<Utc>>()
@@ -315,11 +320,12 @@ fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) {
 #[async_trait]
 impl DocumentRepository for SqliteDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT vault_id FROM documents WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT vault_id FROM documents WHERE id = ? AND deleted_at IS NULL")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(map_sqlx_error)?;
         row.map(|(v,)| parse_uuid(&v).map(VaultId)).transpose()
     }
 
@@ -336,7 +342,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         let doc: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
         )))
         .bind(id.to_string())
         .bind(from.to_string())
@@ -462,7 +468,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
         )))
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -475,7 +481,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
         let mut qb = QueryBuilder::<Sqlite>::new(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE vault_id = "
+            "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND vault_id = "
         ));
         qb.push_bind(vault.to_string());
 
@@ -502,7 +508,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         use folio_core::models::DocumentSort;
         query.validate(vault)?;
         let mut qb = QueryBuilder::<Sqlite>::new(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE vault_id = "
+            "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND vault_id = "
         ));
         qb.push_bind(vault.to_string());
         push_filter(&mut qb, query.filter.clone());
@@ -548,7 +554,9 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn list_ids(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
-        let mut qb = QueryBuilder::<Sqlite>::new("SELECT id FROM documents WHERE vault_id = ");
+        let mut qb = QueryBuilder::<Sqlite>::new(
+            "SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+        );
         qb.push_bind(vault.to_string());
         if let Some(filter) = filter {
             push_filter(&mut qb, filter);
@@ -637,6 +645,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             source: params.source,
             ocr_status,
             embed_status: ProcessingStatus::Pending,
+            deleted_at: None,
+            purge_requested_at: None,
             created_at: now,
             updated_at: now,
         })
@@ -649,7 +659,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
         )))
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -692,7 +702,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         sqlx::query(
             "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
                                   document_type_id = ?, updated_at = ?
-             WHERE id = ? AND vault_id = ?",
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
         )
         .bind(&title)
         .bind(&content)
@@ -723,35 +733,196 @@ impl DocumentRepository for SqliteDocumentRepository {
             source: existing.source,
             ocr_status: existing.ocr_status,
             embed_status: existing.embed_status,
+            deleted_at: None,
+            purge_requested_at: None,
             created_at: existing.created_at,
             updated_at: now,
         })
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let snapshot = match self.find_by_id(vault, id).await? {
-            Some(document) => Some(Arc::new(DeletedDocument {
-                tags: self.get_tags(vault, id).await?,
-                document,
-            })),
-            None => None,
-        };
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
-        let result = sqlx::query("DELETE FROM documents WHERE id = ? AND vault_id = ?")
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents
+             WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.deleted_at.is_some() {
+            return Ok(());
+        }
+        let now = Utc::now();
+        sqlx::query("UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
+            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
+            .await?;
+        self.commit(tx).await
+    }
+
+    async fn locate_retained(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT vault_id FROM documents WHERE id = ?")
             .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&mut *tx)
+            .fetch_optional(&self.pool)
             .await
             .map_err(map_sqlx_error)?;
+        row.map(|(v,)| parse_uuid(&v).map(VaultId)).transpose()
+    }
 
-        if result.rows_affected() == 0 {
-            return Err(not_found("Document", id));
+    async fn locate_trashed(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT vault_id FROM documents
+             WHERE id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        row.map(|(v,)| parse_uuid(&v).map(VaultId)).transpose()
+    }
+
+    async fn find_trashed_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NOT NULL"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Document>> {
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents
+             WHERE vault_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, id DESC"
+        )))
+        .bind(vault.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Document> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents
+             WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.purge_requested_at.is_some() {
+            return Err(Error::Conflict(
+                "permanent deletion has already been requested".into(),
+            ));
         }
+        if document.deleted_at.is_none() {
+            return Ok(document);
+        }
+        sqlx::query("UPDATE documents SET deleted_at = NULL,
+                 ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
+                 embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
+                 updated_at = ? WHERE id = ? AND vault_id = ? AND purge_requested_at IS NULL")
+            .bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        if document.file_path.is_some() {
+            crate::queue::insert_job_sqlite(
+                &mut *tx,
+                crate::queue::JobType::ProcessDocument { document_id: id },
+                Utc::now(),
+                crate::queue::DEFAULT_MAX_ATTEMPTS,
+            )
+            .await?;
+        }
+        self.emit_in(&mut tx, DocumentEvent::Restored { document_id: id })
+            .await?;
+        self.commit(tx).await?;
+        self.find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| not_found("Document", id))
+    }
+
+    async fn request_purge(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents
+             WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let document: Document = row.ok_or_else(|| not_found("Document", id))?.try_into()?;
+        if document.deleted_at.is_none() {
+            return Err(Error::Conflict(
+                "move the document to trash before deleting it forever".into(),
+            ));
+        }
+        if document.purge_requested_at.is_some() {
+            return Ok(());
+        }
+        let now = Utc::now();
+        sqlx::query("UPDATE documents SET purge_requested_at = ?, updated_at = ? WHERE id = ? AND vault_id = ?")
+            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        crate::queue::insert_job_sqlite(
+            &mut *tx,
+            crate::queue::JobType::PurgeDocument { document_id: id },
+            now,
+            crate::queue::DEFAULT_MAX_ATTEMPTS,
+        )
+        .await?;
+        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
+            .await?;
+        self.commit(tx).await
+    }
+
+    async fn list_purge_requested(&self) -> Result<Vec<Document>> {
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {DOC_COLS} FROM documents
+             WHERE deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL ORDER BY purge_requested_at, id")))
+            .fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn finalize_purge(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {DOC_COLS} FROM documents
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL")))
+            .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let document: Document = row.try_into()?;
+        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
+             WHERE dt.document_id = ? AND t.vault_id = ?")
+            .bind(id.to_string()).bind(vault.to_string()).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
+        let tags = tags
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<Tag>>>()?;
+        sqlx::query(
+            "DELETE FROM documents
+             WHERE id = ? AND vault_id = ? AND purge_requested_at IS NOT NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
         self.emit_in(
             &mut tx,
             DocumentEvent::Deleted {
                 document_id: id,
-                snapshot,
+                snapshot: Some(Arc::new(DeletedDocument { document, tags })),
             },
         )
         .await?;
@@ -761,7 +932,7 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
         let now = Utc::now();
         let result = sqlx::query(
-            "UPDATE documents SET file_path = ?, updated_at = ? WHERE id = ? AND vault_id = ?",
+            "UPDATE documents SET file_path = ?, updated_at = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
         )
         .bind(file_path)
         .bind(now.to_rfc3339())
@@ -781,7 +952,7 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()> {
         let now = Utc::now();
         let result = sqlx::query(
-            "UPDATE documents SET page_count = ?, updated_at = ? WHERE id = ? AND vault_id = ?",
+            "UPDATE documents SET page_count = ?, updated_at = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
         )
         .bind(page_count as i64)
         .bind(now.to_rfc3339())
@@ -807,10 +978,10 @@ impl DocumentRepository for SqliteDocumentRepository {
     ) -> Result<()> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                "UPDATE documents SET ocr_status = ? WHERE id = ? AND vault_id = ?"
+                "UPDATE documents SET ocr_status = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
             }
             ProcessingStage::Embed => {
-                "UPDATE documents SET embed_status = ? WHERE id = ? AND vault_id = ?"
+                "UPDATE documents SET embed_status = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
             }
         };
         sqlx::query(sql)
@@ -826,7 +997,7 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
         let result = sqlx::query(
             "UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ?
-             WHERE id = ? AND vault_id = ?",
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
         )
         .bind(content)
         .bind(Utc::now().to_rfc3339())
@@ -844,7 +1015,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
     async fn list_all(&self) -> Result<Vec<Document>> {
         let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents ORDER BY created_at DESC"
+            "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL ORDER BY created_at DESC"
         )))
         .fetch_all(&self.pool)
         .await
@@ -858,7 +1029,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             ProcessingStage::Embed => "embed_status",
         };
         let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE {column} = 'pending' ORDER BY created_at"
+            "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND {column} = 'pending' ORDER BY created_at"
         )))
         .fetch_all(&self.pool)
         .await
@@ -868,14 +1039,14 @@ impl DocumentRepository for SqliteDocumentRepository {
 
     async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
         let ids: Vec<(String,)> =
-            sqlx::query_as("SELECT id FROM documents WHERE content IS NOT NULL AND content != ''")
+            sqlx::query_as("SELECT id FROM documents WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''")
                 .fetch_all(&self.pool)
                 .await
                 .map_err(map_sqlx_error)?;
 
         sqlx::query(
             "UPDATE documents SET embed_status = 'pending'
-             WHERE content IS NOT NULL AND content != ''",
+             WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''",
         )
         .execute(&self.pool)
         .await
@@ -890,7 +1061,7 @@ impl DocumentRepository for SqliteDocumentRepository {
              FROM tags t
              INNER JOIN document_tags dt ON t.id = dt.tag_id
              INNER JOIN documents d ON d.id = dt.document_id
-             WHERE dt.document_id = ? AND d.vault_id = ? AND t.vault_id = d.vault_id",
+             WHERE dt.document_id = ? AND d.deleted_at IS NULL AND d.vault_id = ? AND t.vault_id = d.vault_id",
         )
         .bind(document_id.to_string())
         .bind(vault.to_string())
@@ -916,7 +1087,7 @@ impl DocumentRepository for SqliteDocumentRepository {
                 "SELECT dt.document_id, t.id, t.name, t.color, t.created_at
                  FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
                  JOIN documents d ON d.id = dt.document_id
-                 WHERE t.vault_id = d.vault_id AND d.vault_id = ",
+                 WHERE t.vault_id = d.vault_id AND d.deleted_at IS NULL AND d.vault_id = ",
             );
             qb.push_bind(vault.to_string()).push(" AND d.id IN (");
             let mut separated = qb.separated(", ");
