@@ -105,9 +105,47 @@ pub struct WorkflowConditions {
     /// Where the document came from: folder path, email sender, subject, and so on
     #[serde(default, skip_serializing_if = "SourceConditions::is_empty")]
     pub source: SourceConditions,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
+    pub all: Vec<WorkflowConditions>,
+
+    /// Omitted means unconstrained; an empty list never matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
+    pub any: Option<Vec<WorkflowConditions>>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
+    pub none: Vec<WorkflowConditions>,
 }
 
 impl WorkflowConditions {
+    /// Reject invalid source patterns and trees exceeding eight levels or 64 nodes.
+    pub fn validate(&self) -> Result<()> {
+        let mut pending = vec![(self, 0)];
+        let mut count = 0;
+        while let Some((conditions, depth)) = pending.pop() {
+            count += 1;
+            if depth > 8 || count > 64 {
+                return Err(Error::Validation(
+                    "Workflow conditions allow at most eight nested groups and 64 condition objects"
+                        .into(),
+                ));
+            }
+            conditions.source.validate()?;
+            for child in conditions
+                .all
+                .iter()
+                .chain(conditions.any.iter().flatten())
+                .chain(&conditions.none)
+            {
+                pending.push((child, depth + 1));
+            }
+        }
+        Ok(())
+    }
+
     /// Whether the document satisfies every set condition
     pub fn matches(&self, document: &Document, tag_ids: &[Id]) -> bool {
         self.matches_metadata(
@@ -150,22 +188,38 @@ impl WorkflowConditions {
             && self
                 .document_type_id
                 .is_none_or(|id| document_type_id == Some(id))
+            && self.matches_groups(|child| {
+                child.matches_metadata(
+                    mime,
+                    filename,
+                    source,
+                    tag_ids,
+                    correspondent_id,
+                    document_type_id,
+                )
+            })
+    }
+
+    fn matches_groups(&self, matches: impl Fn(&Self) -> bool) -> bool {
+        self.all.iter().all(&matches)
+            && self
+                .any
+                .as_ref()
+                .is_none_or(|group| group.iter().any(&matches))
+            && !self.none.iter().any(matches)
     }
 
     /// Whether a file that is not imported yet satisfies the conditions
     ///
-    /// Conditions about stored metadata (tag, correspondent, type) cannot be
-    /// met by a file that has none, so setting one makes a match impossible.
+    /// Stored metadata predicates evaluate false because a candidate has no
+    /// tag, correspondent, or type; group operators retain their usual semantics.
     pub fn matches_candidate(
         &self,
         mime_type: &str,
         filename: &str,
         source: &DocumentSource,
     ) -> bool {
-        self.tag_id.is_none()
-            && self.correspondent_id.is_none()
-            && self.document_type_id.is_none()
-            && self.matches_file(Some(mime_type), Some(filename), source)
+        self.matches_metadata(Some(mime_type), Some(filename), source, &[], None, None)
     }
 
     fn matches_file(
@@ -338,7 +392,7 @@ impl WorkflowInput {
                 );
             }
         }
-        self.conditions.source.validate()?;
+        self.conditions.validate()?;
         Ok(())
     }
 }
@@ -517,6 +571,147 @@ mod tests {
     }
 
     #[test]
+    fn any_group_requires_one_matching_branch() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "any": [{"mime_type": "image/*"}, {"filename_glob": "invoice-*"}]
+        }))
+        .unwrap();
+        assert!(conditions.matches(&doc("scan.png", "image/png"), &[]));
+        assert!(conditions.matches(&doc("invoice-42.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("letter.pdf", "application/pdf"), &[]));
+    }
+
+    #[test]
+    fn none_group_excludes_matching_documents() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "mime_type": "application/pdf",
+            "none": [{"filename_glob": "draft-*"}]
+        }))
+        .unwrap();
+        assert!(conditions.matches(&doc("invoice.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("draft-invoice.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("invoice.png", "image/png"), &[]));
+    }
+
+    #[test]
+    fn nested_all_group_requires_every_branch() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "all": [{"mime_type": "application/pdf"}, {
+                "any": [{"filename_glob": "invoice-*"}, {"filename_glob": "receipt-*"}]
+            }]
+        }))
+        .unwrap();
+        assert!(conditions.matches(&doc("receipt-42.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("letter.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("invoice-42.png", "image/png"), &[]));
+    }
+
+    #[test]
+    fn empty_any_group_never_matches() {
+        let conditions: WorkflowConditions =
+            serde_json::from_value(serde_json::json!({"any": []})).unwrap();
+        assert!(!conditions.matches(&doc("invoice.pdf", "application/pdf"), &[]));
+    }
+
+    #[test]
+    fn condition_groups_apply_before_import() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "all": [{"mime_type": "application/pdf"}],
+            "none": [{"filename_glob": "keep-*"}]
+        }))
+        .unwrap();
+        let source = DocumentSource::default();
+        assert!(conditions.matches_candidate("application/pdf", "discard.pdf", &source));
+        assert!(!conditions.matches_candidate("application/pdf", "keep-invoice.pdf", &source));
+        assert!(!conditions.matches_candidate("image/png", "discard.png", &source));
+    }
+
+    #[test]
+    fn validation_rejects_excessive_condition_nesting() {
+        let mut nested = serde_json::json!({"mime_type": "application/pdf"});
+        for _ in 0..9 {
+            nested = serde_json::json!({"all": [nested]});
+        }
+        let mut workflow = input(
+            WorkflowTrigger::DocumentUploaded,
+            vec![webhook("https://example.com")],
+        );
+        workflow.conditions = serde_json::from_value(nested).unwrap();
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_oversized_condition_groups() {
+        let mut workflow = input(
+            WorkflowTrigger::DocumentUploaded,
+            vec![webhook("https://example.com")],
+        );
+        workflow.conditions = serde_json::from_value(serde_json::json!({
+            "any": vec![serde_json::json!({"mime_type": "image/*"}); 65]
+        }))
+        .unwrap();
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn validation_checks_source_patterns_inside_groups() {
+        let mut workflow = input(
+            WorkflowTrigger::DocumentUploaded,
+            vec![webhook("https://example.com")],
+        );
+        workflow.conditions = serde_json::from_value(serde_json::json!({
+            "none": [{"source": {"email_from": {"regex": "["}}}]
+        }))
+        .unwrap();
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn groups_match_historical_snapshot_metadata() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "any": [{"filename_glob": "invoice-*"}],
+            "none": [{"mime_type": "image/*"}]
+        }))
+        .unwrap();
+        let mut document = doc("invoice-42.pdf", "application/pdf");
+        let snapshot = crate::EventSnapshot::from(&crate::events::DeletedDocument {
+            document: document.clone(),
+            tags: vec![],
+        });
+        document.original_filename = Some("letter.pdf".into());
+        assert!(conditions.matches_snapshot(&snapshot));
+        assert!(!conditions.matches(&document, &[]));
+    }
+
+    #[test]
+    fn legacy_conditions_round_trip_without_group_fields() {
+        let legacy = serde_json::json!({"mime_type": "application/pdf"});
+        let conditions: WorkflowConditions = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(conditions).unwrap(), legacy);
+    }
+
+    #[cfg(feature = "openapi")]
+    #[test]
+    fn condition_group_schema_uses_recursive_references() {
+        use utoipa::OpenApi;
+
+        #[derive(OpenApi)]
+        #[openapi(components(schemas(WorkflowConditions)))]
+        struct Api;
+
+        let schema = serde_json::to_value(Api::openapi()).unwrap();
+        let conditions = &schema["components"]["schemas"]["WorkflowConditions"];
+        assert_eq!(
+            conditions["properties"]["all"]["items"]["$ref"],
+            "#/components/schemas/WorkflowConditions"
+        );
+        assert_eq!(
+            conditions["properties"]["none"]["items"]["$ref"],
+            "#/components/schemas/WorkflowConditions"
+        );
+    }
+
+    #[test]
     fn every_set_condition_must_match() {
         let tag = Id::new_v4();
         let sender = Id::new_v4();
@@ -529,6 +724,7 @@ mod tests {
             document_type_id: None,
             filename_glob: Some("*.pdf".into()),
             source: Default::default(),
+            ..Default::default()
         };
         assert!(all.matches(&document, &[tag]));
         assert!(!all.matches(&document, &[]), "missing tag");

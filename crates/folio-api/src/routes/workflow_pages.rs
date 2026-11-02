@@ -274,6 +274,9 @@ impl FormValues {
                 email_attachment_glob: optional(&self.email_attachment_glob),
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
             },
+            ..existing
+                .map(|workflow| workflow.conditions.clone())
+                .unwrap_or_default()
         };
 
         if trigger == WorkflowTrigger::IngestReceived {
