@@ -480,3 +480,15 @@ Run `cargo test -p folio-api --test routes classification_form` for the HTML
 and API form entry points and malformed-ID preservation. Run
 `cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
 metadata edits and the persisted title delta. Both use isolated fixtures.
+
+## Verify saved-view web controls
+
+Run `cargo test -p folio-api --test saved_views` for form CSRF protection,
+unavailable references, and exact date-boundary preservation through the editor.
+Build `folio-app`, then run
+`npx playwright test vaults.spec.ts --grep 'saved views restore|submillisecond'`
+from `e2e/`. Set `FOLIO_BIN` to the built binary and leave `E2E_BASE_URL` unset
+so setup owns the disposable instance. Desktop and mobile checks save, reopen,
+rename, share, and delete views. Inspect screenshots and confirm that a single
+grid card keeps a bounded width. The precision regression renames a view without
+rounding its stored submillisecond boundaries to the date input's display value.
