@@ -270,10 +270,10 @@ public struct LiveFolioService: FolioService {
             }
             return copy
         }
-        let token = await tokenProvider.token()
+        let token = try await tokenProvider.token()
         let first = try await transfer { try await perform(signed(token)) }
         guard (first.1 as? HTTPURLResponse)?.statusCode == 401, let token,
-            let fresh = await tokenProvider.refresh(rejecting: token)
+            let fresh = try await tokenProvider.refresh(rejecting: token)
         else { return first }
         return try await transfer { try await perform(signed(fresh)) }
     }
@@ -311,6 +311,7 @@ public struct LiveFolioService: FolioService {
         } catch let error as ClientError {
             switch error.underlyingError {
             case let folio as FolioError: throw folio
+            case let credentials as CredentialStoreError: throw credentials
             case is URLError: throw FolioError.unreachable
             default: throw FolioError.unreadableResponse
             }

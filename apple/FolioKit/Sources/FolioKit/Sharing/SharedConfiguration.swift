@@ -29,8 +29,14 @@ public enum SharedConfiguration {
 
     }
 
-    /// The sign-in shared through the keychain access group, refreshed by whichever process needs it first.
-    private static let sharedOAuth = OAuthSession(store: KeychainCredentialStore())
+    /// Coordinates credential writes and restoration across the app and its extensions.
+    public static let oauthRefreshLock = OAuthRefreshLock(
+        url: container?.appending(path: "folio-oauth-refresh.lock"))
+
+    private static let sharedOAuth = OAuthSession(
+        store: KeychainCredentialStore(),
+        refreshLock: oauthRefreshLock
+    )
 
     /// One session per process, so concurrent requests share a single refresh.
     public static func tokenProvider() -> OAuthSession { sharedOAuth }

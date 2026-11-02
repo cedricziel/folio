@@ -46,6 +46,21 @@ The tests exercise authentication completion from a background queue without
 launching the app, opening a browser, or accessing credentials.
 Do not launch the app against existing App Group or keychain state.
 
+## Apple session recovery
+
+The package suite covers Keychain read, write, and delete failures through injected
+operations; it does not access the user’s Keychain. `SessionRestorationTests`
+checks temporary failures, retained server addresses, expiry, and interrupted
+refreshes. `OAuthRecoveryTests` checks concurrent sessions, failed token persistence,
+stale writes after sign-out or another sign-in, offline retry, and lost responses.
+`OAuthRefreshLockTests` uses temporary files to verify exclusion, cancellation,
+and lock release after failure.
+
+On an isolated macOS test account, check startup with unavailable credentials,
+retry after access recovers, and reauthentication after expiry. Confirm that
+activation retries restoration without returning to the server selector. Package
+tests do not establish the visual behavior of these recovery screens.
+
 ## Apple App lock
 
 `FolioAuthTests/AppLockTests` uses unique temporary UserDefaults suites, fake

@@ -28,14 +28,14 @@ struct BearerAuthMiddleware: ClientMiddleware {
         next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
     ) async throws -> (HTTPResponse, HTTPBody?) {
         var request = request
-        let token = await provider.token()
+        let token = try await provider.token()
         if let token {
             request.headerFields[.authorization] = "Bearer \(token)"
         }
         let first = try await next(request, body, baseURL)
         // A rejected token is refreshed once and the request replayed with the new one.
         guard first.0.status == .unauthorized, let token,
-            let fresh = await provider.refresh(rejecting: token)
+            let fresh = try await provider.refresh(rejecting: token)
         else { return first }
         request.headerFields[.authorization] = "Bearer \(fresh)"
         return try await next(request, body, baseURL)

@@ -58,9 +58,9 @@ public enum FolioError: Error, Equatable, LocalizedError {
 
 /// Supplies the bearer token for API requests.
 public protocol BearerTokenProvider: Sendable {
-    func token() async -> String?
+    func token() async throws -> String?
     /// Called after the server rejected `token`. Returns a fresh token to retry with, or nil to give up.
-    func refresh(rejecting token: String?) async -> String?
+    func refresh(rejecting token: String?) async throws -> String?
 }
 
 public extension BearerTokenProvider {
@@ -71,7 +71,7 @@ public extension BearerTokenProvider {
 
 public struct NoToken: BearerTokenProvider {
     public init() {}
-    public func token() async -> String? {
+    public func token() async throws -> String? {
         nil
     }
 }
