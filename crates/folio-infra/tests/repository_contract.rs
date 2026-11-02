@@ -1763,7 +1763,7 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(recorder.ids().len(), 1);
     let replayed = restarted
         .outbox
-        .replay(recorder.ids()[0] - 1, Utc::now() - Duration::hours(1), 10)
+        .replay(recorder.ids()[0] - 1, orphan.created_at, 10)
         .await
         .unwrap();
     assert_eq!(replayed.len(), 1);
@@ -1832,7 +1832,7 @@ async fn outbox_contract(db: &Database) {
     assert!(r.outbox.claim(10, lease(), 3).await.unwrap().is_empty());
     r.outbox.mark_dispatched(first.id).await.unwrap();
 
-    // Replay serves dispatched events only, and old ones are pruned.
+    // Replay includes pending events so consumer failures cannot hide live updates.
     for title in ["replay-1", "replay-2", "replay-3"] {
         r.documents.create(new_document(title)).await.unwrap();
     }
@@ -1860,8 +1860,11 @@ async fn outbox_contract(db: &Database) {
                 .collect::<Vec<_>>()
         }
     };
-    assert_eq!(replay_ids(ids[0] - 1, hour_ago).await, [ids[0], ids[1]]);
-    assert_eq!(replay_ids(ids[0], hour_ago).await, [ids[1]]);
+    assert_eq!(
+        replay_ids(ids[0] - 1, hour_ago).await,
+        [ids[0], ids[1], ids[2]]
+    );
+    assert_eq!(replay_ids(ids[0], hour_ago).await, [ids[1], ids[2]]);
     assert!(replay_ids(0, Utc::now() + Duration::hours(1))
         .await
         .is_empty());
@@ -1876,7 +1879,7 @@ async fn outbox_contract(db: &Database) {
             .unwrap()
             >= 2
     );
-    assert!(replay_ids(ids[0] - 1, hour_ago).await.is_empty());
+    assert_eq!(replay_ids(ids[0] - 1, hour_ago).await, [ids[2]]);
     r.outbox.mark_dispatched(ids[2]).await.unwrap();
 
     r.documents
@@ -1892,6 +1895,11 @@ async fn outbox_contract(db: &Database) {
     let later = batch[1].id;
     r.outbox.mark_dispatched(later).await.unwrap();
     r.outbox.mark_dispatched(earlier).await.unwrap();
+    assert_eq!(
+        replay_ids(earlier, hour_ago).await,
+        [later],
+        "a later broadcast is replayed even if its consumers finish first"
+    );
     assert_eq!(
         replay_ids(later, hour_ago).await,
         [earlier],
