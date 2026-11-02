@@ -181,9 +181,6 @@ impl DocumentStore for FailingStore {
     async fn exists(&self, key: &str) -> folio_core::Result<bool> {
         self.0.exists(key).await
     }
-    async fn copy(&self, from: &str, to: &str) -> folio_core::Result<()> {
-        self.0.copy(from, to).await
-    }
     async fn delete(&self, key: &str) -> folio_core::Result<()> {
         self.0.delete(key).await
     }

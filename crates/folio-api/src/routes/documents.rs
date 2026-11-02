@@ -668,15 +668,15 @@ async fn remove_tag(
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
 }
 
-/// Remove every stored object of a document, including pre-key-layout files.
+/// Remove every stored object of a document in the selected vault.
 pub(crate) async fn purge_document_files(
     DefaultVault(vault): DefaultVault,
     state: &AppState,
     id: Uuid,
 ) -> ApiResult<()> {
-    let Some(document) = state.document_repo.find_by_id(vault, id).await? else {
+    if state.document_repo.find_by_id(vault, id).await?.is_none() {
         return Ok(());
-    };
-    folio_core::ports::purge_document(state.store.as_ref(), id, document.page_count).await?;
+    }
+    folio_core::ports::purge_document(state.store.as_ref(), id).await?;
     Ok(())
 }

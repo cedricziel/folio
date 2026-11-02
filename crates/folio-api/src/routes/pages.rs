@@ -15,7 +15,7 @@ use folio_core::models::{
     Correspondent, Document, DocumentSource, DocumentStatus, DocumentType, SourceKind,
     UpdateDocument, UserId, VaultId,
 };
-use folio_core::ports::{keys, DocumentStore, StoredObject};
+use folio_core::ports::{keys, StoredObject};
 use folio_core::services::NewUpload;
 use folio_infra::JobType;
 
@@ -309,19 +309,6 @@ fn kind_label(mime: &str) -> Option<&'static str> {
     }
 }
 
-/// The first of `candidates` that exists; later ones are keys from before the
-/// object-key layout, kept so thumbnails survive until the layout migration ran.
-async fn first_object(store: &dyn DocumentStore, candidates: &[String]) -> Option<StoredObject> {
-    for key in candidates {
-        match store.get(key).await {
-            Ok(object) => return Some(object),
-            Err(folio_core::Error::NotFound { .. }) => {}
-            Err(e) => error!("Failed to read {key}: {e}"),
-        }
-    }
-    None
-}
-
 /// Stream a stored object as a response body
 fn stream_object(object: StoredObject, content_type: &str) -> Response {
     let mut response = Response::builder().header(header::CONTENT_TYPE, content_type);
@@ -347,14 +334,10 @@ async fn document_thumbnail(
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
-    // Try to serve generated thumbnail first
-    if let Some(object) = first_object(
-        state.store.as_ref(),
-        &[keys::thumbnail(id), keys::legacy::thumbnail(id)],
-    )
-    .await
-    {
-        return Ok(stream_object(object, "image/jpeg"));
+    match state.store.get(&keys::thumbnail(id)).await {
+        Ok(object) => return Ok(stream_object(object, "image/jpeg")),
+        Err(folio_core::Error::NotFound { .. }) => {}
+        Err(e) => error!("Failed to read thumbnail for {id}: {e}"),
     }
 
     // Fallback: try to serve the original image if it's an image
@@ -422,14 +405,10 @@ async fn document_page_thumbnail(
         }
     }
 
-    // Try to serve generated page thumbnail
-    if let Some(object) = first_object(
-        state.store.as_ref(),
-        &[keys::page(id, page), keys::legacy::page(id, page)],
-    )
-    .await
-    {
-        return Ok(stream_object(object, "image/jpeg"));
+    match state.store.get(&keys::page(id, page)).await {
+        Ok(object) => return Ok(stream_object(object, "image/jpeg")),
+        Err(folio_core::Error::NotFound { .. }) => {}
+        Err(e) => error!("Failed to read page {page} thumbnail for {id}: {e}"),
     }
 
     // Fallback: a quiet placeholder for the page

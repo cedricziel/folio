@@ -17,10 +17,9 @@ use folio_core::services::{
 };
 use folio_core::EventBroadcaster;
 use folio_infra::{
-    build_store, cleanup_legacy_layout, migrate_legacy_layout, telemetry, Config, Database,
-    DatabaseHealthCheck, DynamicEmbeddingService, DynamicOcrService, PipelineContext,
-    SourceFactory, StorageFileMetadata, ThumbnailService, WebhookClient, Worker, WorkerConfig,
-    WorkflowRunner,
+    build_store, telemetry, Config, Database, DatabaseHealthCheck, DynamicEmbeddingService,
+    DynamicOcrService, PipelineContext, SourceFactory, StorageFileMetadata, ThumbnailService,
+    WebhookClient, Worker, WorkerConfig, WorkflowRunner,
 };
 use folio_mcp::McpOptions;
 
@@ -28,8 +27,6 @@ use folio_mcp::McpOptions;
 enum Mode {
     Server,
     McpStdio,
-    /// Delete old-layout copies left behind by the storage migration
-    CleanupLegacyStorage,
 }
 
 /// Database settings key of the generated secret key.
@@ -45,8 +42,7 @@ fn parse_args() -> Result<Mode> {
     {
         [] => Ok(Mode::Server),
         ["mcp", "--stdio"] => Ok(Mode::McpStdio),
-        ["storage", "cleanup-legacy"] => Ok(Mode::CleanupLegacyStorage),
-        _ => anyhow::bail!("usage: folio-app [mcp --stdio | storage cleanup-legacy]"),
+        _ => anyhow::bail!("usage: folio-app [mcp --stdio]"),
     }
 }
 
@@ -123,22 +119,6 @@ async fn main() -> Result<()> {
     let ledger = repos.ledger;
     let auth_store = repos.auth;
     let vault_service = Arc::new(VaultService::new(repos.vaults.clone(), repos.members));
-
-    if matches!(mode, Mode::CleanupLegacyStorage) {
-        let cleaned = cleanup_legacy_layout(store.as_ref(), document_repo.as_ref())
-            .await
-            .context("Failed to clean up old storage layout")?;
-        info!("Removed old-layout files of {cleaned} documents");
-        return Ok(());
-    }
-
-    migrate_legacy_layout(
-        store.as_ref(),
-        document_repo.as_ref(),
-        settings_repo.as_ref(),
-    )
-    .await
-    .context("Failed to migrate stored files to object keys")?;
 
     let stored_documents = document_repo.list_all().await.map(|d| d.len()).unwrap_or(0);
     telemetry::metrics().documents_changed(stored_documents as i64);

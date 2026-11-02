@@ -521,6 +521,64 @@ async fn thumbnail_route_streams_jpeg_from_the_store() {
 }
 
 #[tokio::test]
+async fn page_thumbnail_route_streams_jpeg_from_the_store() {
+    let app = test_app().await;
+    let id = stored_document(&app, "a.pdf", b"x").await;
+    app.state
+        .store
+        .put(&keys::page(id, 2), b"page-jpeg".as_slice().into())
+        .await
+        .unwrap();
+
+    let response = raw_get(&app, &format!("/documents/{id}/page/2/thumbnail")).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/jpeg");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&body[..], b"page-jpeg");
+}
+
+#[tokio::test]
+async fn thumbnail_route_ignores_objects_outside_the_document_prefix() {
+    let app = test_app().await;
+    let id = stored_document(&app, "a.pdf", b"x").await;
+    app.state
+        .store
+        .put(
+            &format!("thumbnails/{id}.jpg"),
+            b"old-jpeg".as_slice().into(),
+        )
+        .await
+        .unwrap();
+
+    let response = raw_get(&app, &format!("/documents/{id}/thumbnail")).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/svg+xml");
+}
+
+#[tokio::test]
+async fn page_thumbnail_route_ignores_objects_outside_the_document_prefix() {
+    let app = test_app().await;
+    let id = stored_document(&app, "a.pdf", b"x").await;
+    app.state
+        .store
+        .put(
+            &format!("thumbnails/{id}-p2.jpg"),
+            b"old-jpeg".as_slice().into(),
+        )
+        .await
+        .unwrap();
+
+    let response = raw_get(&app, &format!("/documents/{id}/page/2/thumbnail")).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/svg+xml");
+}
+
+#[tokio::test]
 async fn deleting_a_document_removes_all_of_its_objects() {
     let app = test_app().await;
     let id = stored_document(&app, "a.pdf", b"original").await;
@@ -530,12 +588,7 @@ async fn deleting_a_document_removes_all_of_its_objects() {
         .set_page_count(app.vault, id, 3)
         .await
         .unwrap();
-    for key in [
-        keys::thumbnail(id),
-        keys::page(id, 2),
-        keys::page(id, 3),
-        keys::legacy::page(id, 2),
-    ] {
+    for key in [keys::thumbnail(id), keys::page(id, 2), keys::page(id, 3)] {
         app.state
             .store
             .put(&key, b"t".as_slice().into())
@@ -553,12 +606,6 @@ async fn deleting_a_document_removes_all_of_its_objects() {
         .await
         .unwrap()
         .is_empty());
-    assert!(!app
-        .state
-        .store
-        .exists(&keys::legacy::page(id, 2))
-        .await
-        .unwrap());
     assert!(app
         .state
         .store

@@ -15,8 +15,7 @@ filesystem paths.
 | `documents/{id}/thumb.jpg` | First-page thumbnail (also page 1 in the viewer) |
 | `documents/{id}/pages/{n}.jpg` | Page previews for pages 2 and up |
 
-Deleting a document deletes every object under `documents/{id}/`, plus any
-files written by older versions.
+Deleting a document deletes every object under `documents/{id}/`.
 
 ## Local
 
@@ -76,28 +75,6 @@ FOLIO_STORAGE__S3__ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 FOLIO_STORAGE__S3__REGION=auto
 FOLIO_STORAGE__S3__PATH_STYLE=true
 ```
-
-## Moving from the old layout
-
-Versions before the storage port wrote `{id}/{file name}` and
-`thumbnails/{id}.jpg` under `FOLIO_STORAGE__PATH`. On the first start after the
-upgrade, Folio copies those objects to their new keys and updates
-`documents.file_path`. The old files stay where they are, so rolling back to the
-previous release still works (it reads the same root). After a pass without
-errors the setting `storage.layout_version` is set to `2` and later starts skip
-the pass. Until a document is copied, its old path keeps working for reads.
-
-When you are sure you will not roll back, remove the old copies:
-
-```sh
-folio-app storage cleanup-legacy
-```
-
-It only deletes the old files of documents whose new original exists.
-
-Switching an existing installation to S3 requires copying the old directory
-into the bucket first (for example with `rclone`), then starting Folio so the
-pass can copy the keys.
 
 ## Working with local tools
 

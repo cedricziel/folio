@@ -388,7 +388,7 @@ impl Worker {
         if self.document_repo.locate(document_id).await?.is_some() {
             return Ok(());
         }
-        folio_core::ports::purge_document(self.store.as_ref(), document_id, None).await?;
+        folio_core::ports::purge_document(self.store.as_ref(), document_id).await?;
         Ok(())
     }
 
@@ -1040,9 +1040,6 @@ mod tests {
         }
         async fn exists(&self, key: &str) -> Result<bool> {
             self.inner.exists(key).await
-        }
-        async fn copy(&self, from: &str, to: &str) -> Result<()> {
-            self.inner.copy(from, to).await
         }
         async fn delete(&self, key: &str) -> Result<()> {
             self.inner.delete(key).await

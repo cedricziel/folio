@@ -47,7 +47,7 @@ The system SHALL accept a multipart upload at `POST /vaults/{vault_id}/documents
 
 The system SHALL store each uploaded file under the opaque storage key `vaults/<vault id>/documents/<document id>/original` and record that key on the document. Thumbnails SHALL be stored as `vaults/<vault id>/documents/<document id>/thumb.jpg` and page previews as `vaults/<vault id>/documents/<document id>/pages/<n>.jpg`. The original filename SHALL remain metadata and SHALL NOT control the storage path. Moving a document SHALL move its file and thumbnails to the target vault's prefix.
 
-#### Scenario: Filename with spaces and directories
+#### Scenario: Upload with a filename
 
 - **WHEN** a file named `../scans/my letter.pdf` is uploaded to vault `<v>`
 - **THEN** it is stored as `vaults/<v>/documents/<document id>/original`
@@ -64,11 +64,6 @@ The system SHALL store each uploaded file under the opaque storage key `vaults/<
 - **WHEN** a document stored under `vaults/<home>/documents/<id>/` is moved to vault `<business>`
 - **THEN** its file and thumbnails are stored under `vaults/<business>/documents/<id>/` and nothing remains under the old prefix
 
-#### Scenario: File stored before the upgrade
-
-- **WHEN** a document uploaded before the upgrade still has the key `<document id>/<filename>`
-- **THEN** its file is read and downloaded from that recorded key
-
 ### Requirement: JSON upload queues processing
 
 The system SHALL accept the same multipart fields at `POST /api/vaults/{vault_id}/documents/upload` from a contributor, editor or owner of the vault. It SHALL record the caller as uploader, store the file through the shared importer, enqueue a document-processing job, and return the created document, including `vault_id`, as JSON with status 200. OCR and embedding generation SHALL run in the background.
@@ -80,7 +75,7 @@ The system SHALL accept the same multipart fields at `POST /api/vaults/{vault_id
 - **AND** a processing job for that document is enqueued
 - **AND** processing stores extracted text and embeddings in the document's vault
 
-#### Scenario: Upload with OCR disabled
+#### Scenario: Upload with the local provider
 
 - **WHEN** a file is uploaded while the OCR provider is `none`
 - **THEN** the document and its processing job are created
