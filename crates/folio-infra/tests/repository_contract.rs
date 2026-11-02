@@ -2818,6 +2818,12 @@ async fn trash_contract(db: &Database, r: &Repositories) {
         Err(Error::Conflict(_))
     ));
 
+    let persisted = r
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
     r.documents.delete(vault, document.id).await.unwrap();
     r.documents.delete(vault, document.id).await.unwrap();
 
@@ -2920,7 +2926,7 @@ async fn trash_contract(db: &Database, r: &Repositories) {
     let restored = r.documents.restore(vault, document.id).await.unwrap();
     assert_eq!(restored.id, document.id);
     assert_eq!(restored.content, document.content);
-    assert_eq!(restored.created_at, document.created_at);
+    assert_eq!(restored.created_at, persisted.created_at);
     assert!(restored.deleted_at.is_none());
     assert_eq!(
         r.documents.locate_retained(document.id).await.unwrap(),
