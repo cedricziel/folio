@@ -125,6 +125,8 @@ pub enum FailOutcome {
     Retrying,
     /// Out of attempts or not retryable; it will not run again
     GaveUp,
+    /// The claim expired or another worker owns the job.
+    LostLease,
 }
 
 /// A job in the queue
@@ -141,10 +143,14 @@ pub struct Job {
     pub scheduled_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub claim_id: Option<Uuid>,
+    pub lease_expires_at: Option<i64>,
 }
 
 /// Retry budget of a job unless the caller sets one
 pub(crate) const DEFAULT_MAX_ATTEMPTS: i32 = 3;
+pub(crate) const LEASE_SECONDS: i64 = 300;
+pub(crate) const HEARTBEAT_SECONDS: u64 = 60;
 
 /// Job queue backed by the configured database.
 #[derive(Clone)]
@@ -208,14 +214,19 @@ impl JobQueue {
         dispatch!(self, dequeue(Some(class)))
     }
 
-    /// Mark a job as completed
-    pub async fn complete(&self, job_id: Uuid) -> Result<()> {
-        dispatch!(self, complete(job_id))
+    /// Complete a live claim; return false when ownership has expired or changed.
+    pub async fn complete(&self, job: &Job) -> Result<bool> {
+        dispatch!(self, complete(job))
     }
 
     /// Mark a job as failed, rescheduling it when `retry` is set and attempts remain
-    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<FailOutcome> {
-        dispatch!(self, fail(job_id, error, retry))
+    pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
+        dispatch!(self, fail(job, error, retry))
+    }
+
+    /// Renew only the current, unexpired claim. An expired claim cannot be revived.
+    pub async fn renew(&self, job: &Job) -> Result<bool> {
+        dispatch!(self, renew(job))
     }
 
     /// Get count of pending jobs
@@ -228,9 +239,9 @@ impl JobQueue {
         dispatch!(self, cleanup(days))
     }
 
-    /// Reset processing jobs that started more than the given minutes ago
-    pub async fn reset_stuck(&self, minutes: i64) -> Result<i64> {
-        dispatch!(self, reset_stuck(minutes))
+    /// Recover processing jobs whose lease expired, including pre-lease jobs.
+    pub async fn reset_stuck(&self) -> Result<i64> {
+        dispatch!(self, reset_stuck())
     }
 
     /// Find active jobs (pending or processing) for a specific document

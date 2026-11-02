@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS};
+use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
 pub(crate) async fn insert_job<'e>(
@@ -90,14 +90,16 @@ impl SqliteJobQueue {
         let class_filter = class.map_or("TRUE", JobClass::condition);
 
         // Find and claim the next pending job
-        let row: Option<(String, String, String, i32, i32, Option<String>, String, String, String, Option<String>, Option<String>)> =
+        let row: Option<(String, String, String, i32, i32, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, Option<i64>)> =
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 r#"
                 UPDATE jobs
                 SET status = 'processing',
                     started_at = ?,
                     updated_at = ?,
-                    attempts = attempts + 1
+                    attempts = attempts + 1,
+                    claim_id = ?,
+                    lease_expires_at = unixepoch() + ?
                 WHERE id = (
                     SELECT id FROM jobs
                     WHERE status = 'pending'
@@ -106,11 +108,13 @@ impl SqliteJobQueue {
                     ORDER BY scheduled_at ASC
                     LIMIT 1
                 )
-                RETURNING id, job_type, payload, attempts, max_attempts, error, created_at, updated_at, scheduled_at, started_at, completed_at
+                RETURNING id, job_type, payload, attempts, max_attempts, error, created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at
                 "#,
             )))
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
+            .bind(Uuid::new_v4().to_string())
+            .bind(LEASE_SECONDS)
             .bind(now.to_rfc3339())
             .fetch_optional(&self.pool)
             .await
@@ -129,12 +133,16 @@ impl SqliteJobQueue {
                 scheduled_at,
                 started_at,
                 completed_at,
+                claim_id,
+                lease_expires_at,
             )) => {
                 let job_type: JobType = serde_json::from_str(&payload)
                     .map_err(|e| Error::Repository(format!("Failed to deserialize job: {}", e)))?;
 
                 Ok(Some(Job {
                     id: Uuid::parse_str(&id).unwrap(),
+                    claim_id: claim_id.and_then(|id| Uuid::parse_str(&id).ok()),
+                    lease_expires_at,
                     job_type,
                     status: JobStatus::Processing,
                     attempts,
@@ -153,101 +161,73 @@ impl SqliteJobQueue {
         }
     }
 
-    /// Mark a job as completed
-    #[instrument(skip(self))]
-    pub async fn complete(&self, job_id: Uuid) -> Result<()> {
+    pub async fn complete(&self, job: &Job) -> Result<bool> {
         let now = Utc::now();
-
-        sqlx::query(
-            r#"
-            UPDATE jobs
-            SET status = 'completed',
-                completed_at = ?,
-                updated_at = ?
-            WHERE id = ?
-            "#,
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'completed', completed_at = ?, updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND claim_id = ? AND status = 'processing' AND lease_expires_at > unixepoch()",
         )
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
-        .bind(job_id.to_string())
+        .bind(job.id.to_string())
+        .bind(job.claim_id.map(|id| id.to_string()))
         .execute(&self.pool)
         .await
-        .map_err(|e| Error::Repository(format!("Failed to complete job: {}", e)))?;
-
-        debug!("Completed job {}", job_id);
-        Ok(())
+        .map_err(|e| Error::Repository(format!("Failed to complete job: {e}")))?;
+        Ok(result.rows_affected() == 1)
     }
 
-    /// Mark a job as failed
-    #[instrument(skip(self))]
-    pub async fn fail(&self, job_id: Uuid, error: &str, retry: bool) -> Result<FailOutcome> {
+    pub async fn renew(&self, job: &Job) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE jobs SET lease_expires_at = unixepoch() + ? WHERE id = ? AND claim_id = ? AND status = 'processing' AND lease_expires_at > unixepoch()",
+        )
+        .bind(LEASE_SECONDS)
+        .bind(job.id.to_string())
+        .bind(job.claim_id.map(|id| id.to_string()))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(format!("Failed to renew job lease: {e}")))?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
         let now = Utc::now();
-
-        // Get current attempt count
-        let row: Option<(i32, i32)> =
-            sqlx::query_as("SELECT attempts, max_attempts FROM jobs WHERE id = ?")
-                .bind(job_id.to_string())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| Error::Repository(format!("Failed to get job: {}", e)))?;
-
-        let (attempts, max_attempts) = row.unwrap_or((1, 3));
-
-        if retry && attempts < max_attempts {
-            // Schedule retry with exponential backoff
-            let delay_seconds = (2_i64).pow(attempts as u32) * 10; // 10s, 20s, 40s, ...
+        let retrying = retry && job.attempts < job.max_attempts;
+        let result = if retrying {
+            let delay_seconds = 2_i64.pow(job.attempts as u32) * 10;
             let retry_at = now + Duration::seconds(delay_seconds);
-
             sqlx::query(
-                r#"
-                UPDATE jobs
-                SET status = 'pending',
-                    error = ?,
-                    scheduled_at = ?,
-                    updated_at = ?
-                WHERE id = ?
-                "#,
+                "UPDATE jobs SET status = 'pending', error = ?, scheduled_at = ?, updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND claim_id = ? AND status = 'processing' AND lease_expires_at > unixepoch()",
             )
             .bind(error)
             .bind(retry_at.to_rfc3339())
             .bind(now.to_rfc3339())
-            .bind(job_id.to_string())
+            .bind(job.id.to_string())
+            .bind(job.claim_id.map(|id| id.to_string()))
             .execute(&self.pool)
             .await
-            .map_err(|e| Error::Repository(format!("Failed to retry job: {}", e)))?;
-
-            warn!(
-                "Job {} failed (attempt {}/{}), retrying in {}s: {}",
-                job_id, attempts, max_attempts, delay_seconds, error
-            );
-            return Ok(FailOutcome::Retrying);
         } else {
-            // Mark as permanently failed
             sqlx::query(
-                r#"
-                UPDATE jobs
-                SET status = 'failed',
-                    error = ?,
-                    completed_at = ?,
-                    updated_at = ?
-                WHERE id = ?
-                "#,
+                "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND claim_id = ? AND status = 'processing' AND lease_expires_at > unixepoch()",
             )
             .bind(error)
             .bind(now.to_rfc3339())
             .bind(now.to_rfc3339())
-            .bind(job_id.to_string())
+            .bind(job.id.to_string())
+            .bind(job.claim_id.map(|id| id.to_string()))
             .execute(&self.pool)
             .await
-            .map_err(|e| Error::Repository(format!("Failed to fail job: {}", e)))?;
-
-            error!(
-                "Job {} permanently failed after {} attempts: {}",
-                job_id, attempts, error
-            );
         }
-
-        Ok(FailOutcome::GaveUp)
+        .map_err(|e| Error::Repository(format!("Failed to fail job: {e}")))?;
+        if result.rows_affected() == 0 {
+            return Ok(FailOutcome::LostLease);
+        }
+        Ok(if retrying {
+            warn!(job.id = %job.id, job.attempt = job.attempts, %error, "Job failed; scheduled retry");
+            FailOutcome::Retrying
+        } else {
+            error!(job.id = %job.id, job.attempt = job.attempts, %error, "Job permanently failed");
+            FailOutcome::GaveUp
+        })
     }
 
     /// Get count of pending jobs
@@ -274,29 +254,18 @@ impl SqliteJobQueue {
         Ok(result.rows_affected() as i64)
     }
 
-    /// Reset stuck processing jobs (older than specified minutes)
-    pub async fn reset_stuck(&self, minutes: i64) -> Result<i64> {
-        let cutoff = Utc::now() - Duration::minutes(minutes);
-
+    pub async fn reset_stuck(&self) -> Result<i64> {
+        let now = Utc::now();
         let result = sqlx::query(
-            r#"
-            UPDATE jobs
-            SET status = 'pending',
-                updated_at = ?
-            WHERE status = 'processing'
-            AND started_at < ?
-            "#,
+            "UPDATE jobs SET status = 'pending', updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= unixepoch())",
         )
-        .bind(Utc::now().to_rfc3339())
-        .bind(cutoff.to_rfc3339())
+        .bind(now.to_rfc3339())
         .execute(&self.pool)
         .await
-        .map_err(|e| Error::Repository(format!("Failed to reset stuck jobs: {}", e)))?;
-
+        .map_err(|e| Error::Repository(format!("Failed to recover expired jobs: {e}")))?;
         if result.rows_affected() > 0 {
-            info!("Reset {} stuck jobs", result.rows_affected());
+            info!("Recovered {} expired jobs", result.rows_affected());
         }
-
         Ok(result.rows_affected() as i64)
     }
 
@@ -319,10 +288,12 @@ impl SqliteJobQueue {
             String,
             Option<String>,
             Option<String>,
+            Option<String>,
+            Option<i64>,
         )> = sqlx::query_as(
             r#"
             SELECT id, job_type, payload, status, attempts, max_attempts, error,
-                   created_at, updated_at, scheduled_at, started_at, completed_at
+                   created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at
             FROM jobs
             WHERE payload LIKE ?
             AND status IN ('pending', 'processing')
@@ -341,6 +312,8 @@ impl SqliteJobQueue {
 
             jobs.push(Job {
                 id: Uuid::parse_str(&row.0).unwrap(),
+                claim_id: row.12.and_then(|id| Uuid::parse_str(&id).ok()),
+                lease_expires_at: row.13,
                 job_type,
                 status: JobStatus::from(row.3),
                 attempts: row.4,

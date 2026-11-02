@@ -49,10 +49,28 @@ Embeddings are always stored in `document_embeddings.embedding` (`real[]`).
 
 The startup log says which mode is active.
 
-### Job queue
+## Job leases
 
-Workers claim jobs with `FOR UPDATE SKIP LOCKED`, so running more than one
-Folio instance against the same database never processes a job twice.
+SQLite and PostgreSQL assign each claimed job a unique claim ID and a
+five-minute lease, using the database clock. Workers renew the lease every
+minute while processing documents or workflow runs. Recovery requeues expired
+leases, including jobs whose owner crashed. A long-running job keeps its claim
+while renewal succeeds, regardless of when it started.
+
+Renewal, completion, and failure updates require the current, unexpired claim.
+An expired worker cannot change the queue state of a replacement attempt. Each
+renewal has a one-minute deadline. If renewal fails, times out, or loses ownership,
+the worker cancels its processing future.
+PostgreSQL uses `FOR UPDATE SKIP LOCKED` when claiming work. SQLite claims work
+with an atomic update.
+
+Delivery remains at least once. Cancellation cannot undo writes or external
+requests already completed by an earlier attempt. Blocking local embedding
+computations can continue after cancellation. Consumers must tolerate retries.
+Leases do not provide exactly-once external effects.
+
+Stop all old worker instances before starting upgraded binaries. Older binaries
+do not renew leases or check claim IDs.
 
 ## Docker Compose
 

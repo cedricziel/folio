@@ -75,6 +75,7 @@ pub async fn text_layer(data: &[u8]) -> Result<Vec<String>> {
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
     let output = Command::new("pdftotext")
+        .kill_on_drop(true)
         .args(["-enc", "UTF-8"])
         .arg(&pdf)
         .arg("-")
@@ -107,6 +108,7 @@ pub async fn render_pages(data: &[u8], dpi: u32, format: PageFormat) -> Result<V
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
     let output = Command::new("pdftoppm")
+        .kill_on_drop(true)
         .args([format.flag(), "-r", &dpi.to_string()])
         .arg(&pdf)
         .arg(dir.path().join("page"))
