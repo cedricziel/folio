@@ -25,9 +25,10 @@ import XCTest
         let second = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
         first.tap()
+        XCTAssertTrue(app.staticTexts["first.pdf"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(second.isHittable, "The document list must remain available alongside the preview.")
         second.tap()
-        XCTAssertTrue(app.navigationBars["Second fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["second.pdf"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(first.isHittable)
     }
 
