@@ -2527,9 +2527,51 @@ async fn sqlite_satisfies_the_contract() {
 }
 
 #[tokio::test]
+async fn interrupted_fresh_initialization_removes_seeded_overrides() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    sqlx::migrate!("../../migrations/sqlite")
+        .run(pool)
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    fresh_database_uses_config_and_preserves_saved_overrides(&db).await;
+}
+
+#[tokio::test]
+async fn existing_database_preserves_seeded_overrides() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    let mut migrator = sqlx::migrate!("../../migrations/sqlite");
+    migrator
+        .migrations
+        .to_mut()
+        .retain(|migration| migration.version != 0);
+    migrator.run(pool).await.unwrap();
+    db.migrate().await.unwrap();
+    let repos = db.repositories().await;
+    assert_eq!(
+        repos
+            .settings
+            .get("ocr.provider")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
+        "tesseract"
+    );
+}
+
+#[tokio::test]
 async fn memory_database_survives_initialization() {
     let db = Database::connect("sqlite::memory:").await.unwrap();
-    db.migrate().await.unwrap();
+    let (first, second) = tokio::join!(db.migrate(), db.migrate());
+    first.unwrap();
+    second.unwrap();
     let repos = db.repositories().await;
     repos.settings.set("test.key", "value").await.unwrap();
     db.migrate().await.unwrap();
@@ -2537,6 +2579,58 @@ async fn memory_database_survives_initialization() {
         repos.settings.get("test.key").await.unwrap().unwrap().value,
         "value"
     );
+}
+
+async fn postgres_initialization_recovery(pool: &sqlx::PgPool, host: &str, port: u16) {
+    for existing in [false, true] {
+        let name = if existing {
+            "existing_install"
+        } else {
+            "interrupted_install"
+        };
+        sqlx::query(if existing {
+            "CREATE DATABASE existing_install"
+        } else {
+            "CREATE DATABASE interrupted_install"
+        })
+        .execute(pool)
+        .await
+        .unwrap();
+        let fixture = Database::connect(&format!(
+            "postgres://postgres:postgres@{host}:{port}/{name}"
+        ))
+        .await
+        .unwrap();
+        let Database::Postgres(fixture_pool) = &fixture else {
+            unreachable!()
+        };
+        let mut migrator = sqlx::migrate!("../../migrations/postgres");
+        if existing {
+            migrator
+                .migrations
+                .to_mut()
+                .retain(|migration| migration.version != 0);
+        }
+        migrator.run(fixture_pool).await.unwrap();
+        fixture.migrate().await.unwrap();
+        if existing {
+            assert_eq!(
+                fixture
+                    .repositories()
+                    .await
+                    .settings
+                    .get("ocr.provider")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .value,
+                "tesseract"
+            );
+        } else {
+            fresh_database_uses_config_and_preserves_saved_overrides(&fixture).await;
+        }
+        fixture_pool.close().await;
+    }
 }
 
 #[tokio::test]
@@ -2555,6 +2649,10 @@ async fn postgres_satisfies_the_contract() {
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let db = Database::connect(&url).await.unwrap();
+    let Database::Postgres(pool) = &db else {
+        unreachable!()
+    };
+    postgres_initialization_recovery(pool, &host.to_string(), port).await;
     run_contract(&db).await;
 
     let Database::Postgres(pool) = &db else {
@@ -2588,6 +2686,10 @@ async fn postgres_without_the_vector_extension_falls_back() {
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let db = Database::connect(&url).await.unwrap();
+    let Database::Postgres(pool) = &db else {
+        unreachable!()
+    };
+    postgres_initialization_recovery(pool, &host.to_string(), port).await;
     run_contract(&db).await;
 
     let Database::Postgres(pool) = &db else {

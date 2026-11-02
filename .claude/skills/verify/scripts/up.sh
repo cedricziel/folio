@@ -42,6 +42,7 @@ ln -s "$repo/static" "$dir/static"
 pid=$!
 
 printf 'BASE_URL=%s\nPID=%s\nVERIFY_DIR=%s\n' "$base" "$pid" "$dir" >"$dir/env"
+printf 'FOLIO_VERIFY_AUTO_OCR=%q\n' "${FOLIO_VERIFY_AUTO_OCR:-true}" >>"$dir/env"
 
 # Readiness: /readyz when the health-endpoints PR has landed (404 before), else /.
 for _ in $(seq 1 60); do

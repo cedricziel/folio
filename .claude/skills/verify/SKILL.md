@@ -21,7 +21,7 @@ $S/with-instance.sh bash -c "$S/smoke.sh \$FOLIO_VERIFY_ENV"
 ## 2. Or step by step
 
 1. `scripts/build.sh` builds `folio-app` once (uses `~/.local/bin/cargo-slot` when present, `CARGO_INCREMENTAL=0`). Set `CARGO_TARGET_DIR` inside the worktree when sharing a machine with other agents. `up.sh` builds on demand if the binary is missing; set `FOLIO_BIN` to use another binary (for example a release build in CI).
-2. `env_file=$(scripts/up.sh)` picks a free port, creates `${TMPDIR:-/tmp}/folio-verify.XXXXXX` (DB, storage, log in `server.log`), starts the app, waits for readiness and prints the env file path. The env file defines `BASE_URL`, `PID`, `VERIFY_DIR`. `source` it in later steps.
+2. `env_file=$(scripts/up.sh)` picks a free port, creates `${TMPDIR:-/tmp}/folio-verify.XXXXXX` (DB, storage, log in `server.log`), starts the app, waits for readiness and prints the env file path. The env file defines `BASE_URL`, `PID`, `VERIFY_DIR`, and the effective `FOLIO_VERIFY_AUTO_OCR` so a separately invoked smoke test uses the instance configuration. `source` it in later steps.
 3. `scripts/smoke.sh "$env_file"` runs the API checks: upload the fixture PDF through the UI route (so the worker handles it), poll until the worker has set `page_count` (with provider `local` OCR yields no text, so `content` stays null), list and get via `/api`, download and compare bytes, assert an SSE event arrived on `/events`, delete and expect 404.
 4. Drive the UI (next section).
 5. `scripts/down.sh "$env_file"` kills the PID and removes the temp dir. Idempotent. When using `up.sh` directly, install `trap '$S/down.sh "$env_file"' EXIT` first.
