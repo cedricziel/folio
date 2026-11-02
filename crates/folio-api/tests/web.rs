@@ -337,3 +337,39 @@ async fn api_and_script_clients_keep_json_errors() {
     assert_eq!(script.status(), StatusCode::NOT_FOUND);
     assert!(text(script).await.contains(r#""error""#));
 }
+
+fn form_post(uri: &str, body: &str) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn settings_page_toggles_the_mcp_endpoint() {
+    let h = harness().await;
+    let page = text(h.app.clone().oneshot(get("/settings")).await.unwrap()).await;
+    assert!(page.contains(r#"name="mcp_enabled""#));
+
+    let saved = h
+        .app
+        .clone()
+        .oneshot(form_post("/settings/mcp", "mcp_enabled=on"))
+        .await
+        .unwrap();
+    assert!(saved.status().is_redirection());
+    let stored = h.state.settings_repo.get("mcp.enabled").await.unwrap();
+    assert_eq!(stored.unwrap().value, "true");
+    let page = text(h.app.clone().oneshot(get("/settings")).await.unwrap()).await;
+    assert!(page.contains(r#"name="mcp_enabled" checked"#));
+
+    h.app
+        .clone()
+        .oneshot(form_post("/settings/mcp", ""))
+        .await
+        .unwrap();
+    let stored = h.state.settings_repo.get("mcp.enabled").await.unwrap();
+    assert_eq!(stored.unwrap().value, "false");
+}

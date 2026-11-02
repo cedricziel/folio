@@ -20,7 +20,7 @@ use folio_core::models::{
     DocumentSource, EmailOrigin, IngestionSourceInput, LedgerEntry, SourceConfig, SourceKind,
     SourceStatus,
 };
-use folio_core::ports::{EmbeddedChunk, SearchService};
+use folio_core::ports::{EmbeddedChunk, ProcessingQueue, SearchService};
 use folio_core::services::{DispatcherConfig, EventConsumer, OutboxDispatcher};
 use folio_core::{DocumentEvent, EventOrigin, OutboxEvent};
 use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
@@ -563,6 +563,27 @@ async fn document_filter_contract(r: &Repositories) {
     })
     .await;
     assert!(future.is_empty());
+
+    // list_ids applies the same filter and order as list
+    for filter in [
+        DocumentFilter::default(),
+        DocumentFilter {
+            tag_ids: Some(vec![home.id]),
+            search_query: Some("march".into()),
+            ..Default::default()
+        },
+        DocumentFilter {
+            created_after: Some(Utc::now() + Duration::days(1)),
+            ..Default::default()
+        },
+    ] {
+        let listed = ids(list(filter.clone()).await);
+        assert_eq!(
+            r.documents.list_ids(Some(filter)).await.unwrap(),
+            listed,
+            "list_ids agrees with list"
+        );
+    }
 }
 
 async fn settings_contract(r: &Repositories) {
@@ -782,6 +803,39 @@ async fn jobs_contract(r: &Repositories) {
     jobs.complete(stuck).await.unwrap();
     assert_eq!(jobs.cleanup(1).await.unwrap(), 0);
     assert_eq!(jobs.cleanup(-1).await.unwrap(), 2);
+}
+
+async fn processing_recovery_contract(r: &Repositories) {
+    let id = Id::new_v4();
+    let failed = r
+        .jobs
+        .enqueue(JobType::ProcessDocument { document_id: id })
+        .await
+        .unwrap();
+    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, failed);
+    r.jobs
+        .fail(failed, "unreadable upload", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Failed
+    );
+    let retry = r
+        .jobs
+        .enqueue(JobType::ProcessDocument { document_id: id })
+        .await
+        .unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Pending
+    );
+    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, retry);
+    r.jobs.complete(retry).await.unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Completed
+    );
 }
 
 async fn concurrent_dequeue_contract(r: &Repositories) {
@@ -1910,6 +1964,7 @@ async fn run_contract(db: &Database) {
     search_contract(repos.documents.as_ref(), repos.search.as_ref()).await;
     // Before the workflow contracts, which leave queued run jobs behind
     jobs_contract(&repos).await;
+    processing_recovery_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
     workflows_contract(&repos).await;
     ingestion_contract(&repos).await;

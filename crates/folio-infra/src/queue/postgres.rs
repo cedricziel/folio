@@ -285,15 +285,16 @@ impl PostgresJobQueue {
     }
 
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM jobs
-             WHERE payload->'data'->>'document_id' = $1 AND status = 'failed'",
+        let failed: bool = sqlx::query_scalar(
+            "SELECT COALESCE((SELECT status = 'failed' FROM jobs
+             WHERE payload->'data'->>'document_id' = $1 AND status IN ('completed', 'failed')
+             ORDER BY created_at DESC, completed_at DESC, id DESC LIMIT 1), FALSE)",
         )
         .bind(document_id.to_string())
         .fetch_one(&self.pool)
         .await
         .map_err(repo_err("Failed to check failed jobs"))?;
 
-        Ok(count > 0)
+        Ok(failed)
     }
 }
