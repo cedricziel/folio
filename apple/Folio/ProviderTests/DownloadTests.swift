@@ -4,23 +4,38 @@ import PDFKit
 import XCTest
 
 private let downloadID = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+private let downloadVaultID = UUID(uuidString: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")!
 
 private final class TransferProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override class func canInit(with _: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
     override func stopLoading() {}
 
     override func startLoading() {
         let download = request.url!.path.hasSuffix("/download")
+        let discovery = request.url!.path.hasSuffix("/api/vaults")
         let missing = download && request.url!.path.contains("/missing/")
-        let status = missing ? 404 : 200
+        let wrongVault =
+            !discovery && request.value(forHTTPHeaderField: "X-Folio-Vault") != downloadVaultID.uuidString.lowercased()
+        let status = missing || wrongVault ? 404 : 200
         let body: Data
-        if download {
+        if discovery {
+            body = Data(
+                "{\"vaults\":[{\"id\":\"\(downloadVaultID)\",\"name\":\"Household\",\"role\":\"viewer\"}],\"default_vault_id\":\"\(downloadVaultID)\"}"
+                    .utf8)
+        } else if download {
             body =
                 missing
                 ? Data()
                 : try! Data(
-                    contentsOf: Bundle(for: DownloadTests.self).url(forResource: "sample", withExtension: "pdf")!)
+                    contentsOf: Bundle(for: DownloadTests.self).url(forResource: "sample", withExtension: "pdf")!
+                )
         } else {
             body = Data(
                 """
@@ -28,11 +43,13 @@ private final class TransferProtocol: URLProtocol {
                 "mime_type":"application/pdf","vault_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","uploaded_by":"test",
                 "ocr_status":"done","embed_status":"done","tags":[],
                 "created_at":"2025-01-01T00:00:00Z","updated_at":"2025-01-01T00:00:00Z"}],"count":1}
-                """.utf8)
+                """.utf8
+            )
         }
         let response = HTTPURLResponse(
             url: request.url!, statusCode: status, httpVersion: nil,
-            headerFields: ["Content-Type": download ? "application/pdf" : "application/json"])!
+            headerFields: ["Content-Type": download ? "application/pdf" : "application/json"]
+        )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
@@ -58,21 +75,27 @@ final class DownloadTests: XCTestCase {
     private func provider(path: String = "") -> FolioFileProvider {
         let service = LiveFolioService(
             baseURL: URL(string: "https://provider.invalid/" + path)!,
-            session: session, downloadDirectory: directory)
+            session: session, downloadDirectory: directory
+        )
         let staging = directory!
         return FolioFileProvider(
             domain: NSFileProviderDomain(identifier: .init("download-test"), displayName: "Test"),
-            service: service, temporaryDirectory: { staging })
+            service: service, temporaryDirectory: { staging }
+        )
     }
 
     private func fetch(_ provider: FolioFileProvider) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             _ = provider.fetchContents(
-                for: FolioItemID.document(downloadID, in: .all).providerIdentifier,
+                for: FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier,
                 version: nil, request: NSFileProviderRequest()
             ) { url, item, error in
-                if let error { continuation.resume(throwing: error); return }
-                XCTAssertEqual(item?.itemIdentifier, FolioItemID.document(downloadID, in: .all).providerIdentifier)
+                if let error {
+                    continuation.resume(throwing: error); return
+                }
+                XCTAssertEqual(
+                    item?.itemIdentifier,
+                    FolioItemID.document(downloadID, in: .scoped(downloadVaultID, .all)).providerIdentifier)
                 XCTAssertEqual(item?.capabilities, [.allowsReading])
                 guard let url else { continuation.resume(throwing: NSFileProviderError(.noSuchItem)); return }
                 continuation.resume(returning: url)

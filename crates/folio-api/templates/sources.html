@@ -10,11 +10,11 @@
         <div class="page-head-row">
             <h1 class="title">Sources</h1>
             <div class="head-actions">
-                <a href="/settings/sources/new?kind=email" class="f-btn">Add mail account</a>
-                <a href="/settings/sources/new?kind=folder" class="f-btn f-btn-primary">Add folder</a>
+                <a href="{{ "/settings/sources/new?kind=email"|vault_url }}" class="f-btn">Add mail account</a>
+                <a href="{{ "/settings/sources/new?kind=folder"|vault_url }}" class="f-btn f-btn-primary">Add folder</a>
             </div>
         </div>
-        <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="/workflows">Workflows</a>.</p>
+        <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="{{ "/workflows"|vault_url }}">Workflows</a>.</p>
     </header>
 
     {% match notice %}
@@ -35,7 +35,7 @@
                 {% if row.read_only %}
                 <span class="f-row-title">{{ row.name }}</span>
                 {% else %}
-                <a href="/settings/sources/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
+                <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
                 {% endif %}
                 <div class="f-row-sub">
                     <span class="f-meta">{{ row.kind }}</span>
@@ -59,11 +59,11 @@
                 {% endmatch %}
             </div>
             <div class="form-actions">
-                <form action="/settings/sources/{{ row.id }}/test" method="post" data-turbo="false">
+                <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/test" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">Test</button>
                 </form>
                 {% if !row.read_only %}
-                <form action="/settings/sources/{{ row.id }}/toggle" method="post" data-turbo="false">
+                <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/toggle" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">{% if row.enabled %}Turn off{% else %}Turn on{% endif %}</button>
                 </form>
                 {% endif %}

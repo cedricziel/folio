@@ -1,5 +1,5 @@
-<a class="f-row" id="document-{{ row.id }}" href="/documents/{{ row.id }}" data-turbo-frame="_top">
-    <div class="f-thumb"><img src="/documents/{{ row.id }}/thumbnail?v={{ row.version }}" alt="" loading="lazy"></div>
+<a class="f-row" id="document-{{ row.id }}" href="{{ "/documents"|vault_url }}/{{ row.id }}" data-turbo-frame="_top" data-can-edit="{{ row.can_edit }}">
+    <div class="f-thumb"><img src="{{ "/documents"|vault_url }}/{{ row.id }}/thumbnail?v={{ row.version }}" alt="" loading="lazy"></div>
     <div class="row-main">
         <div class="f-row-title">{{ row.title }}</div>
         {% let sub = row.subline() %}

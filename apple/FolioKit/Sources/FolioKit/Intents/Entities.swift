@@ -4,7 +4,8 @@ import Foundation
 
 public struct DocumentEntity: AppEntity, IndexedEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Document", numericFormat: "\(placeholder: .int) documents")
+        name: "Document", numericFormat: "\(placeholder: .int) documents"
+    )
     public static let defaultQuery = DocumentEntityQuery()
 
     public let id: UUID
@@ -37,7 +38,8 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
         DisplayRepresentation(
             title: "\(title)",
             subtitle: subtitle.map { "\($0)" },
-            image: .init(systemName: "doc.text"))
+            image: .init(systemName: "doc.text")
+        )
     }
 
     private var subtitle: String? {
@@ -74,7 +76,8 @@ public struct DocumentEntityQuery: EntityStringQuery {
 
 public struct TagEntity: AppEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Tag", numericFormat: "\(placeholder: .int) tags")
+        name: "Tag", numericFormat: "\(placeholder: .int) tags"
+    )
     public static let defaultQuery = TagEntityQuery()
 
     public let id: UUID
@@ -110,7 +113,8 @@ public struct TagEntityQuery: EntityStringQuery {
 
 public struct CorrespondentEntity: AppEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Correspondent", numericFormat: "\(placeholder: .int) correspondents")
+        name: "Correspondent", numericFormat: "\(placeholder: .int) correspondents"
+    )
     public static let defaultQuery = CorrespondentEntityQuery()
 
     public let id: UUID
@@ -148,7 +152,8 @@ public struct CorrespondentEntityQuery: EntityStringQuery {
 
 public struct DocumentTypeEntity: AppEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Document type", numericFormat: "\(placeholder: .int) document types")
+        name: "Document type", numericFormat: "\(placeholder: .int) document types"
+    )
     public static let defaultQuery = DocumentTypeEntityQuery()
 
     public let id: UUID
@@ -184,15 +189,15 @@ public struct DocumentTypeEntityQuery: EntityStringQuery {
     }
 }
 
-/// The server has no vaults yet. The entity exists so intents can take one later without
-/// changing identifiers; until `FolioFeatures.vaults` flips, its query finds nothing.
+/// Vault entities stay inactive until intents can scope every operation to the selected vault.
 public enum FolioFeatures {
     public static let vaults = false
 }
 
 public struct VaultEntity: AppEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
-        name: "Vault", numericFormat: "\(placeholder: .int) vaults")
+        name: "Vault", numericFormat: "\(placeholder: .int) vaults"
+    )
     public static let defaultQuery = VaultEntityQuery()
 
     public let id: UUID
@@ -213,11 +218,17 @@ public struct VaultEntity: AppEntity {
 public struct VaultEntityQuery: EntityStringQuery {
     public init() {}
 
-    public func entities(for identifiers: [UUID]) async throws -> [VaultEntity] { try vaults() }
+    public func entities(for _: [UUID]) async throws -> [VaultEntity] {
+        try vaults()
+    }
 
-    public func entities(matching string: String) async throws -> [VaultEntity] { try vaults() }
+    public func entities(matching _: String) async throws -> [VaultEntity] {
+        try vaults()
+    }
 
-    public func suggestedEntities() async throws -> [VaultEntity] { try vaults() }
+    public func suggestedEntities() async throws -> [VaultEntity] {
+        try vaults()
+    }
 
     private func vaults() throws -> [VaultEntity] {
         guard FolioFeatures.vaults else { return [] }

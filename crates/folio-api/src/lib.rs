@@ -12,6 +12,7 @@ pub mod routes;
 pub mod state;
 pub mod telemetry;
 pub mod vault;
+mod vault_context;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use forward::forward_auth;

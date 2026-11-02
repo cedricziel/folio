@@ -21,6 +21,7 @@ mod settings;
 mod source_pages;
 pub(crate) mod sources;
 pub(crate) mod tags;
+pub(crate) mod vaults;
 mod view;
 mod workflow_pages;
 pub(crate) mod workflows;
@@ -60,7 +61,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let default_vault = axum::middleware::from_fn_with_state(
         crate::vault::VaultResolver {
             auth: auth.clone(),
-            vaults: state.vaults.clone(),
+            state: state.clone(),
         },
         crate::vault::resolve_default_vault,
     );
@@ -115,12 +116,13 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     #[cfg(debug_assertions)]
     let router = router.layer(tower_livereload::LiveReloadLayer::new());
 
-    router
+    crate::vault::scoped_router(router)
 }
 
 /// API router for JSON endpoints
 fn api_router() -> Router<AppState> {
     Router::new()
+        .route("/vaults", axum::routing::get(vaults::list_vaults))
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
         .route("/documents/browse", get(browse::browse_default))

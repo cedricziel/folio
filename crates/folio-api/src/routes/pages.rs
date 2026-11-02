@@ -1,5 +1,6 @@
 //! Page routes for Turbo-based web UI
 
+use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},

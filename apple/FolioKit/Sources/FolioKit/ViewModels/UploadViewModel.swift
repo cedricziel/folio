@@ -14,15 +14,25 @@ public final class UploadViewModel {
 
     private let service: any FolioService
     private let onUploaded: () -> Void
+    public let destination: VaultDestinationViewModel?
 
-    public init(service: any FolioService, onUploaded: @escaping () -> Void) {
+    public init(
+        service: any FolioService, destination: VaultDestinationViewModel? = nil,
+        onUploaded: @escaping () -> Void
+    ) {
         self.service = service
         self.onUploaded = onUploaded
+        self.destination = destination
     }
 
     /// Uploads one file at a time and stops at the first failure.
     public func upload(_ files: [UploadFile]) async {
         guard !files.isEmpty, !isUploading else { return }
+        guard destination?.canUpload != false else {
+            state = .failed(message: "Choose a vault you can upload to.", uploaded: 0)
+            return
+        }
+        let service = destination?.service ?? service
         var done = 0
         do {
             for file in files {
@@ -40,7 +50,9 @@ public final class UploadViewModel {
     }
 
     private var isUploading: Bool {
-        if case .uploading = state { return true }
+        if case .uploading = state {
+            return true
+        }
         return false
     }
 

@@ -7,10 +7,11 @@
         {% for correspondent in correspondents %}
         <li class="manage-list-item" id="correspondent-{{ correspondent.id }}">
             <span class="manage-item-name">{{ correspondent.name }}</span>
+            {% if true|can_manage %}
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename correspondent {{ correspondent.name }}"
                         onclick="this.closest('li').querySelector('.manage-edit-form').classList.toggle('active')">{{ icons::pencil() }}</button>
-                <form action="/manage/correspondents/{{ correspondent.id }}/delete" method="post" class="inline-form"
+                <form action="{{ "/manage/correspondents"|vault_url }}/{{ correspondent.id }}/delete" method="post" class="inline-form"
                       data-controller="confirm"
                       data-confirm-message-value="Delete correspondent '{{ correspondent.name }}'?"
                       data-action="submit->confirm#confirm"
@@ -19,7 +20,7 @@
                 </form>
             </div>
             <div class="manage-edit-form">
-                <form action="/manage/correspondents/{{ correspondent.id }}/update" method="post"
+                <form action="{{ "/manage/correspondents"|vault_url }}/{{ correspondent.id }}/update" method="post"
                       data-turbo-frame="correspondents-list">
                     <label class="sr-only" for="edit-correspondent-{{ correspondent.id }}">Name</label>
                     <input class="input" id="edit-correspondent-{{ correspondent.id }}" type="text" name="name" value="{{ correspondent.name }}" required>
@@ -30,6 +31,7 @@
                     </div>
                 </form>
             </div>
+            {% endif %}
         </li>
         {% endfor %}
         {% endif %}

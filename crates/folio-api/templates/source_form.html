@@ -6,7 +6,7 @@
 <section class="page">
     <header class="page-head">
         <h1 class="title">{% if source_id.is_some() %}Edit source{% else %}New source{% endif %}</h1>
-        <a href="/settings/sources" class="f-btn f-btn-quiet">Back to sources</a>
+        <a href="{{ "/settings/sources"|vault_url }}" class="f-btn f-btn-quiet">Back to sources</a>
     </header>
 
     {% match notice %}
@@ -16,7 +16,7 @@
     {% endmatch %}
 
     <form method="post" data-turbo="false"
-          action="{% match source_id %}{% when Some with (id) %}/settings/sources/{{ id }}{% when None %}/settings/sources{% endmatch %}">
+          action="{{ "/settings/sources"|vault_url }}{% match source_id %}{% when Some with (id) %}/{{ id }}{% when None %}{% endmatch %}">
         <input type="hidden" name="kind" value="{{ values.kind }}">
 
         <div class="field">
@@ -100,7 +100,7 @@
     {% match source_id %}
     {% when Some with (id) %}
     <div class="form-actions">
-        <form action="/settings/sources/{{ id }}/delete" method="post" data-turbo="false">
+        <form action="{{ "/settings/sources"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false">
             <button type="submit" class="f-btn f-btn-danger">Delete source</button>
         </form>
     </div>

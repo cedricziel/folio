@@ -3,9 +3,11 @@ import SwiftUI
 
 struct DocumentDetailView: View {
     @State var model: DocumentDetailViewModel
+    let vaultID: UUID?
 
-    init(model: DocumentDetailViewModel) {
+    init(model: DocumentDetailViewModel, vaultID: UUID? = nil) {
         _model = State(initialValue: model)
+        self.vaultID = vaultID
     }
 
     var body: some View {
@@ -21,7 +23,7 @@ struct DocumentDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
         #endif
         .task { await model.loadPreview() }
-        .task { await SpotlightDonor.donate(model.summary) }
+        .task { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
     }
 
     @ViewBuilder

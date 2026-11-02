@@ -1,5 +1,6 @@
 //! Server-rendered workflow pages: list, create/edit form, test, and run history
 
+use crate::vault::filters;
 use std::collections::{BTreeMap, HashMap};
 
 use askama::Template;

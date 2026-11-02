@@ -17,11 +17,13 @@
             </div>
             <p class="hint">People and organizations that send you documents.</p>
 
-            <form action="/manage/correspondents/create" method="post" class="add-form" data-turbo-frame="correspondents-list">
+            {% if true|can_manage %}
+            <form action="{{ "/manage/correspondents/create"|vault_url }}" method="post" class="add-form" data-turbo-frame="correspondents-list">
                 <label class="sr-only" for="new-correspondent">Name</label>
                 <input class="input" id="new-correspondent" type="text" name="name" placeholder="Name" required>
                 <button type="submit" class="f-btn">Add</button>
             </form>
+            {% endif %}
 
             <turbo-frame id="correspondents-list">
                 {% include "partials/correspondents_list.html" %}
@@ -35,11 +37,13 @@
             </div>
             <p class="hint">Invoice, contract, payslip: the kind of document.</p>
 
-            <form action="/manage/document_types/create" method="post" class="add-form" data-turbo-frame="document-types-list">
+            {% if true|can_manage %}
+            <form action="{{ "/manage/document_types/create"|vault_url }}" method="post" class="add-form" data-turbo-frame="document-types-list">
                 <label class="sr-only" for="new-document-type">Name</label>
                 <input class="input" id="new-document-type" type="text" name="name" placeholder="Name" required>
                 <button type="submit" class="f-btn">Add</button>
             </form>
+            {% endif %}
 
             <turbo-frame id="document-types-list">
                 {% include "partials/document_types_list.html" %}
@@ -53,11 +57,13 @@
             </div>
             <p class="hint">Labels for finding documents across types.</p>
 
-            <form action="/manage/tags/create" method="post" class="add-form" data-turbo-frame="tags-list">
+            {% if true|can_manage %}
+            <form action="{{ "/manage/tags/create"|vault_url }}" method="post" class="add-form" data-turbo-frame="tags-list">
                 <label class="sr-only" for="new-tag">Name</label>
                 <input class="input" id="new-tag" type="text" name="name" placeholder="Name" required>
                 <button type="submit" class="f-btn">Add</button>
             </form>
+            {% endif %}
 
             <turbo-frame id="tags-list">
                 {% include "partials/tags_list.html" %}

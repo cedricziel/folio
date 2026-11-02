@@ -41,6 +41,11 @@ struct ScanReviewView: View {
                             .textFieldStyle(.roundedBorder)
                     }
 
+                    if let destination = model.destination {
+                        VaultDestinationPicker(destination: destination)
+                            .disabled(model.state == .filing)
+                    }
+
                     Text("\(model.pages.count) \(model.pages.count == 1 ? "page" : "pages")")
                         .font(FolioTheme.Typography.meta)
                         .foregroundStyle(Color.inkMuted)
@@ -76,7 +81,7 @@ struct ScanReviewView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(model.state == .filing)
+                .disabled(model.state == .filing || model.destination?.canUpload == false)
                 .padding(FolioTheme.Spacing.space4)
             }
         }

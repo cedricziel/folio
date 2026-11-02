@@ -4,6 +4,7 @@
 //! People opening a page in a browser should get the app shell instead, so
 //! this layer swaps those bodies for a rendered page when the request asks for HTML.
 
+use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Request, State},

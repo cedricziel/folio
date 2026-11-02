@@ -18,11 +18,13 @@
         <pre class="ocr">{{ content }}</pre>
         {% when None %}
         {% endmatch %}
-        <form action="/documents/{{ document.id }}/delete" method="post"
+        {% if document|can_edit_document %}
+        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/delete" method="post"
               data-controller="confirm"
               data-confirm-message-value="Delete this document?"
               data-action="submit->confirm#confirm">
             <button type="submit" class="f-btn f-btn-quiet f-btn-danger">Delete</button>
         </form>
+        {% endif %}
     </div>
 </turbo-frame>

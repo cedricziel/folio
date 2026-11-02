@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 
-use folio_core::models::{Correspondent, Document, DocumentStatus, DocumentType, Id, Tag, VaultId};
+use folio_core::models::{
+    Correspondent, Document, DocumentStatus, DocumentType, Id, Tag, VaultId, VaultRole,
+};
 
 use crate::error::ApiResult;
 use crate::state::AppState;
-use crate::vault::DefaultVault;
+use crate::vault::{DefaultVault, CURRENT_VAULT};
 
 /// Which sidebar entry is highlighted
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +91,12 @@ fn initials(name: &str) -> String {
 
 /// Data the sidebar needs on every page
 pub struct Sidebar {
+    pub vault_id: VaultId,
+    pub vault_name: String,
+    pub vault_role: &'static str,
+    pub vaults: Vec<VaultChoice>,
+    pub upload_vaults: Vec<VaultChoice>,
+    pub can_upload: bool,
     pub user: Option<SidebarUser>,
     pub active: &'static str,
     pub inbox_count: usize,
@@ -111,7 +119,52 @@ impl Sidebar {
         nav: Nav,
         documents: &[Document],
     ) -> ApiResult<Self> {
+        let context = CURRENT_VAULT.try_with(Clone::clone).ok();
+        let role = context
+            .as_ref()
+            .map(|context| context.role)
+            .unwrap_or(VaultRole::Viewer);
+        let choices: Vec<VaultChoice> = context
+            .as_ref()
+            .map(|context| {
+                context
+                    .vaults
+                    .iter()
+                    .map(|item| VaultChoice {
+                        id: item.id,
+                        name: item.name.clone(),
+                        role: vault_role_label(item.role),
+                        selected: item.id == vault,
+                        writable: item.role >= VaultRole::Contributor,
+                    })
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                vec![VaultChoice {
+                    id: vault,
+                    name: "Vault".to_string(),
+                    role: vault_role_label(role),
+                    selected: true,
+                    writable: false,
+                }]
+            });
+        let vault_name = choices
+            .iter()
+            .find(|item| item.selected)
+            .map(|item| item.name.clone())
+            .unwrap_or_else(|| "Vault".to_string());
+        let upload_vaults = choices
+            .iter()
+            .filter(|item| item.writable)
+            .cloned()
+            .collect::<Vec<_>>();
         Ok(Self {
+            vault_id: vault,
+            vault_name,
+            vault_role: vault_role_label(role),
+            vaults: choices,
+            can_upload: !upload_vaults.is_empty(),
+            upload_vaults,
             user: CURRENT_USER.try_with(Clone::clone).ok(),
             active: nav.as_str(),
             inbox_count: inbox_count(documents),
@@ -126,6 +179,24 @@ impl Sidebar {
                 .map(TagView::from)
                 .collect(),
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct VaultChoice {
+    pub id: VaultId,
+    pub name: String,
+    pub role: &'static str,
+    pub selected: bool,
+    pub writable: bool,
+}
+
+fn vault_role_label(role: VaultRole) -> &'static str {
+    match role {
+        VaultRole::Viewer => "Viewer",
+        VaultRole::Contributor => "Contributor",
+        VaultRole::Editor => "Editor",
+        VaultRole::Owner => "Owner",
     }
 }
 
@@ -210,6 +281,7 @@ pub struct DocumentRow {
     pub page_count: Option<u32>,
     pub date: String,
     pub version: i64,
+    pub can_edit: bool,
 }
 
 impl DocumentRow {
@@ -299,6 +371,13 @@ fn row_from(
         page_count: doc.page_count,
         date: doc.created_at.format("%Y-%m-%d").to_string(),
         version: doc.updated_at.timestamp_millis(),
+        can_edit: CURRENT_VAULT
+            .try_with(|context| match context.role {
+                VaultRole::Viewer => false,
+                VaultRole::Contributor => context.user.is_some() && context.user == doc.uploaded_by,
+                VaultRole::Editor | VaultRole::Owner => true,
+            })
+            .unwrap_or(false),
     }
 }
 
@@ -339,6 +418,7 @@ mod tests {
             page_count: pages,
             date: "2025-03-14".into(),
             version: 0,
+            can_edit: true,
         }
     }
 

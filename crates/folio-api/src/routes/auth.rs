@@ -5,7 +5,8 @@ use std::{sync::Arc, time::Duration};
 use askama::Template;
 use axum::{
     extract::{
-        ConnectInfo, DefaultBodyLimit, FromRef, FromRequestParts, Query, RawQuery, Request, State,
+        ConnectInfo, DefaultBodyLimit, FromRef, FromRequestParts, OriginalUri, Query, RawQuery,
+        Request, State,
     },
     http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::Next,
@@ -461,7 +462,10 @@ pub async fn enforce_auth(
     }
     let next_path = if request.method() == Method::GET {
         request
-            .uri()
+            .extensions()
+            .get::<OriginalUri>()
+            .map(|original| &original.0)
+            .unwrap_or_else(|| request.uri())
             .path_and_query()
             .map(|p| p.as_str().to_string())
             .unwrap_or_else(|| "/".into())

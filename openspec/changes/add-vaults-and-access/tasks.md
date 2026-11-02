@@ -31,6 +31,8 @@ Groups 1 and 2 form the foundation release. Existing HTTP and MCP calls use the 
 - [x] 2.6 Set `vault_id` and `uploaded_by` on documents created by the worker and the existing upload code paths; the worker uses `locate` before scoped calls. Existing worker tests pass with the new signatures.
 - [x] 2.7 Run `make format`, `make lint`, `make test`; commit as `refactor(core): scope repositories by vault` and `test(infra): assert cross-vault isolation`.
 
+The `vault-library-switching` change delivers additive discovery, request selection, role enforcement, and library selectors. It preserves unscoped API compatibility. The remaining CRUD, membership, moves, and MCP tasks below are still pending.
+
 ## 3. JSON API (PR 3, depends on 2 and the auth PRs)
 
 - [ ] 3.1 Add the `VaultAccess` extractor mapping `NotVisible` to 404 and `Forbidden` to 403; failing test first: `invisible_vault_404_body_equals_unknown_id_body`.
