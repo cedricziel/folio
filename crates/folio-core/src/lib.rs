@@ -14,4 +14,6 @@ pub mod redact;
 pub mod services;
 
 pub use error::{Error, Result};
-pub use events::{DeletedDocument, DocumentEvent, EventBroadcaster, EventOrigin, OutboxEvent};
+pub use events::{
+    DeletedDocument, DocumentEvent, EventBroadcaster, EventOrigin, EventSnapshot, OutboxEvent,
+};

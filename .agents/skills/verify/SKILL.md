@@ -173,6 +173,10 @@ for upload finalization. Gated PUT tests verify that blocked or failed originals
 emit no Created event; successful finalization emits one event and workflow run
 across retries. The shared contract covers atomic path/event commits, concurrent
 finalization, outbox pruning, and already-announced records on both databases.
+Outbox context regressions in the repository contract cover immutable metadata
+and taxonomy names, transaction rollback, scoped worker events, delete snapshots,
+and payload size independent of OCR content. Run `cargo test -p folio-core events::tests`
+and `cargo test -p folio-infra --test vault_outbox_upgrade` for wire compatibility.
 They cover competing source claims, owner success/failure/cancellation, missing
 originals, and retained trash. Folder tests use temporary inputs; IMAP tests use
 loopback fixtures or disposable GreenMail containers. Never point these suites

@@ -8,7 +8,7 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool, Transaction};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-use super::outbox::insert_event;
+use super::outbox::{capture_document, insert_event};
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
@@ -52,7 +52,14 @@ impl SqliteDocumentRepository {
     }
 
     async fn emit_in(&self, tx: &mut Transaction<'_, Sqlite>, event: DocumentEvent) -> Result<()> {
-        insert_event(tx, &event, self.origin).await.map(|_| ())
+        let context = capture_document(tx, event.document_id(), None)
+            .await?
+            .ok_or_else(|| {
+                Error::Repository("Document vanished before its event was captured".into())
+            })?;
+        insert_event(tx, &event, self.origin, Some(&context))
+            .await
+            .map(|_| ())
     }
 
     async fn commit(&self, tx: Transaction<'_, Sqlite>) -> Result<()> {
@@ -849,12 +856,15 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {DOC_COLS} FROM documents
-             WHERE id = ? AND vault_id = ? AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL")))
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT {} FROM documents
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL", DOC_COLS.replace(" content,", " NULL AS content,"))))
             .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
         let Some(row) = row else {
             return Ok(());
         };
+        let context = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let document: Document = row.try_into()?;
         let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
              WHERE dt.document_id = ? AND t.vault_id = ?")
@@ -877,12 +887,14 @@ impl DocumentRepository for SqliteDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        self.emit_in(
+        insert_event(
             &mut tx,
-            DocumentEvent::Deleted {
+            &DocumentEvent::Deleted {
                 document_id: id,
                 snapshot: Some(Arc::new(DeletedDocument { document, tags })),
             },
+            self.origin,
+            Some(&context),
         )
         .await?;
         self.commit(tx).await

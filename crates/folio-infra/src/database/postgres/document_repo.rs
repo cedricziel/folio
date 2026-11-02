@@ -20,7 +20,7 @@ use folio_core::ports::{
 use folio_core::{DeletedDocument, DocumentEvent, EventOrigin};
 
 use super::map_write_error;
-use super::outbox::insert_event;
+use super::outbox::{capture_document, insert_event};
 
 fn repo_err(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
@@ -260,7 +260,14 @@ impl PostgresDocumentRepository {
         tx: &mut Transaction<'_, Postgres>,
         event: DocumentEvent,
     ) -> Result<()> {
-        insert_event(tx, &event, self.origin).await.map(|_| ())
+        let context = capture_document(tx, event.document_id(), None)
+            .await?
+            .ok_or_else(|| {
+                Error::Repository("Document vanished before its event was captured".into())
+            })?;
+        insert_event(tx, &event, self.origin, Some(&context))
+            .await
+            .map(|_| ())
     }
 
     async fn commit(&self, tx: Transaction<'_, Postgres>) -> Result<()> {
@@ -810,11 +817,14 @@ impl DocumentRepository for PostgresDocumentRepository {
             .fetch_all(&mut *tx)
             .await
             .map_err(repo_err)?;
-        let row: Option<DocumentRow> = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2 AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL FOR UPDATE"))
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(select_documents!("WHERE id = $1 AND vault_id = $2 AND deleted_at IS NOT NULL AND purge_requested_at IS NOT NULL FOR UPDATE").replace(" content,", " NULL AS content,")))
             .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?;
         let Some(row) = row else {
             return Ok(());
         };
+        let context = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let document: Document = row.try_into()?;
         let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
              WHERE dt.document_id = $1 AND t.vault_id = $2")
@@ -834,12 +844,14 @@ impl DocumentRepository for PostgresDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        self.emit_in(
+        insert_event(
             &mut tx,
-            DocumentEvent::Deleted {
+            &DocumentEvent::Deleted {
                 document_id: id,
                 snapshot: Some(Arc::new(DeletedDocument { document, tags })),
             },
+            self.origin,
+            Some(&context),
         )
         .await?;
         self.commit(tx).await

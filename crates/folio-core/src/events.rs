@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::models::{Document, Tag};
+use crate::models::{Document, DocumentSource, Id, NamedRef, Tag, VaultId};
 
 /// What a document looked like just before it was deleted
 ///
@@ -88,6 +88,24 @@ pub enum EventOrigin {
     Workflow,
 }
 
+/// Immutable metadata captured in the transaction that produced an event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventSnapshot {
+    pub document_id: Id,
+    pub vault_id: VaultId,
+    pub title: String,
+    pub original_filename: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_path: Option<String>,
+    pub source: DocumentSource,
+    pub created_at: DateTime<Utc>,
+    pub correspondent_id: Option<Id>,
+    pub correspondent_name: Option<String>,
+    pub document_type_id: Option<Id>,
+    pub document_type_name: Option<String>,
+    pub tags: Vec<NamedRef>,
+}
+
 /// A [`DocumentEvent`] as persisted in the outbox
 #[derive(Debug, Clone)]
 pub struct OutboxEvent {
@@ -95,6 +113,7 @@ pub struct OutboxEvent {
     pub id: i64,
     pub event: DocumentEvent,
     pub origin: EventOrigin,
+    pub context: Option<Arc<EventSnapshot>>,
     pub created_at: DateTime<Utc>,
     /// Delivery attempts so far, including the current one
     pub attempts: i32,
@@ -106,10 +125,21 @@ struct StoredPayload {
     event: DocumentEvent,
     origin: EventOrigin,
     snapshot: Option<DeletedDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context: Option<EventSnapshot>,
 }
 
 /// Encode an event for the outbox `payload` column
 pub fn encode_outbox_payload(event: &DocumentEvent, origin: EventOrigin) -> String {
+    encode_outbox_payload_with_context(event, origin, None)
+}
+
+/// Encode an event with its internal immutable metadata; wire events remain unchanged.
+pub fn encode_outbox_payload_with_context(
+    event: &DocumentEvent,
+    origin: EventOrigin,
+    context: Option<&EventSnapshot>,
+) -> String {
     let snapshot = match event {
         DocumentEvent::Deleted { snapshot, .. } => snapshot.as_deref().cloned(),
         _ => None,
@@ -118,21 +148,38 @@ pub fn encode_outbox_payload(event: &DocumentEvent, origin: EventOrigin) -> Stri
         event: event.clone(),
         origin,
         snapshot,
+        context: context.cloned(),
     })
     .expect("document events always serialize")
 }
 
 /// Decode an outbox `payload` column
 pub fn decode_outbox_payload(payload: &str) -> serde_json::Result<(DocumentEvent, EventOrigin)> {
+    decode_outbox_payload_with_context(payload).map(|(event, origin, _)| (event, origin))
+}
+
+/// Decode both current context and older payloads that lack it.
+pub fn decode_outbox_payload_with_context(
+    payload: &str,
+) -> serde_json::Result<(DocumentEvent, EventOrigin, Option<Arc<EventSnapshot>>)> {
     let StoredPayload {
         mut event,
         origin,
         snapshot,
+        context,
     } = serde_json::from_str(payload)?;
     if let DocumentEvent::Deleted { snapshot: slot, .. } = &mut event {
         *slot = snapshot.map(Arc::new);
     }
-    Ok((event, origin))
+    if context
+        .as_ref()
+        .is_some_and(|context| context.document_id != event.document_id())
+    {
+        return Err(<serde_json::Error as serde::de::Error>::custom(
+            "Outbox context document ID does not match its event",
+        ));
+    }
+    Ok((event, origin, context.map(Arc::new)))
 }
 
 /// In-process fan-out of dispatched events to live SSE connections
@@ -172,6 +219,66 @@ impl Default for EventBroadcaster {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn context() -> EventSnapshot {
+        EventSnapshot {
+            document_id: Id::new_v4(),
+            vault_id: VaultId::new(),
+            title: "at occurrence".into(),
+            original_filename: Some("original.pdf".into()),
+            mime_type: Some("application/pdf".into()),
+            file_path: Some("immutable/original".into()),
+            source: DocumentSource::default(),
+            created_at: Utc::now(),
+            correspondent_id: None,
+            correspondent_name: None,
+            document_type_id: None,
+            document_type_name: None,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn immutable_context_round_trips_without_changing_the_wire_event() {
+        let context = context();
+        let event = DocumentEvent::Created {
+            document_id: context.document_id,
+        };
+        let payload =
+            encode_outbox_payload_with_context(&event, EventOrigin::Workflow, Some(&context));
+        let (decoded, origin, restored) = decode_outbox_payload_with_context(&payload).unwrap();
+        assert_eq!(origin, EventOrigin::Workflow);
+        assert_eq!(restored.as_deref(), Some(&context));
+        assert_eq!(
+            serde_json::to_value(decoded).unwrap(),
+            serde_json::json!({"type":"created", "document_id": context.document_id})
+        );
+    }
+
+    #[test]
+    fn mismatched_context_cannot_be_used_as_the_events_document() {
+        let event = DocumentEvent::Updated {
+            document_id: Id::new_v4(),
+        };
+        let payload =
+            encode_outbox_payload_with_context(&event, EventOrigin::User, Some(&context()));
+        assert!(decode_outbox_payload_with_context(&payload)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+    }
+
+    #[test]
+    fn legacy_nondeletion_payload_has_no_inferred_context() {
+        let event = DocumentEvent::Updated {
+            document_id: Id::new_v4(),
+        };
+        let payload = encode_outbox_payload(&event, EventOrigin::User);
+        assert!(decode_outbox_payload_with_context(&payload)
+            .unwrap()
+            .2
+            .is_none());
+    }
 
     #[test]
     fn deleted_snapshot_survives_the_outbox_payload() {

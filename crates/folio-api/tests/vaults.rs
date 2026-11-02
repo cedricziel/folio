@@ -74,6 +74,7 @@ fn broadcast(h: &Harness, id: i64, event: DocumentEvent) {
         id,
         event,
         origin: EventOrigin::User,
+        context: None,
         created_at: chrono::Utc::now(),
         attempts: 1,
     });
