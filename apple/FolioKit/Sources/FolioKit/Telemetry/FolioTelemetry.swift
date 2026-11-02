@@ -281,7 +281,7 @@ final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let url = request.url, TelemetryRequestPolicy.sameOrigin(url, baseURL),
             url.path.hasPrefix("/api/telemetry"), lock.withLock({ active }),
-            let token = await provider.token()
+            let token = try await provider.token()
         else { throw URLError(.userAuthenticationRequired) }
         func signed(_ token: String) -> URLRequest {
             var signed = request
@@ -294,7 +294,7 @@ final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
         guard lock.withLock({ active }) else { throw URLError(.cancelled) }
         var (data, response) = try await session.data(for: signed(token))
         if (response as? HTTPURLResponse)?.statusCode == 401,
-            let fresh = await provider.refresh(rejecting: token), lock.withLock({ active })
+            let fresh = try await provider.refresh(rejecting: token), lock.withLock({ active })
         {
             (data, response) = try await session.data(for: signed(fresh))
         }

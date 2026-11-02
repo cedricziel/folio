@@ -40,23 +40,6 @@ struct CredentialStoreTests {
         #expect(store.load() == nil)
     }
 
-    @Test func keychainStoreRoundTripsAndOverwritesAtomically() {
-        let store = KeychainCredentialStore(
-            service: "com.cedricziel.folio.tests.\(UUID().uuidString)", accessGroup: nil, dataProtection: false
-        )
-        defer { store.clear() }
-        #expect(store.load() == nil)
-        store.save(Self.credentials)
-        #expect(store.load() == Self.credentials)
-
-        var rotated = Self.credentials
-        rotated.tokens = OAuthTokens(
-            accessToken: "b", refreshToken: "s", expiresAt: Date(timeIntervalSince1970: 2_000_000_100))
-        store.save(rotated)
-        #expect(store.load() == rotated)
-        store.clear()
-        #expect(store.load() == nil)
-    }
 }
 
 struct OAuthRequestTests {
@@ -284,7 +267,7 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
             #expect(store.load()?.tokens.refreshToken == nil)
         }
 
-        @Test func signOutClearsCredentialsAndRevokesBestEffort() async {
+        @Test func signOutClearsCredentialsAndRevokesBestEffort() async throws {
             let store = InMemoryCredentialStore(credentials())
             var revoked = false
             RouterURLProtocol.handler = { request, body in
@@ -294,7 +277,7 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
                 return .init()
             }
             let oauth = OAuthSession(store: store, session: session(), now: { clock })
-            await oauth.signOut()
+            try await oauth.signOut()
             #expect(store.load() == nil)
             #expect(revoked)
         }

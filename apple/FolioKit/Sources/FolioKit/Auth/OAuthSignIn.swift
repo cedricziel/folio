@@ -12,11 +12,13 @@ public struct OAuthSignIn: Sendable {
     private let clients: any ClientRegistry
     private let authenticator: any WebAuthenticating
     private let client: OAuthClient
+    private let refreshLock: OAuthRefreshLock?
 
     public init(
         store: any CredentialStore, clients: any ClientRegistry, authenticator: any WebAuthenticating,
-        session: URLSession = .shared
+        session: URLSession = .shared, refreshLock: OAuthRefreshLock? = nil
     ) {
+        self.refreshLock = refreshLock
         self.store = store
         self.clients = clients
         self.authenticator = authenticator
@@ -70,11 +72,14 @@ public struct OAuthSignIn: Sendable {
         } catch let failure as OAuthFailure {
             throw FolioError.signInFailed("The server refused the sign-in: \(failure).")
         }
-        store.save(
-            OAuthCredentials(
-                serverURL: server, clientID: clientID, tokenEndpoint: metadata.tokenEndpoint,
-                revocationEndpoint: metadata.revocationEndpoint, tokens: tokens
-            )
+        let credentials = OAuthCredentials(
+            serverURL: server, clientID: clientID, tokenEndpoint: metadata.tokenEndpoint,
+            revocationEndpoint: metadata.revocationEndpoint, tokens: tokens
         )
+        if let refreshLock {
+            try await refreshLock.withLock { try store.save(credentials) }
+        } else {
+            try store.save(credentials)
+        }
     }
 }

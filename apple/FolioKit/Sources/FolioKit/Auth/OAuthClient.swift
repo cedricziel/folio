@@ -48,7 +48,18 @@ struct OAuthClient: Sendable {
     }
 
     func tokens(for request: URLRequest, keeping previousRefresh: String? = nil) async throws -> OAuthTokens {
-        let (data, response) = try await fetch(request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError {
+            switch error.code {
+            case .notConnectedToInternet, .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost:
+                throw OAuthFailure.unreachable
+            default:
+                throw FolioError.unreachable
+            }
+        }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard status == 200, let access = object?["access_token"] as? String else {

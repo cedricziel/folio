@@ -2,10 +2,42 @@ import Foundation
 import Security
 
 public protocol CredentialStore: Sendable {
-    func load() -> OAuthCredentials?
+    func load() throws -> OAuthCredentials?
     /// Replaces the stored credentials in one write, so a rotated refresh token never exists half-saved.
-    func save(_ credentials: OAuthCredentials)
-    func clear()
+    func save(_ credentials: OAuthCredentials) throws
+    func clear() throws
+}
+
+public enum CredentialStoreError: Error, Equatable, LocalizedError {
+    case keychain(OSStatus)
+    case unreadableCredentials
+
+    public var errorDescription: String? {
+        switch self {
+        case .keychain:
+            "Couldn't access your saved sign-in. Try again."
+        case .unreadableCredentials:
+            "Your saved sign-in couldn't be read. Sign in again."
+        }
+    }
+}
+
+struct KeychainOperations: Sendable {
+    var read: @Sendable (CFDictionary) -> (OSStatus, Data?)
+    var update: @Sendable (CFDictionary, CFDictionary) -> OSStatus
+    var add: @Sendable (CFDictionary) -> OSStatus
+    var delete: @Sendable (CFDictionary) -> OSStatus
+
+    static let system = KeychainOperations(
+        read: { query in
+            var result: CFTypeRef?
+            let status = SecItemCopyMatching(query, &result)
+            return (status, result as? Data)
+        },
+        update: { SecItemUpdate($0, $1) },
+        add: { SecItemAdd($0, nil) },
+        delete: { SecItemDelete($0) }
+    )
 }
 
 public final class InMemoryCredentialStore: CredentialStore, @unchecked Sendable {
@@ -34,6 +66,7 @@ public struct KeychainCredentialStore: CredentialStore {
     private let service: String
     private let accessGroup: String?
     private let dataProtection: Bool
+    private var operations = KeychainOperations.system
 
     public init(
         service: String = "com.cedricziel.folio.credentials",
@@ -45,29 +78,42 @@ public struct KeychainCredentialStore: CredentialStore {
         self.dataProtection = dataProtection
     }
 
-    public func load() -> OAuthCredentials? {
+    init(operations: KeychainOperations) {
+        self.init(service: "test", accessGroup: nil)
+        self.operations = operations
+    }
+
+    public func load() throws -> OAuthCredentials? {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data
-        else { return nil }
-        return try? JSONDecoder().decode(OAuthCredentials.self, from: data)
+        let (status, data) = operations.read(query as CFDictionary)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw CredentialStoreError.keychain(status) }
+        guard let data, let credentials = try? JSONDecoder().decode(OAuthCredentials.self, from: data) else {
+            throw CredentialStoreError.unreadableCredentials
+        }
+        return credentials
     }
 
-    public func save(_ credentials: OAuthCredentials) {
-        guard let data = try? JSONEncoder().encode(credentials) else { return }
+    public func save(_ credentials: OAuthCredentials) throws {
+        let data = try JSONEncoder().encode(credentials)
         let update = [kSecValueData as String: data]
-        if SecItemUpdate(baseQuery as CFDictionary, update as CFDictionary) == errSecItemNotFound {
+        var status = operations.update(baseQuery as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
             var attributes = baseQuery
             attributes[kSecValueData as String] = data
             attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(attributes as CFDictionary, nil)
+            status = operations.add(attributes as CFDictionary)
         }
+        guard status == errSecSuccess else { throw CredentialStoreError.keychain(status) }
     }
 
-    public func clear() {
-        SecItemDelete(baseQuery as CFDictionary)
+    public func clear() throws {
+        let status = operations.delete(baseQuery as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw CredentialStoreError.keychain(status)
+        }
     }
 
     private var baseQuery: [String: Any] {

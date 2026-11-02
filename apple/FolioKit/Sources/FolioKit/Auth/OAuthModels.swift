@@ -52,6 +52,7 @@ public struct OAuthCredentials: Codable, Equatable, Sendable {
     public var tokenEndpoint: URL
     public var revocationEndpoint: URL?
     public var tokens: OAuthTokens
+    public var refreshPending: Bool?
 
     public init(
         serverURL: URL, clientID: String, tokenEndpoint: URL, revocationEndpoint: URL?, tokens: OAuthTokens
