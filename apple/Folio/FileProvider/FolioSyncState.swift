@@ -37,13 +37,16 @@ actor FolioSyncState {
             node.id.rawValue, node.parent.rawValue, node.name, node.contentType ?? "",
             String(node.isFolder), String(node.modified.timeIntervalSince1970),
             String(node.document?.createdAt.timeIntervalSince1970 ?? 0),
+            String(node.canUpload),
         ]
         let encoded = fields.map { "\($0.utf8.count):\($0)" }.joined()
         return Data(SHA256.hash(data: Data(encoded.utf8)))
     }
 
     func initialSnapshot() async throws -> Snapshot {
-        if let initial { return try await initial.value }
+        if let initial {
+            return try await initial.value
+        }
         let task = Task { try await capture() }
         initial = task
         do {
@@ -60,6 +63,7 @@ actor FolioSyncState {
         guard let key = String(data: anchor.rawValue, encoding: .utf8), key.count == 64,
             key.allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
             let data = try? Data(contentsOf: directory.appendingPathComponent(key)),
+            snapshotKey(data) == key,
             let previous = try? JSONDecoder().decode([String: Data].self, from: data)
         else { throw NSFileProviderError(.syncAnchorExpired) }
         let current = try await capture()
@@ -82,22 +86,30 @@ actor FolioSyncState {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let data = try encoder.encode(versions)
-        let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let key = snapshotKey(data)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: directory.appendingPathComponent(key), options: .atomic)
         prune(keeping: key)
         return Snapshot(nodes: nodes, versions: versions, anchor: NSFileProviderSyncAnchor(Data(key.utf8)))
     }
 
+    private func snapshotKey(_ data: Data) -> String {
+        let scope = Data((container.map { FolioItemID.folder($0).rawValue } ?? "working-set").utf8)
+        return SHA256.hash(data: scope + data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private func prune(keeping key: String) {
         let files =
             (try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+                at: directory, includingPropertiesForKeys: [.contentModificationDateKey]
+            )) ?? []
         let oldest = files.filter { $0.lastPathComponent != key }.sorted {
             let left = try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             let right = try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             return (left ?? .distantPast) < (right ?? .distantPast)
         }
-        for file in oldest.prefix(max(0, files.count - 32)) { try? FileManager.default.removeItem(at: file) }
+        for file in oldest.prefix(max(0, files.count - 32)) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 }

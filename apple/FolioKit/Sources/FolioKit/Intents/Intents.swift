@@ -10,7 +10,8 @@ private func countText(_ count: Int, _ noun: String) -> String {
 public struct ScanDocumentIntent: AppIntent {
     public static let title: LocalizedStringResource = "Scan a document"
     public static let description = IntentDescription(
-        "Opens Folio's scanner so you can photograph a paper document and file it.")
+        "Opens Folio's scanner so you can photograph a paper document and file it."
+    )
     public static let openAppWhenRun = true
 
     public init() {}
@@ -26,11 +27,13 @@ public struct UploadFileIntent: AppIntent {
     public static let title: LocalizedStringResource = "Upload to Folio"
     public static let description = IntentDescription(
         "Files PDFs and images in Folio. Folio reads the text for you.",
-        categoryName: "Documents", resultValueName: "Uploaded documents")
+        categoryName: "Documents", resultValueName: "Uploaded documents"
+    )
 
     @Parameter(
         title: "Files", description: "PDFs or images to file",
-        supportedContentTypes: [.pdf, .image])
+        supportedContentTypes: [.pdf, .image]
+    )
     public var files: [IntentFile]
 
     @Parameter(title: "Title", description: "Used when you upload a single file")
@@ -60,7 +63,8 @@ public struct UploadFileIntent: AppIntent {
         }
         return .result(
             value: summaries.map(DocumentEntity.init),
-            dialog: "Filed \(countText(summaries.count, "document")) in Folio.")
+            dialog: "Filed \(countText(summaries.count, "document")) in Folio."
+        )
     }
 }
 
@@ -68,7 +72,8 @@ public struct SearchDocumentsIntent: AppIntent {
     public static let title: LocalizedStringResource = "Search documents"
     public static let description = IntentDescription(
         "Finds documents in Folio by what they say.", categoryName: "Documents",
-        resultValueName: "Documents")
+        resultValueName: "Documents"
+    )
 
     @Parameter(title: "Search for", requestValueDialog: "What should I search for?")
     public var query: String
@@ -97,7 +102,8 @@ public struct FindDocumentsIntent: AppIntent {
     public static let title: LocalizedStringResource = "Find documents"
     public static let description = IntentDescription(
         "Lists documents with a given tag, correspondent or type, or from a range of dates.",
-        categoryName: "Documents", resultValueName: "Documents")
+        categoryName: "Documents", resultValueName: "Documents"
+    )
 
     @Parameter(title: "Tag")
     public var tag: TagEntity?
@@ -129,13 +135,15 @@ public struct FindDocumentsIntent: AppIntent {
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         let criteria = DocumentCriteria(
             tagID: tag?.id, correspondentID: correspondent?.id, documentTypeID: documentType?.id,
-            from: from, through: through)
+            from: from, through: through
+        )
         let summaries = try await IntentEnvironment.run { try await $0.find(criteria) }
         return .result(
             value: summaries.map(DocumentEntity.init),
             dialog: summaries.isEmpty
                 ? "No documents in Folio match."
-                : "Found \(countText(summaries.count, "document")).")
+                : "Found \(countText(summaries.count, "document"))."
+        )
     }
 }
 
@@ -143,7 +151,8 @@ public struct GetLatestDocumentIntent: AppIntent {
     public static let title: LocalizedStringResource = "Get the latest document"
     public static let description = IntentDescription(
         "Returns the document most recently added to Folio.", categoryName: "Documents",
-        resultValueName: "Document")
+        resultValueName: "Document"
+    )
 
     public init() {}
 
@@ -156,7 +165,8 @@ public struct GetLatestDocumentIntent: AppIntent {
 public struct OpenDocumentIntent: OpenIntent {
     public static let title: LocalizedStringResource = "Open a document"
     public static let description = IntentDescription(
-        "Opens a document in Folio.", categoryName: "Documents")
+        "Opens a document in Folio.", categoryName: "Documents"
+    )
     public static let openAppWhenRun = true
 
     @Parameter(title: "Document")
@@ -178,7 +188,8 @@ public struct OpenDocumentIntent: OpenIntent {
 public struct AddTagIntent: AppIntent {
     public static let title: LocalizedStringResource = "Add a tag to a document"
     public static let description = IntentDescription(
-        "Puts a tag on a document in Folio.", categoryName: "Documents")
+        "Puts a tag on a document in Folio.", categoryName: "Documents"
+    )
 
     @Parameter(title: "Document")
     public var document: DocumentEntity
@@ -206,7 +217,8 @@ public struct AddTagIntent: AppIntent {
 public struct RemoveTagIntent: AppIntent {
     public static let title: LocalizedStringResource = "Remove a tag from a document"
     public static let description = IntentDescription(
-        "Takes a tag off a document in Folio.", categoryName: "Documents")
+        "Takes a tag off a document in Folio.", categoryName: "Documents"
+    )
 
     @Parameter(title: "Document")
     public var document: DocumentEntity
@@ -235,7 +247,8 @@ public struct GetDocumentFileIntent: AppIntent {
     public static let title: LocalizedStringResource = "Get a document's file"
     public static let description = IntentDescription(
         "Returns the original PDF or image, so Shortcuts can send it to other apps.",
-        categoryName: "Documents", resultValueName: "File")
+        categoryName: "Documents", resultValueName: "File"
+    )
 
     @Parameter(title: "Document")
     public var document: DocumentEntity
@@ -263,7 +276,8 @@ extension UploadFile {
         guard !file.data.isEmpty else { throw ShortcutFailure.unreadableFile(name) }
         self.init(
             data: file.data, filename: name,
-            mimeType: file.type?.preferredMIMEType ?? UploadFile.mimeType(forFilename: name))
+            mimeType: file.type?.preferredMIMEType ?? UploadFile.mimeType(forFilename: name)
+        )
     }
 }
 
@@ -271,7 +285,19 @@ public enum FolioIntentsPackage: AppIntentsPackage {}
 
 /// Re-indexes a document in Spotlight when someone opens it.
 public enum SpotlightDonor {
-    public static func donate(_ summary: DocumentSummary) async {
-        try? await CSSearchableIndex.default().indexAppEntities([DocumentEntity(summary)])
+    public static func donate(_ summary: DocumentSummary, vaultID: UUID? = nil) async {
+        if let vaultID {
+            try? await CSSearchableIndex.default().indexSearchableItems([searchableItem(summary, vaultID: vaultID)])
+        } else {
+            try? await CSSearchableIndex.default().indexAppEntities([DocumentEntity(summary)])
+        }
+    }
+
+    static func searchableItem(_ summary: DocumentSummary, vaultID: UUID) -> CSSearchableItem {
+        CSSearchableItem(
+            uniqueIdentifier: DocumentLink(documentID: summary.id, vaultID: vaultID).spotlightIdentifier,
+            domainIdentifier: "com.cedricziel.folio.documents",
+            attributeSet: DocumentEntity(summary).attributeSet
+        )
     }
 }

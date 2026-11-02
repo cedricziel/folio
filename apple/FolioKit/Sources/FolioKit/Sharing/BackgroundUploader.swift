@@ -5,7 +5,9 @@ public struct ShareUploadRequest {
     public let request: URLRequest
     public let bodyFile: URL
 
-    public static func make(file: UploadFile, serverURL: URL, token: String?, directory: URL) throws
+    public static func make(
+        file: UploadFile, serverURL: URL, token: String?, directory: URL, vaultID: UUID? = nil
+    ) throws
         -> ShareUploadRequest
     {
         let form = MultipartForm(file: file)
@@ -15,6 +17,9 @@ public struct ShareUploadRequest {
         var request = URLRequest(url: serverURL.appending(path: "api/documents/upload"))
         request.httpMethod = "POST"
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
+        if let vaultID {
+            request.setValue(vaultID.uuidString.lowercased(), forHTTPHeaderField: "X-Folio-Vault")
+        }
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -24,6 +29,14 @@ public struct ShareUploadRequest {
 
 public protocol BackgroundUploading: Sendable {
     func enqueue(_ file: UploadFile) throws
+    func enqueue(_ file: UploadFile, vaultID: UUID?) throws
+}
+
+public extension BackgroundUploading {
+    func enqueue(_ file: UploadFile, vaultID: UUID?) throws {
+        guard vaultID == nil else { throw FolioError.unreadableResponse }
+        try enqueue(file)
+    }
 }
 
 /// Uploads through a background `URLSession`, so large files finish after the share sheet has closed.
@@ -49,8 +62,12 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func enqueue(_ file: UploadFile) throws {
+        try enqueue(file, vaultID: nil)
+    }
+
+    public func enqueue(_ file: UploadFile, vaultID: UUID?) throws {
         let built = try ShareUploadRequest.make(
-            file: file, serverURL: serverURL, token: token, directory: directory
+            file: file, serverURL: serverURL, token: token, directory: directory, vaultID: vaultID
         )
         let task = session.uploadTask(with: built.request, fromFile: built.bodyFile)
         task.taskDescription = built.bodyFile.path
@@ -63,7 +80,8 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     ) {
         TelemetryRedirectGuard().urlSession(
             session, task: task, willPerformHTTPRedirection: response,
-            newRequest: request, completionHandler: completionHandler)
+            newRequest: request, completionHandler: completionHandler
+        )
     }
 
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError _: (any Error)?) {

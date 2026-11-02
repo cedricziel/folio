@@ -4,6 +4,19 @@ import Testing
 @testable import FolioKit
 
 struct ShareUploadRequestTests {
+    @Test func backgroundRequestCapturesItsVaultDestination() throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vaultID = UUID()
+        let built = try ShareUploadRequest.make(
+            file: UploadFile(data: Data(), filename: "a.pdf", mimeType: "application/pdf"),
+            serverURL: #require(URL(string: "https://folio.example.com")), token: nil,
+            directory: directory, vaultID: vaultID
+        )
+
+        #expect(built.request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+    }
+
     private func directory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -44,11 +57,71 @@ struct ShareUploadRequestTests {
 
 @MainActor
 struct ShareViewModelTests {
+    @Test func viewerCannotEnqueueASharedFile() async {
+        let viewer = Vault(id: UUID(), name: "Household", role: .viewer)
+        let source = MockFolioService(vaults: VaultCatalog(vaults: [viewer], defaultVaultID: viewer.id))
+        let uploader = RecordingUploader()
+        let model = ShareViewModel(files: [file()], service: source, background: uploader)
+
+        await model.upload()
+
+        #expect(model.state == .failed("Choose a vault you can upload to."))
+        #expect(uploader.enqueued.isEmpty)
+    }
+
     final class RecordingUploader: BackgroundUploading, @unchecked Sendable {
         var enqueued: [UploadFile] = []
+        var destinations: [UUID?] = []
         func enqueue(_ file: UploadFile) throws {
             enqueued.append(file)
         }
+
+        func enqueue(_ file: UploadFile, vaultID: UUID?) throws {
+            enqueued.append(file)
+            destinations.append(vaultID)
+        }
+    }
+
+    @Test func chosenVaultScopesTagsAndClearsPreviousSelections() async {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let shared = Vault(id: UUID(), name: "Household", role: .editor)
+        let personalService = MockFolioService()
+        let sharedService = MockFolioService()
+        let privateTag = Tag(name: "Private")
+        let sharedTag = Tag(name: "Household")
+        await personalService.setTags([privateTag])
+        await sharedService.setTags([sharedTag])
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: personalService, shared.id: sharedService]
+        )
+        let model = ShareViewModel(files: [file()], service: source, background: RecordingUploader())
+        await model.loadTags()
+        model.selectedTagIDs = [privateTag.id]
+
+        model.destination.selectVault(shared.id)
+        #expect(model.tags.isEmpty)
+        await model.loadTags()
+
+        #expect(model.tags == [sharedTag])
+        #expect(model.selectedTagIDs.isEmpty)
+    }
+
+    @Test func backgroundUploadUsesTheChosenVault() async {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let shared = Vault(id: UUID(), name: "Household", role: .contributor)
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id)
+        )
+        let uploader = RecordingUploader()
+        let model = ShareViewModel(files: [file()], service: source, background: uploader)
+        await model.loadTags()
+        model.destination.selectVault(shared.id)
+
+        await model.upload()
+
+        #expect(uploader.destinations == [shared.id])
+        #expect(model.state == .done)
     }
 
     private func file(_ name: String = "a.pdf") -> UploadFile {
@@ -57,7 +130,8 @@ struct ShareViewModelTests {
 
     @Test func prefillsTheTitleFromASingleFile() {
         let model = ShareViewModel(
-            files: [file("Bill.pdf")], service: MockFolioService(), background: RecordingUploader())
+            files: [file("Bill.pdf")], service: MockFolioService(), background: RecordingUploader()
+        )
         #expect(model.title == "Bill")
         let many = ShareViewModel(
             files: [file("a.pdf"), file("b.pdf")], service: MockFolioService(), background: RecordingUploader()

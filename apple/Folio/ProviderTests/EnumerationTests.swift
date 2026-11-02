@@ -9,13 +9,23 @@ private final class ChangeObserver: NSObject, NSFileProviderChangeObserver {
     var anchor: NSFileProviderSyncAnchor?
     let finished: XCTestExpectation
 
-    init(_ finished: XCTestExpectation) { self.finished = finished }
-    func didUpdate(_ updatedItems: [NSFileProviderItem]) { updated += updatedItems }
-    func didDeleteItems(withIdentifiers identifiers: [NSFileProviderItemIdentifier]) { deleted += identifiers }
-    func finishEnumeratingChanges(upTo anchor: NSFileProviderSyncAnchor, moreComing: Bool) {
+    init(_ finished: XCTestExpectation) {
+        self.finished = finished
+    }
+
+    func didUpdate(_ updatedItems: [NSFileProviderItem]) {
+        updated += updatedItems
+    }
+
+    func didDeleteItems(withIdentifiers identifiers: [NSFileProviderItemIdentifier]) {
+        deleted += identifiers
+    }
+
+    func finishEnumeratingChanges(upTo anchor: NSFileProviderSyncAnchor, moreComing _: Bool) {
         self.anchor = anchor
         finished.fulfill()
     }
+
     func finishEnumeratingWithError(_ error: Error) {
         self.error = error
         finished.fulfill()
@@ -23,6 +33,88 @@ private final class ChangeObserver: NSObject, NSFileProviderChangeObserver {
 }
 
 final class EnumerationTests: XCTestCase {
+    func testRevokedVaultRemovesItsWorkingSetAliasesWithoutRemovingOtherVaults() async throws {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let shared = Vault(id: UUID(), name: "Shared", role: .viewer)
+        let personalDocument = Document(title: "Private")
+        let sharedDocument = Document(title: "Shared")
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [
+                personal.id: MockFolioService(documents: [personalDocument]),
+                shared.id: MockFolioService(documents: [sharedDocument]),
+            ]
+        )
+        let catalog = FolioCatalog(service: source)
+        let enumerator = FolioEnumerator(catalog: catalog, container: nil, directory: directory)
+        let anchor = try await anchor(for: enumerator)
+
+        await source.setVaults(VaultCatalog(vaults: [personal], defaultVaultID: personal.id))
+        let observer = await changes(enumerator, from: anchor)
+
+        XCTAssertNil(observer.error)
+        XCTAssertTrue(observer.deleted.contains(FolioItemID.folder(.vault(shared.id)).providerIdentifier))
+        XCTAssertTrue(
+            observer.deleted.contains(
+                FolioItemID.document(sharedDocument.id, in: .scoped(shared.id, .all)).providerIdentifier
+            )
+        )
+        XCTAssertTrue(
+            observer.deleted.contains(
+                FolioItemID.document(sharedDocument.id, in: .scoped(shared.id, .inbox)).providerIdentifier
+            )
+        )
+        XCTAssertFalse(
+            observer.deleted.contains(
+                FolioItemID.document(personalDocument.id, in: .scoped(personal.id, .all)).providerIdentifier
+            )
+        )
+        XCTAssertTrue(observer.updated.isEmpty)
+    }
+
+    func testRoleDowngradeUpdatesInboxCapabilities() async throws {
+        let writable = Vault(id: UUID(), name: "Shared", role: .contributor)
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [writable], defaultVaultID: writable.id),
+            vaultServices: [writable.id: MockFolioService()]
+        )
+        let enumerator = FolioEnumerator(
+            catalog: FolioCatalog(service: source), container: .vault(writable.id), directory: directory
+        )
+        let anchor = try await anchor(for: enumerator)
+
+        await source.setVaults(
+            VaultCatalog(
+                vaults: [Vault(id: writable.id, name: writable.name, role: .viewer)], defaultVaultID: writable.id
+            )
+        )
+        let observer = await changes(enumerator, from: anchor)
+
+        XCTAssertNil(observer.error)
+        XCTAssertEqual(
+            observer.updated.map(\.itemIdentifier),
+            [FolioItemID.folder(.scoped(writable.id, .inbox)).providerIdentifier]
+        )
+        let inbox = try XCTUnwrap(observer.updated.first)
+        let capabilities = try XCTUnwrap(inbox.capabilities)
+        XCTAssertFalse(capabilities.contains(.allowsAddingSubItems))
+        XCTAssertTrue(observer.deleted.isEmpty)
+    }
+
+    func testAnchorFromAnotherVaultIsExpiredEvenWithTheSameSnapshotDirectory() async throws {
+        let first = Vault(id: UUID(), name: "One", role: .viewer)
+        let second = Vault(id: UUID(), name: "Two", role: .viewer)
+        let source = MockFolioService(vaults: VaultCatalog(vaults: [first, second], defaultVaultID: first.id))
+        let catalog = FolioCatalog(service: source)
+        let original = FolioEnumerator(catalog: catalog, container: .scoped(first.id, .all), directory: directory)
+        let anchor = try await anchor(for: original)
+        let other = FolioEnumerator(catalog: catalog, container: .scoped(second.id, .all), directory: directory)
+
+        let observer = await changes(other, from: anchor)
+
+        XCTAssertEqual((observer.error as? NSFileProviderError)?.code, .syncAnchorExpired)
+    }
+
     private var directory: URL!
 
     override func setUp() {
@@ -79,7 +171,8 @@ final class EnumerationTests: XCTestCase {
                 FolioItemID.document(document.id, in: .all).providerIdentifier,
                 FolioItemID.document(document.id, in: .inbox).providerIdentifier,
                 FolioItemID.document(document.id, in: .tag(tag.id)).providerIdentifier,
-            ]))
+            ])
+        )
         XCTAssertTrue(observer.updated.isEmpty)
     }
 
@@ -115,7 +208,8 @@ final class EnumerationTests: XCTestCase {
         XCTAssertEqual(observer.deleted, [FolioItemID.document(document.id, in: .inbox).providerIdentifier])
         XCTAssertEqual(
             observer.updated.map(\.itemIdentifier),
-            [FolioItemID.document(document.id, in: .correspondent(person.id)).providerIdentifier])
+            [FolioItemID.document(document.id, in: .correspondent(person.id)).providerIdentifier]
+        )
     }
 
     func testUnchangedSnapshotDoesNotReportUpdates() async throws {
@@ -129,9 +223,10 @@ final class EnumerationTests: XCTestCase {
         XCTAssertTrue(observer.deleted.isEmpty)
     }
 
-    func testMissingSnapshotRequestsFullEnumeration() async throws {
+    func testMissingSnapshotRequestsFullEnumeration() async {
         let enumerator = FolioEnumerator(
-            catalog: FolioCatalog(service: MockFolioService()), container: .all, directory: directory)
+            catalog: FolioCatalog(service: MockFolioService()), container: .all, directory: directory
+        )
         let observer = await changes(enumerator, from: NSFileProviderSyncAnchor(Data("legacy-anchor".utf8)))
         XCTAssertEqual((observer.error as? NSFileProviderError)?.code, .syncAnchorExpired)
         XCTAssertNil(observer.anchor)
@@ -149,5 +244,4 @@ final class EnumerationTests: XCTestCase {
         let (_, _, deleted) = try await state.changes(from: before.anchor)
         XCTAssertEqual(deleted, [FolioItemID.document(document.id, in: .all).providerIdentifier])
     }
-
 }

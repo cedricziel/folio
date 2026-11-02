@@ -4,7 +4,7 @@ import SwiftUI
 /// What the menu bar (Mac) and the Command-key overlay (iPad) can ask the front window to do.
 /// Keys match docs/shortcuts.md; change them there first.
 struct InboxActions {
-    var upload: () -> Void
+    var upload: (() -> Void)?
     /// Nil where the device has no scanner.
     var scan: (() -> Void)?
     var showInbox: () -> Void
@@ -23,9 +23,9 @@ struct FolioCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
-            Button("Upload…") { actions?.upload() }
+            Button("Upload…") { actions?.upload?() }
                 .keyboardShortcut("o")
-                .disabled(actions == nil)
+                .disabled(actions?.upload == nil)
             #if os(iOS)
                 Button("Scan document") { actions?.scan?() }
                     .keyboardShortcut("s", modifiers: [.command, .shift])

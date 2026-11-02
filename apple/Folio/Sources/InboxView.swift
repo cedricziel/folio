@@ -7,13 +7,20 @@ import UniformTypeIdentifiers
 struct InboxView: View {
     let serverURL: URL
     let service: any FolioService
+    let vaultID: UUID?
+    let canEdit: Bool
+    let canUpload: Bool
+    let makeUploadDestination: () -> VaultDestinationViewModel
     let onSignOut: () -> Void
 
     @Bindable var session: DocumentBrowserSession
     let onNavigate: (WorkspaceDestination) -> Void
-    let onOpenDocument: (Document.ID) -> Void
+    let onOpenDocument: (Document.ID, UUID?) -> Void
 
-    private var list: DocumentListViewModel { session.list }
+    private var list: DocumentListViewModel {
+        session.list
+    }
+
     @State private var uploads: UploadViewModel
     @State private var showFileImporter = false
     @State private var photoSelection: [PhotosPickerItem] = []
@@ -21,17 +28,25 @@ struct InboxView: View {
     @State private var showScanner = false
     @State private var problem: String?
     @State private var scannedPages: ScannedPages?
+    @State private var pendingUploads: UploadBatch?
     @FocusState private var searchFocused: Bool
     private let router = IntentRouter.shared
 
     init(
         serverURL: URL, service: any FolioService, session: DocumentBrowserSession,
+        vaultID: UUID?,
+        canEdit: Bool, canUpload: Bool,
+        makeUploadDestination: @escaping () -> VaultDestinationViewModel,
         onSignOut: @escaping () -> Void,
         onNavigate: @escaping (WorkspaceDestination) -> Void,
-        onOpenDocument: @escaping (Document.ID) -> Void
+        onOpenDocument: @escaping (Document.ID, UUID?) -> Void
     ) {
         self.serverURL = serverURL
         self.service = service
+        self.vaultID = vaultID
+        self.canEdit = canEdit
+        self.canUpload = canUpload
+        self.makeUploadDestination = makeUploadDestination
         self.session = session
         self.onSignOut = onSignOut
         self.onNavigate = onNavigate
@@ -55,7 +70,7 @@ struct InboxView: View {
                                 correspondent: list.correspondentName(for: row.document),
                                 type: list.typeName(for: row.document),
                                 service: service
-                            )
+                            ), vaultID: vaultID
                         )
                         .id(row.id)
                     } else if list.phase == .loading || list.phase == .idle {
@@ -69,7 +84,9 @@ struct InboxView: View {
                 }
         }
         .onChange(of: session.path) { _, path in
-            if let id = path.last { session.selection = id }
+            if let id = path.last {
+                session.selection = id
+            }
         }
         // Keep loading alive when compact navigation hides the sidebar.
         .task(id: list.searchText) { await list.search(list.searchText) }
@@ -81,36 +98,39 @@ struct InboxView: View {
         }
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
             let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
-            if let id = identifier.flatMap({ UUID(uuidString: String($0.suffix(36))) }) {
-                handle(.document(id))
+            if let link = identifier.flatMap(DocumentLink.init(spotlightIdentifier:)) {
+                handle(.document(link.documentID, vaultID: link.vaultID))
             }
         }
     }
 
     private var actions: InboxActions {
         InboxActions(
-            upload: { showFileImporter = true },
+            upload: canUpload ? { showFileImporter = true } : nil,
             scan: scanAction,
             showInbox: { onNavigate(.inbox) },
             showAll: { onNavigate(.all) },
             find: { searchFocused = true },
-            deleteSelected: list.rows.first(where: { $0.id == session.selection }).map { row in
-                { pendingDelete = row.document }
-            }
+            deleteSelected: canEdit
+                ? list.rows.first(where: { $0.id == session.selection }).map { row in
+                    { pendingDelete = row.document }
+                } : nil
         )
     }
 
     private var scanAction: (() -> Void)? {
+        guard canUpload else { return nil }
         #if os(iOS)
-            DocumentScanner.isSupported ? { showScanner = true } : nil
+            return DocumentScanner.isSupported ? { showScanner = true } : nil
         #else
-            nil
+            return nil
         #endif
     }
 
     private func handle(_ request: IntentRouter.Request) {
         switch request {
         case .scan:
+            guard canUpload else { return }
             if let scan = scanAction {
                 scan()
             } else {
@@ -118,11 +138,12 @@ struct InboxView: View {
                 showFileImporter = true
             }
         case .upload:
+            guard canUpload else { return }
             showFileImporter = true
         case .inbox:
             onNavigate(.inbox)
-        case let .document(id):
-            onOpenDocument(id)
+        case let .document(id, vaultID):
+            onOpenDocument(id, vaultID)
         }
     }
 
@@ -137,8 +158,10 @@ struct InboxView: View {
                 .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
                 .listRowSeparatorTint(.rule)
                 .swipeActions {
-                    Button("Delete", systemImage: "trash", role: .destructive) {
-                        pendingDelete = row.document
+                    if canEdit {
+                        Button("Delete", systemImage: "trash", role: .destructive) {
+                            pendingDelete = row.document
+                        }
                     }
                 }
             }
@@ -167,12 +190,17 @@ struct InboxView: View {
         #endif
         .sheet(item: $scannedPages) { scan in
             ScanReviewView(
-                model: ScanReviewViewModel(pages: scan.images, service: service),
+                model: ScanReviewViewModel(
+                    pages: scan.images, service: service, destination: makeUploadDestination()
+                ),
                 onFinished: {
                     scannedPages = nil
                     Task { await list.load() }
                 }
             )
+        }
+        .sheet(item: $pendingUploads) { batch in
+            UploadReviewView(files: batch.files, model: uploads) { pendingUploads = nil }
         }
         .fileImporter(
             isPresented: $showFileImporter, allowedContentTypes: [.pdf, .image], allowsMultipleSelection: true
@@ -186,7 +214,7 @@ struct InboxView: View {
                     if !loaded.failed.isEmpty {
                         problem = "Couldn't read \(loaded.failed.joined(separator: ", "))."
                     }
-                    await uploads.upload(loaded.files)
+                    reviewUploads(loaded.files)
                 }
             }
         }
@@ -208,7 +236,7 @@ struct InboxView: View {
         .onChange(of: photoSelection) { _, items in
             guard !items.isEmpty else { return }
             photoSelection = []
-            Task { await uploads.upload(await loadPhotos(items)) }
+            Task { reviewUploads(await loadPhotos(items)) }
         }
         .confirmationDialog(
             "Delete this document?",
@@ -303,9 +331,11 @@ struct InboxView: View {
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                 .help("Upload files (\u{2318}O)")
+                .disabled(!canUpload)
             PhotosPicker(selection: $photoSelection, matching: .images) {
                 Label("Photos", systemImage: "photo")
             }
+            .disabled(!canUpload)
             Menu("Server", systemImage: "gearshape") {
                 Text(serverURL.absoluteString)
                 Button("Sign out", action: onSignOut)
@@ -323,9 +353,18 @@ struct InboxView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(FolioTheme.Spacing.space4)
-            .disabled(!DocumentScanner.isSupported)
+            .disabled(!canUpload || !DocumentScanner.isSupported)
         }
     #endif
+
+    private func reviewUploads(_ files: [UploadFile]) {
+        guard !files.isEmpty else { return }
+        let list = session.list
+        uploads = UploadViewModel(service: service, destination: makeUploadDestination()) {
+            Task { await list.load() }
+        }
+        pendingUploads = UploadBatch(files: files)
+    }
 
     /// Reads off the main actor so large files do not freeze the UI.
     private nonisolated static func readFiles(_ urls: [URL]) async -> (files: [UploadFile], failed: [String]) {
@@ -358,6 +397,11 @@ struct InboxView: View {
         }
         return files
     }
+}
+
+private struct UploadBatch: Identifiable {
+    let id = UUID()
+    let files: [UploadFile]
 }
 
 struct ScannedPages: Identifiable {

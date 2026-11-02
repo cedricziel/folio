@@ -14,13 +14,15 @@ public struct LiveFolioService: FolioService {
     private let downloadDirectory: URL?
     private let client: Client
     private let telemetry: FolioTelemetry?
+    private let vaultID: UUID?
 
     public init(
         baseURL: URL,
         tokenProvider: any BearerTokenProvider = NoToken(),
         session: URLSession? = nil,
         telemetry: FolioTelemetry? = nil,
-        downloadDirectory: URL? = nil
+        downloadDirectory: URL? = nil,
+        vaultID: UUID? = nil
     ) {
         let session =
             session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
@@ -29,13 +31,40 @@ public struct LiveFolioService: FolioService {
         self.tokenProvider = tokenProvider
         self.session = session
         self.downloadDirectory = downloadDirectory
+        self.vaultID = vaultID
         client = Client(
             serverURL: baseURL,
             configuration: .init(dateTranscoder: LenientDateTranscoder()),
             transport: URLSessionTransport(configuration: .init(session: session)),
             // Outermost first: the error mapper sees the response after the bearer middleware retried a 401.
-            middlewares: [ErrorMappingMiddleware(), BearerAuthMiddleware(provider: tokenProvider)]
+            middlewares: [
+                ErrorMappingMiddleware(), VaultScopeMiddleware(vaultID: vaultID),
+                BearerAuthMiddleware(provider: tokenProvider),
+            ]
         )
+    }
+
+    public func scoped(to vaultID: UUID) -> any FolioService {
+        LiveFolioService(
+            baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
+            downloadDirectory: downloadDirectory, vaultID: vaultID
+        )
+    }
+
+    public func vaults() async throws -> VaultCatalog {
+        try await call("vaults.list") {
+            let request = URLRequest(url: endpoint("api/vaults"))
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            if (response as? HTTPURLResponse)?.statusCode == 404 {
+                return .legacy
+            }
+            try check(response, body: data)
+            guard let catalog = try? JSONDecoder().decode(VaultCatalog.self, from: data),
+                let defaultID = catalog.defaultVaultID,
+                catalog.vaults.contains(where: { $0.id == defaultID })
+            else { throw FolioError.unreadableResponse }
+            return catalog
+        }
     }
 
     public func ping() async throws {
@@ -144,11 +173,14 @@ public struct LiveFolioService: FolioService {
         let ext = (filename as NSString).pathExtension
         let suffix = !ext.isEmpty && ext.utf8.count <= 32 ? "." + ext : ""
         let destination = directory.appending(
-            path: downloadDirectory == nil ? filename : UUID().uuidString + suffix)
+            path: downloadDirectory == nil ? filename : UUID().uuidString + suffix
+        )
         do {
             try FileManager.default.moveItem(at: temporary, to: destination)
         } catch {
-            if downloadDirectory == nil { try? FileManager.default.removeItem(at: directory) }
+            if downloadDirectory == nil {
+                try? FileManager.default.removeItem(at: directory)
+            }
             throw error
         }
         return destination
@@ -205,6 +237,9 @@ public struct LiveFolioService: FolioService {
     ) async throws -> (T, URLResponse) {
         func signed(_ token: String?) -> URLRequest {
             var copy = request
+            if let vaultID {
+                copy.setValue(vaultID.uuidString.lowercased(), forHTTPHeaderField: "X-Folio-Vault")
+            }
             if let token {
                 copy.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
             }
@@ -237,7 +272,9 @@ public struct LiveFolioService: FolioService {
     }
 
     private func call<T>(_ name: String, _ work: () async throws -> T) async throws -> T {
-        if let telemetry { return try await telemetry.operation(name) { try await mappedCall(work) } }
+        if let telemetry {
+            return try await telemetry.operation(name) { try await mappedCall(work) }
+        }
         return try await mappedCall(work)
     }
 

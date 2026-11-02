@@ -2,6 +2,9 @@ import Foundation
 
 /// Everything the app needs from a Folio server. View models depend on this, not on the generated client.
 public protocol FolioService: Sendable {
+    func vaults() async throws -> VaultCatalog
+    /// Returns a service whose requests retain this vault even if the visible library changes.
+    func scoped(to vaultID: UUID) -> any FolioService
     func ping() async throws
     func documents(matching query: String) async throws -> [Document]
     /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.
@@ -15,6 +18,12 @@ public protocol FolioService: Sendable {
     func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws
     func correspondents() async throws -> [Correspondent]
     func documentTypes() async throws -> [DocumentType]
+}
+
+public extension FolioService {
+    func vaults() async throws -> VaultCatalog {
+        .legacy
+    }
 }
 
 public enum FolioError: Error, Equatable, LocalizedError {
@@ -52,8 +61,10 @@ public protocol BearerTokenProvider: Sendable {
     func refresh(rejecting token: String?) async -> String?
 }
 
-extension BearerTokenProvider {
-    public func refresh(rejecting token: String?) async -> String? { nil }
+public extension BearerTokenProvider {
+    func refresh(rejecting _: String?) async -> String? {
+        nil
+    }
 }
 
 public struct NoToken: BearerTokenProvider {

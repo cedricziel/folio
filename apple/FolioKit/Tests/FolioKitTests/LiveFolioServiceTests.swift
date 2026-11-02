@@ -72,6 +72,71 @@ private let documentJSON = """
 @Suite(.serialized) struct LiveFolioServiceTests {
     private let baseURL = URL(string: "https://folio.example.com")!
 
+    @Test func discoversVaultNamesRolesAndServerDefault() async throws {
+        let id = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/vaults")
+            return .init(
+                body: Data(
+                    """
+                    {"vaults":[{"id":"\(id)","name":"Household","role":"contributor"}],"default_vault_id":"\(id)"}
+                    """.utf8
+                )
+            )
+        }
+        let catalog = try await makeService().vaults()
+        #expect(catalog.defaultVaultID == id)
+        #expect(catalog.vaults == [Vault(id: id, name: "Household", role: .contributor)])
+    }
+
+    @Test func oldServerDiscoveryFallsBackToTheDefaultLibrary() async throws {
+        StubURLProtocol.handler = { _, _ in .init(status: 404) }
+        #expect(try await makeService().vaults() == .legacy)
+    }
+
+    @Test func scopedCopiesKeepTheirOwnVaultOnConcurrentGeneratedRequests() async throws {
+        let personal = UUID()
+        let shared = UUID()
+        let service = makeService()
+        let personalService = service.scoped(to: personal)
+        let sharedService = service.scoped(to: shared)
+        StubURLProtocol.handler = { request, _ in
+            let vault = request.value(forHTTPHeaderField: "X-Folio-Vault") ?? "default"
+            return .init(
+                body: Data(
+                    """
+                    [{"id":"\(UUID())","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z"}]
+                    """.utf8))
+        }
+
+        async let personalTags = personalService.tags()
+        async let sharedTags = sharedService.tags()
+        async let defaultTags = service.tags()
+        let (personalResult, sharedResult, defaultResult) = try await (personalTags, sharedTags, defaultTags)
+
+        #expect(personalResult.map(\.name) == [personal.uuidString.lowercased()])
+        #expect(sharedResult.map(\.name) == [shared.uuidString.lowercased()])
+        #expect(defaultResult.map(\.name) == ["default"])
+    }
+
+    @Test func scopedUploadRetainsItsDestinationHeader() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(body: Data(documentJSON.utf8))
+        }
+        _ = try await makeService().scoped(to: vault).upload(
+            UploadFile(data: Data(), filename: "letter.pdf", mimeType: "application/pdf")
+        )
+    }
+
+    @Test(arguments: [403, 404]) func scopedFailuresNeverFallBackToTheDefaultVault(status: Int) async {
+        StubURLProtocol.handler = { _, _ in .init(status: status) }
+        await #expect(throws: FolioError.server(status: status, message: nil)) {
+            _ = try await makeService().scoped(to: UUID()).tags()
+        }
+    }
+
     private func makeService(token: (any BearerTokenProvider)? = nil, downloadDirectory: URL? = nil) -> LiveFolioService
     {
         let configuration = URLSessionConfiguration.ephemeral
@@ -202,7 +267,9 @@ private let documentJSON = """
     @Test func removesATagWithAPostToTheTagPath() async throws {
         let tag = UUID()
         let document = UUID()
+        let vault = UUID()
         StubURLProtocol.handler = { request, _ in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
             #expect(request.httpMethod == "POST")
             #expect(
                 request.url?.path
@@ -210,7 +277,22 @@ private let documentJSON = """
             )
             return .init(contentType: "text/html")
         }
-        try await makeService().removeTag(tag, from: document)
+        try await makeService().scoped(to: vault).removeTag(tag, from: document)
+    }
+
+    @Test func addsATagWithinTheSelectedVault() async throws {
+        let vault = UUID()
+        let tag = UUID()
+        let document = UUID()
+        StubURLProtocol.handler = { request, body in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "/api/documents/\(document.uuidString.lowercased())/tags")
+            #expect(String(decoding: body ?? Data(), as: UTF8.self) == "tag_id=\(tag.uuidString.lowercased())")
+            return .init(contentType: "text/html")
+        }
+
+        try await makeService().scoped(to: vault).addTag(tag, to: document)
     }
 
     @Test func surfacesServerErrorMessage() async throws {
@@ -269,7 +351,8 @@ private let documentJSON = """
             .init(contentType: "application/pdf", body: Data("%PDF-1.4".utf8))
         }
         let document = Document(
-            title: "Bill", originalFilename: String(repeating: "a", count: 240) + ".pdf", mimeType: "application/pdf")
+            title: "Bill", originalFilename: String(repeating: "a", count: 240) + ".pdf", mimeType: "application/pdf"
+        )
         let service = makeService(downloadDirectory: directory)
         async let firstDownload = service.downloadFile(for: document)
         async let secondDownload = service.downloadFile(for: document)
@@ -286,12 +369,14 @@ private let documentJSON = """
     }
 
     @Test func downloadKeepsTheFileExtensionForQuickLook() async throws {
+        let vault = UUID()
         StubURLProtocol.handler = { request, _ in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
             #expect(request.url?.path.hasSuffix("/download") == true)
             return .init(contentType: "application/pdf", body: Data("%PDF-1.4".utf8))
         }
         let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
-        let url = try await makeService().downloadFile(for: document)
+        let url = try await makeService().scoped(to: vault).downloadFile(for: document)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         #expect(url.pathExtension == "pdf")
         #expect(try Data(contentsOf: url) == Data("%PDF-1.4".utf8))

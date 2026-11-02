@@ -18,15 +18,26 @@ public final class ScanReviewViewModel {
 
     private let service: any FolioService
     private let defaultTitle: String
+    public let destination: VaultDestinationViewModel?
 
-    public init(pages: [CGImage], service: any FolioService, now: Date = Date()) {
+    public init(
+        pages: [CGImage], service: any FolioService, now: Date = Date(),
+        destination: VaultDestinationViewModel? = nil
+    ) {
         self.pages = pages
         self.service = service
+        self.destination = destination
         defaultTitle = "Scan \(FolioFormat.isoDay(now)) \(Self.time(now))"
         title = defaultTitle
     }
 
     public func fileIt() async {
+        guard state != .filing else { return }
+        guard destination?.canUpload != false else {
+            state = .failed("Choose a vault you can upload to.")
+            return
+        }
+        let service = destination?.service ?? service
         state = .filing
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = name.isEmpty ? defaultTitle : name

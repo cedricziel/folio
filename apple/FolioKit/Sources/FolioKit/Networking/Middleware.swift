@@ -2,6 +2,21 @@ import Foundation
 import HTTPTypes
 import OpenAPIRuntime
 
+struct VaultScopeMiddleware: ClientMiddleware {
+    let vaultID: UUID?
+
+    func intercept(
+        _ request: HTTPRequest, body: HTTPBody?, baseURL: URL, operationID _: String,
+        next: @Sendable (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        var request = request
+        if let vaultID {
+            request.headerFields[HTTPField.Name("X-Folio-Vault")!] = vaultID.uuidString.lowercased()
+        }
+        return try await next(request, body, baseURL)
+    }
+}
+
 struct BearerAuthMiddleware: ClientMiddleware {
     let provider: any BearerTokenProvider
 
@@ -39,7 +54,9 @@ struct ErrorMappingMiddleware: ClientMiddleware {
     ) async throws -> (HTTPResponse, HTTPBody?) {
         let (response, responseBody) = try await next(request, body, baseURL)
         guard response.status.kind != .successful else { return (response, responseBody) }
-        if response.status == .unauthorized { throw FolioError.signInRequired }
+        if response.status == .unauthorized {
+            throw FolioError.signInRequired
+        }
         var data: Data?
         if let responseBody {
             data = try await Data(collecting: responseBody, upTo: 64 * 1024)

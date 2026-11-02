@@ -7,6 +7,26 @@ public enum FolioItemID: Hashable, Sendable {
     public enum Folder: Hashable, Sendable {
         case root, inbox, all, tags, correspondents, types
         case tag(UUID), correspondent(UUID), type(UUID)
+        case vault(UUID)
+        indirect case scoped(UUID, Folder)
+
+        public var vaultID: UUID? {
+            switch self {
+            case let .vault(id), let .scoped(id, _): id
+            default: nil
+            }
+        }
+
+        public var contentFolder: Folder {
+            if case let .scoped(_, folder) = self {
+                return folder
+            }
+            return self
+        }
+
+        public var acceptsUploads: Bool {
+            contentFolder == .inbox
+        }
 
         public var parent: Folder? {
             switch self {
@@ -15,6 +35,9 @@ public enum FolioItemID: Hashable, Sendable {
             case .tag: .tags
             case .correspondent: .correspondents
             case .type: .types
+            case .vault: .root
+            case let .scoped(id, folder):
+                folder.parent.map { $0 == .root ? .vault(id) : .scoped(id, $0) }
             }
         }
 
@@ -29,10 +52,24 @@ public enum FolioItemID: Hashable, Sendable {
             case let .tag(id): "tag:\(id.uuidString.lowercased())"
             case let .correspondent(id): "correspondent:\(id.uuidString.lowercased())"
             case let .type(id): "type:\(id.uuidString.lowercased())"
+            case let .vault(id): "vault:\(id.uuidString.lowercased())"
+            case let .scoped(id, folder): "vault:\(id.uuidString.lowercased())/\(folder.rawValue)"
             }
         }
 
         init?(rawValue: String) {
+            if rawValue.hasPrefix("vault:") {
+                let parts = rawValue.dropFirst(6).split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+                guard let id = parts.first.flatMap({ UUID(uuidString: String($0)) }) else { return nil }
+                if parts.count == 1 {
+                    self = .vault(id)
+                } else {
+                    guard let folder = Folder(rawValue: String(parts[1])), folder != .root, folder.vaultID == nil
+                    else { return nil }
+                    self = .scoped(id, folder)
+                }
+                return
+            }
             switch rawValue {
             case "root": self = .root
             case "inbox": self = .inbox

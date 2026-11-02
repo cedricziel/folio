@@ -265,6 +265,44 @@ struct DocumentStatusTests {
 }
 
 @MainActor struct UploadViewModelTests {
+    @Test func viewerCannotStartAnUpload() async {
+        let viewer = Vault(id: UUID(), name: "Household", role: .viewer)
+        let service = MockFolioService()
+        let destination = VaultDestinationViewModel(
+            service: service, catalog: VaultCatalog(vaults: [viewer], defaultVaultID: viewer.id)
+        )
+        let model = UploadViewModel(service: service, destination: destination) {}
+
+        await model.upload([file("letter.pdf")])
+
+        #expect(model.state == .failed(message: "Choose a vault you can upload to.", uploaded: 0))
+        #expect(await service.uploads.isEmpty)
+    }
+
+    @Test func changingDestinationDuringAnUploadDoesNotMoveTheRemainingFiles() async {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let shared = Vault(id: UUID(), name: "Household", role: .contributor)
+        let personalService = MockFolioService()
+        let sharedService = MockFolioService()
+        let catalog = VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id)
+        let source = MockFolioService(
+            vaults: catalog, vaultServices: [personal.id: personalService, shared.id: sharedService]
+        )
+        let destination = VaultDestinationViewModel(service: source, catalog: catalog)
+        let model = UploadViewModel(service: source, destination: destination) {}
+        await personalService.suspendUploads()
+        let upload = Task { await model.upload([file("a.pdf"), file("b.pdf")]) }
+        await personalService.waitForUploadRequest()
+
+        destination.selectVault(shared.id)
+        await personalService.releaseUploads()
+        await upload.value
+
+        #expect(await personalService.uploads.map(\.filename) == ["a.pdf", "b.pdf"])
+        #expect(await sharedService.uploads.isEmpty)
+        #expect(model.state == .finished(count: 2))
+    }
+
     private func file(_ name: String) -> UploadFile {
         UploadFile(data: Data(name.utf8), filename: name, mimeType: "application/pdf")
     }

@@ -3,6 +3,8 @@ import Foundation
 @testable import FolioKit
 
 actor MockFolioService: FolioService {
+    private var vaultCatalog: VaultCatalog
+    nonisolated let vaultServices: [UUID: any FolioService]
     var documentList: [Document] = []
     var correspondentList: [Correspondent] = []
     var typeList: [DocumentType] = []
@@ -17,13 +19,67 @@ actor MockFolioService: FolioService {
     private(set) var uploads: [UploadFile] = []
     private(set) var deleted: [Document.ID] = []
     private(set) var pings = 0
+    private var documentGate: CheckedContinuation<[Document], Never>?
+    private var documentStarted: CheckedContinuation<Void, Never>?
+    private var suspendDocumentRequests = false
+    private var uploadGate: CheckedContinuation<Void, Never>?
+    private var uploadStarted: CheckedContinuation<Void, Never>?
+    private var suspendUploadRequests = false
 
     init(
-        documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = []
+        documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
+        vaults: VaultCatalog = .legacy, vaultServices: [UUID: any FolioService] = [:]
     ) {
+        vaultCatalog = vaults
+        self.vaultServices = vaultServices
         documentList = documents
         correspondentList = correspondents
         typeList = types
+    }
+
+    func vaults() async throws -> VaultCatalog {
+        if let failure {
+            throw failure
+        }
+        return vaultCatalog
+    }
+
+    func setVaults(_ catalog: VaultCatalog) {
+        vaultCatalog = catalog
+    }
+
+    nonisolated func scoped(to vaultID: UUID) -> any FolioService {
+        vaultServices[vaultID] ?? self
+    }
+
+    func suspendDocuments() {
+        suspendDocumentRequests = true
+    }
+
+    func waitForDocumentRequest() async {
+        guard documentGate == nil else { return }
+        await withCheckedContinuation { documentStarted = $0 }
+    }
+
+    func releaseDocuments() {
+        suspendDocumentRequests = false
+        documentGate?.resume(returning: documentList)
+        documentGate = nil
+    }
+
+    func suspendUploads() {
+        suspendUploadRequests = true
+    }
+
+    func waitForUploadRequest() async {
+        guard uploadGate == nil else { return }
+        await withCheckedContinuation { uploadStarted = $0 }
+    }
+
+    func releaseUploads() {
+        suspendUploadRequests = false
+        uploadGate?.resume()
+        uploadGate = nil
     }
 
     func setDocuments(_ documents: [Document]) {
@@ -62,6 +118,13 @@ actor MockFolioService: FolioService {
         if let failure {
             throw failure
         }
+        if suspendDocumentRequests {
+            return await withCheckedContinuation {
+                documentGate = $0
+                documentStarted?.resume()
+                documentStarted = nil
+            }
+        }
         return documentList
     }
 
@@ -82,7 +145,16 @@ actor MockFolioService: FolioService {
     }
 
     func upload(_ file: UploadFile) async throws -> Document {
-        if let uploadDelay { try await Task.sleep(for: uploadDelay) }
+        if suspendUploadRequests {
+            await withCheckedContinuation {
+                uploadGate = $0
+                uploadStarted?.resume()
+                uploadStarted = nil
+            }
+        }
+        if let uploadDelay {
+            try await Task.sleep(for: uploadDelay)
+        }
         if let failure {
             throw failure
         }
@@ -101,7 +173,9 @@ actor MockFolioService: FolioService {
 
     func documents(filter: DocumentFilter) async throws -> [Document] {
         filters.append(filter)
-        if let failure { throw failure }
+        if let failure {
+            throw failure
+        }
         return documentList.filter { document in
             (filter.correspondentID == nil || document.correspondentID == filter.correspondentID)
                 && (filter.documentTypeID == nil || document.documentTypeID == filter.documentTypeID)
@@ -112,12 +186,16 @@ actor MockFolioService: FolioService {
     }
 
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
-        if let failure { throw failure }
+        if let failure {
+            throw failure
+        }
         tagged.append(TagAssignment(tag: tagID, document: documentID))
     }
 
     func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
-        if let failure { throw failure }
+        if let failure {
+            throw failure
+        }
         untagged.append(TagAssignment(tag: tagID, document: documentID))
     }
 

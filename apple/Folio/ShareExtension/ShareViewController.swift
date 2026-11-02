@@ -108,7 +108,7 @@ struct ShareRoot: View {
     final class ShareViewController: NSViewController {
         override func loadView() {
             let host = NSHostingView(rootView: ShareRoot(context: extensionContext))
-            host.frame = NSRect(x: 0, y: 0, width: 360, height: 280)
+            host.frame = NSRect(x: 0, y: 0, width: 360, height: 420)
             view = host
         }
     }

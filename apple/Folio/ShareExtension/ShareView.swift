@@ -1,7 +1,6 @@
 import FolioKit
 import SwiftUI
 
-/// The compact sheet shown by the share extension. A vault picker joins it once the server has vaults.
 struct ShareView: View {
     @State var model: ShareViewModel
     let onFinish: () -> Void
@@ -17,6 +16,9 @@ struct ShareView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(FolioTheme.Typography.body)
             }
+
+            VaultDestinationPicker(destination: model.destination)
+                .disabled(model.state == .uploading)
 
             if !model.tags.isEmpty {
                 VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
@@ -63,14 +65,14 @@ struct ShareView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.state == .uploading)
+                .disabled(model.state == .uploading || !model.destination.canUpload)
             }
         }
         .padding(FolioTheme.Spacing.space4)
         .frame(minWidth: 320)
         .background(Color.paper)
         .tint(.archive)
-        .task { await model.loadTags() }
+        .task(id: model.destination.selectedVaultID) { await model.loadTags() }
     }
 
     private var summary: String {

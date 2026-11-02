@@ -58,6 +58,40 @@ struct UploadFileTests {
 }
 
 @MainActor struct ScanReviewViewModelTests {
+    @Test func scanUploadsToItsChosenVault() async {
+        let vault = Vault(id: UUID(), name: "Household", role: .contributor)
+        let target = MockFolioService()
+        let source = MockFolioService(vaultServices: [vault.id: target])
+        let destination = VaultDestinationViewModel(
+            service: source, catalog: VaultCatalog(vaults: [vault], defaultVaultID: vault.id)
+        )
+        let model = ScanReviewViewModel(
+            pages: [page(width: 10, height: 10)], service: source, destination: destination
+        )
+
+        await model.fileIt()
+
+        #expect(await target.uploads.first?.mimeType == "application/pdf")
+        #expect(await source.uploads.isEmpty)
+        #expect(model.state == .filed)
+    }
+
+    @Test func viewerCannotFileAScan() async {
+        let vault = Vault(id: UUID(), name: "Household", role: .viewer)
+        let service = MockFolioService()
+        let destination = VaultDestinationViewModel(
+            service: service, catalog: VaultCatalog(vaults: [vault], defaultVaultID: vault.id)
+        )
+        let model = ScanReviewViewModel(
+            pages: [page(width: 10, height: 10)], service: service, destination: destination
+        )
+
+        await model.fileIt()
+
+        #expect(model.state == .failed("Choose a vault you can upload to."))
+        #expect(await service.uploads.isEmpty)
+    }
+
     @Test func fileItUploadsThePagesAsOnePDFWithTheTitle() async {
         let service = MockFolioService()
         let model = ScanReviewViewModel(

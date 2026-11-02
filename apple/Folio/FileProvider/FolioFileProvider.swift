@@ -13,8 +13,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
-        self.service = nil
-        self.temporaryDirectory = nil
+        service = nil
+        temporaryDirectory = nil
         super.init()
     }
 
@@ -75,12 +75,12 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
                     directory = try manager.temporaryDirectoryURL()
                 }
                 phase = "lookup"
-                let (catalog, service) = try catalog(downloadDirectory: directory)
+                let (catalog, _) = try catalog(downloadDirectory: directory)
                 guard let id = FolioItemID(providerIdentifier: itemIdentifier),
-                    let node = try await catalog.node(for: id), let document = node.document
+                    let node = try await catalog.node(for: id), node.document != nil
                 else { throw NSFileProviderError(.noSuchItem) }
                 phase = "download"
-                let url = try await service.downloadFile(for: document)
+                let url = try await catalog.downloadFile(for: node)
                 completionHandler(url, FolioProviderItem(node), nil)
             } catch {
                 ProviderDiagnostics.failure(operation: "fetchContents", phase: phase, error: error)
@@ -96,20 +96,22 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, (any Error)?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        guard itemTemplate.parentItemIdentifier == FolioItemID.folder(.inbox).providerIdentifier,
+        guard case let .folder(destination)? = FolioItemID(providerIdentifier: itemTemplate.parentItemIdentifier),
+            destination.acceptsUploads,
             itemTemplate.contentType != .folder, let url
         else {
             completionHandler(nil, [], false, Self.unsupported)
             progress.completedUnitCount = 1
             return progress
         }
+        let filename = itemTemplate.filename
         Task {
             defer { progress.completedUnitCount = 1 }
             do {
                 let (catalog, _) = try catalog()
                 var file = try UploadFile(contentsOf: url)
-                file.filename = itemTemplate.filename
-                let node = try await catalog.upload(file)
+                file.filename = filename
+                let node = try await catalog.upload(file, to: destination)
                 completionHandler(FolioProviderItem(node), [], false, nil)
             } catch {
                 completionHandler(nil, [], false, error.providerError)
@@ -142,16 +144,18 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
     ) throws -> any NSFileProviderEnumerator {
         let (catalog, _) = try catalog()
         if containerItemIdentifier == .workingSet {
-            return FolioEnumerator(
+            return try FolioEnumerator(
                 catalog: catalog, container: nil,
-                directory: try FolioSyncState.directory(domain: domain, container: containerItemIdentifier))
+                directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier)
+            )
         }
         guard case let .folder(folder)? = FolioItemID(providerIdentifier: containerItemIdentifier) else {
             throw NSFileProviderError(.noSuchItem)
         }
-        return FolioEnumerator(
+        return try FolioEnumerator(
             catalog: catalog, container: folder,
-            directory: try FolioSyncState.directory(domain: domain, container: containerItemIdentifier))
+            directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier)
+        )
     }
 
     private static var unsupported: NSError {
@@ -225,7 +229,7 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
 
     var capabilities: NSFileProviderItemCapabilities {
         if node.isFolder {
-            return node.id == .folder(.inbox)
+            return node.canUpload
                 ? [.allowsContentEnumerating, .allowsAddingSubItems] : [.allowsContentEnumerating]
         }
         return [.allowsReading]
