@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
     let health_checks: Vec<Arc<dyn HealthCheck>> =
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
-    let state = AppState::new(
+    let mut state = AppState::new(
         document_repo.clone(),
         tag_repo,
         correspondent_repo,
@@ -290,6 +290,11 @@ async fn main() -> Result<()> {
     )
     .with_health_checks(health_checks)
     .with_mcp_default(mcp_default);
+
+    state.client_telemetry =
+        folio_api::client_telemetry::ClientTelemetry::from_lookup(|key| std::env::var(key).ok())
+            .map_err(|error| anyhow::anyhow!(error))?
+            .map(Arc::new);
 
     let mut auth = AuthState::new(auth_store.clone(), Some(config.server.base_url()))
         .with_required(config.auth.required);

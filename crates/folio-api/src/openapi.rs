@@ -11,6 +11,7 @@ use utoipa::{IntoResponses, OpenApi};
 
 use folio_core::models::WebhookPayload;
 
+use crate::client_telemetry;
 use crate::error::ErrorResponse;
 use crate::routes::{correspondents, document_types, documents, events, sources, tags, workflows};
 
@@ -22,6 +23,8 @@ use crate::routes::{correspondents, document_types, documents, events, sources, 
         license(name = "AGPL-3.0-only", identifier = "AGPL-3.0-only"),
     ),
     paths(
+        client_telemetry::configuration,
+        client_telemetry::export,
         documents::list_documents,
         documents::get_document,
         documents::create_document,
@@ -62,6 +65,7 @@ use crate::routes::{correspondents, document_types, documents, events, sources, 
     ),
     components(schemas(ErrorResponse, WebhookPayload)),
     tags(
+        (name = "telemetry", description = "Authenticated client OTLP export"),
         (name = "documents", description = "Documents and their files"),
         (name = "tags", description = "Tags for categorizing documents"),
         (name = "correspondents", description = "Senders of documents"),

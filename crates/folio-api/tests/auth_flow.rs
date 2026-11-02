@@ -1450,6 +1450,19 @@ mod enforcement {
     }
 
     #[tokio::test]
+    async fn read_only_token_can_reach_client_telemetry_without_document_write_scope() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let read_only = api_token(&app, &session, "documents:read").await;
+        let response = send(&app, bearer("POST", "/api/telemetry/v1/traces", &read_only)).await;
+        assert_eq!(
+            response.status,
+            StatusCode::NOT_FOUND,
+            "disabled telemetry is reached after authentication"
+        );
+    }
+
+    #[tokio::test]
     async fn read_only_token_cannot_write_through_the_api() {
         let app = guarded(true).await;
         let session = setup_and_login(&app).await;

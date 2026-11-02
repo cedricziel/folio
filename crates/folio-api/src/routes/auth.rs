@@ -434,7 +434,8 @@ pub async fn enforce_auth(
     if is_api {
         let validator = auth.validator("/api");
         if let Some(context) = validator.validate(request.headers()).await {
-            let needed = if is_read_method(request.method()) {
+            let needed = if is_read_method(request.method()) || path.starts_with("/api/telemetry/")
+            {
                 "documents:read"
             } else {
                 "documents:write"

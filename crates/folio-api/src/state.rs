@@ -58,6 +58,7 @@ pub struct AppState {
     pub access: Arc<dyn folio_core::ports::AccessPolicy>,
     /// Whether `/mcp` is served while the `mcp.enabled` setting is unset
     pub mcp_default: bool,
+    pub client_telemetry: Option<Arc<crate::client_telemetry::ClientTelemetry>>,
 }
 
 impl IngestionState {
@@ -127,6 +128,7 @@ impl AppState {
             vaults,
             access,
             mcp_default: false,
+            client_telemetry: None,
         }
     }
 

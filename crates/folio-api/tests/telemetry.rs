@@ -24,6 +24,7 @@ fn attribute<'a>(
 
 #[tokio::test]
 async fn a_request_produces_a_server_span_and_duration_metric() {
+    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
     let span_exporter = InMemorySpanExporter::default();
     let tracer_provider = SdkTracerProvider::builder()
         .with_simple_exporter(span_exporter.clone())
@@ -47,6 +48,10 @@ async fn a_request_produces_a_server_span_and_duration_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!("/api/documents/{id}"))
+                .header(
+                    "traceparent",
+                    "00-11223344556677881122334455667788-1234567812345678-01",
+                )
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -62,6 +67,11 @@ async fn a_request_produces_a_server_span_and_duration_metric() {
         .find(|span| span.span_kind == SpanKind::Server)
         .expect("a server span");
     assert_eq!(server.name, "GET /api/documents/{id}");
+    assert_eq!(
+        server.span_context.trace_id().to_string(),
+        "11223344556677881122334455667788"
+    );
+    assert_eq!(server.parent_span_id.to_string(), "1234567812345678");
     assert_eq!(
         attribute(server.attributes.iter(), "http.route").as_deref(),
         Some("/api/documents/{id}")

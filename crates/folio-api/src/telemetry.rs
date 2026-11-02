@@ -76,6 +76,9 @@ pub fn instrument(router: Router<crate::AppState>) -> Router<crate::AppState> {
 }
 
 fn make_span(request: &Request) -> Span {
+    if request.uri().path().starts_with("/api/telemetry/") {
+        return Span::none();
+    }
     let method = request.method().as_str();
     let route = request
         .extensions()
@@ -120,6 +123,9 @@ async fn record_metrics(
     request: Request,
     next: Next,
 ) -> Response {
+    if request.uri().path().starts_with("/api/telemetry/") {
+        return next.run(request).await;
+    }
     let method = request.method().as_str().to_owned();
     let route = request
         .extensions()
