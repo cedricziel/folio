@@ -229,7 +229,6 @@ async fn collector_redirects_are_not_followed_with_export_credentials() {
 async fn an_incomplete_payload_times_out_without_occupying_a_collector_slot() {
     let receiver = Receiver::start(StatusCode::OK).await;
     let app = receiver.app().await;
-    tokio::time::pause();
     let response = app
         .oneshot(
             Request::builder()
