@@ -29,7 +29,7 @@ async function post(url, body, csrf) {
 }
 
 class PasskeyController extends Controller {
-  static targets = ["button", "error", "name"];
+  static targets = ["button", "error", "name", "password", "code"];
   static values = { next: String, csrf: String, mode: String };
 
   connect() {
@@ -109,7 +109,12 @@ class PasskeyController extends Controller {
     if (this.hasErrorTarget) this.errorTarget.hidden = true;
     try {
       const url = "/settings/security/passkeys/register";
-      const options = await post(`${url}/start`, undefined, this.csrfValue);
+      const options = await post(`${url}/start`, {
+        password: this.passwordTarget.value,
+        code: this.hasCodeTarget ? this.codeTarget.value : "",
+      }, this.csrfValue);
+      this.passwordTarget.value = "";
+      if (this.hasCodeTarget) this.codeTarget.value = "";
       const publicKey = options.publicKey;
       publicKey.challenge = toBuffer(publicKey.challenge);
       publicKey.user.id = toBuffer(publicKey.user.id);

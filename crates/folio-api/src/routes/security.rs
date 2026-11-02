@@ -455,7 +455,11 @@ async fn totp_confirm(
     auth.code_by_user.record_success(&user.id);
     let codes = mfa::generate_recovery_codes();
     let hashes = hashes_of(&auth, &user.id, &codes);
-    match auth.store.confirm_totp(&user.id, &record.secret_enc, step, &hashes).await {
+    match auth
+        .store
+        .confirm_totp(&user.id, &record.secret_enc, step, &hashes)
+        .await
+    {
         Ok(true) => render_page(&state, &auth, &caller, Some("totp-on"), codes)
             .await
             .unwrap_or_else(IntoResponse::into_response),
@@ -579,14 +583,41 @@ async fn checked_json(auth: &AuthState, headers: &HeaderMap) -> Result<Caller, B
     checked(auth, headers, submitted).await
 }
 
+#[derive(Deserialize)]
+struct RegisterStart {
+    password: String,
+    #[serde(default)]
+    code: String,
+}
+
 async fn passkey_register_start(
     Extension(auth): Extension<AuthState>,
     headers: HeaderMap,
+    ApiJson(body): ApiJson<RegisterStart>,
 ) -> Response {
     let caller = match checked_json(&auth, &headers).await {
         Ok(c) => c,
         Err(r) => return *r,
     };
+    match password_ok(&auth, &caller.user, &body.password).await {
+        Ok(true) => {}
+        Ok(false) => return json_error(StatusCode::UNAUTHORIZED, "Password was not accepted."),
+        Err(_) => return json_error(StatusCode::TOO_MANY_REQUESTS, "Try again later."),
+    }
+    let totp = match auth.store.get_totp(&caller.user.id).await {
+        Ok(record) => record,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if totp.is_some_and(|record| record.confirmed) {
+        if auth.code_by_user.check(&caller.user.id).is_err() {
+            return json_error(StatusCode::TOO_MANY_REQUESTS, "Try again later.");
+        }
+        if !verify_second_factor(&auth, &caller.user, &body.code).await {
+            auth.code_by_user.record_failure(&caller.user.id);
+            return json_error(StatusCode::UNAUTHORIZED, "A current code is required.");
+        }
+        auth.code_by_user.record_success(&caller.user.id);
+    }
     let (Some(webauthn), Some(uuid)) = (auth.webauthn.clone(), parse_user_uuid(&caller.user))
     else {
         return json_error(StatusCode::NOT_FOUND, "Passkeys are not available.");
@@ -616,7 +647,12 @@ async fn passkey_register_start(
         (!exclude.is_empty()).then_some(exclude),
     ) {
         Ok((challenge, state)) => {
-            if !auth.passkey_regs.insert(caller.user.id.clone(), state) {
+            let Ok(mut challenge) = serde_json::to_value(challenge) else {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            };
+            challenge["publicKey"]["authenticatorSelection"]["residentKey"] = json!("required");
+            challenge["publicKey"]["authenticatorSelection"]["requireResidentKey"] = json!(true);
+            if !auth.passkey_regs.insert(caller.session_id.clone(), state) {
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
             Json(challenge).into_response()
@@ -646,7 +682,7 @@ async fn passkey_register_finish(
     let Some(webauthn) = auth.webauthn.clone() else {
         return json_error(StatusCode::NOT_FOUND, "Passkeys are not available.");
     };
-    let Some(state) = auth.passkey_regs.take(&caller.user.id) else {
+    let Some(state) = auth.passkey_regs.take(&caller.session_id) else {
         return json_error(StatusCode::BAD_REQUEST, "The request expired. Try again.");
     };
     let passkey = match webauthn.finish_passkey_registration(&body.credential, &state) {

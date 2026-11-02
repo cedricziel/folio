@@ -1204,6 +1204,7 @@ dialog.palette {
   max-width: 720px;
 }
 .security-stack .f-row {
+  display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
 }

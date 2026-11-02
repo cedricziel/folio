@@ -338,8 +338,8 @@ under the same key.
 - Turning it off or making new recovery codes needs the password and a
   current code (or a recovery code).
 
-**Passkeys.** Register any number of named passkeys; rename and delete them on
-the same page. The login page offers "Sign in with a passkey" and, in browsers
+**Passkeys.** Register up to 20 named, discoverable passkeys; rename and delete them on
+the same page. Enrollment requires the current password and, when TOTP is enabled, a current authenticator or recovery code. A registration ceremony belongs to the browser session that started it and can finish once. The login page offers "Sign in with a passkey" and, in browsers
 that support it, offers passkeys in the username field's autofill. A passkey
 signs in without a password and also satisfies the code step. Passkeys need
 `server.public_url` with a domain name (or `localhost`): the relying party id is its host

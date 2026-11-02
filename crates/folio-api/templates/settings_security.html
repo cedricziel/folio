@@ -122,9 +122,21 @@
         </div>
         {% endif %}
         <div data-controller="passkey" data-passkey-csrf-value="{{ csrf }}" data-passkey-mode-value="register">
-            <div class="inline-form">
+            <div class="field">
                 <label class="hint" for="passkey_name">Name</label>
                 <input class="input" id="passkey_name" type="text" maxlength="64" placeholder="Laptop, phone, security key" data-passkey-target="name">
+            </div>
+            <div class="field">
+                <label class="hint" for="passkey_password">Current password</label>
+                <input class="input" id="passkey_password" type="password" autocomplete="current-password" data-passkey-target="password" required>
+            </div>
+            {% if totp_enabled %}
+            <div class="field">
+                <label class="hint" for="passkey_code">Authenticator or recovery code</label>
+                <input class="input" id="passkey_code" type="text" autocomplete="one-time-code" data-passkey-target="code" required>
+            </div>
+            {% endif %}
+            <div class="form-actions">
                 <button class="f-btn f-btn-primary" type="button" data-action="passkey#register">Add a passkey</button>
             </div>
             <p class="f-notice f-notice-danger" role="alert" data-passkey-target="error" hidden></p>

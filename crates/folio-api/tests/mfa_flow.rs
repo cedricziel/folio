@@ -576,18 +576,44 @@ fn origin() -> Url {
     Url::parse(BASE).unwrap()
 }
 
-async fn register_passkey(b: &mut Browser, authenticator: &mut SoftPasskey, name: &str) -> Resp {
+async fn begin_passkey_registration(
+    b: &mut Browser,
+    authenticator: &mut SoftPasskey,
+    code: Option<&str>,
+) -> Value {
     let csrf = b.csrf().await;
     let start = b
         .json(
             "/settings/security/passkeys/register/start",
             Some(&csrf),
-            None,
+            Some(json!({ "password": PASSWORD, "code": code.unwrap_or("") })),
         )
         .await;
     assert_eq!(start.status, StatusCode::OK, "{}", start.body);
-    let ccr: CreationChallengeResponse = serde_json::from_str(&start.body).unwrap();
-    let credential = authenticator.do_registration(origin(), ccr).unwrap();
+    let mut challenge = start.json();
+    assert_eq!(
+        challenge["publicKey"]["authenticatorSelection"]["residentKey"],
+        "required"
+    );
+    assert_eq!(
+        challenge["publicKey"]["authenticatorSelection"]["requireResidentKey"],
+        true
+    );
+    // SoftPasskey cannot store resident credentials; browser discovery is covered in e2e.
+    challenge["publicKey"]["authenticatorSelection"]["residentKey"] = json!("discouraged");
+    challenge["publicKey"]["authenticatorSelection"]["requireResidentKey"] = json!(false);
+    let ccr: CreationChallengeResponse = serde_json::from_value(challenge).unwrap();
+    serde_json::to_value(authenticator.do_registration(origin(), ccr).unwrap()).unwrap()
+}
+
+async fn register_passkey(
+    b: &mut Browser,
+    authenticator: &mut SoftPasskey,
+    name: &str,
+    code: Option<&str>,
+) -> Resp {
+    let credential = begin_passkey_registration(b, authenticator, code).await;
+    let csrf = b.csrf().await;
     b.json(
         "/settings/security/passkeys/register/finish",
         Some(&csrf),
@@ -624,13 +650,106 @@ async fn passkey_login(
 }
 
 #[tokio::test]
+async fn a_session_alone_cannot_register_a_passkey() {
+    let w = world().await;
+    let mut b = Browser::new(&w.app);
+    b.password_login("ada", PASSWORD).await;
+    let csrf = b.csrf().await;
+    let res = b
+        .json(
+            "/settings/security/passkeys/register/start",
+            Some(&csrf),
+            Some(json!({ "password": "wrong-password" })),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    assert!(w.store.list_passkeys(&w.user.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn passkey_enrollment_requires_the_existing_second_factor() {
+    let w = world().await;
+    let (mut b, _, _) = enroll(&w).await;
+    let csrf = b.csrf().await;
+    let res = b
+        .json(
+            "/settings/security/passkeys/register/start",
+            Some(&csrf),
+            Some(json!({ "password": PASSWORD })),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    assert!(w.store.list_passkeys(&w.user.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn registration_is_bound_to_one_live_session_and_consumed_once() {
+    let w = world().await;
+    let mut first = Browser::new(&w.app);
+    let mut second = Browser::new(&w.app);
+    first.password_login("ada", PASSWORD).await;
+    second.password_login("ada", PASSWORD).await;
+    let mut authenticator = SoftPasskey::new(true);
+    let credential = begin_passkey_registration(&mut first, &mut authenticator, None).await;
+    let body = json!({ "name": "Laptop", "credential": credential });
+    let csrf_second = second.csrf().await;
+    let stolen = second
+        .json(
+            "/settings/security/passkeys/register/finish",
+            Some(&csrf_second),
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(stolen.status, StatusCode::BAD_REQUEST);
+    let csrf_first = first.csrf().await;
+    let accepted = first
+        .json(
+            "/settings/security/passkeys/register/finish",
+            Some(&csrf_first),
+            Some(body.clone()),
+        )
+        .await;
+    assert_eq!(accepted.status, StatusCode::OK);
+    let replay = first
+        .json(
+            "/settings/security/passkeys/register/finish",
+            Some(&csrf_first),
+            Some(body),
+        )
+        .await;
+    assert_eq!(replay.status, StatusCode::BAD_REQUEST);
+    assert_eq!(w.store.list_passkeys(&w.user.id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_revoked_session_cannot_finish_registration() {
+    let w = world().await;
+    let mut b = Browser::new(&w.app);
+    b.password_login("ada", PASSWORD).await;
+    let mut authenticator = SoftPasskey::new(true);
+    let credential = begin_passkey_registration(&mut b, &mut authenticator, None).await;
+    let csrf = b.csrf().await;
+    b.form("/settings/security/sessions/revoke-all", &[("csrf", &csrf)])
+        .await;
+    let res = b
+        .json(
+            "/settings/security/passkeys/register/finish",
+            Some(&csrf),
+            Some(json!({ "name": "Revoked", "credential": credential })),
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::SEE_OTHER);
+    assert!(w.store.list_passkeys(&w.user.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn passkeys_register_sign_in_and_manage() {
     let w = world().await;
     let mut authenticator = SoftPasskey::new(true);
     let mut b = Browser::new(&w.app);
     b.password_login("ada", PASSWORD).await;
 
-    let done = register_passkey(&mut b, &mut authenticator, "Laptop").await;
+    let done = register_passkey(&mut b, &mut authenticator, "Laptop", None).await;
     assert_eq!(done.status, StatusCode::OK, "{}", done.body);
     let keys = w.store.list_passkeys(&w.user.id).await.unwrap();
     assert_eq!(keys.len(), 1);
@@ -679,8 +798,8 @@ async fn passkeys_register_sign_in_and_manage() {
 async fn a_passkey_satisfies_the_second_factor() {
     let w = world().await;
     let mut authenticator = SoftPasskey::new(true);
-    let (mut b, _totp, _codes) = enroll(&w).await;
-    register_passkey(&mut b, &mut authenticator, "Phone").await;
+    let (mut b, _totp, codes) = enroll(&w).await;
+    register_passkey(&mut b, &mut authenticator, "Phone", Some(&codes[0])).await;
     let credential_id = w.store.list_passkeys(&w.user.id).await.unwrap()[0]
         .credential_id
         .clone();
@@ -712,7 +831,7 @@ async fn a_passkey_of_another_user_cannot_finish_a_pending_login() {
     };
     w.store.create_user(mallory.clone()).await.unwrap();
     mallory_session.password_login("mallory", PASSWORD).await;
-    register_passkey(&mut mallory_session, &mut authenticator, "Evil").await;
+    register_passkey(&mut mallory_session, &mut authenticator, "Evil", None).await;
     let credential_id = w.store.list_passkeys(&mallory.id).await.unwrap()[0]
         .credential_id
         .clone();
