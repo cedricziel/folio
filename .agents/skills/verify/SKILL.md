@@ -321,6 +321,12 @@ unchanged and concurrent duplicate updates emit no extra event, and a forced
 outbox failure rolls back creates, updates, and deletes. Never use an existing
 archive for these checks.
 
+Run `cargo test -p folio-api --test saved_views --test openapi` for the JSON API.
+Temporary SQLite fixtures cover private visibility, viewer sharing restrictions,
+cross-vault filter rejection, rename precision, audit identity, and deletion.
+PATCH must reject explicit null and client-supplied ownership. Regenerate the
+OpenAPI contract with `make openapi` when the route schema changes.
+
 ## Verify document repository changes
 
 The shared repository contract covers atomic OCR completion and its outbox event,

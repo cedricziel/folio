@@ -89,6 +89,7 @@ pub async fn harness_with(
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
     let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
     let state = AppState::new(
+        repos.saved_views,
         repos.documents,
         repos.tags,
         repos.correspondents,
