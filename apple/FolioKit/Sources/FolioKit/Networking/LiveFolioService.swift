@@ -54,7 +54,8 @@ public struct LiveFolioService: FolioService {
                 correspondentId: filter.correspondentID?.uuidString.lowercased(),
                 documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
                 tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
-                createdAfter: filter.createdAfter, createdBefore: filter.createdBefore)
+                createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
+            )
             return try await client.listDocuments(query: query).ok.body.json.documents.map { try Document($0) }
         }
     }
@@ -73,7 +74,9 @@ public struct LiveFolioService: FolioService {
     public func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
         var request = URLRequest(
             url: endpoint(
-                "api/documents/\(documentID.uuidString.lowercased())/tags/\(tagID.uuidString.lowercased())"))
+                "api/documents/\(documentID.uuidString.lowercased())/tags/\(tagID.uuidString.lowercased())"
+            )
+        )
         request.httpMethod = "POST"
         let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
         try check(response, body: data)
@@ -157,7 +160,9 @@ public struct LiveFolioService: FolioService {
     /// The server controls the filename, so keep only its last path component and never a traversal.
     static func safeFilename(_ name: String?, mimeType: String?) -> String {
         let last = name.map { ($0 as NSString).lastPathComponent } ?? ""
-        if !["", ".", "..", "/"].contains(last) { return last }
+        if !["", ".", "..", "/"].contains(last) {
+            return last
+        }
         let ext = mimeType.flatMap { UTType(mimeType: $0)?.preferredFilenameExtension }
         return ext.map { "document.\($0)" } ?? "document"
     }
@@ -177,7 +182,9 @@ public struct LiveFolioService: FolioService {
     ) async throws -> (T, URLResponse) {
         func signed(_ token: String?) -> URLRequest {
             var copy = request
-            if let token { copy.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+            if let token {
+                copy.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
             return copy
         }
         let token = await tokenProvider.token()
@@ -198,7 +205,9 @@ public struct LiveFolioService: FolioService {
 
     private func check(_ response: URLResponse, body: Data?) throws {
         guard let http = response as? HTTPURLResponse else { throw FolioError.unreadableResponse }
-        if http.statusCode == 401 { throw FolioError.signInRequired }
+        if http.statusCode == 401 {
+            throw FolioError.signInRequired
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw FolioError.server(status: http.statusCode, message: body.flatMap(ErrorMappingMiddleware.message))
         }
@@ -226,8 +235,22 @@ extension Document {
             originalFilename: raw.originalFilename, mimeType: raw.mimeType,
             correspondentID: raw.correspondentId.map(LiveFolioService.uuid),
             documentTypeID: raw.documentTypeId.map(LiveFolioService.uuid),
-            pageCount: raw.pageCount.map(Int.init), createdAt: raw.createdAt, updatedAt: raw.updatedAt
+            pageCount: raw.pageCount.map(Int.init),
+            ocrStatus: .init(raw.ocrStatus), embedStatus: .init(raw.embedStatus),
+            createdAt: raw.createdAt, updatedAt: raw.updatedAt
         )
+    }
+}
+
+extension Document.ProcessingStatus {
+    init(_ raw: Components.Schemas.ProcessingStatus) {
+        switch raw {
+        case .pending: self = .pending
+        case .running: self = .running
+        case .done: self = .done
+        case .failed: self = .failed
+        case .skipped: self = .skipped
+        }
     }
 }
 

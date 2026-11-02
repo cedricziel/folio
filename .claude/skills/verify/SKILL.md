@@ -76,19 +76,3 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 Run `xcrun swift test --package-path apple/FolioKit` for native changes. For list and detail loading, the focused suites are `DocumentListViewModelTests`, `DocumentListFailureTests`, and `DocumentDetailViewModelTests`. The detail suite covers cancellation followed by a successful retry. Run `xcrun swift-format lint` on changed Swift files.
 
 Check navigation in a throwaway simulator with test credentials and an isolated server. Open a document, return to the list, and open it again. Check that rows remain visible and the preview loads. Also leave detail before the download finishes and reopen it. Keep list loading on the containing split view so compact navigation does not cancel it when hiding the sidebar. Do not use an existing signed-in simulator or device for this check.
-
-## Apple File Provider
-
-Run `xcrun swift test --package-path apple/FolioKit --scratch-path /tmp/folio-provider-build`.
-`LiveFolioServiceTests` covers retained download contents and concurrent downloads into a supplied staging directory. Use a task-specific scratch path when another worker is testing.
-
-Generate the project with `xcodegen generate --spec apple/Folio/project.yml`. Build the extension through the app scheme:
-
-```sh
-xcrun xcodebuild build -project apple/Folio/Folio.xcodeproj -scheme Folio \
-  -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/folio-provider-xcode \
-  -clonedSourcePackagesDirPath /tmp/folio-provider-xcode-packages \
-  -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
-```
-
-Lint changed Swift files with `xcrun swift-format lint --strict`. A package test or unsigned build does not prove system materialization. For Files or Finder checks, use a new simulator or isolated test account, a separate test domain, and a throwaway server. Verify download bytes and reopening, then remove the domain, simulator, and server. Never register a test domain in the user's signed-in environment.

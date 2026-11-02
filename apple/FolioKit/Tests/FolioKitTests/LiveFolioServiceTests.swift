@@ -98,12 +98,74 @@ private let documentJSON = """
         #expect(document.tags.first?.color == "#ff5733")
     }
 
+    @Test func completedOcrWithoutTextDoesNotKeepReading() async throws {
+        let json = documentJSON.replacingOccurrences(
+            of: "\"content\": \"Rechnungsnummer 2025-00318\"", with: "\"content\": null"
+        )
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"documents\": [\(json)], \"count\": 1}".utf8))
+        }
+        let document = try #require(try await makeService().documents(matching: "").first)
+        #expect(document.status == .filed)
+    }
+
+    @Test(arguments: ["pending", "running"])
+    func activeOcrWithExistingTextKeepsReading(stage: String) async throws {
+        let json = documentJSON.replacingOccurrences(
+            of: "\"ocr_status\": \"done\"", with: "\"ocr_status\": \"\(stage)\""
+        )
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"documents\": [\(json)], \"count\": 1}".utf8))
+        }
+        let document = try #require(try await makeService().documents(matching: "").first)
+        #expect(document.status == .reading(pages: 3))
+    }
+
+    @Test(arguments: ["pending", "running"])
+    func activeEmbeddingIsIndexing(stage: String) async throws {
+        let json = documentJSON.replacingOccurrences(
+            of: "\"embed_status\": \"skipped\"", with: "\"embed_status\": \"\(stage)\""
+        )
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"results\": [{\"document\": \(json), \"score\": 0.9}]}".utf8))
+        }
+        let document = try #require(try await makeService().documents(matching: "invoice").first)
+        #expect(document.status == .indexing)
+        #expect(FolioFormat.statusText(document.status) == "Indexing…")
+    }
+
+    @Test func failedOcrIsNotStillReading() async throws {
+        let json = documentJSON.replacingOccurrences(
+            of: "\"ocr_status\": \"done\"", with: "\"ocr_status\": \"failed\""
+        )
+        .replacingOccurrences(of: "\"embed_status\": \"skipped\"", with: "\"embed_status\": \"pending\"")
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"documents\": [\(json)], \"count\": 1}".utf8))
+        }
+        let document = try #require(try await makeService().documents(matching: "").first)
+        #expect(document.status == .failed)
+        #expect(FolioFormat.statusText(document.status) == "Couldn't process")
+    }
+
+    @Test func failedEmbeddingIsNotFiled() async throws {
+        let json = documentJSON.replacingOccurrences(
+            of: "\"embed_status\": \"skipped\"", with: "\"embed_status\": \"failed\""
+        )
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"documents\": [\(json)], \"count\": 1}".utf8))
+        }
+        let document = try #require(try await makeService().documents(matching: "").first)
+        #expect(document.status == .failed)
+    }
+
     @Test func sendsEveryFilterAsAQueryParameter() async throws {
         let tags = [UUID(), UUID()]
         let after = Date(timeIntervalSince1970: 1_741_910_400)
         StubURLProtocol.handler = { request, _ in
             let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
-            func values(_ name: String) -> [String] { items.filter { $0.name == name }.compactMap(\.value) }
+            func values(_ name: String) -> [String] {
+                items.filter { $0.name == name }.compactMap(\.value)
+            }
             #expect(request.url?.path == "/api/documents")
             #expect(values("tag_id") == tags.map { $0.uuidString.lowercased() })
             #expect(values("correspondent_id").count == 1)
@@ -112,7 +174,8 @@ private let documentJSON = """
             return .init(body: Data("{\"documents\": [], \"count\": 0}".utf8))
         }
         let filter = DocumentFilter(
-            tagIDs: tags, correspondentID: UUID(), createdAfter: after, createdBefore: after.addingTimeInterval(86400))
+            tagIDs: tags, correspondentID: UUID(), createdAfter: after, createdBefore: after.addingTimeInterval(86400)
+        )
         #expect(try await makeService().documents(filter: filter).isEmpty)
     }
 
@@ -143,7 +206,8 @@ private let documentJSON = """
             #expect(request.httpMethod == "POST")
             #expect(
                 request.url?.path
-                    == "/api/documents/\(document.uuidString.lowercased())/tags/\(tag.uuidString.lowercased())")
+                    == "/api/documents/\(document.uuidString.lowercased())/tags/\(tag.uuidString.lowercased())"
+            )
             return .init(contentType: "text/html")
         }
         try await makeService().removeTag(tag, from: document)
@@ -163,7 +227,8 @@ private let documentJSON = """
             #expect(request.httpMethod == "POST")
             #expect(request.url?.path == "/api/documents/upload")
             #expect(
-                request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
+                request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true
+            )
             let text = String(decoding: body ?? Data(), as: UTF8.self)
             #expect(text.contains("name=\"file\"; filename=\"scan.pdf\""))
             #expect(text.contains("Content-Type: application/pdf"))
