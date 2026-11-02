@@ -96,6 +96,7 @@ impl From<PgPool> for Database {
 
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     /// Writes an outbox event with every lifecycle change
     pub documents: Arc<dyn DocumentRepository>,
     /// Like `documents`, but its events are attributed to workflows, so they
@@ -158,6 +159,10 @@ impl Database {
                     )
                 };
                 Repositories {
+                    entries: Arc::new(
+                        sqlite::SqliteDocumentEntryRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     documents: documents(EventOrigin::User),
                     workflow_documents: documents(EventOrigin::Workflow),
                     outbox: Arc::new(SqliteOutboxStore::new(pool.clone()).with_wake(wake.clone())),
@@ -188,6 +193,10 @@ impl Database {
                     )
                 };
                 Repositories {
+                    entries: Arc::new(
+                        postgres::PostgresDocumentEntryRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     documents: documents(EventOrigin::User),
                     workflow_documents: documents(EventOrigin::Workflow),
                     outbox: Arc::new(
