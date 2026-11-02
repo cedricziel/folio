@@ -1485,6 +1485,111 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+Stimulus.register("integrations", class extends Controller {
+  static targets = ["status", "secretPanel", "secret", "list", "empty"];
+
+  connect() {
+    this.clearBeforeCache = () => this.clearSecret();
+    document.addEventListener("turbo:before-cache", this.clearBeforeCache);
+    window.addEventListener("pagehide", this.clearBeforeCache);
+    if (this.hasListTarget) this.load();
+  }
+
+  disconnect() {
+    this.clearSecret();
+    document.removeEventListener("turbo:before-cache", this.clearBeforeCache);
+    window.removeEventListener("pagehide", this.clearBeforeCache);
+  }
+
+  clearSecret() {
+    if (!this.hasSecretTarget) return;
+    this.secretTarget.value = "";
+    this.secretPanelTarget.hidden = true;
+  }
+
+  async request(path = "", options = {}) {
+    const response = await fetch(`/api/auth/tokens${path}`, {
+      credentials: "same-origin", cache: "no-store", ...options,
+      headers: { "Content-Type": "application/json", ...options.headers },
+    });
+    if (!response.ok) {
+      const message = response.status === 401 ? "Sign in again to manage tokens." : "Could not update tokens. Check your permissions and try again.";
+      throw new Error(message);
+    }
+    return response.status === 204 ? null : response.json();
+  }
+
+  async load() {
+    try {
+      const tokens = await this.request();
+      if (!this.element.isConnected) return;
+      this.listTarget.replaceChildren();
+      this.emptyTarget.textContent = tokens.length ? "" : "No tokens yet.";
+      for (const token of tokens) {
+        const row = document.createElement("li");
+        row.className = "f-row";
+        const details = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = token.name;
+        const metadata = document.createElement("p");
+        metadata.className = "hint";
+        const date = value => new Date(value * 1000).toLocaleDateString();
+        const state = token.revoked_at ? "Revoked" : token.expires_at <= Date.now() / 1000 ? "Expired" : "Active";
+        metadata.textContent = `${token.prefix} · ${token.audience.toUpperCase()} · ${token.scopes.join(", ")} · Created ${date(token.created_at)} · Expires ${date(token.expires_at)} · ${state}`;
+        details.append(name, metadata);
+        row.append(details);
+        if (!token.revoked_at) {
+          const revoke = document.createElement("button");
+          revoke.type = "button";
+          revoke.className = "f-btn f-btn-danger";
+          revoke.textContent = "Revoke";
+          revoke.addEventListener("click", async () => {
+            revoke.disabled = true;
+            try {
+              await this.request(`/${encodeURIComponent(token.id)}`, { method: "DELETE" });
+              this.clearSecret();
+              this.statusTarget.textContent = "Token revoked.";
+              await this.load();
+            } catch (error) { this.statusTarget.textContent = error.message; revoke.disabled = false; }
+          });
+          row.append(revoke);
+        }
+        this.listTarget.append(row);
+      }
+    } catch (error) { this.emptyTarget.textContent = error.message; }
+  }
+
+  async create(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const scopes = data.getAll("scopes");
+    if (!scopes.length) { this.statusTarget.textContent = "Choose at least one permission."; return; }
+    this.clearSecret();
+    const submit = form.querySelector("button[type=submit]");
+    submit.disabled = true;
+    try {
+      const result = await this.request("", { method: "POST", body: JSON.stringify({
+        name: data.get("name").trim(), audience: data.get("audience"), scopes,
+        expires_in_days: Number(data.get("expires_in_days")),
+      }) });
+      if (!this.element.isConnected) return;
+      this.secretTarget.value = result.token;
+      this.secretPanelTarget.hidden = false;
+      this.secretTarget.focus();
+      this.statusTarget.textContent = "Token created. Save it now.";
+      await this.load();
+    } catch (error) { this.statusTarget.textContent = error.message; }
+    finally { submit.disabled = false; }
+  }
+
+  async copy(value) {
+    try { await navigator.clipboard.writeText(value); this.statusTarget.textContent = "Copied."; }
+    catch { this.statusTarget.textContent = "Copy failed. Select the field and copy it manually."; }
+  }
+  copyUrl() { this.copy(this.element.querySelector("#mcp-url").value); }
+  copyToken() { this.copy(this.secretTarget.value); }
+});
     </script>
   </head>
   <body
