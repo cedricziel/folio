@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { uniqueTitle, uploadViaUi } from "./fixtures";
+import { uniqueTitle, uploadViaUi, loadDiscussion } from "./fixtures";
 import { TourInstance, tour } from "./tour";
 
 const instance = new TourInstance();
@@ -20,6 +20,7 @@ for (const width of [1280, 390]) {
       await page.getByRole("link", { name: new RegExp(title) }).click();
       await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}$/);
       const documentID = page.url().split("/").at(-1)!;
+      await loadDiscussion(page);
       const notes = page.locator("#document-notes");
       await notes.scrollIntoViewIfNeeded();
       await expect(notes.getByText("No notes yet", { exact: false })).toBeVisible();

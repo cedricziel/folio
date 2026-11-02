@@ -37,3 +37,13 @@ export async function uploadViaUi(page: Page, title: string) {
     .not.toBeNull();
   await page.goto("/");
 }
+
+export async function loadDiscussion(page: Page) {
+  const frames = await page.locator("turbo-frame[data-entry-frame]").all();
+  if (frames.length === 0) return;
+  for (const frame of frames) {
+    await frame.scrollIntoViewIfNeeded();
+    await expect(frame).toHaveAttribute("complete", "");
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+}
