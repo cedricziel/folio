@@ -65,7 +65,7 @@ A processing job SHALL generate thumbnails and record the page count, then, if `
 
 ### Requirement: OCR through the configured AI provider
 
-OCR SHALL use the provider selected by `ocr.provider` from the registry: `tesseract` (default), `openai-vision`, `anthropic-vision`, `ollama-vision` or `none`, with `ocr.model` (empty selects the provider default), `ocr.languages` and `ocr.base_url`. For PDFs, an embedded text layer extracted with `pdftotext` SHALL be used instead of the provider when at least 80% of pages contain 20 or more letters or digits. Otherwise pages SHALL be rasterized with `pdftoppm` at 300 DPI and recognised page by page, joined by blank lines; a failing page fails the OCR. Each result SHALL report the engine id and, when available, a confidence.
+OCR SHALL use the provider selected by `ocr.provider` from the registry: `tesseract` (default), `ocrmypdf`, `openai-vision`, `anthropic-vision`, `ollama-vision` or `none`, with `ocr.model` (empty selects the provider default), `ocr.languages` and `ocr.base_url`. For PDFs, an embedded text layer extracted with `pdftotext` SHALL be used instead of the provider when at least 80% of pages contain 20 or more letters or digits. Otherwise pages SHALL be rasterized with `pdftoppm` at 300 DPI and recognised page by page, joined by blank lines; a failing page fails the OCR. Each result SHALL report the engine id and, when available, a confidence.
 
 #### Scenario: PDF with a text layer
 

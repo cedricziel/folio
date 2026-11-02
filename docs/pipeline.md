@@ -23,6 +23,7 @@ the OCR provider is not called. Otherwise pages are rendered by `pdftoppm` at
 | `ocr.provider` | What it does | Needs |
 | --- | --- | --- |
 | `tesseract` (default) | Local `tesseract` CLI, reports confidence | `tesseract-ocr` plus language packs |
+| `ocrmypdf` | Local OCRmyPDF CLI, extracts a text sidecar from rendered pages | `ocrmypdf`, Tesseract language packs, and `poppler-utils` for PDFs |
 | `openai-vision` | OpenAI-compatible chat completions with image input | `ai.openai_api_key` (optional with a custom base URL) |
 | `anthropic-vision` | Anthropic messages API with image input | `ai.anthropic_api_key` |
 | `ollama-vision` | Ollama `/api/chat` with images | Ollama server, e.g. `llama3.2-vision` |

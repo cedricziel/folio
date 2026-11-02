@@ -70,6 +70,7 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - Webhooks and workflows: start a local receiver (`python3 -m http.server`, or `nc -l`) on a free port, point the webhook at `http://127.0.0.1:<port>`, run the trigger (upload), and check the receiver log.
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.
 - Pipeline startup configuration: run the smoke test with `FOLIO_VERIFY_OCR_PROVIDER=none FOLIO_VERIFY_AUTO_OCR=false FOLIO_VERIFY_AUTO_EMBED=false`. On the fresh database, `/settings` must select `none` and leave both processing checkboxes unchecked; uploads must finish with skipped OCR and embeddings. The scripts pass these test options through the scrubbed environment.
+- OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; a PDF with an existing text layer bypasses the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
 - Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
 ## Client telemetry
