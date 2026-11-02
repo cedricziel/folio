@@ -396,3 +396,64 @@ async fn settings_page_toggles_the_mcp_endpoint() {
     let stored = h.state.settings_repo.get("mcp.enabled").await.unwrap();
     assert_eq!(stored.unwrap().value, "false");
 }
+
+#[tokio::test]
+async fn manage_trash_restores_entries_and_retains_conflicting_rows() {
+    let h = harness().await;
+    let retained = h
+        .state
+        .correspondent_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateCorrespondent {
+                name: "Retained sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .correspondent_repo
+        .delete(h.vault, retained.id)
+        .await
+        .unwrap();
+    let response = h.app.clone().oneshot(get("/manage")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Trash (1)"));
+    assert!(body.contains(&format!("/manage/correspondents/{}/restore", retained.id)));
+    h.state
+        .correspondent_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateCorrespondent {
+                name: "Retained sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/manage/correspondents/{}/restore", retained.id))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Restore failed. An active entry already uses this name."));
+    assert!(body.contains(&format!("/manage/correspondents/{}/restore", retained.id)));
+    assert!(h
+        .state
+        .correspondent_repo
+        .find_retained(h.vault, retained.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_some());
+}

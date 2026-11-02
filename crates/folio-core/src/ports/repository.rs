@@ -158,6 +158,15 @@ pub trait DocumentRepository: Send + Sync {
 /// Repository for tag operations
 #[async_trait]
 pub trait TagRepository: Send + Sync {
+    /// Read an entry including deleted entries retained by documents.
+    async fn find_retained(&self, vault: VaultId, id: Id) -> Result<Option<Tag>>;
+
+    /// List deleted entries in this vault.
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Tag>>;
+
+    /// Restore an entry, rejecting a live entry with the same name.
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Tag>;
+
     /// Find a tag by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Tag>>;
 
@@ -180,6 +189,15 @@ pub trait TagRepository: Send + Sync {
 /// Repository for correspondent operations
 #[async_trait]
 pub trait CorrespondentRepository: Send + Sync {
+    /// Read an entry including deleted entries retained by documents.
+    async fn find_retained(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>>;
+
+    /// List deleted entries in this vault.
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Correspondent>>;
+
+    /// Restore an entry, rejecting a live entry with the same name.
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Correspondent>;
+
     /// Find a correspondent by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>>;
 
@@ -207,6 +225,15 @@ pub trait CorrespondentRepository: Send + Sync {
 /// Repository for document type operations
 #[async_trait]
 pub trait DocumentTypeRepository: Send + Sync {
+    /// Read an entry including deleted entries retained by documents.
+    async fn find_retained(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>>;
+
+    /// List deleted entries in this vault.
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<DocumentType>>;
+
+    /// Restore an entry, rejecting a live entry with the same name.
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<DocumentType>;
+
     /// Find a document type by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>>;
 

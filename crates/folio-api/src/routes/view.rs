@@ -257,7 +257,11 @@ impl From<&Tag> for TagView {
     fn from(tag: &Tag) -> Self {
         Self {
             id: tag.id,
-            name: tag.name.clone(),
+            name: if tag.deleted_at.is_some() {
+                format!("{} (deleted)", tag.name)
+            } else {
+                tag.name.clone()
+            },
             tone: tag.tone(),
         }
     }
@@ -319,14 +323,14 @@ pub async fn rows(
     state: &AppState,
     documents: Vec<Document>,
 ) -> ApiResult<Vec<DocumentRow>> {
-    let correspondents: HashMap<Id, String> = state
+    let mut correspondents: HashMap<Id, String> = state
         .correspondent_repo
         .list(vault)
         .await?
         .into_iter()
         .map(|c| (c.id, c.name))
         .collect();
-    let types: HashMap<Id, String> = state
+    let mut types: HashMap<Id, String> = state
         .document_type_repo
         .list(vault)
         .await?
@@ -334,12 +338,19 @@ pub async fn rows(
         .map(|t| (t.id, t.name))
         .collect();
 
+    for entry in state.correspondent_repo.list_trash(vault).await? {
+        correspondents.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
+    for entry in state.document_type_repo.list_trash(vault).await? {
+        types.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
+    let ids: Vec<_> = documents.iter().map(|document| document.id).collect();
+    let mut document_tags = state.document_repo.tags_for_documents(vault, &ids).await?;
     let mut out = Vec::with_capacity(documents.len());
     for doc in documents {
-        let tags = state
-            .document_repo
-            .get_tags(vault, doc.id)
-            .await?
+        let tags = document_tags
+            .remove(&doc.id)
+            .unwrap_or_default()
             .iter()
             .map(TagView::from)
             .collect();

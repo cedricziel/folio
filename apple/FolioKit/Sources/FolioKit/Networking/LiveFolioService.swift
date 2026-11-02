@@ -162,7 +162,7 @@ public struct LiveFolioService: FolioService {
     public func tags() async throws -> [Tag] {
         try await call("tags.list") {
             try await client.listTags().ok.body.json.map {
-                try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color)
+                try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
             }
         }
     }
@@ -394,7 +394,7 @@ extension Document {
     init(_ raw: Components.Schemas.DocumentView) throws {
         try self.init(raw.value1)
         tags = try raw.value2.tags.map {
-            try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color)
+            try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
         }
     }
 }

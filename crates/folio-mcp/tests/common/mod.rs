@@ -125,6 +125,20 @@ struct CountingTags {
 
 #[async_trait]
 impl TagRepository for CountingTags {
+    async fn find_retained(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Tag>> {
+        self.inner.find_retained(vault, id).await
+    }
+    async fn list_trash(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Tag>> {
+        self.inner.list_trash(vault).await
+    }
+    async fn restore(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<Tag> {
+        self.inner.restore(vault, id).await
+    }
+
     async fn find_by_id(
         &self,
         vault: folio_core::models::VaultId,

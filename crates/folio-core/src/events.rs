@@ -32,11 +32,16 @@ impl<'de> Deserialize<'de> for DeletedDocument {
             .tags
             .into_iter()
             .map(|mut tag| {
-                // Older stored snapshots omitted tag ownership; the captured document supplies it.
+                // Legacy snapshots predate tag ownership and update metadata.
                 if let Some(fields) = tag.as_object_mut() {
                     fields.entry("vault_id").or_insert_with(|| {
                         serde_json::Value::String(snapshot.document.vault_id.to_string())
                     });
+                    if !fields.contains_key("updated_at") {
+                        if let Some(created_at) = fields.get("created_at").cloned() {
+                            fields.insert("updated_at".into(), created_at);
+                        }
+                    }
                 }
                 serde_json::from_value(tag).map_err(serde::de::Error::custom)
             })
@@ -602,20 +607,26 @@ mod tests {
     }
 
     #[test]
-    fn legacy_deleted_snapshot_inherits_tag_vault_from_document() {
+    fn legacy_deleted_snapshot_infers_tag_update_time_from_captured_creation() {
         let document = Document::new(VaultId::new(), "retained history");
         let tag = Tag::new(document.vault_id, "archive");
         let mut payload = serde_json::json!({
             "document": document,
             "tags": [tag]
         });
-        payload["tags"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("vault_id");
+        let fields = payload["tags"][0].as_object_mut().unwrap();
+        fields.remove("vault_id");
+        fields.remove("updated_at");
+        fields.remove("deleted_at");
+        fields.remove("created_by");
+        fields.remove("updated_by");
         let snapshot: DeletedDocument = serde_json::from_value(payload).unwrap();
         assert_eq!(snapshot.tags[0].vault_id, document.vault_id);
         assert_eq!(snapshot.tags[0].id, tag.id);
+        assert_eq!(snapshot.tags[0].updated_at, tag.created_at);
+        assert_eq!(snapshot.tags[0].deleted_at, None);
+        assert_eq!(snapshot.tags[0].created_by, None);
+        assert_eq!(snapshot.tags[0].updated_by, None);
     }
 
     #[test]
