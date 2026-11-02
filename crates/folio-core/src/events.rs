@@ -106,6 +106,34 @@ pub struct EventSnapshot {
     pub tags: Vec<NamedRef>,
 }
 
+impl From<&DeletedDocument> for EventSnapshot {
+    fn from(snapshot: &DeletedDocument) -> Self {
+        let doc = &snapshot.document;
+        Self {
+            document_id: doc.id,
+            vault_id: doc.vault_id,
+            title: doc.title.clone(),
+            original_filename: doc.original_filename.clone(),
+            mime_type: doc.mime_type.clone(),
+            file_path: doc.file_path.clone(),
+            source: doc.source.clone(),
+            created_at: doc.created_at,
+            correspondent_id: doc.correspondent_id,
+            correspondent_name: None,
+            document_type_id: doc.document_type_id,
+            document_type_name: None,
+            tags: snapshot
+                .tags
+                .iter()
+                .map(|tag| NamedRef {
+                    id: tag.id,
+                    name: tag.name.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A [`DocumentEvent`] as persisted in the outbox
 #[derive(Debug, Clone)]
 pub struct OutboxEvent {
@@ -117,6 +145,24 @@ pub struct OutboxEvent {
     pub created_at: DateTime<Utc>,
     /// Delivery attempts so far, including the current one
     pub attempts: i32,
+}
+
+impl OutboxEvent {
+    /// The authoritative origin, when captured by this event or an older deletion snapshot.
+    pub fn origin_vault(&self) -> Option<VaultId> {
+        match &self.context {
+            Some(context) => {
+                (context.document_id == self.event.document_id()).then_some(context.vault_id)
+            }
+            None => match &self.event {
+                DocumentEvent::Deleted {
+                    document_id,
+                    snapshot: Some(snapshot),
+                } if snapshot.document.id == *document_id => Some(snapshot.document.vault_id),
+                _ => None,
+            },
+        }
+    }
 }
 
 /// What the outbox stores in the `payload` column

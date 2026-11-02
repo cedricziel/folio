@@ -19,7 +19,8 @@ use folio_core::models::{
     WorkflowTrigger,
 };
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, OutboxStore, TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, OutboxStore,
+    TagRepository, VaultRepository, WorkflowRepository,
 };
 use folio_core::services::{
     BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher, WorkflowEngine,
@@ -121,6 +122,8 @@ struct Harness {
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
     tags: Arc<dyn TagRepository>,
+    document_types: Arc<dyn DocumentTypeRepository>,
+    vaults: Arc<dyn VaultRepository>,
     correspondents: Arc<dyn CorrespondentRepository>,
     queue: JobQueue,
     outbox: Arc<dyn OutboxStore>,
@@ -160,7 +163,7 @@ impl Harness {
             workflows.clone(),
             documents.clone(),
             correspondents.clone(),
-            repos.document_types,
+            repos.document_types.clone(),
             Arc::new(StorageFileMetadata::new(Arc::new(
                 ObjectStoreDocumentStore::in_memory(),
             ))),
@@ -177,6 +180,8 @@ impl Harness {
             workflows,
             documents,
             tags,
+            document_types: repos.document_types,
+            vaults: repos.vaults,
             correspondents,
             queue,
             outbox: repos.outbox,
@@ -264,21 +269,22 @@ impl Harness {
         self.workflows.find_run(id).await.unwrap().unwrap()
     }
 
-    /// An event as the dispatcher would hand it over, with a fresh id
-    fn event(&self, event: DocumentEvent) -> OutboxEvent {
-        static NEXT_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1_000_000);
-        OutboxEvent {
-            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            event,
-            origin: EventOrigin::User,
-            context: None,
-            created_at: chrono::Utc::now(),
-            attempts: 1,
-        }
+    async fn event(&self, event: DocumentEvent) -> OutboxEvent {
+        let id = self
+            .outbox
+            .append_document(self.vault, &event, EventOrigin::User)
+            .await
+            .unwrap();
+        self.outbox
+            .replay(id - 1, chrono::Utc::now() - chrono::Duration::days(1), 1)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap()
     }
 
     async fn handle(&self, event: DocumentEvent) -> Vec<WorkflowRun> {
-        self.engine.handle(&self.event(event)).await.unwrap()
+        self.engine.handle(&self.event(event).await).await.unwrap()
     }
 
     fn dispatcher(&self, consumers: Vec<Arc<dyn EventConsumer>>) -> Arc<OutboxDispatcher> {
@@ -483,15 +489,18 @@ async fn concurrent_events_still_create_one_run() {
         .await;
     let doc = h.document("a.pdf", "application/pdf").await;
 
-    let handles: Vec<_> = (0..8)
-        .map(|_| {
-            let engine = h.engine.clone();
-            let event = h.event(DocumentEvent::Created {
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let engine = h.engine.clone();
+        let event = h
+            .event(DocumentEvent::Created {
                 document_id: doc.id,
-            });
-            tokio::spawn(async move { engine.handle(&event).await.unwrap().len() })
-        })
-        .collect();
+            })
+            .await;
+        handles.push(tokio::spawn(async move {
+            engine.handle(&event).await.unwrap().len()
+        }));
+    }
     let mut created = 0;
     for handle in handles {
         created += handle.await.unwrap();
@@ -975,9 +984,11 @@ async fn handling_an_event_twice_creates_one_run() {
         )
         .await;
     let doc = h.document("a.pdf", "application/pdf").await;
-    let event = h.event(DocumentEvent::Updated {
-        document_id: doc.id,
-    });
+    let event = h
+        .event(DocumentEvent::Updated {
+            document_id: doc.id,
+        })
+        .await;
 
     assert_eq!(h.engine.handle(&event).await.unwrap().len(), 1);
     assert!(h.engine.handle(&event).await.unwrap().is_empty());
@@ -1012,9 +1023,11 @@ async fn one_failing_workflow_does_not_skip_the_others() {
         .webhook_workflow("http://127.0.0.1:1/b".into(), None)
         .await;
     let doc = h.document("a.pdf", "application/pdf").await;
-    let event = h.event(DocumentEvent::Created {
-        document_id: doc.id,
-    });
+    let event = h
+        .event(DocumentEvent::Created {
+            document_id: doc.id,
+        })
+        .await;
 
     sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE TRIGGER refuse BEFORE INSERT ON workflow_runs
@@ -1143,4 +1156,519 @@ async fn webhook_actions_have_independent_ids_and_retries_deduplicate() {
             .collect::<Vec<_>>(),
         vec!["alpha", "beta", "beta"]
     );
+}
+
+#[tokio::test]
+async fn delayed_events_match_and_deliver_their_own_metadata_names_and_occurrence_time() {
+    use folio_core::models::{
+        CreateDocumentType, UpdateCorrespondent, UpdateDocumentType, UpdateTag,
+    };
+    let h = Harness::new().await;
+    let first_tag = h.tag("first tag").await;
+    let later_tag = h.tag("later tag").await;
+    let sender = h
+        .correspondents
+        .create(
+            h.vault,
+            CreateCorrespondent {
+                name: "first sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let kind = h
+        .document_types
+        .create(
+            h.vault,
+            CreateDocumentType {
+                name: "first type".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let first_workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions {
+                tag_id: Some(first_tag),
+                correspondent_id: Some(sender.id),
+                document_type_id: Some(kind.id),
+                ..Default::default()
+            },
+            unreachable_hook(),
+        )
+        .await;
+    let later_workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions {
+                tag_id: Some(later_tag),
+                ..Default::default()
+            },
+            unreachable_hook(),
+        )
+        .await;
+    let doc = h
+        .documents
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "first title".into(),
+                original_filename: Some("first.pdf".into()),
+                mime_type: Some("application/pdf".into()),
+                correspondent_id: Some(sender.id),
+                document_type_id: Some(kind.id),
+                tag_ids: vec![first_tag],
+                source: folio_core::models::DocumentSource::folder(
+                    "original source",
+                    folio_core::models::FolderOrigin {
+                        relative_path: "original/first.pdf".into(),
+                        original_filename: "first.pdf".into(),
+                    },
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut first = h
+        .event(DocumentEvent::Updated {
+            document_id: doc.id,
+        })
+        .await;
+    first.created_at = chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap();
+    h.correspondents
+        .update(
+            h.vault,
+            sender.id,
+            UpdateCorrespondent {
+                name: Some("later sender".into()),
+            },
+        )
+        .await
+        .unwrap();
+    h.document_types
+        .update(
+            h.vault,
+            kind.id,
+            UpdateDocumentType {
+                name: Some("later type".into()),
+            },
+        )
+        .await
+        .unwrap();
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("later title".into()),
+                tag_ids: Some(vec![later_tag]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let later = h
+        .event(DocumentEvent::Updated {
+            document_id: doc.id,
+        })
+        .await;
+    h.correspondents
+        .update(
+            h.vault,
+            sender.id,
+            UpdateCorrespondent {
+                name: Some("current sender".into()),
+            },
+        )
+        .await
+        .unwrap();
+    h.document_types
+        .update(
+            h.vault,
+            kind.id,
+            UpdateDocumentType {
+                name: Some("current type".into()),
+            },
+        )
+        .await
+        .unwrap();
+    h.tags
+        .update(
+            h.vault,
+            later_tag,
+            UpdateTag {
+                name: Some("current tag".into()),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("current title".into()),
+                tag_ids: Some(Vec::new()),
+                correspondent_id: Some(None),
+                document_type_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let first_runs = h.engine.handle(&first).await.unwrap();
+    let later_runs = h.engine.handle(&later).await.unwrap();
+
+    assert_eq!(first_runs.len(), 1);
+    assert_eq!(first_runs[0].workflow_id, first_workflow.id);
+    assert_eq!(later_runs.len(), 1);
+    assert_eq!(later_runs[0].workflow_id, later_workflow.id);
+    let payload: serde_json::Value = serde_json::from_str(&first_runs[0].payload).unwrap();
+    assert_eq!(payload["occurred_at"], "2020-09-13T12:26:40Z");
+    assert_eq!(payload["document"]["title"], "first title");
+    assert_eq!(payload["document"]["filename"], "first.pdf");
+    assert_eq!(payload["document"]["correspondent"]["name"], "first sender");
+    assert_eq!(payload["document"]["document_type"]["name"], "first type");
+    assert_eq!(payload["document"]["tags"][0]["name"], "first tag");
+    assert_eq!(
+        payload["document"]["source"]["source_name"],
+        "original source"
+    );
+    let payload: serde_json::Value = serde_json::from_str(&later_runs[0].payload).unwrap();
+    assert_eq!(payload["document"]["title"], "later title");
+    assert_eq!(payload["document"]["correspondent"]["name"], "later sender");
+    assert_eq!(payload["document"]["document_type"]["name"], "later type");
+    assert_eq!(payload["document"]["tags"][0]["name"], "later tag");
+    assert!(h.engine.handle(&first).await.unwrap().is_empty());
+    assert!(h.engine.handle(&later).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn moving_before_dispatch_never_routes_an_event_to_destination_workflows() {
+    let h = Harness::new().await;
+    let origin = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let destination = h.vaults.create("destination", None).await.unwrap().id;
+    let foreign = h
+        .workflows
+        .create(
+            destination,
+            WorkflowInput {
+                name: "destination hook".into(),
+                enabled: true,
+                trigger: WorkflowTrigger::DocumentUpdated,
+                conditions: Default::default(),
+                actions: unreachable_hook(),
+            },
+        )
+        .await
+        .unwrap();
+    let doc = h.document("before move.pdf", "application/pdf").await;
+    let event = h
+        .event(DocumentEvent::Updated {
+            document_id: doc.id,
+        })
+        .await;
+    h.documents
+        .move_to(doc.id, h.vault, destination, None)
+        .await
+        .unwrap();
+
+    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+
+    assert!(h
+        .workflows
+        .list_runs(h.vault, origin.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(h
+        .workflows
+        .list_runs(destination, foreign.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn moving_after_run_creation_terminally_fails_before_webhook_delivery() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    h.webhook_workflow(server.url("moved"), None).await;
+    let doc = h.document("moved.pdf", "application/pdf").await;
+    let run = h
+        .handle(DocumentEvent::Created {
+            document_id: doc.id,
+        })
+        .await
+        .pop()
+        .unwrap();
+    let destination = h.vaults.create("destination", None).await.unwrap().id;
+    h.documents
+        .move_to(doc.id, h.vault, destination, None)
+        .await
+        .unwrap();
+
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    let failed = h.run(run.id).await;
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(failed.completed_actions, 0);
+    assert!(failed.last_error.unwrap().contains("workflow's vault"));
+    assert_eq!(server.hits("moved"), 0);
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+}
+
+#[tokio::test]
+async fn moving_between_actions_stops_remaining_webhooks_and_local_changes() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let doc = h.document("move on reply.pdf", "application/pdf").await;
+    let destination = h.vaults.create("destination", None).await.unwrap().id;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let move_url = format!("http://{}/move", listener.local_addr().unwrap());
+    let documents = h.documents.clone();
+    let from = h.vault;
+    let app = Router::new().route(
+        "/move",
+        post(move || {
+            let documents = documents.clone();
+            async move {
+                documents
+                    .move_to(doc.id, from, destination, None)
+                    .await
+                    .unwrap();
+                StatusCode::OK
+            }
+        }),
+    );
+    let mover = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let tag = h.tag("must not add").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUploaded,
+            Default::default(),
+            vec![
+                webhook(move_url, None),
+                webhook(server.url("remaining"), None),
+                WorkflowAction::AddTags { tag_ids: vec![tag] },
+            ],
+        )
+        .await;
+    let run = h.run_for(&workflow, doc.id).await;
+
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    let failed = h.run(run.id).await;
+    assert_eq!(failed.completed_actions, 1);
+    assert_eq!(server.hits("remaining"), 0);
+    assert!(h
+        .documents
+        .get_tags(destination, doc.id)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(failed.last_error.unwrap().contains("workflow's vault"));
+    mover.abort();
+}
+
+#[tokio::test]
+async fn moving_before_retry_preserves_completed_actions_and_stops_the_failed_action() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    server.script("retry", &[503]);
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUploaded,
+            Default::default(),
+            vec![
+                webhook(server.url("done"), None),
+                webhook(server.url("retry"), None),
+            ],
+        )
+        .await;
+    let doc = h.document("retry.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, doc.id).await;
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Retry);
+    let destination = h.vaults.create("destination", None).await.unwrap().id;
+    h.documents
+        .move_to(doc.id, h.vault, destination, None)
+        .await
+        .unwrap();
+
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    assert_eq!(h.run(run.id).await.completed_actions, 1);
+    assert_eq!(server.hits("done"), 1);
+    assert_eq!(server.hits("retry"), 1);
+}
+
+#[tokio::test]
+async fn legacy_nondeletion_event_fails_with_context_error_and_exhausts_delivery_attempts() {
+    let h = Harness::new().await;
+    h.workflow(
+        WorkflowTrigger::DocumentUpdated,
+        Default::default(),
+        unreachable_hook(),
+    )
+    .await;
+    let doc = h.document("legacy.pdf", "application/pdf").await;
+    let creation = h.pending_events().await.pop().unwrap();
+    h.outbox.mark_dispatched(creation.id).await.unwrap();
+    let id = h
+        .outbox
+        .append(
+            &DocumentEvent::Updated {
+                document_id: doc.id,
+            },
+            EventOrigin::User,
+        )
+        .await
+        .unwrap();
+    let dispatch = OutboxDispatcher::new(
+        h.outbox.clone(),
+        vec![h.engine.clone()],
+        DispatcherConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(dispatch.dispatch_once().await.unwrap(), 1);
+
+    let (attempts, dispatched, error): (i64, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT attempts, dispatched_at, last_error FROM outbox_events WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&h.pool)
+    .await
+    .unwrap();
+    assert_eq!(attempts, 1);
+    assert!(dispatched.is_none());
+    let error = error.unwrap();
+    assert!(error.contains(&id.to_string()));
+    assert!(error.contains("historical document/vault context"));
+    assert_eq!(dispatch.dispatch_once().await.unwrap(), 0);
+    assert_eq!(h.queue.pending_count().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn legacy_deletion_snapshot_still_delivers_its_recorded_document_and_tags() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let tag = h.tag("deleted tag").await;
+    h.workflow(
+        WorkflowTrigger::DocumentDeleted,
+        WorkflowConditions {
+            tag_id: Some(tag),
+            ..Default::default()
+        },
+        vec![webhook(server.url("legacy-deleted"), None)],
+    )
+    .await;
+    let doc = h.document("legacy gone.pdf", "application/pdf").await;
+    h.documents.add_tag(h.vault, doc.id, tag).await.unwrap();
+    h.documents.delete(h.vault, doc.id).await.unwrap();
+    h.documents.request_purge(h.vault, doc.id).await.unwrap();
+    h.documents.finalize_purge(h.vault, doc.id).await.unwrap();
+    let mut event = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| matches!(event.event, DocumentEvent::Deleted { .. }))
+        .unwrap();
+    event.context = None;
+
+    let runs = h.engine.handle(&event).await.unwrap();
+
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        h.runner.execute(runs[0].id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+    let payload: serde_json::Value = serde_json::from_str(&runs[0].payload).unwrap();
+    assert_eq!(payload["document"]["filename"], "legacy gone.pdf");
+    assert_eq!(payload["document"]["tags"][0]["name"], "deleted tag");
+    assert_eq!(server.hits("legacy-deleted"), 1);
+}
+
+#[tokio::test]
+async fn missing_document_terminally_fails_before_nondeletion_webhook_delivery() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let workflow = h.webhook_workflow(server.url("missing"), None).await;
+    let doc = h.document("missing.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, doc.id).await;
+    h.documents.delete(h.vault, doc.id).await.unwrap();
+    h.documents.request_purge(h.vault, doc.id).await.unwrap();
+    h.documents.finalize_purge(h.vault, doc.id).await.unwrap();
+
+    assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    assert_eq!(server.hits("missing"), 0);
+    assert_eq!(h.run(run.id).await.completed_actions, 0);
+}
+
+#[tokio::test]
+async fn captured_deletion_context_takes_precedence_over_the_legacy_fallback() {
+    let h = Harness::new().await;
+    h.workflow(
+        WorkflowTrigger::DocumentDeleted,
+        Default::default(),
+        unreachable_hook(),
+    )
+    .await;
+    let doc = h.document("authoritative.pdf", "application/pdf").await;
+    h.documents.delete(h.vault, doc.id).await.unwrap();
+    h.documents.request_purge(h.vault, doc.id).await.unwrap();
+    h.documents.finalize_purge(h.vault, doc.id).await.unwrap();
+    let mut event = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| matches!(event.event, DocumentEvent::Deleted { .. }))
+        .unwrap();
+    let foreign = h.vaults.create("legacy fallback", None).await.unwrap().id;
+    let DocumentEvent::Deleted {
+        snapshot: Some(ref mut fallback),
+        ..
+    } = event.event
+    else {
+        panic!("legacy fallback exists")
+    };
+    let fallback = Arc::make_mut(fallback);
+    fallback.document.vault_id = foreign;
+    fallback.document.title = "untrusted legacy title".into();
+
+    let runs = h.engine.handle(&event).await.unwrap();
+
+    assert_eq!(runs.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(&runs[0].payload).unwrap();
+    assert_eq!(payload["document"]["title"], "authoritative.pdf");
+}
+
+#[tokio::test]
+async fn webhook_test_run_without_a_document_still_sends() {
+    let h = Harness::new().await;
+    let server = TestServer::start().await;
+    let workflow = h.webhook_workflow(server.url("sample"), None).await;
+    let run = WorkflowRun::new(workflow.id, workflow.trigger, None, "{}".into())
+        .with_actions(workflow.actions.clone());
+    assert!(h.workflows.create_run(&run).await.unwrap());
+
+    assert_eq!(
+        h.runner.execute(run.id).await.unwrap(),
+        RunOutcome::Succeeded
+    );
+
+    assert_eq!(server.hits("sample"), 1);
 }

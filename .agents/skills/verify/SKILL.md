@@ -197,6 +197,14 @@ Outbox context regressions in the repository contract cover immutable metadata
 and taxonomy names, transaction rollback, scoped worker events, delete snapshots,
 and payload size independent of OCR content. Run `cargo test -p folio-core events::tests`
 and `cargo test -p folio-infra --test vault_outbox_upgrade` for wire compatibility.
+Run `cargo test -p folio-infra --test workflows` and
+`cargo test -p folio-api --test vaults --test live` for immutable event delivery.
+These regressions delay metadata, rename taxonomy, move documents before dispatch
+and between actions or retries, and verify terminal failures without webhook delivery.
+Legacy tests cover missing nondelete context through the attempt limit, deletion
+compatibility, and no-document test runs. SSE tests cover origin filtering, live
+membership revocation, and exclusion of internal context from the wire. They use
+temporary SQLite state and loopback HTTP servers.
 They cover competing source claims, owner success/failure/cancellation, missing
 originals, and retained trash. Folder tests use temporary inputs; IMAP tests use
 loopback fixtures or disposable GreenMail containers. Never point these suites
@@ -258,6 +266,13 @@ store failures, bearer authentication, read scope, and vault/account isolation.
 The server smoke test in `.claude/skills/verify/scripts/smoke.sh` also retrieves
 the processed fixture's thumbnail and checks its JPEG bytes and private no-store
 headers. Use that skill's disposable instance wrapper, never a user archive.
+
+`LiveFolioServiceTests` covers bearer and vault headers, token refresh, unavailable
+thumbnails, authentication errors, and JPEG byte/pixel limits. Native
+`FolioProviderTests/ThumbnailTests` covers independent per-item results, folder
+and invalid-identifier handling, empty batches, and cancellation that stops the
+network transfer and completes the batch once. Run the isolated package and
+macOS provider commands above; these tests do not register a provider domain.
 
 ## Verify document repository changes
 

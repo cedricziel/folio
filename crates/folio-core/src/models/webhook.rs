@@ -111,7 +111,52 @@ impl WebhookPayload {
     }
 }
 
+impl WebhookUrls {
+    fn for_document(base_url: &str, id: Id) -> Self {
+        let base = base_url.trim_end_matches('/');
+        Self {
+            api: format!("{base}/api/documents/{id}"),
+            web: format!("{base}/documents/{id}"),
+            download: format!("{base}/api/documents/{id}/download"),
+        }
+    }
+}
+
 impl WebhookDocument {
+    /// Build a delivery from captured metadata without consulting mutable document rows.
+    pub fn from_snapshot(
+        snapshot: &crate::EventSnapshot,
+        size: Option<u64>,
+        base_url: &str,
+    ) -> Self {
+        Self {
+            id: snapshot.document_id,
+            title: snapshot.title.clone(),
+            filename: snapshot.original_filename.clone(),
+            mime_type: snapshot.mime_type.clone(),
+            size,
+            correspondent: snapshot
+                .correspondent_id
+                .zip(snapshot.correspondent_name.as_ref())
+                .map(|(id, name)| NamedRef {
+                    id,
+                    name: name.clone(),
+                }),
+            document_type: snapshot
+                .document_type_id
+                .zip(snapshot.document_type_name.as_ref())
+                .map(|(id, name)| NamedRef {
+                    id,
+                    name: name.clone(),
+                }),
+            tags: snapshot.tags.clone(),
+            asn: None,
+            source: snapshot.source.clone(),
+            created_at: snapshot.created_at,
+            urls: WebhookUrls::for_document(base_url, snapshot.document_id),
+        }
+    }
+
     pub fn from_parts(
         document: &Document,
         tags: &[Tag],
@@ -120,7 +165,6 @@ impl WebhookDocument {
         size: Option<u64>,
         base_url: &str,
     ) -> Self {
-        let base = base_url.trim_end_matches('/');
         let id = document.id;
         Self {
             id,
@@ -146,11 +190,7 @@ impl WebhookDocument {
             asn: None,
             source: document.source.clone(),
             created_at: document.created_at,
-            urls: WebhookUrls {
-                api: format!("{base}/api/documents/{id}"),
-                web: format!("{base}/documents/{id}"),
-                download: format!("{base}/api/documents/{id}/download"),
-            },
+            urls: WebhookUrls::for_document(base_url, id),
         }
     }
 }
