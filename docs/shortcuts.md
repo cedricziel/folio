@@ -12,7 +12,7 @@ On Windows and Linux, read Cmd as Ctrl.
 | Go to inbox                     | `g` then `i`        | `Cmd 1` (View > Inbox)      |
 | Go to all documents             | `g` then `a`        | `Cmd 2` (View > All documents) |
 | Go to workflows                 | `g` then `w`        | -                           |
-| Go to settings                  | `g` then `s`        | -                           |
+| Go to settings                  | `g` then `s`        | `Cmd ,` (Mac)               |
 | Next / previous document        | `j` / `k`           | Down / Up arrow             |
 | Open the selected document      | `Enter`             | Return                      |
 | Edit details                    | `e`                 | -                           |

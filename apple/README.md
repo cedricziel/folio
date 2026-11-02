@@ -38,7 +38,8 @@ Both iOS and macOS uploads in [the November 2, 2026 TestFlight run](https://gith
 
 ## App lock
 
-Open the Privacy menu in the workspace toolbar and choose **App lock settings**.
+On Mac, choose **Folio > Settings** or press Command-comma. On iPhone and iPad,
+open the Privacy menu in the workspace toolbar and choose **App lock settings**.
 App lock is off by default and applies to this installation. Enabling or disabling
 it requires system authentication. Face ID or Touch ID is used when available,
 with the device passcode or Mac password as fallback.
