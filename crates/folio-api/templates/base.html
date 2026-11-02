@@ -880,6 +880,7 @@ Stimulus.register(
                     <span><span class="queue-item-status f-meta">Waiting</span> <button type="button" class="f-btn f-btn-quiet" data-action="click->dropzone#retry" hidden>Retry</button></span>
                     <div class="queue-item-progress"><div class="queue-item-progress-bar" style="width: 0%"></div></div>
                 `;
+      item.querySelector("button").setAttribute("aria-label", `Retry ${file.name}`);
       this.queueListTarget.appendChild(item);
     }
 

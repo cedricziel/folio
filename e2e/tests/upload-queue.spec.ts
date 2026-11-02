@@ -47,7 +47,7 @@ test("dismissing finished uploads keeps active, waiting and failed uploads", asy
     finishActive();
     await expect(row("active.pdf")).toContainText("Uploaded");
     await expect(row("pending.pdf")).toContainText("Uploaded");
-    await expect(row("failed.pdf").getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+    await expect(row("failed.pdf").getByRole("button", { name: "Retry failed.pdf", exact: true })).toBeVisible();
   } finally {
     finishActive();
   }
@@ -88,9 +88,9 @@ test("cancelling pending uploads preserves active and failed uploads and shows c
 test("retrying a failed upload retains the file and destination while another upload is active", async ({ page }) => {
   const { queue, row, requests, finishActive } = await mixedQueue(page);
   try {
-    await row("failed.pdf").getByRole("button", { name: "Retry", exact: true }).click();
+    await row("failed.pdf").getByRole("button", { name: "Retry failed.pdf", exact: true }).click();
     await expect(row("failed.pdf")).toContainText("Waiting");
-    await expect(row("failed.pdf").getByRole("button", { name: "Retry", exact: true })).toBeHidden();
+    await expect(row("failed.pdf").getByRole("button", { name: "Retry failed.pdf", exact: true })).toBeHidden();
     await expect(row("active.pdf")).toContainText("Uploading");
     finishActive();
     await expect(row("failed.pdf")).toContainText("Uploaded");
