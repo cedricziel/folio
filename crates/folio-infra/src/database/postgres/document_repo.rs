@@ -20,7 +20,11 @@ use folio_core::ports::{
 use folio_core::{DeletedDocument, DocumentEvent, EventOrigin};
 
 use super::map_write_error;
-use super::outbox::{capture_document, insert_event};
+use super::outbox::{
+    capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
+};
+use folio_core::document_transitions::metadata_envelopes;
+use folio_core::EventSnapshot;
 
 fn repo_err(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
@@ -273,6 +277,33 @@ impl PostgresDocumentRepository {
         insert_event(tx, &event, self.origin, Some(&context))
             .await
             .map(|_| ())
+    }
+
+    async fn emit_metadata_in(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        before: &EventSnapshot,
+    ) -> Result<()> {
+        let after = capture_document(tx, before.document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", before.document_id))?;
+        for envelope in metadata_envelopes(before, &after)? {
+            if envelope.event_type() == "document.updated" {
+                insert_event_with_envelope(
+                    tx,
+                    &DocumentEvent::Updated {
+                        document_id: after.document_id,
+                    },
+                    self.origin,
+                    Some(&after),
+                    &envelope,
+                )
+                .await?;
+            } else {
+                insert_domain_event_with_origin(tx, &envelope, self.origin).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn commit(&self, tx: Transaction<'_, Postgres>) -> Result<()> {
@@ -599,6 +630,9 @@ impl DocumentRepository for PostgresDocumentRepository {
             .transpose()?
             .ok_or_else(|| not_found("Document", id))?;
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let title = params.title.unwrap_or_else(|| existing.title.clone());
         let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
@@ -642,8 +676,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        self.emit_in(&mut tx, DocumentEvent::Updated { document_id: id })
-            .await?;
+        self.emit_metadata_in(&mut tx, &before).await?;
         self.commit(tx).await?;
 
         Ok(Document {
@@ -1061,12 +1094,14 @@ impl DocumentRepository for PostgresDocumentRepository {
     async fn add_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         require_document(&mut tx, vault, document_id).await?;
+        let before = capture_document(&mut tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
         require_entry(&mut tx, "tags", "Tag", vault, tag_id).await?;
         let result = sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(document_id).bind(tag_id).execute(&mut *tx).await.map_err(repo_err)?;
         if result.rows_affected() > 0 {
-            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-                .await?;
+            self.emit_metadata_in(&mut tx, &before).await?;
         }
         self.commit(tx).await
     }
@@ -1074,6 +1109,9 @@ impl DocumentRepository for PostgresDocumentRepository {
     async fn remove_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         require_document(&mut tx, vault, document_id).await?;
+        let before = capture_document(&mut tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
         let result =
             sqlx::query("DELETE FROM document_tags WHERE document_id = $1 AND tag_id = $2")
                 .bind(document_id)
@@ -1082,8 +1120,7 @@ impl DocumentRepository for PostgresDocumentRepository {
                 .await
                 .map_err(repo_err)?;
         if result.rows_affected() > 0 {
-            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-                .await?;
+            self.emit_metadata_in(&mut tx, &before).await?;
         }
         self.commit(tx).await
     }

@@ -2671,7 +2671,7 @@ async fn outbox_contract(db: &Database) {
     let events = flush_outbox(&r).await;
     let seen: Vec<_> = events
         .iter()
-        .map(|e| (e.event.as_ref().unwrap().event_type(), e.origin))
+        .filter_map(|e| e.event.as_ref().map(|event| (event.event_type(), e.origin)))
         .collect();
     assert_eq!(
         seen,
@@ -2688,7 +2688,7 @@ async fn outbox_contract(db: &Database) {
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
     assert!(events
         .iter()
-        .all(|e| e.event.as_ref().unwrap().document_id() == doc.id));
+        .all(|e| e.envelope.as_ref().and_then(|event| event.document_id()) == Some(doc.id)));
     assert!(matches!(
         events.last().unwrap().event,
         Some(DocumentEvent::Trashed { .. })
@@ -2728,9 +2728,13 @@ async fn outbox_contract(db: &Database) {
         .await
         .unwrap();
     assert_eq!(
-        flush_outbox(&r).await.len(),
+        flush_outbox(&r)
+            .await
+            .iter()
+            .filter(|event| event.event.is_some())
+            .count(),
         1,
-        "one metadata save emits one event"
+        "one metadata save emits one compatibility projection"
     );
     r.documents
         .set_tags(vault, atomic.id, &[tag.id])
