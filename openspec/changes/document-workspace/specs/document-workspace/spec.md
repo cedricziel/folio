@@ -30,7 +30,7 @@ The system SHALL support vault-scoped paged document queries with chronological 
 
 ### Requirement: Literal search with filters
 
-Paged browse requests SHALL accept `q` as a literal text query. Every whitespace-separated term SHALL match the title or content. Text and all selected classification/date filters SHALL apply before pagination, without requiring an AI provider. Existing hybrid search SHALL remain unchanged.
+Paged browse requests SHALL accept `q` as a literal text query. Queries with more than 32 whitespace-separated terms SHALL return 400 before querying the document repository. Every term SHALL match the title or content. Text and all selected classification/date filters SHALL apply before pagination, without requiring an AI provider. Existing hybrid search SHALL remain unchanged.
 
 #### Scenario: Match outside the first unfiltered page
 - **WHEN** a document outside the first unfiltered page matches the text and every selected tag

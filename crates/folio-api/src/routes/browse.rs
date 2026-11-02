@@ -20,7 +20,7 @@ use crate::{
 #[into_params(parameter_in = Query)]
 #[allow(dead_code)]
 pub struct BrowseQuery {
-    /// Literal words to match in title or content. Every word must match.
+    /// Literal words to match in title or content. Every word must match; at most 32 words.
     q: Option<String>,
     /// Maximum documents per page, from 1 to 100. Defaults to 50.
     limit: Option<u32>,
@@ -45,7 +45,11 @@ fn query(raw: Option<&str>) -> ApiResult<DocumentPageQuery> {
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
             "q" => {
-                let text = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                let terms = value.split_whitespace().take(33).collect::<Vec<_>>();
+                if terms.len() > 32 {
+                    return Err(ApiError::bad_request("Search supports at most 32 words"));
+                }
+                let text = terms.join(" ");
                 query.filter.search_query = (!text.is_empty()).then_some(text);
             }
             "limit" => {

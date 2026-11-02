@@ -689,3 +689,22 @@ async fn browse_search_combines_text_with_all_tags_before_paging() {
     let response = h.app.clone().oneshot(common::get(&changed)).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn browse_enforces_the_search_term_limit() {
+    let h = common::harness().await;
+    for (words, expected) in [
+        (32, StatusCode::OK),
+        (33, StatusCode::BAD_REQUEST),
+        (1000, StatusCode::BAD_REQUEST),
+    ] {
+        let query = vec!["word"; words].join("+");
+        let response = h
+            .app
+            .clone()
+            .oneshot(common::get(&format!("/api/documents/browse?q={query}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}

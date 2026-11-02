@@ -709,7 +709,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Literal words to match in title or content. Every word must match.",
+            "description": "Literal words to match in title or content. Every word must match; at most 32 words.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1826,7 +1826,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Literal words to match in title or content. Every word must match.",
+            "description": "Literal words to match in title or content. Every word must match; at most 32 words.",
             "required": false,
             "schema": {
               "type": "string"
