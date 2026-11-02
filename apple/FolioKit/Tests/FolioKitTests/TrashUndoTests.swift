@@ -15,16 +15,19 @@ import Testing
 
         #expect(await history.moveToTrash(document, undoManager: manager))
         #expect(list.rows.isEmpty)
+        #expect(list.rowChangeRevision == 1)
         #expect(manager.undoActionName == "Move to Trash")
 
         manager.undo()
         await history.waitForPendingOperations()
         #expect(list.rows.map(\.id) == [document.id])
+        #expect(list.rowChangeRevision == 2)
         #expect(manager.canRedo)
 
         manager.redo()
         await history.waitForPendingOperations()
         #expect(list.rows.isEmpty)
+        #expect(list.rowChangeRevision == 3)
         #expect(manager.canUndo)
     }
 
@@ -41,6 +44,7 @@ import Testing
         #expect(await history.moveToTrash(document, undoManager: manager) == false)
         #expect(list.rows.map(\.id) == [document.id])
         #expect(manager.canUndo == false)
+        #expect(list.rowChangeRevision == 0)
         #expect(list.actionError != nil)
     }
 
@@ -59,6 +63,7 @@ import Testing
         await history.waitForPendingOperations()
 
         #expect(list.rows.isEmpty)
+        #expect(list.rowChangeRevision == 1)
         #expect(list.actionError != nil)
         #expect(manager.canRedo == false)
         #expect(manager.canUndo == false)
@@ -96,13 +101,22 @@ import Testing
         manager.groupsByEvent = false
         #expect(await history.moveToTrash(document, undoManager: manager))
         list.scope = .inbox
+        let incoming = Document(title: "New letter")
+        await service.setDocuments([incoming])
 
         manager.undo()
         await history.waitForPendingOperations()
 
-        #expect(list.rows.isEmpty)
-        #expect(await service.documentList.map(\.id) == [document.id])
+        #expect(list.rows.map(\.id) == [incoming.id])
+        #expect(list.rowChangeRevision == 1)
+        #expect(await service.documentList.map(\.id) == [incoming.id, document.id])
         #expect(manager.canRedo)
+
+        manager.redo()
+        await history.waitForPendingOperations()
+        #expect(list.rows.map(\.id) == [incoming.id])
+        #expect(list.rowChangeRevision == 1)
+        #expect(await service.documentList.map(\.id) == [incoming.id])
     }
 
     @Test func leavingTheWorkspacePreservesUnrelatedUndoActions() async {

@@ -103,6 +103,18 @@ test uses temporary preferences and reports only fresh trace and resource IDs.
 Never use the real app profile or a user account for this test. Verify those
 IDs in the chosen telemetry destination when validating a deployment.
 
+## Interface motion
+
+Run `cd e2e && npx playwright test motion.spec.ts keyboard.spec.ts` against the
+disposable instance. The motion suite checks dialog focus restoration, toast
+dismissal, drawer backdrops, and one-time streamed row fades with reduced motion
+on and off. Replacements and duplicate row insertions must not replay the fade.
+
+The Apple package tests cover upload, trash, undo, and redo animation signals
+separately from ordinary reloads and failed or invisible changes. In an isolated simulator, check upload notice appearance
+and dismissal, new rows, and confirmed deletion with Reduce Motion on and off.
+Keep native navigation and immediate privacy locking unchanged.
+
 ## Apple navigation
 
 Run `xcrun swift test --package-path apple/FolioKit` for native changes. For list and detail loading, the focused suites are `DocumentListViewModelTests`, `DocumentListFailureTests`, and `DocumentDetailViewModelTests`. The detail suite covers cancellation followed by a successful retry. Run `xcrun swift-format lint` on changed Swift files.

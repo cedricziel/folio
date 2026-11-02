@@ -41,6 +41,8 @@ public final class DocumentListViewModel {
 
     public private(set) var phase = Phase.idle
     public private(set) var rows: [DocumentRow] = []
+    /// Changes only for visible insertions after uploads or restores, and confirmed deletions.
+    public private(set) var rowChangeRevision = 0
     public private(set) var correspondents: [Correspondent.ID: String] = [:]
     public private(set) var documentTypes: [DocumentType.ID: String] = [:]
     public var searchText = ""
@@ -96,11 +98,16 @@ public final class DocumentListViewModel {
         document.documentTypeID.flatMap { documentTypes[$0] }
     }
 
-    public func load() async {
+    /// Reloads the current query; upload completion marks newly inserted rows for presentation.
+    public func load(afterUpload: Bool = false) async {
+        await reload(afterUpload: afterUpload)
+    }
+
+    private func reload(afterUpload: Bool = false, restoredDocumentID: Document.ID? = nil) async {
         let request = query
         let ticket = begin(request)
         async let lookups: Void = loadLookups()
-        await fetch(request, ticket: ticket)
+        await fetch(request, ticket: ticket, afterUpload: afterUpload, restoredDocumentID: restoredDocumentID)
         await lookups
         if isCurrent(ticket) { rebuildRows() }
     }
@@ -166,6 +173,7 @@ public final class DocumentListViewModel {
         actionError = nil
         do {
             try await service.deleteDocument(id: document.id)
+            let wasVisible = rows.contains { $0.id == document.id }
             documents.removeAll { $0.id == document.id }
             if resolvedDocument?.id == document.id {
                 resolvedDocument = nil
@@ -175,6 +183,7 @@ public final class DocumentListViewModel {
             }
             lookupError = (document.id, "This document is no longer available.")
             rebuildRows()
+            if wasVisible { rowChangeRevision += 1 }
             return true
         } catch {
             actionError = error.localizedDescription
@@ -190,7 +199,7 @@ public final class DocumentListViewModel {
             if lookupError?.id == document.id {
                 lookupError = nil
             }
-            await load()
+            await reload(restoredDocumentID: document.id)
             return true
         } catch {
             actionError = error.localizedDescription
@@ -217,15 +226,22 @@ public final class DocumentListViewModel {
         !Task.isCancelled && ticket == latestFetch
     }
 
-    private func fetch(_ request: DocumentBrowseQuery, ticket: Int) async {
+    private func fetch(
+        _ request: DocumentBrowseQuery, ticket: Int, afterUpload: Bool = false,
+        restoredDocumentID: Document.ID? = nil
+    ) async {
         do {
             let page = try await readPage(request, cursor: nil, ticket: ticket, knownIDs: [])
             guard isCurrent(ticket) else { return }
+            let previousIDs = Set(rows.map(\.id))
             documents = page.documents
             nextCursor = page.nextCursor
             loadedVaultID = page.vaultID
             phase = .loaded
             rebuildRows()
+            if rows.contains(where: { !previousIDs.contains($0.id) && (afterUpload || $0.id == restoredDocumentID) }) {
+                rowChangeRevision += 1
+            }
         } catch {
             guard isCurrent(ticket) else { return }
             phase = .failed(error.localizedDescription)

@@ -42,7 +42,7 @@ private struct ScanReviewFixture: View {
                         ],
                         service: service
                     ),
-                    onFinished: { presented = false }
+                    onFinished: { _ in presented = false }
                 )
             }
     }

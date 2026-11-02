@@ -6,9 +6,9 @@ import SwiftUI
 struct ScanReviewView: View {
     @State var model: ScanReviewViewModel
     @State private var confirmDiscard = false
-    let onFinished: () -> Void
+    let onFinished: (Bool) -> Void
 
-    init(model: ScanReviewViewModel, onFinished: @escaping () -> Void) {
+    init(model: ScanReviewViewModel, onFinished: @escaping (Bool) -> Void) {
         _model = State(initialValue: model)
         self.onFinished = onFinished
     }
@@ -75,7 +75,7 @@ struct ScanReviewView: View {
                     Task {
                         await model.fileIt()
                         if model.state == .filed {
-                            onFinished()
+                            onFinished(true)
                         }
                     }
                 } label: {
@@ -89,7 +89,7 @@ struct ScanReviewView: View {
         }
         .interactiveDismissDisabled()
         .alert("Discard this scan?", isPresented: $confirmDiscard) {
-            Button("Discard Scan", role: .destructive, action: onFinished)
+            Button("Discard Scan", role: .destructive) { onFinished(false) }
             Button("Keep Scan", role: .cancel) {}
         } message: {
             Text("These pages haven't been filed. Discarding the scan permanently removes them.")

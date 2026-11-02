@@ -131,13 +131,45 @@ struct DocumentStatusTests {
         #expect(await service.queries == ["strom"])
     }
 
+    @Test func uploadReloadOnlyAnimatesWhenNewRowsArrive() async {
+        let kept = document("Keep")
+        let added = document("Uploaded")
+        let service = MockFolioService(documents: [kept])
+        let model = makeModel(service)
+        await model.load()
+        let revision = model.rowChangeRevision
+
+        await service.setDocuments([added, kept])
+        await model.load(afterUpload: true)
+
+        #expect(model.rows.map(\.id) == [added.id, kept.id])
+        #expect(model.rowChangeRevision == revision + 1)
+        await model.load(afterUpload: true)
+        #expect(model.rowChangeRevision == revision + 1)
+    }
+
+    @Test func ordinaryReloadDoesNotAnimateNewRows() async {
+        let service = MockFolioService(documents: [document("Keep")])
+        let model = makeModel(service)
+        await model.load()
+        let revision = model.rowChangeRevision
+
+        await service.setDocuments([document("New")])
+        await model.load()
+        await model.search("new")
+
+        #expect(model.rowChangeRevision == revision)
+    }
+
     @Test func deleteRemovesTheRowAfterTheServerConfirms() async {
         let kept = document("Keep")
         let gone = document("Gone")
         let service = MockFolioService(documents: [kept, gone])
         let model = makeModel(service)
         await model.load()
+        let revision = model.rowChangeRevision
         await model.delete(gone)
+        #expect(model.rowChangeRevision == revision + 1)
         #expect(model.rows.map(\.title) == ["Keep"])
         #expect(await service.deleted == [gone.id])
     }
@@ -150,7 +182,9 @@ struct DocumentStatusTests {
         let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
         await model.load()
         await service.setFailure(.unreachable)
+        let revision = model.rowChangeRevision
         await model.delete(doc)
+        #expect(model.rowChangeRevision == revision)
         #expect(model.phase == .loaded)
         #expect(model.rows.count == 1)
         #expect(model.actionError == "Couldn't reach the server.")
