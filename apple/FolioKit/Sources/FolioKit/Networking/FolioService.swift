@@ -5,6 +5,8 @@ public protocol FolioService: Sendable {
     func vaults() async throws -> VaultCatalog
     /// Returns a service whose requests retain this vault even if the visible library changes.
     func scoped(to vaultID: UUID) -> any FolioService
+    func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage
+    func document(id: Document.ID) async throws -> Document
     func ping() async throws
     func documents(matching query: String) async throws -> [Document]
     /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.

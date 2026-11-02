@@ -23,6 +23,9 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
 `WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
+`PagingTests` covers continuation deduplication, selection retention, Inbox lookahead,
+cancellation, stale queries, retry, vault consistency, and direct document lookup.
+`LiveFolioServiceTests` verifies scoped browse queries and direct document requests.
 `DocumentDetailViewModelTests` covers opening the next document from a cancelled
 navigation task, retaining a downloaded preview on reappearance, and retrying a
 failed download without restarting the app. For device confirmation, open one

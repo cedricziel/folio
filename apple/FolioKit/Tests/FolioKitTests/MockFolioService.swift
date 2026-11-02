@@ -113,6 +113,48 @@ actor MockFolioService: FolioService {
         }
     }
 
+    private let pageVaultID = UUID()
+    private var pages: [String: DocumentPage] = [:]
+    private(set) var pageRequests: [String] = []
+    private var suspendedCursor: String?
+    private var pageGate: CheckedContinuation<DocumentPage, Never>?
+    private var pageStarted: CheckedContinuation<Void, Never>?
+
+    func setPages(_ pages: [String: DocumentPage]) { self.pages = pages }
+    func suspendPage(_ cursor: String) { suspendedCursor = cursor }
+    func waitForPage() async {
+        guard pageGate == nil else { return }
+        await withCheckedContinuation { pageStarted = $0 }
+    }
+    func releasePage(_ page: DocumentPage) {
+        suspendedCursor = nil
+        pageGate?.resume(returning: page)
+        pageGate = nil
+    }
+
+    func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage {
+        let key = query.text + "|" + (cursor ?? "")
+        pageRequests.append(key)
+        if let cursor, cursor == suspendedCursor {
+            return await withCheckedContinuation {
+                pageGate = $0
+                pageStarted?.resume()
+                pageStarted = nil
+            }
+        }
+        if let failure { throw failure }
+        if let page = pages[key] { return page }
+        return try await DocumentPage(vaultID: pageVaultID, documents: documents(matching: query.text))
+    }
+
+    func document(id: Document.ID) async throws -> Document {
+        if let failure { throw failure }
+        guard let document = documentList.first(where: { $0.id == id }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        return document
+    }
+
     func documents(matching query: String) async throws -> [Document] {
         queries.append(query)
         if let failure {
