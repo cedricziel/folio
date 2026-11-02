@@ -17,7 +17,7 @@ use folio_core::models::{
     DocumentSource, EmailOrigin, IngestionSourceInput, LedgerEntry, SourceConfig, SourceKind,
     SourceStatus,
 };
-use folio_core::ports::{EmbeddedChunk, SearchService};
+use folio_core::ports::{EmbeddedChunk, ProcessingQueue, SearchService};
 use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
@@ -799,6 +799,39 @@ async fn jobs_contract(r: &Repositories) {
     assert_eq!(jobs.cleanup(-1).await.unwrap(), 2);
 }
 
+async fn processing_recovery_contract(r: &Repositories) {
+    let id = Id::new_v4();
+    let failed = r
+        .jobs
+        .enqueue(JobType::ProcessDocument { document_id: id })
+        .await
+        .unwrap();
+    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, failed);
+    r.jobs
+        .fail(failed, "unreadable upload", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Failed
+    );
+    let retry = r
+        .jobs
+        .enqueue(JobType::ProcessDocument { document_id: id })
+        .await
+        .unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Pending
+    );
+    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, retry);
+    r.jobs.complete(retry).await.unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Completed
+    );
+}
+
 async fn concurrent_dequeue_contract(r: &Repositories) {
     for _ in 0..8 {
         r.jobs
@@ -1467,6 +1500,7 @@ async fn run_contract(db: &Database) {
     workflows_contract(&repos).await;
     ingestion_contract(&repos).await;
     jobs_contract(&repos).await;
+    processing_recovery_contract(&repos).await;
     concurrent_dequeue_contract(&repos).await;
     auth_contract(&repos).await;
 }

@@ -348,15 +348,15 @@ impl SqliteJobQueue {
         Ok(jobs)
     }
 
-    /// Check if a document has any failed jobs (for displaying error state)
+    /// Whether the most recently finished processing job failed
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         let search_pattern = format!("%\"document_id\":\"{}\"%", document_id);
 
         let row: (i64,) = sqlx::query_as(
             r#"
-            SELECT COUNT(*) FROM jobs
-            WHERE payload LIKE ?
-            AND status = 'failed'
+            SELECT COALESCE((SELECT status = 'failed' FROM jobs
+            WHERE payload LIKE ? AND status IN ('completed', 'failed')
+            ORDER BY created_at DESC, completed_at DESC, id DESC LIMIT 1), 0)
             "#,
         )
         .bind(&search_pattern)
