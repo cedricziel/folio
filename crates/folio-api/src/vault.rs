@@ -72,17 +72,18 @@ pub async fn resolve_default_vault(
     mut request: Request,
     next: Next,
 ) -> Response {
-    if is_exempt(request.uri().path()) {
+    if is_exempt(request.uri().path())
+        || request.uri().path() == "/api/auth/tokens"
+        || request.uri().path().starts_with("/api/auth/tokens/")
+    {
         return next.run(request).await;
     }
     let user = match request.extensions().get::<AuthContext>() {
-        Some(ctx) => resolver
-            .auth
-            .store
-            .find_user_by_id(&ctx.user_id)
-            .await
-            .ok()
-            .flatten(),
+        Some(ctx) => match resolver.auth.store.find_user_by_id(&ctx.user_id).await {
+            Ok(Some(user)) => Some(user),
+            Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
         None => resolver.auth.current_user(request.headers()).await,
     };
     if user.is_none() && resolver.auth.required {

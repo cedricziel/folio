@@ -95,7 +95,7 @@ pub struct AuthState {
     pub store: Arc<dyn AuthStore>,
     pub server: OAuthServer,
     pub public_url: Option<String>,
-    /// When false, [`enforce_auth`] lets every request through.
+    /// When false, requests without explicit credentials can access the anonymous archive.
     pub required: bool,
     /// Trusted-header login, see [`crate::forward::forward_auth`].
     pub forward: Option<Arc<ForwardAuth>>,
@@ -418,13 +418,42 @@ pub async fn enforce_auth(
     next: Next,
 ) -> Response {
     let path = request.uri().path().to_string();
-    if !auth.required || is_exempt(&path) {
+    if is_exempt(&path) {
         return next.run(request).await;
     }
     if path == "/setup" && auth.store.count_users().await.unwrap_or(1) == 0 {
         return next.run(request).await;
     }
     let is_api = path == "/api" || path.starts_with("/api/");
+    if path == "/api/auth/tokens" || path.starts_with("/api/auth/tokens/") {
+        return next.run(request).await;
+    }
+    if request.headers().contains_key(header::AUTHORIZATION) {
+        let validator = auth.validator("/api");
+        if is_api {
+            if let Some(context) = validator.validate(request.headers()).await {
+                let needed = if context.personal_token_id.is_some() {
+                    match personal_token_scope(request.method(), &path) {
+                        Some(scope) => scope,
+                        None => return StatusCode::FORBIDDEN.into_response(),
+                    }
+                } else if is_read_method(request.method())
+                    || path.starts_with("/api/telemetry/")
+                    || (request.method() == Method::POST && path == "/api/documents/search")
+                {
+                    "documents:read"
+                } else {
+                    "documents:write"
+                };
+                if !context.has_scope(needed) {
+                    return insufficient_scope(needed);
+                }
+                request.extensions_mut().insert(context);
+                return next.run(request).await;
+            }
+        }
+        return api_unauthorized(&validator, request.headers());
+    }
     if let Some((session_id, user)) = auth.session(request.headers()).await {
         if !is_read_method(request.method()) && !auth.is_same_origin(request.headers()) {
             return StatusCode::FORBIDDEN.into_response();
@@ -432,28 +461,11 @@ pub async fn enforce_auth(
         let sidebar_user = SidebarUser::new(&user, auth.csrf_session_token(&session_id));
         return CURRENT_USER.scope(sidebar_user, next.run(request)).await;
     }
+    if !auth.required {
+        return next.run(request).await;
+    }
     if is_api {
-        let validator = auth.validator("/api");
-        if let Some(context) = validator.validate(request.headers()).await {
-            let needed = if is_read_method(request.method()) || path.starts_with("/api/telemetry/")
-            {
-                "documents:read"
-            } else {
-                "documents:write"
-            };
-            if !context.has_scope(needed) {
-                return insufficient_scope(needed);
-            }
-            request.extensions_mut().insert(context);
-            return next.run(request).await;
-        }
-        let mut response = validator.unauthorized(request.headers());
-        *response.body_mut() = axum::body::Body::from(r#"{"error":"unauthorized"}"#);
-        response.headers_mut().insert(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        return response;
+        return api_unauthorized(&auth.validator("/api"), request.headers());
     }
     if path == "/share" && request.method() == Method::POST {
         // Accepting the upload before login would let anyone park files on
@@ -473,6 +485,59 @@ pub async fn enforce_auth(
         "/".into()
     };
     login_redirect(&next_path).into_response()
+}
+
+fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response {
+    let mut response = validator.unauthorized(headers);
+    *response.body_mut() = axum::body::Body::from(r#"{"error":"unauthorized"}"#);
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
+fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
+    let parts: Vec<_> = path.trim_end_matches('/').split('/').collect();
+    let read = matches!(*method, Method::GET | Method::HEAD);
+    let write = matches!(*method, Method::POST | Method::PUT | Method::DELETE);
+    let id = |value: &str| uuid::Uuid::parse_str(value).is_ok();
+    let classified = match parts.as_slice() {
+        ["", "api", "vaults"] => read,
+        ["", "api", "vaults", vault, "documents"] if id(vault) => read,
+        ["", "api", "documents"] => read || *method == Method::POST,
+        ["", "api", "documents", "search"] => read || *method == Method::POST,
+        ["", "api", "documents", "browse" | "trash"] => read,
+        ["", "api", "documents", document] if id(document) => read || *method == Method::DELETE,
+        ["", "api", "documents", "upload"] => *method == Method::POST,
+        ["", "api", "documents", document, "download"] if id(document) => read,
+        ["", "api", "documents", document, "restore" | "correspondent" | "document_type" | "tags"]
+            if id(document) =>
+        {
+            *method == Method::POST
+        }
+        ["", "api", "documents", document, "purge"] if id(document) => *method == Method::DELETE,
+        ["", "api", "documents", document, "tags", tag] if id(document) && id(tag) => {
+            *method == Method::POST
+        }
+        ["", "api", "tags" | "correspondents" | "document_types"] => {
+            read || *method == Method::POST
+        }
+        ["", "api", "tags" | "correspondents" | "document_types", item] if id(item) => {
+            read || (*method == Method::PUT || *method == Method::DELETE)
+        }
+        _ => false,
+    };
+    if !classified {
+        return None;
+    }
+    if read || (*method == Method::POST && path.trim_end_matches('/') == "/api/documents/search") {
+        Some("documents:read")
+    } else if write {
+        Some("documents:write")
+    } else {
+        None
+    }
 }
 
 fn is_read_method(method: &Method) -> bool {

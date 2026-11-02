@@ -124,7 +124,46 @@ impl Receiver {
 #[tokio::test]
 async fn relay_preserves_otlp_body_and_uses_only_server_credentials() {
     let receiver = Receiver::start(StatusCode::OK).await;
-    let (app, _harness) = receiver.app().await;
+    let (app, harness) = receiver.app().await;
+    harness
+        .auth_store
+        .create_user(folio_auth::User {
+            id: "telemetry-user".into(),
+            username: "telemetry-user".into(),
+            password_hash: "!".into(),
+            created_at: 1,
+            email: None,
+            display_name: None,
+            is_admin: false,
+            is_owner: false,
+            auth_source: "local".into(),
+            external_id: None,
+        })
+        .await
+        .unwrap();
+    harness
+        .auth_store
+        .insert_client(folio_auth::OAuthClient {
+            client_id: "telemetry-client".into(),
+            client_name: "Telemetry fixture".into(),
+            redirect_uris: vec!["http://localhost/callback".into()],
+            created_at: 1,
+        })
+        .await
+        .unwrap();
+    harness
+        .auth_store
+        .insert_access_token(folio_auth::AccessToken {
+            token_hash: folio_auth::crypto::hash_token("client-token"),
+            client_id: "telemetry-client".into(),
+            user_id: "telemetry-user".into(),
+            scopes: vec!["documents:read".into()],
+            audience: "http://localhost/api".into(),
+            expires_at: i64::MAX,
+            grant_id: "telemetry-grant".into(),
+        })
+        .await
+        .unwrap();
     let response = app
         .clone()
         .oneshot(
