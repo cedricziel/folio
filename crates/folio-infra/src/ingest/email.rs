@@ -481,6 +481,7 @@ impl EmailSource {
                     .insert(
                         self.vault()?,
                         &LedgerEntry {
+                            vault_id: self.vault()?,
                             key: key.clone(),
                             source_id: self.id,
                             document_id: None,

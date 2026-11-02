@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::Id;
+use super::{Id, VaultId};
 
 /// A correspondent (sender/source) of documents
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +12,9 @@ pub struct Correspondent {
     /// Unique identifier
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
+
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
 
     /// Correspondent name (unique)
     pub name: String,
@@ -22,9 +25,10 @@ pub struct Correspondent {
 
 impl Correspondent {
     /// Create a new correspondent with the given name
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(vault_id: VaultId, name: impl Into<String>) -> Self {
         Self {
             id: Id::new_v4(),
+            vault_id,
             name: name.into(),
             created_at: Utc::now(),
         }

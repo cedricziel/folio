@@ -255,6 +255,7 @@ impl Harness {
     /// Queue a run for `workflow` the way the engine would
     async fn run_for(&self, workflow: &Workflow, document_id: Id) -> WorkflowRun {
         let run = WorkflowRun::new(
+            workflow.vault_id,
             workflow.id,
             workflow.trigger,
             Some(document_id),
@@ -1661,7 +1662,7 @@ async fn webhook_test_run_without_a_document_still_sends() {
     let h = Harness::new().await;
     let server = TestServer::start().await;
     let workflow = h.webhook_workflow(server.url("sample"), None).await;
-    let run = WorkflowRun::new(workflow.id, workflow.trigger, None, "{}".into())
+    let run = WorkflowRun::new(h.vault, workflow.id, workflow.trigger, None, "{}".into())
         .with_actions(workflow.actions.clone());
     assert!(h.workflows.create_run(&run).await.unwrap());
 

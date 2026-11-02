@@ -13,7 +13,7 @@ use chrono::{Duration, Utc};
 use folio_core::error::Error;
 use folio_core::models::{
     CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, DocumentFilter, Id,
-    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, WebhookMethod,
+    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, VaultId, WebhookMethod,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 use folio_core::models::{
@@ -60,6 +60,7 @@ async fn tags_contract(r: &Repositories) {
         .await
         .unwrap();
     assert_eq!(tag.name, "invoice");
+    assert_eq!(tag.vault_id, vault);
 
     let dup = r
         .tags
@@ -87,6 +88,7 @@ async fn tags_contract(r: &Repositories) {
 
     let found = r.tags.find_by_id(vault, tag.id).await.unwrap().unwrap();
     assert_eq!(found.color.as_deref(), Some("#ff0000"));
+    assert_eq!(found.vault_id, vault);
     assert_eq!(
         r.tags
             .find_by_name(vault, "invoice")
@@ -132,6 +134,7 @@ async fn tags_contract(r: &Repositories) {
         .await
         .unwrap();
     assert_eq!(updated.name, "bill");
+    assert_eq!(updated.vault_id, vault);
     assert_eq!(updated.color, None);
     let collision = r
         .tags
@@ -169,6 +172,7 @@ async fn correspondents_contract(r: &Repositories) {
         )
         .await
         .unwrap();
+    assert_eq!(c.vault_id, vault);
     let dup = r
         .correspondents
         .create(
@@ -258,6 +262,7 @@ async fn document_types_contract(r: &Repositories) {
         )
         .await
         .unwrap();
+    assert_eq!(t.vault_id, vault);
     let dup = r
         .document_types
         .create(
@@ -1099,6 +1104,8 @@ async fn workflows_contract(r: &Repositories) {
         .await
         .unwrap();
     let fetched = r.workflows.find_by_id(vault, wf.id).await.unwrap().unwrap();
+    assert_eq!(wf.vault_id, vault);
+    assert_eq!(fetched.vault_id, vault);
     assert_eq!(fetched.name, "Notify");
     assert_eq!(fetched.conditions, wf.conditions);
     assert_eq!(fetched.actions, wf.actions);
@@ -1151,9 +1158,28 @@ async fn workflows_contract(r: &Repositories) {
 
     // Runs: round trip, ordering, update
     let doc = Id::new_v4();
-    let run = WorkflowRun::new(off.id, uploaded, Some(doc), r#"{"a":  1}"#.into());
+    let run = WorkflowRun::new(
+        off.vault_id,
+        off.id,
+        uploaded,
+        Some(doc),
+        r#"{"a":  1}"#.into(),
+    );
+    let mut wrong_vault = run.clone();
+    wrong_vault.vault_id = VaultId::new();
+    assert!(matches!(
+        r.workflows.create_run(&wrong_vault).await,
+        Err(Error::Validation(_))
+    ));
+    assert!(r
+        .workflows
+        .find_run(wrong_vault.id)
+        .await
+        .unwrap()
+        .is_none());
     assert!(r.workflows.create_run(&run).await.unwrap());
     let mut stored = r.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(stored.vault_id, vault);
     assert_eq!(
         stored.payload, r#"{"a":  1}"#,
         "payload is kept byte for byte"
@@ -1176,13 +1202,13 @@ async fn workflows_contract(r: &Repositories) {
     assert_eq!(reread.last_error.as_deref(), Some("HTTP 500"));
 
     // Once-per-document events collapse to a single run, even concurrently
-    let once = WorkflowRun::new(off.id, uploaded, Some(doc), "{}".into());
+    let once = WorkflowRun::new(off.vault_id, off.id, uploaded, Some(doc), "{}".into());
     assert!(!r.workflows.create_run(&once).await.unwrap());
     let race_doc = Id::new_v4();
     let mut handles = Vec::new();
     for _ in 0..8 {
         let workflows = r.workflows.clone();
-        let run = WorkflowRun::new(off.id, uploaded, Some(race_doc), "{}".into());
+        let run = WorkflowRun::new(off.vault_id, off.id, uploaded, Some(race_doc), "{}".into());
         handles.push(tokio::spawn(async move {
             workflows.create_run(&run).await.unwrap()
         }));
@@ -1196,6 +1222,7 @@ async fn workflows_contract(r: &Repositories) {
     // Other events may repeat
     for _ in 0..2 {
         let again = WorkflowRun::new(
+            off.vault_id,
             off.id,
             WorkflowTrigger::DocumentUpdated,
             Some(doc),
@@ -1205,6 +1232,7 @@ async fn workflows_contract(r: &Repositories) {
     }
     let runs = r.workflows.list_runs(vault, off.id, 100).await.unwrap();
     assert_eq!(runs.len(), 4);
+    assert!(runs.iter().all(|run| run.vault_id == vault));
     assert_eq!(
         r.workflows.list_runs(vault, off.id, 2).await.unwrap().len(),
         2
@@ -1318,12 +1346,17 @@ async fn ingestion_contract(r: &Repositories) {
 
     // Ledger: the first insert wins, later ones report false
     let entry = LedgerEntry {
+        vault_id: vault,
         key: "hash:abc".into(),
         source_id: Id::new_v4(),
         document_id: None,
         outcome: "claimed".into(),
         created_at: Utc::now(),
     };
+    assert!(matches!(
+        r.ledger.insert(VaultId::new(), &entry).await,
+        Err(Error::Validation(_))
+    ));
     assert!(r.ledger.insert(vault, &entry).await.unwrap());
     assert!(!r.ledger.insert(vault, &entry).await.unwrap());
     r.ledger
@@ -1331,6 +1364,18 @@ async fn ingestion_contract(r: &Repositories) {
         .await
         .unwrap();
     let stored = r.ledger.find(vault, "hash:abc").await.unwrap().unwrap();
+    assert_eq!(stored.vault_id, vault);
+    let wrong_vault = VaultId::new();
+    assert!(matches!(
+        r.ledger
+            .transition_if_matches(wrong_vault, &stored, "retryable", Utc::now())
+            .await,
+        Err(Error::Validation(_))
+    ));
+    assert!(matches!(
+        r.ledger.delete_if_matches(wrong_vault, &stored).await,
+        Err(Error::Validation(_))
+    ));
     assert_eq!(
         (stored.outcome.as_str(), stored.document_id),
         ("imported", Some(doc.id))
@@ -1356,6 +1401,14 @@ async fn ingestion_contract(r: &Repositories) {
         .await
         .unwrap()
         .unwrap();
+    let mut wrong_owner = reservation.clone();
+    wrong_owner.vault_id = VaultId::new();
+    assert!(matches!(
+        r.documents
+            .create_for_ingest(vault, &wrong_owner, new_document("wrong owner"))
+            .await,
+        Err(Error::Validation(_))
+    ));
     let document = r
         .documents
         .create_for_ingest(
@@ -2970,6 +3023,7 @@ async fn run_atomicity_contract(db: &Database) {
     let document = Id::new_v4();
     let run_for = |event: i64| {
         WorkflowRun::new(
+            workflow.vault_id,
             workflow.id,
             WorkflowTrigger::DocumentUpdated,
             Some(document),

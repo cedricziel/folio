@@ -198,6 +198,7 @@ async fn failed_processing_enqueue_keeps_the_successfully_stored_upload() {
 async fn failed_reserved_upload_keeps_the_document_for_retry_without_cleanup() {
     let (_db, r, vault) = fixture().await;
     let claim = folio_core::models::LedgerEntry {
+        vault_id: vault,
         key: folio_core::services::content_key(&upload().data),
         source_id: uuid::Uuid::new_v4(),
         document_id: Some(uuid::Uuid::new_v4()),
@@ -282,6 +283,7 @@ impl DocumentStore for PausedPutStore {
 async fn original_written_after_purge_is_removed_without_resurrecting_the_document() {
     let (_db, r, vault) = fixture().await;
     let claim = folio_core::models::LedgerEntry {
+        vault_id: vault,
         key: folio_core::services::content_key(&upload().data),
         source_id: uuid::Uuid::new_v4(),
         document_id: Some(uuid::Uuid::new_v4()),
@@ -339,6 +341,7 @@ async fn original_written_after_purge_is_removed_without_resurrecting_the_docume
 async fn original_written_between_purge_and_finalization_is_removed() {
     let (_db, r, vault) = fixture().await;
     let claim = folio_core::models::LedgerEntry {
+        vault_id: vault,
         key: folio_core::services::content_key(&upload().data),
         source_id: uuid::Uuid::new_v4(),
         document_id: Some(uuid::Uuid::new_v4()),
@@ -404,6 +407,7 @@ async fn original_written_between_purge_and_finalization_is_removed() {
 async fn original_written_after_soft_delete_is_preserved_for_restore() {
     let (_db, r, vault) = fixture().await;
     let claim = folio_core::models::LedgerEntry {
+        vault_id: vault,
         key: folio_core::services::content_key(&upload().data),
         source_id: uuid::Uuid::new_v4(),
         document_id: Some(uuid::Uuid::new_v4()),
@@ -506,6 +510,7 @@ async fn failed_outbox_insert_rolls_back_upload_path_and_can_be_retried_once() {
         unreachable!()
     };
     let claim = folio_core::models::LedgerEntry {
+        vault_id: vault,
         key: folio_core::services::content_key(&upload().data),
         source_id: uuid::Uuid::new_v4(),
         document_id: Some(uuid::Uuid::new_v4()),

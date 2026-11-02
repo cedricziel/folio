@@ -1819,6 +1819,7 @@ mod tests {
             .await
             .unwrap();
         let run = WorkflowRun::new(
+            workflow.vault_id,
             workflow.id,
             WorkflowTrigger::DocumentUploaded,
             Some(f.doc_id),

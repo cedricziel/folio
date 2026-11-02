@@ -255,6 +255,7 @@ async fn pending_content_is_busy_and_preserves_the_claim() {
     let h = Harness::new().await;
     let key = content_key(b"pending");
     let claim = LedgerEntry {
+        vault_id: h.vault,
         key: key.clone(),
         source_id: h.source_id,
         document_id: None,
@@ -278,6 +279,7 @@ async fn old_pending_content_is_busy_until_recovery_can_prove_it_is_abandoned() 
     let h = Harness::new().await;
     let key = content_key(b"old pending");
     let claim = LedgerEntry {
+        vault_id: h.vault,
         key: key.clone(),
         source_id: h.source_id,
         document_id: None,
@@ -461,6 +463,7 @@ async fn uploaded_workflows_see_the_source_in_conditions_and_payload() {
 
 async fn recoverable_claim(h: &Harness) -> LedgerEntry {
     let claim = LedgerEntry {
+        vault_id: h.vault,
         key: content_key(b"recovery"),
         source_id: h.source_id,
         document_id: Some(folio_core::models::Id::new_v4()),

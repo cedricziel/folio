@@ -96,9 +96,9 @@ impl WebhookPayload {
             .with_filename("invoice-2025-03.pdf")
             .with_mime_type("application/pdf");
         doc.id = Id::nil();
-        let sender = Correspondent::new("Stadtwerke Köln");
-        let kind = DocumentType::new("Invoice");
-        let tag = Tag::new("finance");
+        let sender = Correspondent::new(doc.vault_id, "Stadtwerke Köln");
+        let kind = DocumentType::new(doc.vault_id, "Invoice");
+        let tag = Tag::new(doc.vault_id, "finance");
         let document = WebhookDocument::from_parts(
             &doc,
             &[tag],

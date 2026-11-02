@@ -86,6 +86,7 @@ async fn passwords_are_masked_and_a_masked_update_keeps_the_stored_one() {
     let (status, created) =
         json_request(&app, "POST", "/api/sources", Some(mail_body("hunter2"))).await;
     assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["vault_id"], app.vault.to_string());
     assert_eq!(created["config"]["password"], "********");
     assert_eq!(created["config"]["port"], 993);
     let id = created["id"].as_str().unwrap().to_string();
@@ -139,6 +140,7 @@ async fn configured_sources_are_listed_read_only_and_can_be_tested() {
 
     let (_, listed) = json_request(&app, "GET", "/api/sources", None).await;
     assert_eq!(listed[0]["origin"], "config");
+    assert_eq!(listed[0]["vault_id"], app.vault.to_string());
 
     let (status, _) =
         json_request(&app, "DELETE", &format!("/api/sources/{missing_id}"), None).await;

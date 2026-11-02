@@ -218,6 +218,7 @@ struct DocumentTagRow {
 #[derive(sqlx::FromRow)]
 struct TagRow {
     id: String,
+    vault_id: String,
     name: String,
     color: Option<String>,
     created_at: String,
@@ -229,6 +230,7 @@ impl TryFrom<TagRow> for Tag {
     fn try_from(row: TagRow) -> Result<Self> {
         Ok(Tag {
             id: parse_uuid(&row.id)?,
+            vault_id: VaultId(parse_uuid(&row.vault_id)?),
             name: row.name,
             color: row.color,
             created_at: row
@@ -242,6 +244,7 @@ impl TryFrom<TagRow> for Tag {
 #[derive(sqlx::FromRow)]
 struct CorrespondentRow {
     id: String,
+    vault_id: String,
     name: String,
     created_at: String,
 }
@@ -252,6 +255,7 @@ impl TryFrom<CorrespondentRow> for Correspondent {
     fn try_from(row: CorrespondentRow) -> Result<Self> {
         Ok(Correspondent {
             id: parse_uuid(&row.id)?,
+            vault_id: VaultId(parse_uuid(&row.vault_id)?),
             name: row.name,
             created_at: row
                 .created_at
@@ -264,6 +268,7 @@ impl TryFrom<CorrespondentRow> for Correspondent {
 #[derive(sqlx::FromRow)]
 struct DocumentTypeRow {
     id: String,
+    vault_id: String,
     name: String,
     created_at: String,
 }
@@ -274,6 +279,7 @@ impl TryFrom<DocumentTypeRow> for DocumentType {
     fn try_from(row: DocumentTypeRow) -> Result<Self> {
         Ok(DocumentType {
             id: parse_uuid(&row.id)?,
+            vault_id: VaultId(parse_uuid(&row.vault_id)?),
             name: row.name,
             created_at: row
                 .created_at
@@ -594,6 +600,11 @@ impl DocumentRepository for SqliteDocumentRepository {
         claim: &folio_core::models::LedgerEntry,
         params: CreateDocument,
     ) -> Result<Document> {
+        if claim.vault_id != vault {
+            return Err(Error::Validation(
+                "Ingest claim belongs to a different vault".into(),
+            ));
+        }
         if claim.outcome != "claimed" {
             return Err(Error::Conflict("Ingest reservation is not claimed".into()));
         }
@@ -866,7 +877,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await?
             .ok_or_else(|| not_found("Document", id))?;
         let document: Document = row.try_into()?;
-        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
+        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.vault_id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
              WHERE dt.document_id = ? AND t.vault_id = ?")
             .bind(id.to_string()).bind(vault.to_string()).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
         let tags = tags
@@ -1046,7 +1057,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
     async fn get_tags(&self, vault: VaultId, document_id: Id) -> Result<Vec<Tag>> {
         let rows: Vec<TagRow> = sqlx::query_as(
-            "SELECT t.id, t.name, t.color, t.created_at
+            "SELECT t.id, t.vault_id, t.name, t.color, t.created_at
              FROM tags t
              INNER JOIN document_tags dt ON t.id = dt.tag_id
              INNER JOIN documents d ON d.id = dt.document_id
@@ -1073,7 +1084,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         // Legacy unbounded list callers can exceed the database's bind limit.
         for chunk in ids.chunks(500) {
             let mut qb = QueryBuilder::<Sqlite>::new(
-                "SELECT dt.document_id, t.id, t.name, t.color, t.created_at
+                "SELECT dt.document_id, t.id, t.vault_id, t.name, t.color, t.created_at
                  FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
                  JOIN documents d ON d.id = dt.document_id
                  WHERE t.vault_id = d.vault_id AND d.deleted_at IS NULL AND d.vault_id = ",
@@ -1207,7 +1218,7 @@ impl SqliteTagRepository {
 impl TagRepository for SqliteTagRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Tag>> {
         let row: Option<TagRow> = sqlx::query_as(
-            "SELECT id, name, color, created_at FROM tags WHERE id = ? AND vault_id = ?",
+            "SELECT id, vault_id, name, color, created_at FROM tags WHERE id = ? AND vault_id = ?",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -1220,7 +1231,7 @@ impl TagRepository for SqliteTagRepository {
 
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Tag>> {
         let row: Option<TagRow> = sqlx::query_as(
-            "SELECT id, name, color, created_at FROM tags WHERE name = ? AND vault_id = ?",
+            "SELECT id, vault_id, name, color, created_at FROM tags WHERE name = ? AND vault_id = ?",
         )
         .bind(name)
         .bind(vault.to_string())
@@ -1233,7 +1244,7 @@ impl TagRepository for SqliteTagRepository {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<Tag>> {
         let rows: Vec<TagRow> = sqlx::query_as(
-            "SELECT id, name, color, created_at FROM tags WHERE vault_id = ? ORDER BY name",
+            "SELECT id, vault_id, name, color, created_at FROM tags WHERE vault_id = ? ORDER BY name",
         )
         .bind(vault.to_string())
         .fetch_all(&self.pool)
@@ -1261,6 +1272,7 @@ impl TagRepository for SqliteTagRepository {
 
         Ok(Tag {
             id,
+            vault_id: vault,
             name: params.name,
             color: params.color,
             created_at: now,
@@ -1287,6 +1299,7 @@ impl TagRepository for SqliteTagRepository {
 
         Ok(Tag {
             id,
+            vault_id: vault,
             name,
             color,
             created_at: existing.created_at,
@@ -1324,7 +1337,7 @@ impl SqliteCorrespondentRepository {
 impl CorrespondentRepository for SqliteCorrespondentRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>> {
         let row: Option<CorrespondentRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM correspondents WHERE id = ? AND vault_id = ?",
+            "SELECT id, vault_id, name, created_at FROM correspondents WHERE id = ? AND vault_id = ?",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -1337,7 +1350,7 @@ impl CorrespondentRepository for SqliteCorrespondentRepository {
 
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Correspondent>> {
         let row: Option<CorrespondentRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM correspondents WHERE name = ? AND vault_id = ?",
+            "SELECT id, vault_id, name, created_at FROM correspondents WHERE name = ? AND vault_id = ?",
         )
         .bind(name)
         .bind(vault.to_string())
@@ -1350,7 +1363,7 @@ impl CorrespondentRepository for SqliteCorrespondentRepository {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<Correspondent>> {
         let rows: Vec<CorrespondentRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM correspondents WHERE vault_id = ? ORDER BY name",
+            "SELECT id, vault_id, name, created_at FROM correspondents WHERE vault_id = ? ORDER BY name",
         )
         .bind(vault.to_string())
         .fetch_all(&self.pool)
@@ -1377,6 +1390,7 @@ impl CorrespondentRepository for SqliteCorrespondentRepository {
 
         Ok(Correspondent {
             id,
+            vault_id: vault,
             name: params.name,
             created_at: now,
         })
@@ -1405,6 +1419,7 @@ impl CorrespondentRepository for SqliteCorrespondentRepository {
 
         Ok(Correspondent {
             id,
+            vault_id: vault,
             name,
             created_at: existing.created_at,
         })
@@ -1441,7 +1456,7 @@ impl SqliteDocumentTypeRepository {
 impl DocumentTypeRepository for SqliteDocumentTypeRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>> {
         let row: Option<DocumentTypeRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM document_types WHERE id = ? AND vault_id = ?",
+            "SELECT id, vault_id, name, created_at FROM document_types WHERE id = ? AND vault_id = ?",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -1454,7 +1469,7 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
 
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<DocumentType>> {
         let row: Option<DocumentTypeRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM document_types WHERE name = ? AND vault_id = ?",
+            "SELECT id, vault_id, name, created_at FROM document_types WHERE name = ? AND vault_id = ?",
         )
         .bind(name)
         .bind(vault.to_string())
@@ -1467,7 +1482,7 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<DocumentType>> {
         let rows: Vec<DocumentTypeRow> = sqlx::query_as(
-            "SELECT id, name, created_at FROM document_types WHERE vault_id = ? ORDER BY name",
+            "SELECT id, vault_id, name, created_at FROM document_types WHERE vault_id = ? ORDER BY name",
         )
         .bind(vault.to_string())
         .fetch_all(&self.pool)
@@ -1494,6 +1509,7 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
 
         Ok(DocumentType {
             id,
+            vault_id: vault,
             name: params.name,
             created_at: now,
         })
@@ -1522,6 +1538,7 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
 
         Ok(DocumentType {
             id,
+            vault_id: vault,
             name,
             created_at: existing.created_at,
         })

@@ -76,6 +76,7 @@ impl IngestPipeline {
 
     async fn claim(&self, vault: VaultId, key: &str, source_id: Id) -> Result<ClaimOutcome> {
         let entry = LedgerEntry {
+            vault_id: vault,
             key: key.to_string(),
             source_id,
             document_id: Some(Id::new_v4()),

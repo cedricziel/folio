@@ -37,6 +37,7 @@ fn parse_trigger(value: &str) -> Result<WorkflowTrigger> {
 #[derive(sqlx::FromRow)]
 struct WorkflowRow {
     id: Id,
+    vault_id: Id,
     name: String,
     enabled: bool,
     trigger_event: String,
@@ -52,6 +53,7 @@ impl TryFrom<WorkflowRow> for Workflow {
     fn try_from(row: WorkflowRow) -> Result<Self> {
         Ok(Workflow {
             id: row.id,
+            vault_id: VaultId(row.vault_id),
             name: row.name,
             enabled: row.enabled,
             trigger: parse_trigger(&row.trigger_event)?,
@@ -66,6 +68,7 @@ impl TryFrom<WorkflowRow> for Workflow {
 #[derive(sqlx::FromRow)]
 struct RunRow {
     id: Id,
+    vault_id: Id,
     workflow_id: Id,
     event: String,
     document_id: Option<Id>,
@@ -87,6 +90,7 @@ impl TryFrom<RunRow> for WorkflowRun {
     fn try_from(row: RunRow) -> Result<Self> {
         Ok(WorkflowRun {
             id: row.id,
+            vault_id: VaultId(row.vault_id),
             workflow_id: row.workflow_id,
             event: parse_trigger(&row.event)?,
             document_id: row.document_id,
@@ -186,6 +190,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
         Ok(Workflow {
             id,
+            vault_id: vault,
             name: input.name,
             enabled: input.enabled,
             trigger: input.trigger,
@@ -240,6 +245,11 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
+        if self.locate(run.workflow_id).await? != Some(run.vault_id) {
+            return Err(Error::Validation(
+                "Workflow run belongs to a different vault".into(),
+            ));
+        }
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
@@ -281,11 +291,14 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
     #[instrument(skip(self))]
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>> {
-        let row: Option<RunRow> = sqlx::query_as("SELECT * FROM workflow_runs WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let row: Option<RunRow> = sqlx::query_as(
+            "SELECT r.*, w.vault_id FROM workflow_runs r
+             JOIN workflows w ON w.id = r.workflow_id WHERE r.id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         row.map(WorkflowRun::try_from).transpose()
     }
 
@@ -317,7 +330,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         limit: u32,
     ) -> Result<Vec<WorkflowRun>> {
         let rows: Vec<RunRow> = sqlx::query_as(
-            "SELECT r.* FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
+            "SELECT r.*, w.vault_id FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
              WHERE r.workflow_id = $1 AND w.vault_id = $3 ORDER BY r.created_at DESC LIMIT $2",
         )
         .bind(workflow_id)

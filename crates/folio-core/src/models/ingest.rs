@@ -335,6 +335,7 @@ pub enum IngestOutcome {
 /// Record of something the pipeline already handled
 #[derive(Debug, Clone)]
 pub struct LedgerEntry {
+    pub vault_id: VaultId,
     /// `hash:<sha256>` or `msg:<source id>:<message id>`
     pub key: String,
     pub source_id: Id,
