@@ -16,4 +16,4 @@ Issue #46 requires pipeline configuration through environment variables. The typ
 
 ## Impact
 
-Touches folio-core settings models, folio-infra configuration and database initialization, folio-api's existing HTML settings route, and binary wiring. No JSON endpoint, OpenAPI, Swift client, or database schema changes. Existing keys remain in both startup configuration and the settings table; saved database values win.
+Touches folio-core settings models, folio-infra configuration and database initialization, folio-api's existing HTML settings route, and binary wiring. Adds a database initialization marker; no JSON endpoint, OpenAPI, or Swift client changes. Existing keys remain in both startup configuration and the settings table; saved database values win.

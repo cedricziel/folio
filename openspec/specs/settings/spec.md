@@ -121,3 +121,8 @@ The system SHALL accept `ocr.provider`, `ocr.model`, `ocr.languages`, `ocr.base_
 
 - **WHEN** an existing database is initialized with different startup values
 - **THEN** every saved pipeline row remains unchanged, including values equal to built-in defaults
+
+#### Scenario: Interrupted initialization
+
+- **WHEN** a fresh installation restarts after migrations finish but before pipeline defaults are removed
+- **THEN** initialization retries cleanup and records completion atomically, so seeded rows cannot hide startup values

@@ -39,3 +39,8 @@ The system SHALL store runtime settings as key-value rows in the `settings` tabl
 
 - **WHEN** the database had `ai.provider` `openai` and `ai.embedding_model` `text-embedding-3-large`
 - **THEN** `ocr.provider` is `openai-vision`, `embeddings.provider` is `openai` and `embeddings.model` is `text-embedding-3-large`
+
+#### Scenario: Interrupted initialization
+
+- **WHEN** a fresh installation restarts after migrations finish but before pipeline defaults are removed
+- **THEN** initialization retries cleanup and records completion atomically, so seeded rows cannot hide startup values
