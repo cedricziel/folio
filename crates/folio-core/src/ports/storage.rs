@@ -52,6 +52,28 @@ pub struct StoredObject {
 }
 
 impl StoredObject {
+    /// Collect at most `max_bytes`, rejecting oversized metadata before reading.
+    /// Unknown or understated sizes are checked on each streamed chunk.
+    pub async fn into_bytes_limited(self, max_bytes: usize) -> Result<Vec<u8>> {
+        let too_large = || {
+            Error::Validation(format!(
+                "file is too large to inline (max {max_bytes} bytes)"
+            ))
+        };
+        if self.size.is_some_and(|size| size > max_bytes as u64) {
+            return Err(too_large());
+        }
+        let mut data = Vec::new();
+        let mut stream = self.stream;
+        while let Some(chunk) = stream.try_next().await? {
+            if chunk.len() > max_bytes - data.len() {
+                return Err(too_large());
+            }
+            data.extend_from_slice(&chunk);
+        }
+        Ok(data)
+    }
+
     /// Collect the whole object in memory.
     pub async fn into_bytes(self) -> Result<Vec<u8>> {
         let chunks: Vec<Bytes> = self.stream.try_collect().await?;
@@ -162,4 +184,68 @@ pub trait ProcessingQueue: Send + Sync {
 
     /// Current processing status of a document
     async fn processing_status(&self, document_id: Id) -> Result<ProcessingStatus>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    fn counted_object(size: Option<u64>) -> (StoredObject, Arc<AtomicUsize>) {
+        let consumed = Arc::new(AtomicUsize::new(0));
+        let counter = consumed.clone();
+        let stream = futures::stream::iter([
+            Ok(Bytes::from_static(b"abcd")),
+            Ok(Bytes::from_static(b"efgh")),
+            Ok(Bytes::from_static(b"ijkl")),
+        ])
+        .inspect(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })
+        .boxed();
+        (StoredObject { size, stream }, consumed)
+    }
+
+    #[tokio::test]
+    async fn oversized_metadata_rejects_without_reading() {
+        let (object, consumed) = counted_object(Some(12));
+        assert!(matches!(
+            object.into_bytes_limited(5).await,
+            Err(Error::Validation(_))
+        ));
+        assert_eq!(consumed.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn unknown_size_stops_when_stream_exceeds_limit() {
+        let (object, consumed) = counted_object(None);
+        assert!(matches!(
+            object.into_bytes_limited(5).await,
+            Err(Error::Validation(_))
+        ));
+        assert_eq!(consumed.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn understated_size_stops_when_stream_exceeds_limit() {
+        let (object, consumed) = counted_object(Some(1));
+        assert!(matches!(
+            object.into_bytes_limited(5).await,
+            Err(Error::Validation(_))
+        ));
+        assert_eq!(consumed.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn exact_limit_preserves_all_bytes() {
+        let (object, _) = counted_object(Some(12));
+        assert_eq!(
+            object.into_bytes_limited(12).await.unwrap(),
+            b"abcdefghijkl"
+        );
+    }
 }

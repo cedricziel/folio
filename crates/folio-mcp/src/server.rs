@@ -705,19 +705,16 @@ impl FolioMcp {
     ) -> Result<ReadResourceResult, ErrorData> {
         let (document, data) = self
             .library
-            .read_file(vault, id)
+            .read_file(vault, id, MAX_BLOB_BYTES)
             .await
-            .map_err(resource_error)?
-            .ok_or_else(|| ErrorData::resource_not_found("document has no stored file", None))?;
-        if data.len() > MAX_BLOB_BYTES {
-            return Err(ErrorData::invalid_params(
-                format!(
-                    "file is too large to inline ({} bytes, max {MAX_BLOB_BYTES}); use the text resource instead",
-                    data.len()
+            .map_err(|error| match error {
+                Error::Validation(message) => ErrorData::invalid_params(
+                    format!("{message}; use the text resource instead"),
+                    None,
                 ),
-                None,
-            ));
-        }
+                other => resource_error(other),
+            })?
+            .ok_or_else(|| ErrorData::resource_not_found("document has no stored file", None))?;
         let blob = base64::engine::general_purpose::STANDARD.encode(data);
         Ok(ReadResourceResult::new(vec![ResourceContents::blob(
             blob,

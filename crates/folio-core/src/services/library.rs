@@ -284,12 +284,22 @@ impl LibraryService {
         Ok((DocumentDetail { document, tags }, page))
     }
 
-    /// Original file bytes of a document, if one was stored
-    pub async fn read_file(&self, vault: VaultId, id: Id) -> Result<Option<(Document, Vec<u8>)>> {
+    /// Original bytes, rejecting files larger than `max_bytes` before collection.
+    pub async fn read_file(
+        &self,
+        vault: VaultId,
+        id: Id,
+        max_bytes: usize,
+    ) -> Result<Option<(Document, Vec<u8>)>> {
         let document = self.require_document(vault, id).await?;
         match document.file_path.clone() {
             Some(path) => {
-                let data = self.files.get_bytes(&path).await?;
+                let data = self
+                    .files
+                    .get(&path)
+                    .await?
+                    .into_bytes_limited(max_bytes)
+                    .await?;
                 Ok(Some((document, data)))
             }
             None => Ok(None),

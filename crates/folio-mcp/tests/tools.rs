@@ -280,6 +280,41 @@ async fn resources_expose_document_text_and_file() {
 }
 
 #[tokio::test]
+async fn oversized_file_resource_suggests_text_resource() {
+    let fx = Fixture::new().await;
+    let (document, _) = fx
+        .library
+        .upload(
+            fx.vault,
+            folio_core::services::NewUpload {
+                filename: "large.txt".into(),
+                title: None,
+                mime_type: Some("text/plain".into()),
+                data: vec![b'x'; 5 * 1024 * 1024 + 1],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let client = fx.in_process_client().await;
+
+    let error = client
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(format!(
+            "folio://documents/{}/file",
+            document.id
+        )))
+        .await
+        .unwrap_err();
+
+    let rmcp::service::ServiceError::McpError(error) = error else {
+        panic!("expected a protocol error");
+    };
+    assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+    assert!(error.message.contains("5242880"));
+    assert!(error.message.contains("use the text resource instead"));
+}
+
+#[tokio::test]
 async fn literal_matches_rank_before_semantic_hits() {
     let search = Arc::new(FakeSearch::default());
     let fx = Fixture::with_semantic(Arc::new(FakeEmbeddings), Some(search.clone())).await;
