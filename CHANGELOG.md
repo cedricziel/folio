@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.0](https://github.com/cedricziel/folio/compare/v0.5.0...v0.6.0) (2026-11-02)
+
+
+### Features
+
+* **apple:** add library workspace navigation ([2b12762](https://github.com/cedricziel/folio/commit/2b12762505281d5b0c9f4ca516a1ec724bbbd0b0))
+* **apple:** add library workspace navigation ([#195](https://github.com/cedricziel/folio/issues/195)) ([cfdd0be](https://github.com/cedricziel/folio/commit/cfdd0bea147e688d0994312f278988a938985151))
+* **infra:** add bounded document browse queries ([55cb15f](https://github.com/cedricziel/folio/commit/55cb15feef720abe5e19129c326f5e89b3f7434b))
+* **infra:** add bounded document browse queries ([#193](https://github.com/cedricziel/folio/issues/193)) ([642aa16](https://github.com/cedricziel/folio/commit/642aa166f246536d2da0d4a104bf2562d0c4f86d))
+
+
+### Bug Fixes
+
+* **apple:** keep previews alive across navigation cancellation ([ff5b496](https://github.com/cedricziel/folio/commit/ff5b4969c48d6fbd85609af1a1def6829c5b226e))
+* **apple:** keep previews alive across navigation cancellation ([#196](https://github.com/cedricziel/folio/issues/196)) ([9303974](https://github.com/cedricziel/folio/commit/9303974044da0bcd2145eec8903747e3119956a7))
+
+
+### Performance Improvements
+
+* **api:** batch document tag enrichment ([2126fc8](https://github.com/cedricziel/folio/commit/2126fc8d8b315eb088a5171a8abeb1b8b2ca1c0b))
+* **api:** batch document tag enrichment ([#204](https://github.com/cedricziel/folio/issues/204)) ([64297c1](https://github.com/cedricziel/folio/commit/64297c13e206f9304c7ab8bf71e79af35490f389))
+
 ## [0.5.0](https://github.com/cedricziel/folio/releases/tag/v0.5.0) (2026-11-02)
 
 This release expands local document processing and gives webhook actions distinct delivery identities.
