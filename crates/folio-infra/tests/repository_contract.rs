@@ -1697,7 +1697,7 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(recorder.ids().len(), 1);
     let replayed = restarted
         .outbox
-        .replay(recorder.ids()[0] - 1, Utc::now() - Duration::hours(1), 10)
+        .replay(recorder.ids()[0] - 1, orphan.created_at, 10)
         .await
         .unwrap();
     assert_eq!(replayed.len(), 1);
