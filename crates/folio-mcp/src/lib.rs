@@ -5,6 +5,7 @@
 
 mod auth;
 mod server;
+mod skills;
 mod transport;
 
 pub use auth::{bridge_auth_context, McpAuth, SCOPE_READ, SCOPE_WRITE};

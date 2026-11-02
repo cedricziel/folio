@@ -14,9 +14,9 @@ use folio_core::Error;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    Implementation, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
+    CustomRequest, CustomResult, Implementation, ListResourceTemplatesResult, ListResourcesResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    Resource, ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
 };
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
@@ -38,7 +38,8 @@ const DOCUMENT_URI_PREFIX: &str = "folio://documents/";
 const INSTRUCTIONS: &str = "Folio is a personal document archive. Use search_documents to find \
 documents, get_document to read one (long text is paginated with a cursor), and the list_* \
 tools to see which tags, correspondents and document types exist before filtering or \
-updating. Tags, correspondents and document types are referred to by name, case-insensitively.";
+updating. Tags, correspondents and document types are referred to by name, case-insensitively. \
+Skills-capable hosts can load skill://folio-archive/SKILL.md for archive workflows.";
 
 type ToolResult<T> = Result<Json<T>, String>;
 
@@ -740,10 +741,21 @@ impl ServerHandler for FolioMcp {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
+                .enable_extensions_with(
+                    [(crate::skills::EXTENSION.to_string(), serde_json::Map::new())].into(),
+                )
                 .build(),
         )
         .with_server_info(Implementation::new("folio", env!("CARGO_PKG_VERSION")))
         .with_instructions(INSTRUCTIONS)
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _ctx: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, ErrorData> {
+        crate::skills::request(request)
     }
 
     async fn list_resources(
@@ -796,6 +808,9 @@ impl ServerHandler for FolioMcp {
         request: ReadResourceRequestParams,
         ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
+        if request.uri.starts_with("skill:") {
+            return crate::skills::read(&request.uri).map(Into::into);
+        }
         require_scope(&ctx, SCOPE_READ).map_err(forbidden)?;
         let vault = self.vault(&ctx).await.map_err(forbidden)?;
 
