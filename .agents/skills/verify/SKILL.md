@@ -177,6 +177,14 @@ Outbox context regressions in the repository contract cover immutable metadata
 and taxonomy names, transaction rollback, scoped worker events, delete snapshots,
 and payload size independent of OCR content. Run `cargo test -p folio-core events::tests`
 and `cargo test -p folio-infra --test vault_outbox_upgrade` for wire compatibility.
+Run `cargo test -p folio-infra --test workflows` and
+`cargo test -p folio-api --test vaults --test live` for immutable event delivery.
+These regressions delay metadata, rename taxonomy, move documents before dispatch
+and between actions or retries, and verify terminal failures without webhook delivery.
+Legacy tests cover missing nondelete context through the attempt limit, deletion
+compatibility, and no-document test runs. SSE tests cover origin filtering, live
+membership revocation, and exclusion of internal context from the wire. They use
+temporary SQLite state and loopback HTTP servers.
 They cover competing source claims, owner success/failure/cancellation, missing
 originals, and retained trash. Folder tests use temporary inputs; IMAP tests use
 loopback fixtures or disposable GreenMail containers. Never point these suites

@@ -69,15 +69,26 @@ fn request(method: &str, path: &str, signed_in: &SignedIn, body: Body) -> Reques
         .unwrap()
 }
 
-fn broadcast(h: &Harness, id: i64, event: DocumentEvent) {
-    h.state.event_broadcaster.send(OutboxEvent {
-        id,
-        event,
-        origin: EventOrigin::User,
-        context: None,
-        created_at: chrono::Utc::now(),
-        attempts: 1,
-    });
+async fn captured(h: &Harness, vault: VaultId, event: &DocumentEvent) -> OutboxEvent {
+    let id = h
+        .state
+        .outbox
+        .append_document(vault, event, EventOrigin::User)
+        .await
+        .unwrap();
+    h.state
+        .outbox
+        .replay(id - 1, chrono::Utc::now() - chrono::Duration::days(1), 1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap()
+}
+
+async fn broadcast(h: &Harness, vault: VaultId, id: i64, event: DocumentEvent) {
+    let mut event = captured(h, vault, &event).await;
+    event.id = id;
+    h.state.event_broadcaster.send(event);
 }
 
 async fn stream_until(body: &mut Body, marker: &str) -> String {
@@ -344,18 +355,22 @@ async fn event_stream_drops_events_from_unrelated_vaults() {
 
     broadcast(
         &h,
+        bob.vault,
         100,
         DocumentEvent::Created {
             document_id: secret.id,
         },
-    );
+    )
+    .await;
     broadcast(
         &h,
+        alice.vault,
         101,
         DocumentEvent::Created {
             document_id: visible.id,
         },
-    );
+    )
+    .await;
     let delivered = stream_until(&mut body, "Visible stream document").await;
 
     assert!(delivered.contains(&visible.id.to_string()));
@@ -403,11 +418,13 @@ async fn event_stream_closes_before_delivering_events_after_membership_is_revoke
     let mut body = response.into_body();
     broadcast(
         &h,
+        owner.vault,
         200,
         DocumentEvent::Created {
             document_id: visible.id,
         },
-    );
+    )
+    .await;
     stream_until(&mut body, "Before revocation").await;
 
     h.members
@@ -428,11 +445,13 @@ async fn event_stream_closes_before_delivering_events_after_membership_is_revoke
         .unwrap();
     broadcast(
         &h,
+        owner.vault,
         201,
         DocumentEvent::Updated {
             document_id: visible.id,
         },
-    );
+    )
+    .await;
     let next = tokio::time::timeout(Duration::from_secs(2), body.frame())
         .await
         .expect("revocation closes the stream when the next event arrives");
@@ -1590,4 +1609,116 @@ async fn selected_vault_trash_keeps_viewer_and_contributor_ownership_restriction
         .unwrap()
         .purge_requested_at
         .is_none());
+}
+
+#[tokio::test]
+async fn event_stream_rejects_moved_and_unknown_origins_without_exposing_context() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "captured-stream-alice").await;
+    let bob = sign_in(&h, "captured-stream-bob").await;
+    let moved = h
+        .state
+        .document_repo
+        .create(
+            bob.vault,
+            CreateDocument {
+                title: "old-origin document".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let old_origin = captured(
+        &h,
+        bob.vault,
+        &DocumentEvent::Updated {
+            document_id: moved.id,
+        },
+    )
+    .await;
+    h.state
+        .document_repo
+        .move_to(moved.id, bob.vault, alice.vault, None)
+        .await
+        .unwrap();
+    let visible = h
+        .state
+        .document_repo
+        .create(
+            alice.vault,
+            CreateDocument {
+                title: "allowed sentinel".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut permitted = captured(
+        &h,
+        alice.vault,
+        &DocumentEvent::Updated {
+            document_id: visible.id,
+        },
+    )
+    .await;
+    std::sync::Arc::make_mut(permitted.context.as_mut().unwrap()).title =
+        "internal-context-only".into();
+    let removed = h
+        .state
+        .document_repo
+        .create(
+            alice.vault,
+            CreateDocument {
+                title: "legacy removal".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .delete(alice.vault, removed.id)
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .request_purge(alice.vault, removed.id)
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .finalize_purge(alice.vault, removed.id)
+        .await
+        .unwrap();
+    let mut legacy_deleted = h.state.outbox.replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100).await.unwrap().into_iter().find(|event| matches!(event.event, DocumentEvent::Deleted { document_id, .. } if document_id == removed.id)).unwrap();
+    legacy_deleted.context = None;
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", "/events", &alice, Body::empty()))
+        .await
+        .unwrap();
+    let mut body = response.into_body();
+    h.state.event_broadcaster.send(old_origin);
+    h.state.event_broadcaster.send(OutboxEvent {
+        id: 900_000,
+        event: DocumentEvent::Updated {
+            document_id: visible.id,
+        },
+        origin: EventOrigin::User,
+        context: None,
+        created_at: chrono::Utc::now(),
+        attempts: 1,
+    });
+    h.state.event_broadcaster.send(legacy_deleted);
+    h.state.event_broadcaster.send(permitted);
+
+    let delivered = stream_until(&mut body, "allowed sentinel").await;
+
+    assert!(delivered.contains(&format!("document-{}", removed.id)));
+    assert!(!delivered.contains(&moved.id.to_string()));
+    assert!(!delivered.contains("old-origin document"));
+    assert!(!delivered.contains("900000"));
+    assert!(!delivered.contains("internal-context-only"));
+    assert!(!delivered.contains("\"context\""));
 }

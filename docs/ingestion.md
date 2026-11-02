@@ -114,6 +114,10 @@ Rules are workflows. They see the source in two places.
 
 Ingested documents fire `document.uploaded` like any other upload. A separate "ingested" event would duplicate it, and a rule would have to be written twice to cover manual and automatic uploads. The source conditions below narrow a workflow to the ingested ones. Tags that come from folders are already attached when the event fires. Uploads announce this event only after the original is stored and its download path is committed. Failed uploads do not trigger these workflows; a recovered import announces successful completion once.
 
+Queued events retain their originating vault, metadata, taxonomy names, and occurrence time. Later edits do not change their workflow conditions or payloads. Nondeletion events are skipped if the document has moved, entered Trash, or disappeared before dispatch. Queued runs fail with an explanation if this happens before a remaining action; they never follow the document into another vault.
+
+Older nondeletion events without captured context cannot reconstruct their original metadata. Delivery reports that error, retries through the existing outbox policy, and stops at the attempt limit. Real-time clients skip events whose origin is unknown. Older deletion snapshots remain supported; their document and tags stay authoritative, while taxonomy names may come from surviving vocabulary entries.
+
 ### Discarding before import: `ingest.received`
 
 A workflow with the trigger `ingest.received` runs before anything is stored, for each file or attachment a source found. Its only action is `skip_import`: if the conditions match, the item is discarded and nothing is created. `skip_import` is valid only for this trigger. Conditions about stored data (tag, correspondent, document type) never match here, because nothing is stored yet.

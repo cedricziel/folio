@@ -160,9 +160,23 @@ pub(crate) async fn sse_handler(
 
 /// The SSE messages for one event: the JSON event, then its Turbo Streams
 async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent) -> Vec<Event> {
+    if outbox_event.origin_vault() != Some(vault) {
+        tracing::debug!(
+            event_id = outbox_event.id,
+            "Skipping event outside its captured origin vault"
+        );
+        return Vec::new();
+    }
     let id = outbox_event.id.to_string();
     let event = &outbox_event.event;
-    let html = match turbo_streams_for(DefaultVault(vault), state, event).await {
+    let rendered = if matches!(event, DocumentEvent::Deleted { .. }) {
+        DocumentStreams::removed(state, vault, event.document_id())
+            .await
+            .map(|streams| streams.into_html())
+    } else {
+        turbo_streams_for(DefaultVault(vault), state, event).await
+    };
+    let html = match rendered {
         Ok(html) if !html.is_empty() => html,
         Ok(_) => return Vec::new(),
         Err(e) => {
