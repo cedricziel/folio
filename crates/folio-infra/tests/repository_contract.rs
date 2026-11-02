@@ -821,6 +821,18 @@ async fn processing_recovery_contract(r: &Repositories) {
         r.jobs.processing_status(id).await.unwrap(),
         folio_core::ports::ProcessingStatus::Failed
     );
+    let unrelated = r
+        .jobs
+        .enqueue(JobType::GenerateEmbedding { document_id: id })
+        .await
+        .unwrap();
+    assert_eq!(r.jobs.dequeue().await.unwrap().unwrap().id, unrelated);
+    r.jobs.complete(unrelated).await.unwrap();
+    assert_eq!(
+        r.jobs.processing_status(id).await.unwrap(),
+        folio_core::ports::ProcessingStatus::Failed,
+        "successful embedding must not hide a failed processing stage"
+    );
     let retry = r
         .jobs
         .enqueue(JobType::ProcessDocument { document_id: id })
