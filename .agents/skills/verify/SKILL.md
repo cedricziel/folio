@@ -312,6 +312,15 @@ date ranges, owner-only private visibility, shared edit permissions after a role
 change, soft deletion, and rejection of client-supplied ownership or actors.
 These tests exercise models only and do not launch an app or access user data.
 
+Run `cargo test -p folio-infra --test saved_views` for saved-view persistence.
+It requires Docker and uses temporary SQLite files and disposable PostgreSQL
+containers. The shared contract covers owner isolation, shared edit permissions,
+soft deletion, name reuse, actor attribution, and trusted event lineage. It also
+checks that private transitions remain owner-only, event payloads omit queries,
+unchanged and concurrent duplicate updates emit no extra event, and a forced
+outbox failure rolls back creates, updates, and deletes. Never use an existing
+archive for these checks.
+
 ## Verify document repository changes
 
 The shared repository contract covers atomic OCR completion and its outbox event,
