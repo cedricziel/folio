@@ -17,6 +17,7 @@ mod oidc;
 mod pages;
 mod pending;
 mod pwa;
+pub(crate) mod saved_views;
 mod security;
 mod settings;
 mod source_pages;
@@ -131,6 +132,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
 fn api_router() -> Router<AppState> {
     Router::new()
         .route("/vaults", axum::routing::get(vaults::list_vaults))
+        .merge(saved_views::router())
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
         .route("/documents/browse", get(browse::browse_default))

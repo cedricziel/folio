@@ -1,6 +1,7 @@
 //! SQLite adapters
 
 mod auth_repo;
+mod document_entries;
 mod document_repo;
 mod ingest_repo;
 mod outbox;
@@ -15,6 +16,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{ConnectOptions, Connection, SqlitePool};
 
 pub use auth_repo::SqliteAuthStore;
+pub use document_entries::SqliteDocumentEntryRepository;
 pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
@@ -89,3 +91,6 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::Migr
     }
     Ok(())
 }
+
+mod saved_view_repo;
+pub use saved_view_repo::SqliteSavedViewRepository;

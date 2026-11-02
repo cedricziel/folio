@@ -181,6 +181,10 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 
 Folder regressions cover replacement during import, staged retry and restart,
 cancellation, concurrent source instances, and symlink-safe recovery.
+Observation regressions also cover stable keys across staging restart and mailbox
+retry, new keys for replacements and UIDVALIDITY resets, and attachment identity
+when allowed content types change. Core identity tests cover length-prefixed
+hashing and the Message-ID fallback without publishing raw locators.
 
 Run `cargo test -p folio-infra --test ingest_pipeline --test ingest_folder --test ingest_email`
 with a task-specific temporary `CARGO_TARGET_DIR` and bounded `CARGO_BUILD_JOBS`.
@@ -197,6 +201,14 @@ Outbox context regressions in the repository contract cover immutable metadata
 and taxonomy names, transaction rollback, scoped worker events, delete snapshots,
 and payload size independent of OCR content. Run `cargo test -p folio-core events::tests`
 and `cargo test -p folio-infra --test vault_outbox_upgrade` for wire compatibility.
+For grouped workflow conditions, run `cargo test -p folio-core --features openapi --lib`
+and `cargo test -p folio-api --test workflows --test openapi`. These cover nested
+all/any/none matching, depth and size limits, historical snapshots, legacy JSON,
+recursive schema references, and preserving API-created groups through HTML edits.
+The core suite also verifies trigger registration, duplicate and unknown selections,
+condition catalogs, and action compatibility across document, event, and import targets.
+The API fixture uses temporary SQLite state and loopback webhook receivers.
+
 Run `cargo test -p folio-infra --test workflows` and
 `cargo test -p folio-api --test vaults --test live` for immutable event delivery.
 These regressions delay metadata, rename taxonomy, move documents before dispatch
@@ -302,7 +314,27 @@ date ranges, owner-only private visibility, shared edit permissions after a role
 change, soft deletion, and rejection of client-supplied ownership or actors.
 These tests exercise models only and do not launch an app or access user data.
 
+Run `cargo test -p folio-infra --test saved_views` for saved-view persistence.
+It requires Docker and uses temporary SQLite files and disposable PostgreSQL
+containers. The shared contract covers owner isolation, shared edit permissions,
+soft deletion, name reuse, actor attribution, and trusted event lineage. It also
+checks that private transitions remain owner-only, event payloads omit queries,
+unchanged and concurrent duplicate updates emit no extra event, and a forced
+outbox failure rolls back creates, updates, and deletes. Never use an existing
+archive for these checks.
+
+Run `cargo test -p folio-api --test saved_views --test openapi` for the JSON API.
+Temporary SQLite fixtures cover private visibility, viewer sharing restrictions,
+cross-vault filter rejection, rename precision, audit identity, and deletion.
+PATCH must reject explicit null and client-supplied ownership. Regenerate the
+OpenAPI contract with `make openapi` when the route schema changes.
+
 ## Verify document repository changes
+
+The shared repository contract covers atomic OCR completion and its outbox event,
+including empty output, concurrent repeats, unchanged results, rejected writes, and
+rollback when the outbox rejects insertion. The worker suite also covers retries
+after an empty OCR completion without repeating OCR or its completion event.
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`
 with Docker available. The shared contract uses disposable SQLite databases and
@@ -341,6 +373,9 @@ lease loss or renewal timeout, and progress while renewal waits for a connection
 The worker suite also rejects missing embedding vectors before storing chunks or
 publishing completion. Run `cargo test -p folio-core --test embedding_batch` for
 missing or surplus vectors, malformed dimensions, and nonfinite provider output.
+Run `cargo test -p folio-core --test processing_attempts` for retry state, stale
+attempt rejection, terminal immutability, persisted-state restoration, and attempt
+counter exhaustion. These model tests do not verify transactional lease fencing.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
 
