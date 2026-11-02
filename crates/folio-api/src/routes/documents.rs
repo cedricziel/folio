@@ -577,10 +577,8 @@ async fn set_correspondent(
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<SetCorrespondentForm>,
 ) -> ApiResult<Response> {
-    let correspondent_id = form
-        .correspondent_id
-        .filter(|s| !s.is_empty())
-        .and_then(|s| Uuid::parse_str(&s).ok());
+    let correspondent_id =
+        super::parse_classification_id(form.correspondent_id, "correspondent_id")?;
 
     state
         .document_repo
@@ -610,10 +608,8 @@ async fn set_document_type(
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<SetDocumentTypeForm>,
 ) -> ApiResult<Response> {
-    let document_type_id = form
-        .document_type_id
-        .filter(|s| !s.is_empty())
-        .and_then(|s| Uuid::parse_str(&s).ok());
+    let document_type_id =
+        super::parse_classification_id(form.document_type_id, "document_type_id")?;
 
     state
         .document_repo

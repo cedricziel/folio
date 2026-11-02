@@ -33,6 +33,24 @@ pub use health::HealthChecks;
 
 use crate::state::AppState;
 
+fn parse_classification_id(
+    value: Option<String>,
+    field: &str,
+) -> crate::error::ApiResult<Option<uuid::Uuid>> {
+    let value = value.ok_or_else(|| {
+        crate::error::ApiError::bad_request(format!(
+            "{field} is required; submit an empty value to clear it"
+        ))
+    })?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        uuid::Uuid::parse_str(&value).map(Some).map_err(|_| {
+            crate::error::ApiError::bad_request(format!("{field} must be a UUID or empty"))
+        })
+    }
+}
+
 /// Create the main application router
 pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
     let health = health::router(state.health_checks.clone());

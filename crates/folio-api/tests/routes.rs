@@ -671,3 +671,109 @@ async fn file_responses_are_hardened_against_active_content() {
         .unwrap()
         .starts_with("inline"));
 }
+
+#[tokio::test]
+async fn classification_forms_reject_invalid_or_missing_ids_without_clearing() {
+    let app = test_app().await;
+    let correspondent = app
+        .state
+        .correspondent_repo
+        .create(
+            app.vault,
+            CreateCorrespondent {
+                name: "Existing sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let document_type = app
+        .state
+        .document_type_repo
+        .create(
+            app.vault,
+            folio_core::models::CreateDocumentType {
+                name: "Existing type".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let document = app
+        .state
+        .document_repo
+        .create(
+            app.vault,
+            CreateDocument {
+                title: "Classified document".into(),
+                correspondent_id: Some(correspondent.id),
+                document_type_id: Some(document_type.id),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    for prefix in ["/documents", "/api/documents"] {
+        for (route, field, id) in [
+            ("correspondent", "correspondent_id", correspondent.id),
+            ("document_type", "document_type_id", document_type.id),
+        ] {
+            let uri = format!("{prefix}/{}/{route}", document.id);
+            for body in [format!("{field}=not-a-uuid"), String::new()] {
+                let response = app
+                    .router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(&uri)
+                            .header("content-type", "application/x-www-form-urlencoded")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+                let saved = app
+                    .state
+                    .document_repo
+                    .find_by_id(app.vault, document.id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(saved.correspondent_id, Some(correspondent.id));
+                assert_eq!(saved.document_type_id, Some(document_type.id));
+            }
+            for value in [String::new(), id.to_string()] {
+                let response = app
+                    .router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(&uri)
+                            .header("content-type", "application/x-www-form-urlencoded")
+                            .body(Body::from(format!("{field}={value}")))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::SEE_OTHER, "{uri}");
+                let saved = app
+                    .state
+                    .document_repo
+                    .find_by_id(app.vault, document.id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let expected = if value.is_empty() { None } else { Some(id) };
+                if field == "correspondent_id" {
+                    assert_eq!(saved.correspondent_id, expected);
+                    assert_eq!(saved.document_type_id, Some(document_type.id));
+                } else {
+                    assert_eq!(saved.document_type_id, expected);
+                    assert_eq!(saved.correspondent_id, Some(correspondent.id));
+                }
+            }
+        }
+    }
+}
