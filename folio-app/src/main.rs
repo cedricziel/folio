@@ -366,6 +366,7 @@ async fn main() -> Result<()> {
             enabled_by_default: mcp_default,
             allowed_hosts: config.mcp.allowed_hosts.clone(),
         },
+            ..McpOptions::default()
     );
     let mcp = if config.auth.required {
         mcp.layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))
