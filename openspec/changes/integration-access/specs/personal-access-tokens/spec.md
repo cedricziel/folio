@@ -63,3 +63,19 @@ Personal tokens SHALL authenticate only their selected resource and SHALL inters
 - **THEN** their audience, refresh, and vault behavior remains compatible
 - **WHEN** authentication is optional and a request carries a personal token
 - **THEN** its scopes and validity are enforced while credential-free requests retain existing behavior
+
+### Requirement: MCP session ownership
+
+Stateful MCP transport sessions SHALL remain bound to the authenticated account, client or personal token, scopes, and current vault access.
+
+#### Scenario: Reject another caller's session
+- **WHEN** a different authenticated caller sends POST, GET, or DELETE `/mcp` using an existing session identifier
+- **THEN** the server returns 404 without replaying output, executing a tool, or deleting the session
+
+#### Scenario: Recheck access before replay
+- **WHEN** a caller's vault membership or role changes after session initialization
+- **THEN** GET `/mcp` for that session returns 404 rather than replaying data under outdated permissions
+
+#### Scenario: Preserve OAuth refresh
+- **WHEN** the same OAuth account and client use a replacement access token with unchanged audience, scopes, and vault access
+- **THEN** their existing MCP session remains usable
