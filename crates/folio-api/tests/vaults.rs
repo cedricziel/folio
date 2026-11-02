@@ -49,7 +49,7 @@ async fn sign_in(h: &Harness, name: &str) -> SignedIn {
         .await
         .unwrap();
     let user = UserId::from(name);
-    let vault = h.state.vaults.provision_user(&user, false).await.unwrap();
+    let vault = h.state.vaults.provision_user(&user).await.unwrap();
     SignedIn {
         user,
         vault,

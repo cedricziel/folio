@@ -8,8 +8,6 @@ use crate::error::Result;
 use crate::models::{Principal, UserId, VaultId, VaultRole};
 use crate::ports::{MembershipRepository, VaultRepository};
 
-/// Name of the vault that receives pre-existing data on upgrade
-pub const ARCHIVE_NAME: &str = "Archive";
 /// Name of the vault every user gets for their own papers
 pub const PERSONAL_NAME: &str = "Personal";
 
@@ -33,34 +31,22 @@ impl VaultService {
 
     /// Make sure the user owns a `Personal` vault and has a default vault
     ///
-    /// The instance owner also claims every `Archive` that has no direct owner
-    /// (the upgrade creates it before any user exists), and that becomes their
-    /// default. Safe to call on every request: it does nothing once done.
-    pub async fn provision_user(&self, user: &UserId, is_owner: bool) -> Result<VaultId> {
+    /// Preserve an existing default. Safe to call on every request.
+    pub async fn provision_user(&self, user: &UserId) -> Result<VaultId> {
         let _guard = self.provisioning.lock().await;
         if self.vaults.provisioned(user).await? {
+            if let Some(vault) = self.vaults.default_for_user(user).await? {
+                return Ok(vault);
+            }
             return self
                 .vaults
-                .default_for_user(user)
+                .list_for_user(user)
                 .await?
+                .first()
+                .map(|(vault, _)| vault.id)
                 .ok_or_else(|| crate::error::Error::Repository("no default vault".into()));
         }
         let had_default = self.vaults.default_for_user(user).await?;
-
-        let mut claimed = None;
-        if is_owner {
-            for archive in self.vaults.find_ownerless(ARCHIVE_NAME).await? {
-                self.members
-                    .grant(
-                        archive,
-                        &Principal::User(user.clone()),
-                        VaultRole::Owner,
-                        None,
-                    )
-                    .await?;
-                claimed.get_or_insert(archive);
-            }
-        }
 
         let existing_personal = self
             .vaults
@@ -87,20 +73,7 @@ impl VaultService {
                 .await?;
             vault.id
         };
-        let migrated_archive = if is_owner {
-            match had_default {
-                Some(id) => self
-                    .vaults
-                    .find(id)
-                    .await?
-                    .filter(|v| v.name == ARCHIVE_NAME)
-                    .map(|v| v.id),
-                None => None,
-            }
-        } else {
-            None
-        };
-        let wanted = claimed.or(migrated_archive).unwrap_or(personal);
+        let wanted = had_default.unwrap_or(personal);
         self.vaults.set_default(user, wanted).await?;
         self.vaults.mark_provisioned(user).await?;
         Ok(wanted)
@@ -108,9 +81,9 @@ impl VaultService {
 
     /// The vault a request lands in: the user's default (provisioned on first
     /// use), or the instance default when there is no user
-    pub async fn default_vault(&self, user: Option<(&UserId, bool)>) -> Result<VaultId> {
+    pub async fn default_vault(&self, user: Option<&UserId>) -> Result<VaultId> {
         match user {
-            Some((user, is_owner)) => self.provision_user(user, is_owner).await,
+            Some(user) => self.provision_user(user).await,
             None => self.vaults.instance_default().await,
         }
     }

@@ -5,7 +5,7 @@ use folio_core::error::Error;
 use folio_core::models::{
     CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, DocumentFilter, Id,
     Principal, ProcessingStage, ProcessingStatus, UpdateCorrespondent, UpdateDocument,
-    UpdateDocumentType, UpdateTag, UserId, VaultRole,
+    UpdateDocumentType, UpdateTag, UserId, VaultId, VaultRole,
 };
 use folio_core::ports::EmbeddedChunk;
 use folio_core::services::VaultService;
@@ -594,7 +594,7 @@ async fn membership_contract(r: &Repositories) {
 async fn provisioning_contract(r: &Repositories) {
     let owner = user(r, "provision-owner", true).await;
     let service = VaultService::new(r.vaults.clone(), r.members.clone());
-    let personal = service.default_vault(Some((&owner, true))).await.unwrap();
+    let personal = service.default_vault(Some(&owner)).await.unwrap();
     assert_eq!(
         r.vaults.find(personal).await.unwrap().unwrap().name,
         "Personal"
@@ -604,10 +604,7 @@ async fn provisioning_contract(r: &Repositories) {
         Some(VaultRole::Owner)
     );
     r.vaults.rename(personal, "Renamed personal").await.unwrap();
-    assert_eq!(
-        service.default_vault(Some((&owner, true))).await.unwrap(),
-        personal
-    );
+    assert_eq!(service.default_vault(Some(&owner)).await.unwrap(), personal);
     assert_eq!(r.vaults.list_for_user(&owner).await.unwrap().len(), 1);
 
     let newcomer = user(r, "provision-group-member", false).await;
@@ -630,10 +627,7 @@ async fn provisioning_contract(r: &Repositories) {
         .set_external_groups(newcomer.as_str(), &["provision-group".into()])
         .await
         .unwrap();
-    let newcomer_default = service
-        .default_vault(Some((&newcomer, false)))
-        .await
-        .unwrap();
+    let newcomer_default = service.default_vault(Some(&newcomer)).await.unwrap();
     assert_ne!(newcomer_default, shared);
     assert_eq!(
         r.vaults.find(newcomer_default).await.unwrap().unwrap().name,
@@ -648,43 +642,31 @@ async fn provisioning_contract(r: &Repositories) {
     );
     r.vaults.delete(newcomer_default).await.unwrap();
     assert_eq!(
-        service
-            .default_vault(Some((&newcomer, false)))
-            .await
-            .unwrap(),
+        service.default_vault(Some(&newcomer)).await.unwrap(),
         shared
     );
     r.auth
         .set_external_groups(newcomer.as_str(), &[])
         .await
         .unwrap();
-    assert!(service
-        .default_vault(Some((&newcomer, false)))
-        .await
-        .is_err());
+    assert!(service.default_vault(Some(&newcomer)).await.is_err());
     assert!(r.vaults.list_for_user(&newcomer).await.unwrap().is_empty());
 
     let first_owner = user(r, "ownerless-first-owner", true).await;
     let archive = r.vaults.create("Archive", None).await.unwrap().id;
-    assert_eq!(
-        service
-            .default_vault(Some((&first_owner, true)))
-            .await
-            .unwrap(),
-        archive
-    );
+    let personal = service.default_vault(Some(&first_owner)).await.unwrap();
+    assert_ne!(personal, archive);
     assert_eq!(
         r.access
             .effective_role(&first_owner, archive)
             .await
             .unwrap(),
-        Some(VaultRole::Owner)
+        None
     );
     let owned = r.vaults.list_for_user(&first_owner).await.unwrap();
-    assert_eq!(owned.len(), 2);
-    assert!(owned
-        .iter()
-        .any(|(v, role)| v.name == "Personal" && *role == VaultRole::Owner));
+    assert_eq!(owned.len(), 1);
+    assert_eq!(owned[0].0.name, "Personal");
+    assert_eq!(owned[0].1, VaultRole::Owner);
 }
 
 async fn foundation_contract(db: &Database) {
@@ -779,7 +761,25 @@ async fn migration_contract(db: &Database, fixture: Fixture) {
     }
     migration_suffix(db).await;
     let r = db.repositories().await;
-    let ownerless = r.vaults.find_ownerless("Archive").await.unwrap();
+    let query = "SELECT v.id FROM vaults v WHERE v.name = 'Archive' AND NOT EXISTS (
+        SELECT 1 FROM vault_members m WHERE m.vault_id = v.id
+        AND m.role = 'owner' AND m.user_id IS NOT NULL) ORDER BY v.created_at, v.id";
+    let ownerless: Vec<VaultId> = match db {
+        Database::Sqlite(pool) => sqlx::query_scalar::<_, String>(query)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|id| VaultId(id.parse().unwrap()))
+            .collect(),
+        Database::Postgres(pool) => sqlx::query_scalar::<_, uuid::Uuid>(query)
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(VaultId)
+            .collect(),
+    };
     match fixture {
         Fixture::Empty => {
             assert!(ownerless.is_empty());
@@ -852,20 +852,19 @@ async fn migration_contract(db: &Database, fixture: Fixture) {
                     None
                 );
                 let service = VaultService::new(r.vaults.clone(), r.members.clone());
-                assert_eq!(
-                    service.default_vault(Some((&old, true))).await.unwrap(),
-                    archive
-                );
+                assert_eq!(service.default_vault(Some(&old)).await.unwrap(), archive);
                 assert_eq!(r.vaults.list_for_user(&old).await.unwrap().len(), 2);
             } else {
                 assert_eq!(ownerless, [archive]);
                 let first = user(&r, "first-after-upgrade", true).await;
                 let service = VaultService::new(r.vaults.clone(), r.members.clone());
+                let personal = service.default_vault(Some(&first)).await.unwrap();
+                assert_ne!(personal, archive);
+                assert_eq!(r.vaults.list_for_user(&first).await.unwrap().len(), 1);
                 assert_eq!(
-                    service.default_vault(Some((&first, true))).await.unwrap(),
-                    archive
+                    r.access.effective_role(&first, archive).await.unwrap(),
+                    None
                 );
-                assert_eq!(r.vaults.list_for_user(&first).await.unwrap().len(), 2);
             }
             if let Database::Sqlite(pool) = db {
                 assert!(sqlx::query("PRAGMA foreign_key_check")

@@ -18,7 +18,7 @@ pub use library::{
 pub use outbox_dispatcher::{
     retry_delay, BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher,
 };
-pub use vaults::{VaultService, ARCHIVE_NAME, PERSONAL_NAME};
+pub use vaults::{VaultService, PERSONAL_NAME};
 pub use workflow_engine::WorkflowEngine;
 
 use std::sync::Arc;

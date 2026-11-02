@@ -64,10 +64,7 @@ impl FolioMcp {
     async fn vault(&self, ctx: &RequestContext<RoleServer>) -> Result<VaultId, String> {
         let user = crate::auth::subject_of(&ctx.extensions).map(UserId::from);
         self.vaults
-            .default_vault(
-                user.as_ref()
-                    .map(|u| (u, crate::auth::owner_of(&ctx.extensions))),
-            )
+            .default_vault(user.as_ref())
             .await
             .map_err(tool_error)
     }
