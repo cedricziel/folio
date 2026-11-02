@@ -166,22 +166,28 @@ struct Caller {
     csrf: String,
 }
 
-async fn caller(auth: &AuthState, headers: &HeaderMap) -> Result<Caller, Response> {
+async fn caller(auth: &AuthState, headers: &HeaderMap) -> Result<Caller, Box<Response>> {
     match auth.session(headers).await {
         Some((session_id, user)) => Ok(Caller {
             csrf: auth.csrf_session_token(&session_id),
             session_id,
             user,
         }),
-        None => Err(Redirect::to("/login?next=%2Fsettings%2Fsecurity").into_response()),
+        None => Err(Box::new(
+            Redirect::to("/login?next=%2Fsettings%2Fsecurity").into_response(),
+        )),
     }
 }
 
 /// A caller who may change local credentials, with the form's CSRF token verified.
-async fn checked(auth: &AuthState, headers: &HeaderMap, csrf: &str) -> Result<Caller, Response> {
+async fn checked(
+    auth: &AuthState,
+    headers: &HeaderMap,
+    csrf: &str,
+) -> Result<Caller, Box<Response>> {
     let caller = caller(auth, headers).await?;
     if !auth.csrf_session_ok(headers, csrf).await || caller.user.auth_source != SOURCE_LOCAL {
-        return Err(StatusCode::FORBIDDEN.into_response());
+        return Err(Box::new(StatusCode::FORBIDDEN.into_response()));
     }
     Ok(caller)
 }
@@ -303,7 +309,7 @@ async fn page(
 ) -> Response {
     let caller = match caller(&auth, &headers).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     render_page(&state, &auth, &caller, q.n.as_deref(), Vec::new())
         .await
@@ -347,7 +353,7 @@ async fn change_password(
 ) -> Response {
     let caller = match checked(&auth, &headers, &form.csrf).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match password_ok(&auth, &caller.user, &form.current_password).await {
         Err(key) => return back(key),
@@ -394,7 +400,7 @@ async fn totp_start(
 ) -> Response {
     let caller = match checked(&auth, &headers, &form.csrf).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let sealed = auth
         .secret_box
@@ -427,7 +433,7 @@ async fn totp_confirm(
 ) -> Response {
     let caller = match checked(&auth, &headers, &form.csrf).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let user = &caller.user;
     if auth.code_by_user.check(&user.id).is_err() {
@@ -475,7 +481,7 @@ async fn totp_cancel(
 ) -> Response {
     let caller = match checked(&auth, &headers, &form.csrf).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let pending = auth
         .store
@@ -503,19 +509,19 @@ async fn reauthenticate(
     auth: &AuthState,
     headers: &HeaderMap,
     form: &PasswordCodeForm,
-) -> Result<Caller, Response> {
+) -> Result<Caller, Box<Response>> {
     let caller = checked(auth, headers, &form.csrf).await?;
     if auth.code_by_user.check(&caller.user.id).is_err() {
-        return Err(back("locked"));
+        return Err(Box::new(back("locked")));
     }
     match password_ok(auth, &caller.user, &form.password).await {
-        Err(key) => return Err(back(key)),
-        Ok(false) => return Err(back("bad-factor")),
+        Err(key) => return Err(Box::new(back(key))),
+        Ok(false) => return Err(Box::new(back("bad-factor"))),
         Ok(true) => {}
     }
     if !verify_second_factor(auth, &caller.user, &form.code).await {
         auth.code_by_user.record_failure(&caller.user.id);
-        return Err(back("bad-factor"));
+        return Err(Box::new(back("bad-factor")));
     }
     auth.code_by_user.record_success(&caller.user.id);
     Ok(caller)
@@ -528,7 +534,7 @@ async fn totp_disable(
 ) -> Response {
     let caller = match reauthenticate(&auth, &headers, &form).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match auth.store.delete_totp(&caller.user.id).await {
         Ok(()) => back("totp-off"),
@@ -547,7 +553,7 @@ async fn totp_recovery(
 ) -> Response {
     let caller = match reauthenticate(&auth, &headers, &form).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let codes = mfa::generate_recovery_codes();
     let hashes = hashes_of(&auth, &caller.user.id, &codes);
@@ -571,7 +577,7 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 }
 
 /// Checks the session, the `X-CSRF` header and that the account is local.
-async fn checked_json(auth: &AuthState, headers: &HeaderMap) -> Result<Caller, Response> {
+async fn checked_json(auth: &AuthState, headers: &HeaderMap) -> Result<Caller, Box<Response>> {
     let submitted = headers
         .get("x-csrf")
         .and_then(|v| v.to_str().ok())
@@ -585,7 +591,7 @@ async fn passkey_register_start(
 ) -> Response {
     let caller = match checked_json(&auth, &headers).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let (Some(webauthn), Some(uuid)) = (auth.webauthn.clone(), parse_user_uuid(&caller.user))
     else {
@@ -641,7 +647,7 @@ async fn passkey_register_finish(
 ) -> Response {
     let caller = match checked_json(&auth, &headers).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let Some(webauthn) = auth.webauthn.clone() else {
         return json_error(StatusCode::NOT_FOUND, "Passkeys are not available.");
@@ -696,7 +702,7 @@ async fn passkey_rename(
 ) -> Response {
     let caller = match checked(&auth, &headers, &form.csrf).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let name = form.name.trim();
     if name.is_empty() || name.chars().count() > MAX_NAME_LEN {
@@ -717,7 +723,7 @@ async fn passkey_delete(
 ) -> Response {
     let caller = match checked(&auth, &headers, &form.csrf).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     match auth.store.delete_passkey(&caller.user.id, &id).await {
         Ok(true) => back("passkey-deleted"),
