@@ -615,3 +615,96 @@ async fn default_browse_keeps_filters_and_enrichment_with_paging_parameters() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn browse_search_combines_text_with_all_tags_before_paging() {
+    let h = common::harness().await;
+    let mut tags = Vec::new();
+    for name in ["Tax", "Home"] {
+        tags.push(
+            h.state
+                .tag_repo
+                .create(
+                    h.vault,
+                    folio_core::models::CreateTag {
+                        name: name.into(),
+                        color: None,
+                    },
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    for (title, content, both) in [
+        ("A unrelated", "Other content", true),
+        ("B insurance", "Single tag", false),
+        ("C matching", "Insurance policy", true),
+        ("D insurance", "Second match", true),
+    ] {
+        let doc = h
+            .state
+            .document_repo
+            .create(
+                h.vault,
+                CreateDocument {
+                    title: title.into(),
+                    content: Some(content.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        h.state
+            .document_repo
+            .add_tag(h.vault, doc.id, tags[0].id)
+            .await
+            .unwrap();
+        if both {
+            h.state
+                .document_repo
+                .add_tag(h.vault, doc.id, tags[1].id)
+                .await
+                .unwrap();
+        }
+    }
+    let uri = format!(
+        "/api/documents/browse?q=insurance&tag_id={}&tag_id={}&limit=1&sort=title",
+        tags[0].id, tags[1].id
+    );
+    let response = h.app.clone().oneshot(common::get(&uri)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(first["documents"][0]["title"], "C matching");
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(common::get(&format!("{uri}&cursor={cursor}")))
+        .await
+        .unwrap();
+    let second: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(second["documents"][0]["title"], "D insurance");
+    assert!(second["next_cursor"].is_null());
+    let changed = format!("{}&cursor={cursor}", uri.replace("q=insurance", "q=policy"));
+    let response = h.app.clone().oneshot(common::get(&changed)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn browse_enforces_the_search_term_limit() {
+    let h = common::harness().await;
+    for (words, expected) in [
+        (32, StatusCode::OK),
+        (33, StatusCode::BAD_REQUEST),
+        (1000, StatusCode::BAD_REQUEST),
+    ] {
+        let query = vec!["word"; words].join("+");
+        let response = h
+            .app
+            .clone()
+            .oneshot(common::get(&format!("/api/documents/browse?q={query}")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}

@@ -98,7 +98,15 @@ removed after the tests. Do not point these tests at an existing archive.
 For paged HTTP browsing, run `cargo test -p folio-api --test vaults browse`.
 The route tests cover bounded continuations, filter/tag enrichment, malformed
 queries, legacy list compatibility, invisible vaults, and membership revocation
-between pages. The shared route harness owns a temporary SQLite directory and
+between pages. Search coverage verifies title/content matches outside the first
+unfiltered page, AND semantics for tags, and rejection of cursors after text
+changes. The shared route harness owns a temporary SQLite directory and
 removes it when dropped. Regenerate OpenAPI with `make openapi`; the Apple schema
 input is a symlink to that file, so run the isolated Swift package suite above
 after schema changes.
+
+When temporary build storage is constrained, run Rust and Apple verification
+sequentially. Use `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0` consistently
+for the Rust run and a task-specific `CARGO_TARGET_DIR`; remove that target after
+verification before starting the Apple build. These settings omit debug symbols,
+not tests.
