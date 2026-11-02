@@ -61,7 +61,7 @@ reqwest = { workspace = true }
 sqlx = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tracing-subscriber = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.11"
 tempfile = "3"
 http-body-util = "0.1"
