@@ -94,6 +94,7 @@ impl IngestConfig {
             enabled: c.enabled,
             origin: SourceOrigin::Config,
             config: SourceConfig::Folder(c.settings.clone()),
+            vault_id: None,
         });
         let mailboxes = self.email.iter().map(|(name, c)| IngestionSourceDef {
             id: config_source_id("email", name),
@@ -101,6 +102,7 @@ impl IngestConfig {
             enabled: c.enabled,
             origin: SourceOrigin::Config,
             config: SourceConfig::Email(c.settings.clone()),
+            vault_id: None,
         });
         folders.chain(mailboxes).collect()
     }

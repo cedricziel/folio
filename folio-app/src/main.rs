@@ -13,7 +13,7 @@ use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
 use folio_core::services::{
     BroadcastConsumer, DispatcherConfig, Importer, IngestPipeline, IngestScheduler, LibraryService,
-    OutboxDispatcher, WorkflowEngine,
+    OutboxDispatcher, VaultService, WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
 use folio_infra::{
@@ -122,6 +122,7 @@ async fn main() -> Result<()> {
     let source_repo = repos.sources;
     let ledger = repos.ledger;
     let auth_store = repos.auth;
+    let vault_service = Arc::new(VaultService::new(repos.vaults.clone(), repos.members));
 
     if matches!(mode, Mode::CleanupLegacyStorage) {
         let cleaned = cleanup_legacy_layout(store.as_ref(), document_repo.as_ref())
@@ -139,7 +140,7 @@ async fn main() -> Result<()> {
     .await
     .context("Failed to migrate stored files to object keys")?;
 
-    let stored_documents = document_repo.list(None).await.map(|d| d.len()).unwrap_or(0);
+    let stored_documents = document_repo.list_all().await.map(|d| d.len()).unwrap_or(0);
     telemetry::metrics().documents_changed(stored_documents as i64);
 
     // Create AI services (providers follow the database settings, config.toml keys as fallback)
@@ -190,6 +191,7 @@ async fn main() -> Result<()> {
         configured_sources.clone(),
         source_factory.clone(),
         ingest_pipeline,
+        repos.vaults,
     );
 
     info!("Services initialized");
@@ -245,7 +247,7 @@ async fn main() -> Result<()> {
     ));
 
     if matches!(mode, Mode::McpStdio) {
-        let served = folio_mcp::serve_stdio(library).await;
+        let served = folio_mcp::serve_stdio(library, vault_service.clone()).await;
         stop_worker(shutdown_tx, worker_handle).await;
         return served.map_err(|e| anyhow::anyhow!(e));
     }
@@ -283,6 +285,8 @@ async fn main() -> Result<()> {
         webhook_client,
         public_url,
         IngestionState::new(source_repo, ledger, configured_sources),
+        vault_service.clone(),
+        repos.access,
     )
     .with_health_checks(health_checks)
     .with_mcp_default(mcp_default);
@@ -398,6 +402,7 @@ async fn main() -> Result<()> {
     // Create router
     let mcp = folio_mcp::router(
         library,
+        vault_service,
         mcp_settings,
         McpOptions {
             enabled_by_default: mcp_default,
@@ -406,11 +411,14 @@ async fn main() -> Result<()> {
         },
     );
     let mcp = if config.auth.required {
-        mcp.layer(axum::middleware::from_fn(folio_mcp::bridge_auth_context))
-            .layer(axum::middleware::from_fn_with_state(
-                auth.validator("/mcp"),
-                folio_auth::require_bearer,
-            ))
+        mcp.layer(axum::middleware::from_fn_with_state(
+            auth_store.clone(),
+            folio_mcp::bridge_auth_context,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            auth.validator("/mcp"),
+            folio_auth::require_bearer,
+        ))
     } else {
         mcp
     };

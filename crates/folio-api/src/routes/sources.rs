@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use folio_core::models::VaultId;
 use serde::Serialize;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -20,6 +21,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -45,7 +47,11 @@ pub struct SourceView {
     pub status: Option<SourceStatus>,
 }
 
-pub(crate) async fn view(state: &AppState, def: IngestionSourceDef) -> ApiResult<SourceView> {
+pub(crate) async fn view(
+    DefaultVault(_vault): DefaultVault,
+    state: &AppState,
+    def: IngestionSourceDef,
+) -> ApiResult<SourceView> {
     let status = state.ingestion.managed.status(def.id).await?;
     Ok(SourceView {
         id: def.id,
@@ -58,14 +64,37 @@ pub(crate) async fn view(state: &AppState, def: IngestionSourceDef) -> ApiResult
 }
 
 /// Configured sources first, then the ones created in the UI
-pub(crate) async fn all_sources(state: &AppState) -> ApiResult<Vec<IngestionSourceDef>> {
-    let mut all: Vec<_> = state.ingestion.configured.iter().cloned().collect();
-    all.extend(state.ingestion.managed.list().await?);
+pub(crate) async fn all_sources(
+    DefaultVault(vault): DefaultVault,
+    state: &AppState,
+) -> ApiResult<Vec<IngestionSourceDef>> {
+    let instance_vault = if state
+        .ingestion
+        .configured
+        .iter()
+        .any(|source| source.vault_id.is_none())
+    {
+        Some(state.vaults.default_vault(None).await?)
+    } else {
+        None
+    };
+    let mut all: Vec<_> = state
+        .ingestion
+        .configured
+        .iter()
+        .filter(|source| source.vault_id.or(instance_vault) == Some(vault))
+        .cloned()
+        .collect();
+    all.extend(state.ingestion.managed.list(vault).await?);
     Ok(all)
 }
 
-pub(crate) async fn find(state: &AppState, id: Id) -> ApiResult<IngestionSourceDef> {
-    all_sources(state)
+pub(crate) async fn find(
+    vault: VaultId,
+    state: &AppState,
+    id: Id,
+) -> ApiResult<IngestionSourceDef> {
+    all_sources(DefaultVault(vault), state)
         .await?
         .into_iter()
         .find(|d| d.id == id)
@@ -120,11 +149,12 @@ pub(crate) fn prepare_input(
     )
 )]
 pub(crate) async fn list_sources(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<SourceView>>> {
     let mut views = Vec::new();
-    for def in all_sources(&state).await? {
-        views.push(view(&state, def).await?);
+    for def in all_sources(DefaultVault(vault), &state).await? {
+        views.push(view(DefaultVault(vault), &state, def).await?);
     }
     Ok(Json(views))
 }
@@ -143,11 +173,12 @@ pub(crate) async fn list_sources(
     )
 )]
 pub(crate) async fn get_source(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceView>> {
-    let def = find(&state, id).await?;
-    Ok(Json(view(&state, def).await?))
+    let def = find(vault, &state, id).await?;
+    Ok(Json(view(DefaultVault(vault), &state, def).await?))
 }
 
 /// Create an ingestion source
@@ -166,12 +197,16 @@ pub(crate) async fn get_source(
     )
 )]
 pub(crate) async fn create_source(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<(StatusCode, Json<SourceView>)> {
     prepare_input(&mut input, None)?;
-    let def = state.ingestion.managed.create(input).await?;
-    Ok((StatusCode::CREATED, Json(view(&state, def).await?)))
+    let def = state.ingestion.managed.create(vault, input).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(view(DefaultVault(vault), &state, def).await?),
+    ))
 }
 
 /// Replace an ingestion source
@@ -192,15 +227,16 @@ pub(crate) async fn create_source(
     )
 )]
 pub(crate) async fn update_source(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<Json<SourceView>> {
-    let existing = find(&state, id).await?;
+    let existing = find(vault, &state, id).await?;
     require_managed(&existing)?;
     prepare_input(&mut input, Some(&existing))?;
-    let def = state.ingestion.managed.update(id, input).await?;
-    Ok(Json(view(&state, def).await?))
+    let def = state.ingestion.managed.update(vault, id, input).await?;
+    Ok(Json(view(DefaultVault(vault), &state, def).await?))
 }
 
 /// Delete an ingestion source
@@ -218,12 +254,13 @@ pub(crate) async fn update_source(
     )
 )]
 pub(crate) async fn delete_source(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let existing = find(&state, id).await?;
+    let existing = find(vault, &state, id).await?;
     require_managed(&existing)?;
-    state.ingestion.managed.delete(id).await?;
+    state.ingestion.managed.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -266,9 +303,10 @@ pub(crate) async fn run_test(state: &AppState, def: &IngestionSourceDef) -> Sour
     )
 )]
 pub(crate) async fn test_source(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceTestResult>> {
-    let def = find(&state, id).await?;
+    let def = find(vault, &state, id).await?;
     Ok(Json(run_test(&state, &def).await))
 }

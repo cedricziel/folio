@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use folio_core::models::{Document, DocumentSource, Id, SourceKind, Tag};
+use folio_core::models::{Document, DocumentSource, Id, SourceKind, Tag, UserId, VaultId};
 use folio_core::ports::ProcessingStatus;
 use folio_core::services::{
-    DocumentDetail, DocumentQuery, LibraryService, MetadataUpdate, NewUpload,
+    DocumentDetail, DocumentQuery, LibraryService, MetadataUpdate, NewUpload, VaultService,
 };
 use folio_core::Error;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -46,21 +46,35 @@ type ToolResult<T> = Result<Json<T>, String>;
 #[derive(Clone)]
 pub struct FolioMcp {
     library: Arc<LibraryService>,
+    vaults: Arc<VaultService>,
     tool_router: ToolRouter<Self>,
 }
 
 impl FolioMcp {
-    pub fn new(library: Arc<LibraryService>) -> Self {
+    pub fn new(library: Arc<LibraryService>, vaults: Arc<VaultService>) -> Self {
         Self {
             library,
+            vaults,
             tool_router: Self::tool_router(),
         }
     }
 
-    async fn names(&self) -> Result<Names, String> {
+    /// The caller's default vault; tools get an explicit `vault` argument later
+    async fn vault(&self, ctx: &RequestContext<RoleServer>) -> Result<VaultId, String> {
+        let user = crate::auth::subject_of(&ctx.extensions).map(UserId::from);
+        self.vaults
+            .default_vault(
+                user.as_ref()
+                    .map(|u| (u, crate::auth::owner_of(&ctx.extensions))),
+            )
+            .await
+            .map_err(tool_error)
+    }
+
+    async fn names(&self, vault: VaultId) -> Result<Names, String> {
         let correspondents = self
             .library
-            .list_correspondents()
+            .list_correspondents(vault)
             .await
             .map_err(tool_error)?
             .into_iter()
@@ -68,7 +82,7 @@ impl FolioMcp {
             .collect();
         let document_types = self
             .library
-            .list_document_types()
+            .list_document_types(vault)
             .await
             .map_err(tool_error)?
             .into_iter()
@@ -262,6 +276,7 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<SearchOutput> {
         require_scope(&ctx, SCOPE_READ)?;
+        let vault = self.vault(&ctx).await?;
 
         let query = DocumentQuery {
             text: args.query,
@@ -283,8 +298,12 @@ impl FolioMcp {
                 .unwrap_or(DEFAULT_SEARCH_LIMIT)
                 .clamp(1, MAX_SEARCH_LIMIT),
         };
-        let hits = self.library.search(query).await.map_err(tool_error)?;
-        let names = self.names().await?;
+        let hits = self
+            .library
+            .search(vault, query)
+            .await
+            .map_err(tool_error)?;
+        let names = self.names(vault).await?;
 
         let results: Vec<_> = hits
             .into_iter()
@@ -319,6 +338,7 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<DocumentOutput> {
         require_scope(&ctx, SCOPE_READ)?;
+        let vault = self.vault(&ctx).await?;
 
         let id = parse_id(&args.id)?;
         let cursor = args
@@ -336,10 +356,10 @@ impl FolioMcp {
 
         let (detail, page) = self
             .library
-            .read_document(id, cursor, max_chars)
+            .read_document(vault, id, cursor, max_chars)
             .await
             .map_err(tool_error)?;
-        let names = self.names().await?;
+        let names = self.names(vault).await?;
         let doc = &detail.document;
 
         Ok(Json(DocumentOutput {
@@ -371,7 +391,8 @@ impl FolioMcp {
     )]
     async fn list_tags(&self, ctx: RequestContext<RoleServer>) -> ToolResult<TagsOutput> {
         require_scope(&ctx, SCOPE_READ)?;
-        let tags = self.library.list_tags().await.map_err(tool_error)?;
+        let vault = self.vault(&ctx).await?;
+        let tags = self.library.list_tags(vault).await.map_err(tool_error)?;
         Ok(Json(TagsOutput {
             tags: tags
                 .into_iter()
@@ -399,9 +420,10 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<CorrespondentsOutput> {
         require_scope(&ctx, SCOPE_READ)?;
+        let vault = self.vault(&ctx).await?;
         let items = self
             .library
-            .list_correspondents()
+            .list_correspondents(vault)
             .await
             .map_err(tool_error)?;
         Ok(Json(CorrespondentsOutput {
@@ -430,9 +452,10 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<DocumentTypesOutput> {
         require_scope(&ctx, SCOPE_READ)?;
+        let vault = self.vault(&ctx).await?;
         let items = self
             .library
-            .list_document_types()
+            .list_document_types(vault)
             .await
             .map_err(tool_error)?;
         Ok(Json(DocumentTypesOutput {
@@ -462,6 +485,7 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<MetadataOutput> {
         require_scope(&ctx, SCOPE_WRITE)?;
+        let vault = self.vault(&ctx).await?;
 
         let id = parse_id(&args.id)?;
         let clearable = |v: Option<String>| {
@@ -473,6 +497,7 @@ impl FolioMcp {
         let detail = self
             .library
             .update_metadata(
+                vault,
                 id,
                 MetadataUpdate {
                     title: args.title,
@@ -483,7 +508,7 @@ impl FolioMcp {
             )
             .await
             .map_err(tool_error)?;
-        self.metadata_output(detail).await
+        self.metadata_output(vault, detail).await
     }
 
     #[tool(
@@ -502,13 +527,14 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<MetadataOutput> {
         require_scope(&ctx, SCOPE_WRITE)?;
+        let vault = self.vault(&ctx).await?;
         let id = parse_id(&args.id)?;
         let detail = self
             .library
-            .add_tags(id, &args.tags)
+            .add_tags(vault, id, &args.tags)
             .await
             .map_err(tool_error)?;
-        self.metadata_output(detail).await
+        self.metadata_output(vault, detail).await
     }
 
     #[tool(
@@ -527,13 +553,14 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<MetadataOutput> {
         require_scope(&ctx, SCOPE_WRITE)?;
+        let vault = self.vault(&ctx).await?;
         let id = parse_id(&args.id)?;
         let detail = self
             .library
-            .remove_tags(id, &args.tags)
+            .remove_tags(vault, id, &args.tags)
             .await
             .map_err(tool_error)?;
-        self.metadata_output(detail).await
+        self.metadata_output(vault, detail).await
     }
 
     #[tool(
@@ -552,6 +579,7 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<UploadOutput> {
         require_scope(&ctx, SCOPE_WRITE)?;
+        let vault = self.vault(&ctx).await?;
 
         let data = base64::engine::general_purpose::STANDARD
             .decode(args.content_base64.trim())
@@ -565,14 +593,18 @@ impl FolioMcp {
 
         let (document, status) = self
             .library
-            .upload(NewUpload {
-                filename: args.filename,
-                data,
-                title: args.title,
-                mime_type: args.mime_type,
-                source: DocumentSource::of(SourceKind::Mcp),
-                ..Default::default()
-            })
+            .upload(
+                vault,
+                NewUpload {
+                    filename: args.filename,
+                    data,
+                    title: args.title,
+                    mime_type: args.mime_type,
+                    source: DocumentSource::of(SourceKind::Mcp),
+                    uploaded_by: crate::auth::subject_of(&ctx.extensions).map(UserId::from),
+                    ..Default::default()
+                },
+            )
             .await
             .map_err(tool_error)?;
         Ok(Json(UploadOutput {
@@ -597,10 +629,11 @@ impl FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult<StatusOutput> {
         require_scope(&ctx, SCOPE_READ)?;
+        let vault = self.vault(&ctx).await?;
         let id = parse_id(&args.id)?;
         let status = self
             .library
-            .processing_status(id)
+            .processing_status(vault, id)
             .await
             .map_err(tool_error)?;
         Ok(Json(StatusOutput {
@@ -611,8 +644,12 @@ impl FolioMcp {
 }
 
 impl FolioMcp {
-    async fn metadata_output(&self, detail: DocumentDetail) -> ToolResult<MetadataOutput> {
-        let names = self.names().await?;
+    async fn metadata_output(
+        &self,
+        vault: VaultId,
+        detail: DocumentDetail,
+    ) -> ToolResult<MetadataOutput> {
+        let names = self.names(vault).await?;
         let doc = &detail.document;
         Ok(Json(MetadataOutput {
             id: doc.id.to_string(),
@@ -623,14 +660,18 @@ impl FolioMcp {
         }))
     }
 
-    async fn read_document_text(&self, id: Id) -> Result<ReadResourceResult, ErrorData> {
+    async fn read_document_text(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<ReadResourceResult, ErrorData> {
         let (detail, page) = self
             .library
-            .read_document(id, None, MAX_RESOURCE_TEXT_CHARS)
+            .read_document(vault, id, None, MAX_RESOURCE_TEXT_CHARS)
             .await
             .map_err(resource_error)?;
         let names = self
-            .names()
+            .names(vault)
             .await
             .map_err(|e| ErrorData::internal_error(e, None))?;
         let doc = &detail.document;
@@ -659,10 +700,14 @@ impl FolioMcp {
         .with_mime_type("text/plain")]))
     }
 
-    async fn read_document_file(&self, id: Id) -> Result<ReadResourceResult, ErrorData> {
+    async fn read_document_file(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<ReadResourceResult, ErrorData> {
         let (document, data) = self
             .library
-            .read_file(id)
+            .read_file(vault, id)
             .await
             .map_err(resource_error)?
             .ok_or_else(|| ErrorData::resource_not_found("document has no stored file", None))?;
@@ -707,12 +752,16 @@ impl ServerHandler for FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         require_scope(&ctx, SCOPE_READ).map_err(forbidden)?;
+        let vault = self.vault(&ctx).await.map_err(forbidden)?;
         let hits = self
             .library
-            .search(DocumentQuery {
-                limit: RESOURCE_LIST_LIMIT,
-                ..Default::default()
-            })
+            .search(
+                vault,
+                DocumentQuery {
+                    limit: RESOURCE_LIST_LIMIT,
+                    ..Default::default()
+                },
+            )
             .await
             .map_err(resource_error)?;
         let resources = hits
@@ -748,6 +797,7 @@ impl ServerHandler for FolioMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         require_scope(&ctx, SCOPE_READ).map_err(forbidden)?;
+        let vault = self.vault(&ctx).await.map_err(forbidden)?;
 
         let rest = request
             .uri
@@ -762,9 +812,9 @@ impl ServerHandler for FolioMcp {
         let id = parse_id(id).map_err(|e| ErrorData::invalid_params(e, None))?;
 
         let result = if want_file {
-            self.read_document_file(id).await?
+            self.read_document_file(vault, id).await?
         } else {
-            self.read_document_text(id).await?
+            self.read_document_text(vault, id).await?
         };
         Ok(result.into())
     }
@@ -824,7 +874,10 @@ fn parse_date(s: &str, last_day: bool) -> Result<DateTime<Utc>, String> {
 /// Domain errors the caller can act on are shown as-is; the rest stay in the log
 fn tool_error(err: Error) -> String {
     match err {
-        Error::NotFound { .. } | Error::Validation(_) | Error::Duplicate { .. } => err.to_string(),
+        Error::NotFound { .. }
+        | Error::Validation(_)
+        | Error::Duplicate { .. }
+        | Error::Conflict(_) => err.to_string(),
         other => {
             tracing::error!("MCP tool failed: {other}");
             "internal error while accessing the archive".to_string()

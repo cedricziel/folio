@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::models::Id;
+use crate::models::{Id, VaultId};
 
 /// Result of running an OCR engine over a document
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -126,27 +126,32 @@ pub struct SearchResult {
 #[async_trait]
 pub trait SearchService: Send + Sync {
     /// Replace all stored chunks of a document with freshly embedded ones
+    ///
+    /// Fails with `NotFound` when the document is not in `vault`.
     async fn store_chunks(
         &self,
+        vault: VaultId,
         document_id: Id,
         model: &str,
         chunks: &[EmbeddedChunk],
     ) -> Result<()>;
 
     /// Delete all stored chunks of a document
-    async fn delete_embedding(&self, document_id: Id) -> Result<()>;
+    async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()>;
 
     /// Mark every vector produced by a model other than `active_model` as stale
     ///
-    /// Returns the number of documents that now have no usable vectors.
+    /// Returns the number of documents that now have no usable vectors. This is
+    /// instance-wide: the active model is not a per-vault setting.
     async fn mark_stale_except(&self, active_model: &str) -> Result<u64>;
 
-    /// Search for documents by semantic similarity
+    /// Search the documents of one vault by semantic similarity
     ///
     /// Only vectors produced by `model` are compared. Chunk scores are
     /// aggregated per document (best chunk wins).
     async fn search(
         &self,
+        vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,

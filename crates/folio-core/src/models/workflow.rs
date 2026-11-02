@@ -468,9 +468,10 @@ impl WorkflowRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::VaultId;
 
     fn doc(filename: &str, mime: &str) -> Document {
-        Document::new("t")
+        Document::new(VaultId::new(), "t")
             .with_filename(filename)
             .with_mime_type(mime)
     }
@@ -489,7 +490,7 @@ mod tests {
 
     #[test]
     fn empty_conditions_match_everything() {
-        assert!(WorkflowConditions::default().matches(&Document::new("t"), &[]));
+        assert!(WorkflowConditions::default().matches(&Document::new(VaultId::new(), "t"), &[]));
     }
 
     #[test]
@@ -530,7 +531,7 @@ mod tests {
 
     #[test]
     fn conditions_on_absent_fields_do_not_match() {
-        let bare = Document::new("t");
+        let bare = Document::new(VaultId::new(), "t");
         let by_mime = WorkflowConditions {
             mime_type: Some("*".into()),
             ..Default::default()

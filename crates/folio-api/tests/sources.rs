@@ -56,6 +56,7 @@ async fn json_request(
 
 fn configured_folder(path: &str) -> IngestionSourceDef {
     IngestionSourceDef {
+        vault_id: None,
         id: Uuid::new_v4(),
         name: "scans".into(),
         enabled: true,
@@ -104,7 +105,7 @@ async fn passwords_are_masked_and_a_masked_update_keeps_the_stored_one() {
         .state
         .ingestion
         .managed
-        .find(id.parse().unwrap())
+        .find(app.vault, id.parse().unwrap())
         .await
         .unwrap()
         .unwrap();

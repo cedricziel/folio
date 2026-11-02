@@ -6,7 +6,7 @@ use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Id, IngestionSourceDef, IngestionSourceInput, LedgerEntry, SourceOrigin, SourceStatus,
+    Id, IngestionSourceDef, IngestionSourceInput, LedgerEntry, SourceOrigin, SourceStatus, VaultId,
 };
 use folio_core::ports::{IngestLedger, SourceRepository};
 
@@ -43,6 +43,7 @@ fn source_from_row(row: &SqliteRow) -> Result<IngestionSourceDef> {
         enabled: row.get::<i64, _>("enabled") != 0,
         origin: SourceOrigin::Managed,
         config: serde_json::from_str(row.get("config")).map_err(repo_err)?,
+        vault_id: Some(VaultId(parse_id(row.get("vault_id"))?)),
     })
 }
 
@@ -59,7 +60,18 @@ fn write_err(e: sqlx::Error, name: &str) -> Error {
 
 #[async_trait]
 impl SourceRepository for SqliteSourceRepository {
-    async fn list(&self) -> Result<Vec<IngestionSourceDef>> {
+    async fn list(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>> {
+        let rows = sqlx::query(
+            "SELECT * FROM ingestion_sources WHERE vault_id = ? ORDER BY created_at, name",
+        )
+        .bind(vault.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.iter().map(source_from_row).collect()
+    }
+
+    async fn list_all(&self) -> Result<Vec<IngestionSourceDef>> {
         let rows = sqlx::query("SELECT * FROM ingestion_sources ORDER BY created_at, name")
             .fetch_all(&self.pool)
             .await
@@ -67,23 +79,30 @@ impl SourceRepository for SqliteSourceRepository {
         rows.iter().map(source_from_row).collect()
     }
 
-    async fn find(&self, id: Id) -> Result<Option<IngestionSourceDef>> {
-        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = ?")
+    async fn find(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>> {
+        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ?")
             .bind(id.to_string())
+            .bind(vault.to_string())
             .fetch_optional(&self.pool)
             .await
             .map_err(repo_err)?;
         row.as_ref().map(source_from_row).transpose()
     }
 
-    async fn create(&self, input: IngestionSourceInput) -> Result<IngestionSourceDef> {
+    async fn create(
+        &self,
+        vault: VaultId,
+        input: IngestionSourceInput,
+    ) -> Result<IngestionSourceDef> {
         let id = Id::new_v4();
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO ingestion_sources (id, name, enabled, kind, config, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ingestion_sources
+                 (id, vault_id, name, enabled, kind, config, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
+        .bind(vault.to_string())
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.config.kind().as_str())
@@ -93,15 +112,21 @@ impl SourceRepository for SqliteSourceRepository {
         .execute(&self.pool)
         .await
         .map_err(|e| write_err(e, &input.name))?;
-        self.find(id)
+        self.find(vault, id)
             .await?
             .ok_or_else(|| repo_err("Source vanished after insert"))
     }
 
-    async fn update(&self, id: Id, input: IngestionSourceInput) -> Result<IngestionSourceDef> {
+    async fn update(
+        &self,
+        vault: VaultId,
+        id: Id,
+        input: IngestionSourceInput,
+    ) -> Result<IngestionSourceDef> {
         let result = sqlx::query(
             "UPDATE ingestion_sources
-             SET name = ?, enabled = ?, kind = ?, config = ?, updated_at = ? WHERE id = ?",
+             SET name = ?, enabled = ?, kind = ?, config = ?, updated_at = ?
+             WHERE id = ? AND vault_id = ?",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -109,6 +134,7 @@ impl SourceRepository for SqliteSourceRepository {
         .bind(serde_json::to_string(&input.config).map_err(repo_err)?)
         .bind(Utc::now().to_rfc3339())
         .bind(id.to_string())
+        .bind(vault.to_string())
         .execute(&self.pool)
         .await
         .map_err(|e| write_err(e, &input.name))?;
@@ -118,14 +144,15 @@ impl SourceRepository for SqliteSourceRepository {
                 id: id.to_string(),
             });
         }
-        self.find(id)
+        self.find(vault, id)
             .await?
             .ok_or_else(|| repo_err("Source vanished after update"))
     }
 
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM ingestion_sources WHERE id = ?")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM ingestion_sources WHERE id = ? AND vault_id = ?")
             .bind(id.to_string())
+            .bind(vault.to_string())
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -201,12 +228,13 @@ impl SqliteIngestLedger {
 
 #[async_trait]
 impl IngestLedger for SqliteIngestLedger {
-    async fn insert(&self, entry: &LedgerEntry) -> Result<bool> {
+    async fn insert(&self, vault: VaultId, entry: &LedgerEntry) -> Result<bool> {
         let result = sqlx::query(
-            "INSERT INTO ingest_ledger (key, source_id, document_id, outcome, created_at)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(key) DO NOTHING",
+            "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(vault_id, key) DO NOTHING",
         )
+        .bind(vault.to_string())
         .bind(&entry.key)
         .bind(entry.source_id.to_string())
         .bind(entry.document_id.map(|id| id.to_string()))
@@ -218,8 +246,9 @@ impl IngestLedger for SqliteIngestLedger {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn find(&self, key: &str) -> Result<Option<LedgerEntry>> {
-        let row = sqlx::query("SELECT * FROM ingest_ledger WHERE key = ?")
+    async fn find(&self, vault: VaultId, key: &str) -> Result<Option<LedgerEntry>> {
+        let row = sqlx::query("SELECT * FROM ingest_ledger WHERE vault_id = ? AND key = ?")
+            .bind(vault.to_string())
             .bind(key)
             .fetch_optional(&self.pool)
             .await
@@ -237,19 +266,29 @@ impl IngestLedger for SqliteIngestLedger {
         .transpose()
     }
 
-    async fn complete(&self, key: &str, outcome: &str, document_id: Option<Id>) -> Result<()> {
-        sqlx::query("UPDATE ingest_ledger SET outcome = ?, document_id = ? WHERE key = ?")
-            .bind(outcome)
-            .bind(document_id.map(|id| id.to_string()))
-            .bind(key)
-            .execute(&self.pool)
-            .await
-            .map_err(repo_err)?;
+    async fn complete(
+        &self,
+        vault: VaultId,
+        key: &str,
+        outcome: &str,
+        document_id: Option<Id>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE ingest_ledger SET outcome = ?, document_id = ? WHERE vault_id = ? AND key = ?",
+        )
+        .bind(outcome)
+        .bind(document_id.map(|id| id.to_string()))
+        .bind(vault.to_string())
+        .bind(key)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(())
     }
 
-    async fn delete(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM ingest_ledger WHERE key = ?")
+    async fn delete(&self, vault: VaultId, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM ingest_ledger WHERE vault_id = ? AND key = ?")
+            .bind(vault.to_string())
             .bind(key)
             .execute(&self.pool)
             .await

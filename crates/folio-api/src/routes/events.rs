@@ -15,7 +15,9 @@ use tokio::sync::broadcast;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::vault::{DefaultVault, Uploader};
 use folio_core::events::{DocumentEvent, OutboxEvent};
+use folio_core::models::{UserId, VaultId};
 
 use super::pages::DocumentStreams;
 
@@ -24,13 +26,30 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Turbo Streams that bring open pages up to date after `event`.
-pub async fn turbo_streams_for(state: &AppState, event: &DocumentEvent) -> ApiResult<String> {
+pub async fn turbo_streams_for(
+    DefaultVault(vault): DefaultVault,
+    state: &AppState,
+    event: &DocumentEvent,
+) -> ApiResult<String> {
     let streams = match event {
-        DocumentEvent::Deleted { document_id, .. } => {
-            DocumentStreams::removed(state, *document_id).await?
+        DocumentEvent::Deleted {
+            document_id,
+            snapshot,
+        } => {
+            if snapshot
+                .as_ref()
+                .is_none_or(|s| s.document.vault_id != vault)
+            {
+                return Ok(String::new());
+            }
+            DocumentStreams::removed(state, vault, *document_id).await?
         }
         _ => {
-            let Some(document) = state.document_repo.find_by_id(event.document_id()).await? else {
+            let Some(document) = state
+                .document_repo
+                .find_by_id(vault, event.document_id())
+                .await?
+            else {
                 return Ok(String::new());
             };
             match event {
@@ -69,6 +88,8 @@ const REPLAY_LIMIT: u32 = 500;
     )
 )]
 pub(crate) async fn sse_handler(
+    DefaultVault(vault): DefaultVault,
+    Uploader(user): Uploader,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -80,6 +101,8 @@ pub(crate) async fn sse_handler(
     // Subscribe before replaying, so nothing falls into the gap between the two.
     let mut connection = Connection {
         rx: state.event_broadcaster.subscribe(),
+        vault,
+        user,
         state,
         pending: VecDeque::new(),
         last_id: last_event_id,
@@ -93,7 +116,13 @@ pub(crate) async fn sse_handler(
 
     let stream = stream::unfold(connection, |mut conn| async move {
         let event = conn.next_event().await?;
-        let frames = frames_for(&conn.state, &event).await;
+        if let Some(user) = &conn.user {
+            match conn.state.access.effective_role(user, conn.vault).await {
+                Ok(Some(_)) => {}
+                _ => return None,
+            }
+        }
+        let frames = frames_for(&conn.state, conn.vault, &event).await;
         Some((stream::iter(frames.into_iter().map(Ok)), conn))
     });
 
@@ -105,9 +134,17 @@ pub(crate) async fn sse_handler(
 }
 
 /// The SSE messages for one event: the JSON event, then its Turbo Streams
-async fn frames_for(state: &AppState, outbox_event: &OutboxEvent) -> Vec<Event> {
+async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent) -> Vec<Event> {
     let id = outbox_event.id.to_string();
     let event = &outbox_event.event;
+    let html = match turbo_streams_for(DefaultVault(vault), state, event).await {
+        Ok(html) if !html.is_empty() => html,
+        Ok(_) => return Vec::new(),
+        Err(e) => {
+            tracing::warn!("Failed to render turbo streams: {e:?}");
+            return Vec::new();
+        }
+    };
     let mut frames = Vec::with_capacity(2);
     if let Ok(data) = serde_json::to_string(event) {
         frames.push(
@@ -117,16 +154,14 @@ async fn frames_for(state: &AppState, outbox_event: &OutboxEvent) -> Vec<Event> 
                 .data(data),
         );
     }
-    match turbo_streams_for(state, event).await {
-        Ok(html) if !html.is_empty() => frames.push(Event::default().id(id).data(html)),
-        Ok(_) => {}
-        Err(e) => tracing::warn!("Failed to render turbo streams: {:?}", e),
-    }
+    frames.push(Event::default().id(id).data(html));
     frames
 }
 
 /// One open SSE connection
 struct Connection {
+    vault: VaultId,
+    user: Option<UserId>,
     state: AppState,
     rx: broadcast::Receiver<OutboxEvent>,
     /// Replayed events not yet sent

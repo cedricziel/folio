@@ -11,7 +11,7 @@ use axum::{
     Router,
 };
 use folio_core::ports::SettingsRepository;
-use folio_core::services::LibraryService;
+use folio_core::services::{LibraryService, VaultService};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
@@ -90,6 +90,7 @@ async fn enabled_gate(State(gate): State<Gate>, req: Request, next: Next) -> Res
 /// extensions.
 pub fn router(
     library: Arc<LibraryService>,
+    vaults: Arc<VaultService>,
     settings: Arc<dyn SettingsRepository>,
     options: McpOptions,
 ) -> Router {
@@ -98,7 +99,7 @@ pub fn router(
     config.allowed_hosts.extend(options.allowed_hosts);
 
     let service = StreamableHttpService::new(
-        move || Ok(FolioMcp::new(library.clone())),
+        move || Ok(FolioMcp::new(library.clone(), vaults.clone())),
         Arc::new(LocalSessionManager::default()),
         config,
     );
@@ -117,8 +118,9 @@ pub fn router(
 /// Serve MCP over stdin/stdout until the client disconnects
 pub async fn serve_stdio(
     library: Arc<LibraryService>,
+    vaults: Arc<VaultService>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let running = FolioMcp::new(library)
+    let running = FolioMcp::new(library, vaults)
         .serve(rmcp::transport::stdio())
         .await?;
     running.waiting().await?;

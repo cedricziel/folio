@@ -84,6 +84,7 @@ impl From<DomainError> for ApiError {
                 StatusCode::CONFLICT,
                 format!("{} with {} '{}' already exists", entity_type, field, value),
             ),
+            DomainError::Conflict(msg) => ApiError::new(StatusCode::CONFLICT, msg),
             DomainError::Repository(msg) => {
                 tracing::error!("Repository error: {}", msg);
                 ApiError::internal("Database error")

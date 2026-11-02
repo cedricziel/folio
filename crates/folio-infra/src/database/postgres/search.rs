@@ -14,7 +14,7 @@ use tracing::{info, instrument, warn};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
-use folio_core::models::Id;
+use folio_core::models::{Id, VaultId};
 use folio_core::ports::{EmbeddedChunk, SearchResult, SearchService};
 
 use crate::ai::cosine_similarity;
@@ -92,6 +92,7 @@ impl PostgresSearchService {
 
     async fn search_pgvector(
         &self,
+        vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,
@@ -99,12 +100,12 @@ impl PostgresSearchService {
         // Best chunk per document; rows of another dimension cannot be compared.
         let rows: Vec<(Uuid, String, f64)> = sqlx::query_as(
             "SELECT document_id, text, score FROM (
-                 SELECT DISTINCT ON (document_id) document_id, text,
-                        1 - (embedding_vec <=> $1::vector) AS score
-                 FROM document_chunks
-                 WHERE model = $2 AND NOT stale
-                   AND embedding_vec IS NOT NULL AND vector_dims(embedding_vec) = $3
-                 ORDER BY document_id, embedding_vec <=> $1::vector
+                 SELECT DISTINCT ON (c.document_id) c.document_id, c.text,
+                        1 - (c.embedding_vec <=> $1::vector) AS score
+                 FROM document_chunks c JOIN documents d ON d.id = c.document_id
+                 WHERE d.vault_id = $5 AND c.model = $2 AND NOT c.stale
+                   AND c.embedding_vec IS NOT NULL AND vector_dims(c.embedding_vec) = $3
+                 ORDER BY c.document_id, c.embedding_vec <=> $1::vector
              ) best
              ORDER BY score DESC
              LIMIT $4",
@@ -113,6 +114,7 @@ impl PostgresSearchService {
         .bind(model)
         .bind(query_embedding.len() as i32)
         .bind(limit as i64)
+        .bind(vault.0)
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)?;
@@ -129,15 +131,18 @@ impl PostgresSearchService {
 
     async fn search_in_rust(
         &self,
+        vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         let rows: Vec<(Uuid, String, Vec<f32>)> = sqlx::query_as(
-            "SELECT document_id, text, embedding FROM document_chunks
-             WHERE model = $1 AND NOT stale",
+            "SELECT c.document_id, c.text, c.embedding
+             FROM document_chunks c JOIN documents d ON d.id = c.document_id
+             WHERE d.vault_id = $2 AND c.model = $1 AND NOT c.stale",
         )
         .bind(model)
+        .bind(vault.0)
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)?;
@@ -171,11 +176,26 @@ impl PostgresSearchService {
 impl SearchService for PostgresSearchService {
     async fn store_chunks(
         &self,
+        vault: VaultId,
         document_id: Id,
         model: &str,
         chunks: &[EmbeddedChunk],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
+
+        let in_vault: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2")
+                .bind(document_id)
+                .bind(vault.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(repo_err)?;
+        if in_vault.is_none() {
+            return Err(Error::NotFound {
+                entity_type: "Document",
+                id: document_id.to_string(),
+            });
+        }
 
         sqlx::query("DELETE FROM document_chunks WHERE document_id = $1")
             .bind(document_id)
@@ -219,12 +239,16 @@ impl SearchService for PostgresSearchService {
         tx.commit().await.map_err(repo_err)
     }
 
-    async fn delete_embedding(&self, document_id: Id) -> Result<()> {
-        sqlx::query("DELETE FROM document_chunks WHERE document_id = $1")
-            .bind(document_id)
-            .execute(&self.pool)
-            .await
-            .map_err(repo_err)?;
+    async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM document_chunks WHERE document_id = $1
+               AND document_id IN (SELECT id FROM documents WHERE vault_id = $2)",
+        )
+        .bind(document_id)
+        .bind(vault.0)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(())
     }
 
@@ -250,14 +274,17 @@ impl SearchService for PostgresSearchService {
     #[instrument(skip(self, query_embedding))]
     async fn search(
         &self,
+        vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
         if self.use_pgvector {
-            self.search_pgvector(model, query_embedding, limit).await
+            self.search_pgvector(vault, model, query_embedding, limit)
+                .await
         } else {
-            self.search_in_rust(model, query_embedding, limit).await
+            self.search_in_rust(vault, model, query_embedding, limit)
+                .await
         }
     }
 }

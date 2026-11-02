@@ -10,13 +10,14 @@ use folio_core::models::{
 };
 use folio_core::ports::DocumentStore;
 use folio_core::ports::{
-    DocumentRepository, IngestLedger, IngestSink, OutboxStore, WorkflowRepository,
+    DocumentRepository, IngestLedger, OutboxStore, VaultIngest, WorkflowRepository,
 };
 use folio_core::services::{Importer, IngestPipeline, WorkflowEngine};
 use folio_core::DocumentEvent;
 use folio_infra::{Database, ObjectStoreDocumentStore, StorageFileMetadata};
 
 pub struct Harness {
+    pub vault: folio_core::models::VaultId,
     pub pipeline: Arc<IngestPipeline>,
     pub ledger: Arc<dyn IngestLedger>,
     pub store: Arc<dyn DocumentStore>,
@@ -43,6 +44,7 @@ impl Harness {
             .unwrap();
         database.migrate().await.unwrap();
         let repos = database.repositories().await;
+        let vault = repos.vaults.instance_default().await.unwrap();
 
         let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
         let documents = repos.documents;
@@ -71,6 +73,7 @@ impl Harness {
         .with_file_wait(Duration::ZERO);
 
         Self {
+            vault,
             pipeline,
             ledger,
             store,
@@ -97,21 +100,27 @@ impl Harness {
     }
 
     pub async fn ingest(&self, item: IngestItem) -> IngestOutcome {
-        self.pipeline.ingest(self.source_id, item).await.unwrap()
+        self.pipeline
+            .ingest(self.vault, self.source_id, item)
+            .await
+            .unwrap()
     }
 
     pub async fn rule(&self, name: &str, source: SourceConditions) {
         self.workflows
-            .create(WorkflowInput {
-                name: name.into(),
-                enabled: true,
-                trigger: WorkflowTrigger::IngestReceived,
-                conditions: WorkflowConditions {
-                    source,
-                    ..Default::default()
+            .create(
+                self.vault,
+                WorkflowInput {
+                    name: name.into(),
+                    enabled: true,
+                    trigger: WorkflowTrigger::IngestReceived,
+                    conditions: WorkflowConditions {
+                        source,
+                        ..Default::default()
+                    },
+                    actions: vec![WorkflowAction::SkipImport],
                 },
-                actions: vec![WorkflowAction::SkipImport],
-            })
+            )
             .await
             .unwrap();
     }

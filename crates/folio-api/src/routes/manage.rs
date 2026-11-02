@@ -18,6 +18,7 @@ use folio_core::models::{
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 use super::view::{Nav, Sidebar};
 
@@ -83,13 +84,16 @@ struct ManageTemplate {
     tags: Vec<Tag>,
 }
 
-async fn manage_page(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    let correspondents = state.correspondent_repo.list().await?;
-    let document_types = state.document_type_repo.list().await?;
-    let tags = state.tag_repo.list().await?;
+async fn manage_page(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
+    let correspondents = state.correspondent_repo.list(vault).await?;
+    let document_types = state.document_type_repo.list(vault).await?;
+    let tags = state.tag_repo.list(vault).await?;
 
     let template = ManageTemplate {
-        sidebar: Sidebar::load(&state, Nav::Manage).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::Manage).await?,
         title: "Manage - Folio".to_string(),
         correspondents,
         document_types,
@@ -111,8 +115,11 @@ struct CorrespondentsListTemplate {
     correspondents: Vec<Correspondent>,
 }
 
-async fn correspondents_list(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    let correspondents = state.correspondent_repo.list().await?;
+async fn correspondents_list(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
+    let correspondents = state.correspondent_repo.list(vault).await?;
     let template = CorrespondentsListTemplate { correspondents };
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
@@ -125,15 +132,16 @@ pub struct CreateCorrespondentForm {
 }
 
 async fn create_correspondent_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Form(form): Form<CreateCorrespondentForm>,
 ) -> ApiResult<Response> {
     state
         .correspondent_repo
-        .create(CreateCorrespondent { name: form.name })
+        .create(vault, CreateCorrespondent { name: form.name })
         .await?;
 
-    let correspondents = state.correspondent_repo.list().await?;
+    let correspondents = state.correspondent_repo.list(vault).await?;
     let template = CorrespondentsListTemplate { correspondents };
     let html = template
         .render()
@@ -149,12 +157,13 @@ struct CorrespondentEditTemplate {
 }
 
 async fn edit_correspondent_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let correspondent = state
         .correspondent_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Correspondent not found"))?;
 
@@ -170,6 +179,7 @@ pub struct UpdateCorrespondentForm {
 }
 
 async fn update_correspondent_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Form(form): Form<UpdateCorrespondentForm>,
@@ -177,6 +187,7 @@ async fn update_correspondent_form(
     state
         .correspondent_repo
         .update(
+            vault,
             id,
             UpdateCorrespondent {
                 name: Some(form.name),
@@ -184,7 +195,7 @@ async fn update_correspondent_form(
         )
         .await?;
 
-    let correspondents = state.correspondent_repo.list().await?;
+    let correspondents = state.correspondent_repo.list(vault).await?;
     let template = CorrespondentsListTemplate { correspondents };
     let html = template
         .render()
@@ -194,12 +205,13 @@ async fn update_correspondent_form(
 }
 
 async fn delete_correspondent_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
-    state.correspondent_repo.delete(id).await?;
+    state.correspondent_repo.delete(vault, id).await?;
 
-    let correspondents = state.correspondent_repo.list().await?;
+    let correspondents = state.correspondent_repo.list(vault).await?;
     let template = CorrespondentsListTemplate { correspondents };
     let html = template
         .render()
@@ -218,8 +230,11 @@ struct DocumentTypesListTemplate {
     document_types: Vec<DocumentType>,
 }
 
-async fn document_types_list(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    let document_types = state.document_type_repo.list().await?;
+async fn document_types_list(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
+    let document_types = state.document_type_repo.list(vault).await?;
     let template = DocumentTypesListTemplate { document_types };
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
@@ -232,15 +247,16 @@ pub struct CreateDocumentTypeForm {
 }
 
 async fn create_document_type_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Form(form): Form<CreateDocumentTypeForm>,
 ) -> ApiResult<Response> {
     state
         .document_type_repo
-        .create(CreateDocumentType { name: form.name })
+        .create(vault, CreateDocumentType { name: form.name })
         .await?;
 
-    let document_types = state.document_type_repo.list().await?;
+    let document_types = state.document_type_repo.list(vault).await?;
     let template = DocumentTypesListTemplate { document_types };
     let html = template
         .render()
@@ -256,12 +272,13 @@ struct DocumentTypeEditTemplate {
 }
 
 async fn edit_document_type_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let document_type = state
         .document_type_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document type not found"))?;
 
@@ -277,6 +294,7 @@ pub struct UpdateDocumentTypeForm {
 }
 
 async fn update_document_type_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Form(form): Form<UpdateDocumentTypeForm>,
@@ -284,6 +302,7 @@ async fn update_document_type_form(
     state
         .document_type_repo
         .update(
+            vault,
             id,
             UpdateDocumentType {
                 name: Some(form.name),
@@ -291,7 +310,7 @@ async fn update_document_type_form(
         )
         .await?;
 
-    let document_types = state.document_type_repo.list().await?;
+    let document_types = state.document_type_repo.list(vault).await?;
     let template = DocumentTypesListTemplate { document_types };
     let html = template
         .render()
@@ -301,12 +320,13 @@ async fn update_document_type_form(
 }
 
 async fn delete_document_type_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
-    state.document_type_repo.delete(id).await?;
+    state.document_type_repo.delete(vault, id).await?;
 
-    let document_types = state.document_type_repo.list().await?;
+    let document_types = state.document_type_repo.list(vault).await?;
     let template = DocumentTypesListTemplate { document_types };
     let html = template
         .render()
@@ -325,8 +345,11 @@ struct TagsListTemplate {
     tags: Vec<Tag>,
 }
 
-async fn tags_list(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    let tags = state.tag_repo.list().await?;
+async fn tags_list(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
+    let tags = state.tag_repo.list(vault).await?;
     let template = TagsListTemplate { tags };
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
@@ -340,19 +363,23 @@ pub struct CreateTagForm {
 }
 
 async fn create_tag_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Form(form): Form<CreateTagForm>,
 ) -> ApiResult<Response> {
     let color = form.color.filter(|c| !c.is_empty());
     state
         .tag_repo
-        .create(CreateTag {
-            name: form.name,
-            color,
-        })
+        .create(
+            vault,
+            CreateTag {
+                name: form.name,
+                color,
+            },
+        )
         .await?;
 
-    let tags = state.tag_repo.list().await?;
+    let tags = state.tag_repo.list(vault).await?;
     let template = TagsListTemplate { tags };
     let html = template
         .render()
@@ -368,12 +395,13 @@ struct TagEditTemplate {
 }
 
 async fn edit_tag_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let tag = state
         .tag_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Tag not found"))?;
 
@@ -390,6 +418,7 @@ pub struct UpdateTagForm {
 }
 
 async fn update_tag_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Form(form): Form<UpdateTagForm>,
@@ -403,6 +432,7 @@ async fn update_tag_form(
     state
         .tag_repo
         .update(
+            vault,
             id,
             UpdateTag {
                 name: Some(form.name),
@@ -411,7 +441,7 @@ async fn update_tag_form(
         )
         .await?;
 
-    let tags = state.tag_repo.list().await?;
+    let tags = state.tag_repo.list(vault).await?;
     let template = TagsListTemplate { tags };
     let html = template
         .render()
@@ -421,12 +451,13 @@ async fn update_tag_form(
 }
 
 async fn delete_tag_form(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
-    state.tag_repo.delete(id).await?;
+    state.tag_repo.delete(vault, id).await?;
 
-    let tags = state.tag_repo.list().await?;
+    let tags = state.tag_repo.list(vault).await?;
     let template = TagsListTemplate { tags };
     let html = template
         .render()

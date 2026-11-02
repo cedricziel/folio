@@ -6,6 +6,7 @@ mod ingest_repo;
 mod outbox;
 mod search;
 mod settings_repo;
+mod vault_repo;
 mod workflow_repo;
 
 use std::str::FromStr;
@@ -22,6 +23,7 @@ pub use ingest_repo::{PostgresIngestLedger, PostgresSourceRepository};
 pub use outbox::PostgresOutboxStore;
 pub use search::PostgresSearchService;
 pub use settings_repo::PostgresSettingsRepository;
+pub use vault_repo::PostgresVaultRepository;
 pub use workflow_repo::PostgresWorkflowRepository;
 
 /// Create a new PostgreSQL connection pool

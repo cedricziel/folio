@@ -106,6 +106,7 @@ impl TestServer {
 }
 
 struct Harness {
+    vault: folio_core::models::VaultId,
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
     tags: Arc<dyn TagRepository>,
@@ -133,6 +134,7 @@ impl Harness {
             .unwrap();
         database.migrate().await.unwrap();
         let repos = database.repositories().await;
+        let vault = repos.vaults.instance_default().await.unwrap();
 
         let Database::Sqlite(pool) = database else {
             unreachable!("connected to SQLite");
@@ -163,6 +165,7 @@ impl Harness {
         );
 
         Self {
+            vault,
             workflows,
             documents,
             tags,
@@ -183,13 +186,16 @@ impl Harness {
         actions: Vec<WorkflowAction>,
     ) -> Workflow {
         self.workflows
-            .create(WorkflowInput {
-                name: "test".into(),
-                enabled: true,
-                trigger,
-                conditions,
-                actions,
-            })
+            .create(
+                self.vault,
+                WorkflowInput {
+                    name: "test".into(),
+                    enabled: true,
+                    trigger,
+                    conditions,
+                    actions,
+                },
+            )
             .await
             .unwrap()
     }
@@ -205,10 +211,13 @@ impl Harness {
 
     async fn tag(&self, name: &str) -> Id {
         self.tags
-            .create(CreateTag {
-                name: name.into(),
-                color: None,
-            })
+            .create(
+                self.vault,
+                CreateTag {
+                    name: name.into(),
+                    color: None,
+                },
+            )
             .await
             .unwrap()
             .id
@@ -216,13 +225,16 @@ impl Harness {
 
     async fn document(&self, filename: &str, mime: &str) -> Document {
         self.documents
-            .create(CreateDocument {
-                title: filename.into(),
-                content: None,
-                original_filename: Some(filename.into()),
-                mime_type: Some(mime.into()),
-                ..Default::default()
-            })
+            .create(
+                self.vault,
+                CreateDocument {
+                    title: filename.into(),
+                    content: None,
+                    original_filename: Some(filename.into()),
+                    mime_type: Some(mime.into()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap()
     }
@@ -345,6 +357,7 @@ async fn engine_only_queues_workflows_whose_conditions_match() {
         .await;
     h.workflows
         .update(
+            h.vault,
             disabled.id,
             WorkflowInput {
                 name: disabled.name,
@@ -392,7 +405,7 @@ async fn tag_conditions_are_evaluated_against_the_documents_tags() {
     };
 
     assert!(h.handle(event.clone()).await.is_empty());
-    h.documents.add_tag(doc.id, tag).await.unwrap();
+    h.documents.add_tag(h.vault, doc.id, tag).await.unwrap();
     let runs = h.handle(event).await;
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].workflow_id, workflow.id);
@@ -410,12 +423,22 @@ async fn upload_creates_exactly_one_uploaded_run() {
 
     let doc = h.document("a.pdf", "application/pdf").await;
     // Bookkeeping writes after the upload must not fire anything.
-    h.documents.set_file_path(doc.id, "a/a.pdf").await.unwrap();
-    h.documents.set_page_count(doc.id, 3).await.unwrap();
+    h.documents
+        .set_file_path(h.vault, doc.id, "a/a.pdf")
+        .await
+        .unwrap();
+    h.documents
+        .set_page_count(h.vault, doc.id, 3)
+        .await
+        .unwrap();
 
     let mut runs = Vec::new();
     for _ in 0..100 {
-        runs = h.workflows.list_runs(workflow.id, 10).await.unwrap();
+        runs = h
+            .workflows
+            .list_runs(h.vault, workflow.id, 10)
+            .await
+            .unwrap();
         if !runs.is_empty() {
             break;
         }
@@ -434,7 +457,11 @@ async fn upload_creates_exactly_one_uploaded_run() {
         .await;
     assert!(again.is_empty());
     assert_eq!(
-        h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
+        h.workflows
+            .list_runs(h.vault, workflow.id, 10)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -463,7 +490,11 @@ async fn concurrent_events_still_create_one_run() {
 
     assert_eq!(created, 1);
     assert_eq!(
-        h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
+        h.workflows
+            .list_runs(h.vault, workflow.id, 10)
+            .await
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(h.queue.pending_count().await.unwrap(), 1);
@@ -487,7 +518,11 @@ async fn processed_fires_once_per_document() {
     assert_eq!(h.handle(event.clone()).await.len(), 1);
     assert!(h.handle(event).await.is_empty());
     assert_eq!(
-        h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
+        h.workflows
+            .list_runs(h.vault, workflow.id, 10)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -504,14 +539,18 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .await;
     let sender = h
         .correspondents
-        .create(CreateCorrespondent {
-            name: "ACME".into(),
-        })
+        .create(
+            h.vault,
+            CreateCorrespondent {
+                name: "ACME".into(),
+            },
+        )
         .await
         .unwrap();
     let doc = h.document("gone.pdf", "application/pdf").await;
     h.documents
         .update(
+            h.vault,
             doc.id,
             UpdateDocument {
                 correspondent_id: Some(Some(sender.id)),
@@ -521,7 +560,7 @@ async fn deleted_runs_carry_the_document_as_it_was() {
         .await
         .unwrap();
 
-    h.documents.delete(doc.id).await.unwrap();
+    h.documents.delete(h.vault, doc.id).await.unwrap();
     let event = h
         .pending_events()
         .await
@@ -733,7 +772,10 @@ async fn retry_resumes_after_the_actions_that_already_finished() {
 
     assert_eq!(server.hits("first"), 1);
     assert_eq!(server.hits("second"), 2);
-    assert_eq!(h.documents.get_tags(doc.id).await.unwrap().len(), 1);
+    assert_eq!(
+        h.documents.get_tags(h.vault, doc.id).await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -742,9 +784,12 @@ async fn local_actions_are_announced_but_never_trigger_workflows() {
     let tag = h.tag("auto").await;
     let sender = h
         .correspondents
-        .create(CreateCorrespondent {
-            name: "ACME".into(),
-        })
+        .create(
+            h.vault,
+            CreateCorrespondent {
+                name: "ACME".into(),
+            },
+        )
         .await
         .unwrap();
     let workflow = h
@@ -776,9 +821,17 @@ async fn local_actions_are_announced_but_never_trigger_workflows() {
         RunOutcome::Succeeded
     );
 
-    let updated = h.documents.find_by_id(doc.id).await.unwrap().unwrap();
+    let updated = h
+        .documents
+        .find_by_id(h.vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(updated.correspondent_id, Some(sender.id));
-    assert_eq!(h.documents.get_tags(doc.id).await.unwrap()[0].id, tag);
+    assert_eq!(
+        h.documents.get_tags(h.vault, doc.id).await.unwrap()[0].id,
+        tag
+    );
 
     let events = h.pending_events().await;
     assert_eq!(events.len(), 2, "the tag edit and the correspondent change");
@@ -797,7 +850,7 @@ async fn local_actions_are_announced_but_never_trigger_workflows() {
     }
     assert!(h
         .workflows
-        .list_runs(on_update.id, 10)
+        .list_runs(h.vault, on_update.id, 10)
         .await
         .unwrap()
         .is_empty());
@@ -834,7 +887,7 @@ async fn deleting_a_workflow_removes_its_runs() {
     let doc = h.document("a.pdf", "application/pdf").await;
     let run = h.run_for(&workflow, doc.id).await;
 
-    h.workflows.delete(workflow.id).await.unwrap();
+    h.workflows.delete(h.vault, workflow.id).await.unwrap();
     assert!(h.workflows.find_run(run.id).await.unwrap().is_none());
     assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
 }
@@ -859,7 +912,11 @@ async fn a_lagging_broadcast_does_not_lose_runs() {
     while dispatcher.dispatch_once().await.unwrap() > 0 {}
 
     assert_eq!(
-        h.workflows.list_runs(workflow.id, 100).await.unwrap().len(),
+        h.workflows
+            .list_runs(h.vault, workflow.id, 100)
+            .await
+            .unwrap()
+            .len(),
         30
     );
     assert_eq!(h.queue.pending_count().await.unwrap(), 30);
@@ -883,7 +940,11 @@ async fn handling_an_event_twice_creates_one_run() {
     assert_eq!(h.engine.handle(&event).await.unwrap().len(), 1);
     assert!(h.engine.handle(&event).await.unwrap().is_empty());
     assert_eq!(
-        h.workflows.list_runs(workflow.id, 10).await.unwrap().len(),
+        h.workflows
+            .list_runs(h.vault, workflow.id, 10)
+            .await
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(h.queue.pending_count().await.unwrap(), 1);
@@ -923,7 +984,11 @@ async fn one_failing_workflow_does_not_skip_the_others() {
     .unwrap();
     assert!(h.engine.handle(&event).await.is_err());
     assert_eq!(
-        h.workflows.list_runs(healthy.id, 10).await.unwrap().len(),
+        h.workflows
+            .list_runs(h.vault, healthy.id, 10)
+            .await
+            .unwrap()
+            .len(),
         1,
         "the healthy workflow ran despite the failure before it"
     );
@@ -953,6 +1018,7 @@ async fn editing_a_workflow_does_not_change_queued_runs() {
 
     h.workflows
         .update(
+            h.vault,
             workflow.id,
             WorkflowInput {
                 name: workflow.name,

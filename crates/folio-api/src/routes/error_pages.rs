@@ -13,6 +13,7 @@ use axum::{
 };
 
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 use super::view::{Nav, Sidebar};
 
@@ -65,6 +66,7 @@ fn is_html(response: &Response) -> bool {
 /// Replaces 404 and 5xx answers that are not already HTML with a page in the app shell
 pub async fn html_errors(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let wants_html = wants_html(&request);
+    let vault = request.extensions().get::<DefaultVault>().copied();
     let response = next.run(request).await;
     if !wants_html || is_html(&response) {
         return response;
@@ -72,7 +74,10 @@ pub async fn html_errors(State(state): State<AppState>, request: Request, next: 
     let Some((heading, message)) = wording(response.status()) else {
         return response;
     };
-    let Ok(sidebar) = Sidebar::load(&state, Nav::None).await else {
+    let Some(DefaultVault(vault)) = vault else {
+        return response;
+    };
+    let Ok(sidebar) = Sidebar::load(&state, vault, Nav::None).await else {
         return response;
     };
     match (ErrorTemplate {

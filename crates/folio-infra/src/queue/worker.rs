@@ -9,7 +9,7 @@ use tokio::time::sleep;
 use tracing::{debug, error, info, info_span, Instrument};
 
 use folio_core::events::{DocumentEvent, EventOrigin};
-use folio_core::models::{ProcessingStage, ProcessingStatus};
+use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
 use folio_core::ports::{
     DocumentRepository, DocumentStore, EmbeddedChunk, EmbeddingService, OcrService, OutboxStore,
     SearchService,
@@ -327,7 +327,12 @@ impl Worker {
             {
                 // OCR is over and left no text, so there is nothing to embed.
                 self.document_repo
-                    .set_stage_status(doc.id, ProcessingStage::Embed, ProcessingStatus::Skipped)
+                    .set_stage_status(
+                        doc.vault_id,
+                        doc.id,
+                        ProcessingStage::Embed,
+                        ProcessingStatus::Skipped,
+                    )
                     .await?;
             }
         }
@@ -337,6 +342,15 @@ impl Worker {
         }
 
         Ok(())
+    }
+
+    /// The vault a job's document lives in; jobs carry only the document id
+    async fn vault_of(&self, document_id: uuid::Uuid) -> Result<VaultId, BoxError> {
+        Ok(self
+            .document_repo
+            .locate(document_id)
+            .await?
+            .ok_or("Document not found")?)
     }
 
     async fn has_active_job(&self, document_id: uuid::Uuid) -> Result<bool, BoxError> {
@@ -360,20 +374,21 @@ impl Worker {
 
     /// Fail the job when the document is gone, so a delete is not followed by new writes
     async fn ensure_exists(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
-        match self.document_repo.find_by_id(document_id).await? {
+        match self.document_repo.locate(document_id).await? {
             Some(_) => Ok(()),
             None => Err(format!("Document {document_id} was deleted").into()),
         }
     }
 
-    /// Remove stored objects and embeddings a job wrote after its document was deleted.
+    /// Remove stored objects a job wrote after its document was deleted.
     /// The check before each write narrows that race; this closes it.
+    /// Chunks need no purge: they cascade with the document and `store_chunks`
+    /// refuses a document that no longer exists.
     async fn purge_if_deleted(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
-        if self.document_repo.find_by_id(document_id).await?.is_some() {
+        if self.document_repo.locate(document_id).await?.is_some() {
             return Ok(());
         }
         folio_core::ports::purge_document(self.store.as_ref(), document_id, None).await?;
-        self.search_service.delete_embedding(document_id).await?;
         Ok(())
     }
 
@@ -411,9 +426,10 @@ impl Worker {
         &self,
         document_id: uuid::Uuid,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
@@ -443,19 +459,20 @@ impl Worker {
     /// Run a stage, marking it running first and failed if it errors
     async fn track<T>(
         &self,
+        vault: VaultId,
         document_id: uuid::Uuid,
         stage: ProcessingStage,
         work: impl std::future::Future<Output = Result<T, BoxError>>,
     ) -> Result<T, BoxError> {
         self.document_repo
-            .set_stage_status(document_id, stage, ProcessingStatus::Running)
+            .set_stage_status(vault, document_id, stage, ProcessingStatus::Running)
             .await?;
         match work.await {
             Ok(value) => Ok(value),
             Err(e) => {
                 if let Err(status_err) = self
                     .document_repo
-                    .set_stage_status(document_id, stage, ProcessingStatus::Failed)
+                    .set_stage_status(vault, document_id, stage, ProcessingStatus::Failed)
                     .await
                 {
                     error!("Failed to record {:?} failure: {}", stage, status_err);
@@ -467,30 +484,31 @@ impl Worker {
 
     /// Process OCR text extraction
     async fn process_ocr(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
         let set_status = |status| {
             self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Ocr, status)
+                .set_stage_status(vault, document_id, ProcessingStage::Ocr, status)
         };
 
         if document.content.as_deref().is_some_and(|c| !c.is_empty()) {
             debug!("Document {} already has content, skipping OCR", document_id);
             set_status(ProcessingStatus::Done).await?;
-            return self.schedule_embedding(document_id, true).await;
+            return self.schedule_embedding(vault, document_id, true).await;
         }
 
         if self.pipeline.settings().await.ocr.provider == "none" {
             set_status(ProcessingStatus::Skipped).await?;
-            return self.schedule_embedding(document_id, false).await;
+            return self.schedule_embedding(vault, document_id, false).await;
         }
 
         let output = self
-            .track(document_id, ProcessingStage::Ocr, async {
+            .track(vault, document_id, ProcessingStage::Ocr, async {
                 let file_path = document.file_path.as_ref().ok_or("No file path")?;
                 let data = self.store.get_bytes(file_path).await?;
                 let mime_type = document
@@ -503,7 +521,7 @@ impl Worker {
 
         // An empty result is a successful OCR: store "" so the document is not retried.
         self.document_repo
-            .complete_ocr(document_id, &output.text)
+            .complete_ocr(vault, document_id, &output.text)
             .await?;
 
         info!(
@@ -519,17 +537,18 @@ impl Worker {
             self.emit(DocumentEvent::OcrComplete { document_id })
                 .await?;
         }
-        self.schedule_embedding(document_id, has_text).await
+        self.schedule_embedding(vault, document_id, has_text).await
     }
 
     /// End the embedding stage, the last step of the pipeline, and announce that processing finished
     async fn finish_embed_stage(
         &self,
+        vault: VaultId,
         document_id: uuid::Uuid,
         status: ProcessingStatus,
     ) -> Result<(), BoxError> {
         self.document_repo
-            .set_stage_status(document_id, ProcessingStage::Embed, status)
+            .set_stage_status(vault, document_id, ProcessingStage::Embed, status)
             .await?;
         self.emit(DocumentEvent::Processed { document_id }).await?;
         Ok(())
@@ -538,6 +557,7 @@ impl Worker {
     /// Queue the embedding stage, or mark it skipped when it cannot or should not run
     async fn schedule_embedding(
         &self,
+        vault: VaultId,
         document_id: uuid::Uuid,
         has_text: bool,
     ) -> Result<(), BoxError> {
@@ -545,6 +565,7 @@ impl Worker {
         if has_text && settings.processing.auto_embed && settings.embeddings.provider != "none" {
             self.document_repo
                 .set_stage_status(
+                    vault,
                     document_id,
                     ProcessingStage::Embed,
                     ProcessingStatus::Pending,
@@ -554,7 +575,7 @@ impl Worker {
                 .enqueue(JobType::GenerateEmbedding { document_id })
                 .await?;
         } else {
-            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
                 .await?;
         }
         Ok(())
@@ -562,27 +583,28 @@ impl Worker {
 
     /// Process embedding generation
     async fn process_embedding(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
         let content = document.content.unwrap_or_default();
         let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
         if chunks.is_empty() {
-            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
                 .await?;
             return Ok(());
         }
 
         if self.pipeline.settings().await.embeddings.provider == "none" {
-            self.finish_embed_stage(document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
                 .await?;
             return Ok(());
         }
 
-        self.track(document_id, ProcessingStage::Embed, async {
+        self.track(vault, document_id, ProcessingStage::Embed, async {
             let active_model = self.embedding_service.model_id().await?;
             self.search_service.mark_stale_except(&active_model).await?;
 
@@ -603,9 +625,9 @@ impl Worker {
 
             self.ensure_exists(document_id).await?;
             self.search_service
-                .store_chunks(document_id, &model, &embedded)
+                .store_chunks(vault, document_id, &model, &embedded)
                 .await?;
-            self.finish_embed_stage(document_id, ProcessingStatus::Done)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Done)
                 .await?;
             info!(
                 "Stored {} embedded chunks for document {} (model {})",
@@ -622,9 +644,10 @@ impl Worker {
     async fn process_document(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
         info!("Starting document processing for {}", document_id);
 
+        let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
-            .find_by_id(document_id)
+            .find_by_id(vault, document_id)
             .await?
             .ok_or("Document not found")?;
 
@@ -676,7 +699,11 @@ impl Worker {
             };
 
             // Store page count
-            if let Err(e) = self.document_repo.set_page_count(document_id, count).await {
+            if let Err(e) = self
+                .document_repo
+                .set_page_count(vault, document_id, count)
+                .await
+            {
                 debug!("Failed to set page count: {}", e);
             }
 
@@ -726,7 +753,11 @@ impl Worker {
 
             // Images have 1 page
             if mime_type.starts_with("image/") {
-                if let Err(e) = self.document_repo.set_page_count(document_id, 1).await {
+                if let Err(e) = self
+                    .document_repo
+                    .set_page_count(vault, document_id, 1)
+                    .await
+                {
                     debug!("Failed to set page count: {}", e);
                 }
             }
@@ -745,16 +776,26 @@ impl Worker {
         let has_text = document.content.as_deref().is_some_and(|c| !c.is_empty());
         if has_text || settings.processing.auto_ocr {
             self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Ocr, ProcessingStatus::Pending)
+                .set_stage_status(
+                    vault,
+                    document_id,
+                    ProcessingStage::Ocr,
+                    ProcessingStatus::Pending,
+                )
                 .await?;
             self.queue
                 .enqueue(JobType::ExtractText { document_id })
                 .await?;
         } else {
             self.document_repo
-                .set_stage_status(document_id, ProcessingStage::Ocr, ProcessingStatus::Skipped)
+                .set_stage_status(
+                    vault,
+                    document_id,
+                    ProcessingStage::Ocr,
+                    ProcessingStatus::Skipped,
+                )
                 .await?;
-            self.schedule_embedding(document_id, false).await?;
+            self.schedule_embedding(vault, document_id, false).await?;
         }
 
         info!("Completed processing document {}", document_id);
@@ -843,13 +884,16 @@ mod tests {
             Arc::new(crate::storage::ObjectStoreDocumentStore::in_memory());
         let thumbnails = Arc::new(ThumbnailService::new(storage.clone()));
         let doc = repo
-            .create(CreateDocument {
-                title: "scan".into(),
-                content: None,
-                original_filename: Some("scan.png".into()),
-                mime_type: Some("image/png".into()),
-                ..Default::default()
-            })
+            .create(
+                crate::database::test_vault(),
+                CreateDocument {
+                    title: "scan".into(),
+                    content: None,
+                    original_filename: Some("scan.png".into()),
+                    mime_type: Some("image/png".into()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let path = folio_core::ports::keys::original(doc.id);
@@ -857,7 +901,9 @@ mod tests {
             .put(&path, b"not a real png".as_slice().into())
             .await
             .unwrap();
-        repo.set_file_path(doc.id, &path).await.unwrap();
+        repo.set_file_path(crate::database::test_vault(), doc.id, &path)
+            .await
+            .unwrap();
 
         let worker = Worker::new(
             queue.clone(),
@@ -904,7 +950,12 @@ mod tests {
             .unwrap();
         drain(&f).await;
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.content.as_deref(), Some(""));
         assert_eq!(doc.ocr_status, ProcessingStatus::Done);
         assert_eq!(doc.embed_status, ProcessingStatus::Skipped);
@@ -940,7 +991,12 @@ mod tests {
             .unwrap();
         drain(&f).await;
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             doc.content.as_deref(),
             Some("Invoice from ACME for services")
@@ -948,11 +1004,15 @@ mod tests {
         assert_eq!(doc.ocr_status, ProcessingStatus::Done);
         assert_eq!(doc.embed_status, ProcessingStatus::Done);
 
-        let hits = f.search.search("test:model", &[1.0, 0.0], 5).await.unwrap();
+        let hits = f
+            .search
+            .search(crate::database::test_vault(), "test:model", &[1.0, 0.0], 5)
+            .await
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert!(f
             .search
-            .search("other:model", &[1.0, 0.0], 5)
+            .search(crate::database::test_vault(), "other:model", &[1.0, 0.0], 5)
             .await
             .unwrap()
             .is_empty());
@@ -976,7 +1036,10 @@ mod tests {
         }
         async fn get(&self, key: &str) -> Result<folio_core::ports::StoredObject> {
             let object = self.inner.get(key).await?;
-            let _ = self.repo.delete(self.doc_id).await;
+            let _ = self
+                .repo
+                .delete(crate::database::test_vault(), self.doc_id)
+                .await;
             Ok(object)
         }
         async fn size(&self, key: &str) -> Result<Option<u64>> {
@@ -1036,7 +1099,7 @@ mod tests {
     #[async_trait]
     impl EmbeddingService for DeletingEmbeddings {
         async fn embed(&self, texts: &[&str]) -> Result<EmbeddingBatch> {
-            let _ = self.0.delete(self.1).await;
+            let _ = self.0.delete(crate::database::test_vault(), self.1).await;
             FixedEmbeddings.embed(texts).await
         }
         async fn model_id(&self) -> Result<String> {
@@ -1051,7 +1114,10 @@ mod tests {
     async fn a_document_deleted_mid_job_gets_no_embedding() {
         let mut f = fixture("some text").await;
         f.worker.embedding_service = Arc::new(DeletingEmbeddings(f.repo.clone(), f.doc_id));
-        f.repo.complete_ocr(f.doc_id, "some text").await.unwrap();
+        f.repo
+            .complete_ocr(crate::database::test_vault(), f.doc_id, "some text")
+            .await
+            .unwrap();
         f.settings
             .set("embeddings.provider", "openai")
             .await
@@ -1067,7 +1133,7 @@ mod tests {
 
         assert!(f
             .search
-            .search("test:model", &[1.0, 0.0], 5)
+            .search(crate::database::test_vault(), "test:model", &[1.0, 0.0], 5)
             .await
             .unwrap()
             .is_empty());
@@ -1094,7 +1160,12 @@ mod tests {
             .unwrap();
         drain(&f).await;
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.ocr_status, ProcessingStatus::Done);
         assert_eq!(doc.embed_status, ProcessingStatus::Skipped);
 
@@ -1105,25 +1176,36 @@ mod tests {
         f.pipeline.invalidate().await;
         let doc2 = f
             .repo
-            .create(CreateDocument {
-                title: "second".into(),
-                content: None,
-                original_filename: None,
-                mime_type: Some("image/png".into()),
-                ..Default::default()
-            })
+            .create(
+                crate::database::test_vault(),
+                CreateDocument {
+                    title: "second".into(),
+                    content: None,
+                    original_filename: None,
+                    mime_type: Some("image/png".into()),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
         let path = folio_core::ports::keys::original(doc2.id);
         f.storage.put(&path, b"x".as_slice().into()).await.unwrap();
-        f.repo.set_file_path(doc2.id, &path).await.unwrap();
+        f.repo
+            .set_file_path(crate::database::test_vault(), doc2.id, &path)
+            .await
+            .unwrap();
         f.worker
             .process_job(&JobType::ProcessDocument {
                 document_id: doc2.id,
             })
             .await
             .unwrap();
-        let doc2 = f.repo.find_by_id(doc2.id).await.unwrap().unwrap();
+        let doc2 = f
+            .repo
+            .find_by_id(crate::database::test_vault(), doc2.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc2.ocr_status, ProcessingStatus::Skipped);
     }
 
@@ -1131,7 +1213,7 @@ mod tests {
     async fn failed_ocr_is_recorded_and_not_requeued_by_repair() {
         let f = fixture("x").await;
         f.repo
-            .set_file_path(f.doc_id, "missing/file.png")
+            .set_file_path(crate::database::test_vault(), f.doc_id, "missing/file.png")
             .await
             .unwrap();
 
@@ -1143,7 +1225,12 @@ mod tests {
             .await
             .is_err());
 
-        let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(doc.ocr_status, ProcessingStatus::Failed);
         f.worker.repair_orphaned_documents().await.unwrap();
         assert_eq!(f.queue.pending_count().await.unwrap(), 0);
@@ -1162,18 +1249,21 @@ mod tests {
         f.worker.workflow_runner = Some(runner);
 
         let workflow = workflows
-            .create(WorkflowInput {
-                name: "hook".into(),
-                enabled: true,
-                trigger: WorkflowTrigger::DocumentUploaded,
-                conditions: WorkflowConditions::default(),
-                actions: vec![WorkflowAction::Webhook {
-                    url: "http://127.0.0.1:1/hook".into(),
-                    method: Default::default(),
-                    headers: Default::default(),
-                    secret: None,
-                }],
-            })
+            .create(
+                crate::database::test_vault(),
+                WorkflowInput {
+                    name: "hook".into(),
+                    enabled: true,
+                    trigger: WorkflowTrigger::DocumentUploaded,
+                    conditions: WorkflowConditions::default(),
+                    actions: vec![WorkflowAction::Webhook {
+                        url: "http://127.0.0.1:1/hook".into(),
+                        method: Default::default(),
+                        headers: Default::default(),
+                        secret: None,
+                    }],
+                },
+            )
             .await
             .unwrap();
         let run = WorkflowRun::new(
@@ -1227,7 +1317,7 @@ mod tests {
             }
         });
         let mut stuck = workflows
-            .find_by_id(run.workflow_id)
+            .find_by_id(crate::database::test_vault(), run.workflow_id)
             .await
             .unwrap()
             .unwrap();
@@ -1252,7 +1342,12 @@ mod tests {
         let (_stop, shutdown) = watch::channel(false);
         let processed = async {
             loop {
-                let doc = f.repo.find_by_id(f.doc_id).await.unwrap().unwrap();
+                let doc = f
+                    .repo
+                    .find_by_id(crate::database::test_vault(), f.doc_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 if doc.ocr_status == ProcessingStatus::Done {
                     return;
                 }

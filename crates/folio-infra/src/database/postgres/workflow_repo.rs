@@ -6,7 +6,9 @@ use sqlx::PgPool;
 use tracing::instrument;
 
 use folio_core::error::{Error, Result};
-use folio_core::models::{Id, RunStatus, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger};
+use folio_core::models::{
+    Id, RunStatus, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
+};
 use folio_core::ports::WorkflowRepository;
 
 use crate::queue::{insert_job_postgres as insert_job, JobType};
@@ -111,20 +113,32 @@ fn not_found(id: Id) -> Error {
 
 #[async_trait]
 impl WorkflowRepository for PostgresWorkflowRepository {
-    #[instrument(skip(self))]
-    async fn find_by_id(&self, id: Id) -> Result<Option<Workflow>> {
-        let row: Option<WorkflowRow> = sqlx::query_as("SELECT * FROM workflows WHERE id = $1")
+    async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(Id,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = $1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
             .map_err(repo_err)?;
+        Ok(row.map(|(v,)| VaultId(v)))
+    }
+
+    #[instrument(skip(self))]
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
+        let row: Option<WorkflowRow> =
+            sqlx::query_as("SELECT * FROM workflows WHERE id = $1 AND vault_id = $2")
+                .bind(id)
+                .bind(vault.0)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(repo_err)?;
         row.map(Workflow::try_from).transpose()
     }
 
     #[instrument(skip(self))]
-    async fn list(&self) -> Result<Vec<Workflow>> {
+    async fn list(&self, vault: VaultId) -> Result<Vec<Workflow>> {
         let rows: Vec<WorkflowRow> =
-            sqlx::query_as("SELECT * FROM workflows ORDER BY created_at, name")
+            sqlx::query_as("SELECT * FROM workflows WHERE vault_id = $1 ORDER BY created_at, name")
+                .bind(vault.0)
                 .fetch_all(&self.pool)
                 .await
                 .map_err(repo_err)?;
@@ -132,10 +146,16 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     }
 
     #[instrument(skip(self))]
-    async fn list_enabled(&self, trigger: WorkflowTrigger) -> Result<Vec<Workflow>> {
+    async fn list_enabled(
+        &self,
+        vault: VaultId,
+        trigger: WorkflowTrigger,
+    ) -> Result<Vec<Workflow>> {
         let rows: Vec<WorkflowRow> = sqlx::query_as(
-            "SELECT * FROM workflows WHERE enabled AND trigger_event = $1 ORDER BY created_at",
+            "SELECT * FROM workflows WHERE vault_id = $1 AND enabled AND trigger_event = $2
+             ORDER BY created_at",
         )
+        .bind(vault.0)
         .bind(trigger.as_str())
         .fetch_all(&self.pool)
         .await
@@ -144,15 +164,16 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     }
 
     #[instrument(skip(self, input))]
-    async fn create(&self, input: WorkflowInput) -> Result<Workflow> {
+    async fn create(&self, vault: VaultId, input: WorkflowInput) -> Result<Workflow> {
         input.validate()?;
         let now = Utc::now();
         let id = Id::new_v4();
         sqlx::query(
-            "INSERT INTO workflows (id, name, enabled, trigger_event, conditions, actions, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)",
         )
         .bind(id)
+        .bind(vault.0)
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
@@ -176,12 +197,12 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     }
 
     #[instrument(skip(self, input))]
-    async fn update(&self, id: Id, input: WorkflowInput) -> Result<Workflow> {
+    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow> {
         input.validate()?;
         let result = sqlx::query(
             "UPDATE workflows SET name = $1, enabled = $2, trigger_event = $3, conditions = $4,
                                   actions = $5, updated_at = $6
-             WHERE id = $7",
+             WHERE id = $7 AND vault_id = $8",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -190,6 +211,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
         .bind(Utc::now())
         .bind(id)
+        .bind(vault.0)
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
@@ -197,13 +219,16 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         if result.rows_affected() == 0 {
             return Err(not_found(id));
         }
-        self.find_by_id(id).await?.ok_or_else(|| not_found(id))
+        self.find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| not_found(id))
     }
 
     #[instrument(skip(self))]
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM workflows WHERE id = $1")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM workflows WHERE id = $1 AND vault_id = $2")
             .bind(id)
+            .bind(vault.0)
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -285,12 +310,19 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     }
 
     #[instrument(skip(self))]
-    async fn list_runs(&self, workflow_id: Id, limit: u32) -> Result<Vec<WorkflowRun>> {
+    async fn list_runs(
+        &self,
+        vault: VaultId,
+        workflow_id: Id,
+        limit: u32,
+    ) -> Result<Vec<WorkflowRun>> {
         let rows: Vec<RunRow> = sqlx::query_as(
-            "SELECT * FROM workflow_runs WHERE workflow_id = $1 ORDER BY created_at DESC LIMIT $2",
+            "SELECT r.* FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
+             WHERE r.workflow_id = $1 AND w.vault_id = $3 ORDER BY r.created_at DESC LIMIT $2",
         )
         .bind(workflow_id)
         .bind(i64::from(limit))
+        .bind(vault.0)
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)?;

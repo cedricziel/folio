@@ -6,7 +6,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Correspondent, Document, DocumentSource, DocumentType, Id, Tag, WorkflowTrigger};
+use super::{
+    Correspondent, Document, DocumentSource, DocumentType, Id, Tag, VaultId, WorkflowTrigger,
+};
 
 /// Current payload version
 pub const PAYLOAD_VERSION: u32 = 1;
@@ -90,7 +92,7 @@ impl WebhookPayload {
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
-        let mut doc = Document::new("Sample invoice")
+        let mut doc = Document::new(VaultId::new(), "Sample invoice")
             .with_filename("invoice-2025-03.pdf")
             .with_mime_type("application/pdf");
         doc.id = Id::nil();

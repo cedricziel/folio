@@ -35,33 +35,42 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
     let waiting = h
         .state
         .document_repo
-        .create(folio_core::models::CreateDocument {
-            title: "Waiting".into(),
-            content: Some("read".into()),
-            original_filename: None,
-            mime_type: None,
-            ..Default::default()
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Waiting".into(),
+                content: Some("read".into()),
+                original_filename: None,
+                mime_type: None,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     let dt = h
         .state
         .document_type_repo
-        .create(folio_core::models::CreateDocumentType {
-            name: "Invoice".into(),
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateDocumentType {
+                name: "Invoice".into(),
+            },
+        )
         .await
         .unwrap();
     h.state
         .document_repo
-        .create(folio_core::models::CreateDocument {
-            title: "Already filed".into(),
-            content: Some("read".into()),
-            original_filename: None,
-            mime_type: None,
-            document_type_id: Some(dt.id),
-            ..Default::default()
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Already filed".into(),
+                content: Some("read".into()),
+                original_filename: None,
+                mime_type: None,
+                document_type_id: Some(dt.id),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -87,26 +96,29 @@ async fn home_page_applies_the_tag_filter_together_with_other_filters() {
     let tagged = h
         .state
         .document_repo
-        .create(mk("Tagged doc"))
+        .create(h.vault, mk("Tagged doc"))
         .await
         .unwrap();
     h.state
         .document_repo
-        .create(mk("Untagged doc"))
+        .create(h.vault, mk("Untagged doc"))
         .await
         .unwrap();
     let tag = h
         .state
         .tag_repo
-        .create(folio_core::models::CreateTag {
-            name: "tax".into(),
-            color: None,
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateTag {
+                name: "tax".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
     h.state
         .document_repo
-        .add_tag(tagged.id, tag.id)
+        .add_tag(h.vault, tagged.id, tag.id)
         .await
         .unwrap();
 
@@ -124,9 +136,12 @@ async fn home_page_applies_the_tag_filter_together_with_other_filters() {
     let corr = h
         .state
         .correspondent_repo
-        .create(folio_core::models::CreateCorrespondent {
-            name: "ACME".into(),
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateCorrespondent {
+                name: "ACME".into(),
+            },
+        )
         .await
         .unwrap();
     let combined = text(
@@ -251,15 +266,23 @@ async fn unreadable_files_say_so_instead_of_waiting_for_review() {
     let doc = h
         .state
         .document_repo
-        .create(folio_core::models::CreateDocument {
-            title: "scan_0042.pdf".into(),
-            ..Default::default()
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "scan_0042.pdf".into(),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     h.state
         .document_repo
-        .set_stage_status(doc.id, ProcessingStage::Ocr, ProcessingStatus::Failed)
+        .set_stage_status(
+            h.vault,
+            doc.id,
+            ProcessingStage::Ocr,
+            ProcessingStatus::Failed,
+        )
         .await
         .unwrap();
 

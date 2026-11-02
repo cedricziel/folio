@@ -10,6 +10,7 @@ pub mod openapi;
 pub mod routes;
 pub mod state;
 pub mod telemetry;
+pub mod vault;
 
 pub use events::{DocumentEvent, EventBroadcaster};
 pub use forward::forward_auth;
@@ -18,3 +19,4 @@ pub use routes::{
     create_router,
 };
 pub use state::{AppState, IngestionState};
+pub use vault::DefaultVault;

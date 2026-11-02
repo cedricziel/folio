@@ -21,6 +21,9 @@ pub enum Error {
         value: String,
     },
 
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
     #[error("Repository error: {0}")]
     Repository(String),
 

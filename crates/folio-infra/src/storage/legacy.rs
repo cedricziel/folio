@@ -34,7 +34,7 @@ pub async fn migrate_legacy_layout(
 
     let mut moved = 0;
     let mut failed = false;
-    for document in documents.list(None).await? {
+    for document in documents.list_all().await? {
         match migrate_document(store, documents, &document).await {
             Ok(true) => moved += 1,
             Ok(false) => {}
@@ -71,7 +71,9 @@ async fn migrate_document(
             if !store.exists(&new_key).await? {
                 store.copy(legacy, &new_key).await?;
             }
-            documents.set_file_path(id, &new_key).await?;
+            documents
+                .set_file_path(document.vault_id, id, &new_key)
+                .await?;
             changed = true;
         }
     }
@@ -95,7 +97,7 @@ pub async fn cleanup_legacy_layout(
     documents: &dyn DocumentRepository,
 ) -> Result<usize> {
     let mut cleaned = 0;
-    for document in documents.list(None).await? {
+    for document in documents.list_all().await? {
         let id = document.id;
         if !store.exists(&keys::original(id)).await? {
             continue;

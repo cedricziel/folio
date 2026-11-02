@@ -26,6 +26,7 @@ use uuid::Uuid;
 struct TestApp {
     router: Router,
     state: AppState,
+    vault: folio_core::models::VaultId,
     dir: std::path::PathBuf,
 }
 
@@ -49,6 +50,11 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let vault = repos.vaults.instance_default().await.unwrap();
+    let vaults = Arc::new(folio_core::services::VaultService::new(
+        repos.vaults.clone(),
+        repos.members,
+    ));
 
     let auth = AuthState::new(repos.auth.clone(), None).with_required(auth_required);
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
@@ -74,11 +80,14 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         WebhookClient::new(),
         "http://folio.test".to_string(),
         ingestion,
+        vaults,
+        repos.access,
     );
 
     TestApp {
         router: create_router(state.clone(), auth),
         state,
+        vault,
         dir,
     }
 }
@@ -199,7 +208,7 @@ async fn crud_round_trip() {
     let stored = app
         .state
         .workflow_repo
-        .find_by_id(id.parse().unwrap())
+        .find_by_id(app.vault, id.parse().unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -441,7 +450,7 @@ async fn header_values_are_masked_and_kept_on_update() {
     let stored = app
         .state
         .workflow_repo
-        .find_by_id(id.parse().unwrap())
+        .find_by_id(app.vault, id.parse().unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -565,7 +574,7 @@ async fn the_form_shows_and_edits_every_action() {
     let stored = app
         .state
         .workflow_repo
-        .find_by_id(id.parse().unwrap())
+        .find_by_id(app.vault, id.parse().unwrap())
         .await
         .unwrap()
         .unwrap();

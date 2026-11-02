@@ -20,8 +20,9 @@ use tokio::sync::Notify;
 
 use folio_auth::AuthStore;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentRepository, DocumentTypeRepository, IngestLedger, OutboxStore,
-    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
+    AccessPolicy, AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,
+    IngestLedger, MembershipRepository, OutboxStore, SearchService, SettingsRepository,
+    SourceRepository, TagRepository, VaultRepository, WorkflowRepository,
 };
 use folio_core::EventOrigin;
 
@@ -32,13 +33,13 @@ pub use postgres::{
     PostgresAuthStore, PostgresCorrespondentRepository, PostgresDocumentRepository,
     PostgresDocumentTypeRepository, PostgresIngestLedger, PostgresOutboxStore,
     PostgresSearchService, PostgresSettingsRepository, PostgresSourceRepository,
-    PostgresTagRepository, PostgresWorkflowRepository,
+    PostgresTagRepository, PostgresVaultRepository, PostgresWorkflowRepository,
 };
 pub use sqlite::{
     create_pool, run_migrations, SqliteAuthStore, SqliteCorrespondentRepository,
     SqliteDocumentRepository, SqliteDocumentTypeRepository, SqliteIngestLedger, SqliteOutboxStore,
     SqliteSearchService, SqliteSettingsRepository, SqliteSourceRepository, SqliteTagRepository,
-    SqliteWorkflowRepository,
+    SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
 /// Supported database backends
@@ -108,6 +109,10 @@ pub struct Repositories {
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
     pub auth: Arc<dyn AuthStore>,
+    pub vaults: Arc<dyn VaultRepository>,
+    pub members: Arc<dyn MembershipRepository>,
+    pub audit: Arc<dyn AuditLog>,
+    pub access: Arc<dyn AccessPolicy>,
 }
 
 impl Database {
@@ -140,6 +145,7 @@ impl Database {
     pub async fn repositories(&self) -> Repositories {
         match self {
             Self::Sqlite(pool) => {
+                let vaults = Arc::new(SqliteVaultRepository::new(pool.clone()));
                 let wake = Arc::new(Notify::new());
                 let documents = |origin| {
                     Arc::new(
@@ -162,9 +168,14 @@ impl Database {
                     search: Arc::new(SqliteSearchService::new(pool.clone())),
                     jobs: JobQueue::sqlite(pool.clone()),
                     auth: Arc::new(SqliteAuthStore::new(pool.clone())),
+                    vaults: vaults.clone(),
+                    members: vaults.clone(),
+                    audit: vaults.clone(),
+                    access: vaults,
                 }
             }
             Self::Postgres(pool) => {
+                let vaults = Arc::new(PostgresVaultRepository::new(pool.clone()));
                 let wake = Arc::new(Notify::new());
                 let documents = |origin| {
                     Arc::new(
@@ -189,10 +200,19 @@ impl Database {
                     search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                     jobs: JobQueue::postgres(pool.clone()),
                     auth: Arc::new(PostgresAuthStore::new(pool.clone())),
+                    vaults: vaults.clone(),
+                    members: vaults.clone(),
+                    audit: vaults.clone(),
+                    access: vaults,
                 }
             }
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_vault() -> folio_core::models::VaultId {
+    folio_core::models::VaultId(uuid::Uuid::nil())
 }
 
 /// Migrated throw-away database for tests; each pooled connection of an
@@ -203,6 +223,14 @@ pub(crate) async fn test_pool() -> (SqlitePool, tempfile::TempDir) {
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("test.db").display());
     let pool = create_pool(&url).await.unwrap();
     run_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO vaults (id, name, created_at, updated_at) VALUES ($1, 'Test', $2, $2)",
+    )
+    .bind(test_vault().to_string())
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .unwrap();
     (pool, dir)
 }
 

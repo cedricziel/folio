@@ -404,7 +404,7 @@ const EXEMPT_PREFIX: [&str; 6] = [
     "/auth/oidc/",
 ];
 
-fn is_exempt(path: &str) -> bool {
+pub(crate) fn is_exempt(path: &str) -> bool {
     EXEMPT_EXACT.contains(&path) || EXEMPT_PREFIX.iter().any(|p| path.starts_with(p))
 }
 

@@ -169,7 +169,7 @@ async fn upload_returns_id_and_pending_status() {
 
     let stored = fx
         .documents
-        .find_by_id(id.parse().unwrap())
+        .find_by_id(fx.vault, id.parse().unwrap())
         .await
         .unwrap()
         .unwrap();
@@ -190,7 +190,7 @@ async fn failed_upload_leaves_no_document_behind() {
     .await;
 
     assert!(!matches!(res, Ok(r) if r.is_error != Some(true)));
-    assert!(fx.documents.list(None).await.unwrap().is_empty());
+    assert!(fx.documents.list(fx.vault, None).await.unwrap().is_empty());
 }
 
 #[tokio::test]

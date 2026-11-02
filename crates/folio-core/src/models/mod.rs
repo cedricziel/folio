@@ -7,6 +7,7 @@ mod ingest;
 mod settings;
 mod source;
 mod tag;
+mod vault;
 mod webhook;
 mod workflow;
 
@@ -28,6 +29,10 @@ pub use source::{
     DocumentSource, EmailOrigin, FolderOrigin, SourceConditions, SourceKind, TextMatch,
 };
 pub use tag::{CreateTag, Tag, UpdateTag};
+pub use vault::{
+    Access, AuditEvent, GroupId, NewAuditEvent, Principal, UserId, Vault, VaultAction, VaultId,
+    VaultMember, VaultRole,
+};
 pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOAD_VERSION};
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,

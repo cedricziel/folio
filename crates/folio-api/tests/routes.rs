@@ -23,6 +23,7 @@ use uuid::Uuid;
 struct TestApp {
     router: Router,
     state: AppState,
+    vault: folio_core::models::VaultId,
     dir: std::path::PathBuf,
 }
 
@@ -47,6 +48,11 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         .unwrap();
     database.migrate().await.unwrap();
     let repos = database.repositories().await;
+    let vault = repos.vaults.instance_default().await.unwrap();
+    let vaults = Arc::new(folio_core::services::VaultService::new(
+        repos.vaults.clone(),
+        repos.members,
+    ));
     let auth_store = repos.auth.clone();
 
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
@@ -72,6 +78,8 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         WebhookClient::new(),
         "http://folio.test".to_string(),
         ingestion,
+        vaults,
+        repos.access,
     );
 
     TestApp {
@@ -80,6 +88,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
             AuthState::new(auth_store, None).with_required(auth_required),
         ),
         state,
+        vault,
         dir,
     }
 }
@@ -123,13 +132,16 @@ async fn get_document_by_id_returns_the_document() {
     let doc = app
         .state
         .document_repo
-        .create(CreateDocument {
-            title: "Invoice".into(),
-            content: None,
-            original_filename: None,
-            mime_type: None,
-            ..Default::default()
-        })
+        .create(
+            app.vault,
+            CreateDocument {
+                title: "Invoice".into(),
+                content: None,
+                original_filename: None,
+                mime_type: None,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
@@ -147,14 +159,21 @@ async fn tagged_document(
     let doc = app
         .state
         .document_repo
-        .create(CreateDocument {
-            title: title.into(),
-            ..Default::default()
-        })
+        .create(
+            app.vault,
+            CreateDocument {
+                title: title.into(),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     for tag in tags {
-        app.state.document_repo.add_tag(doc.id, *tag).await.unwrap();
+        app.state
+            .document_repo
+            .add_tag(app.vault, doc.id, *tag)
+            .await
+            .unwrap();
     }
     doc
 }
@@ -165,24 +184,31 @@ async fn documents_carry_their_tags_and_names() {
     let tag = app
         .state
         .tag_repo
-        .create(CreateTag {
-            name: "Taxes".into(),
-            color: Some("#ff5733".into()),
-        })
+        .create(
+            app.vault,
+            CreateTag {
+                name: "Taxes".into(),
+                color: Some("#ff5733".into()),
+            },
+        )
         .await
         .unwrap();
     let sender = app
         .state
         .correspondent_repo
-        .create(CreateCorrespondent {
-            name: "Finanzamt".into(),
-        })
+        .create(
+            app.vault,
+            CreateCorrespondent {
+                name: "Finanzamt".into(),
+            },
+        )
         .await
         .unwrap();
     let doc = tagged_document(&app, "Bescheid", &[tag.id]).await;
     app.state
         .document_repo
         .update(
+            app.vault,
             doc.id,
             folio_core::models::UpdateDocument {
                 correspondent_id: Some(Some(sender.id)),
@@ -208,10 +234,13 @@ async fn documents_carry_their_tags_and_names() {
 async fn list_filters_by_all_tags_and_by_creation_time() {
     let app = test_app().await;
     let make = |name: &str| {
-        app.state.tag_repo.create(CreateTag {
-            name: name.into(),
-            color: None,
-        })
+        app.state.tag_repo.create(
+            app.vault,
+            CreateTag {
+                name: name.into(),
+                color: None,
+            },
+        )
     };
     let (tax, home) = (make("Tax").await.unwrap(), make("Home").await.unwrap());
     tagged_document(&app, "both", &[tax.id, home.id]).await;
@@ -290,7 +319,20 @@ async fn unknown_ids_reach_the_handlers_and_return_json_404() {
 #[tokio::test]
 async fn nested_tag_route_matches() {
     let app = test_app().await;
-    let (doc_id, tag_id) = (Uuid::new_v4(), Uuid::new_v4());
+    let tag = app
+        .state
+        .tag_repo
+        .create(
+            app.vault,
+            CreateTag {
+                name: "Nested".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    let doc = tagged_document(&app, "Tagged", &[tag.id]).await;
+    let (doc_id, tag_id) = (doc.id, tag.id);
 
     let (status, _) = request(
         &app,
@@ -337,10 +379,13 @@ async fn deletes_return_no_content_with_an_empty_body() {
     let tag = app
         .state
         .tag_repo
-        .create(CreateTag {
-            name: "Tax".into(),
-            color: None,
-        })
+        .create(
+            app.vault,
+            CreateTag {
+                name: "Tax".into(),
+                color: None,
+            },
+        )
         .await
         .unwrap();
 
@@ -370,10 +415,13 @@ async fn update_tag_clears_color_on_null_and_keeps_it_when_absent() {
     let tag = app
         .state
         .tag_repo
-        .create(CreateTag {
-            name: "Tax".into(),
-            color: Some("#ff5733".into()),
-        })
+        .create(
+            app.vault,
+            CreateTag {
+                name: "Tax".into(),
+                color: Some("#ff5733".into()),
+            },
+        )
         .await
         .unwrap();
     let uri = format!("/api/tags/{}", tag.id);
@@ -392,20 +440,23 @@ async fn stored_document(app: &TestApp, filename: &str, bytes: &'static [u8]) ->
     let doc = app
         .state
         .document_repo
-        .create(CreateDocument {
-            title: "Stored".into(),
-            content: None,
-            original_filename: Some(filename.into()),
-            mime_type: Some("application/pdf".into()),
-            ..Default::default()
-        })
+        .create(
+            app.vault,
+            CreateDocument {
+                title: "Stored".into(),
+                content: None,
+                original_filename: Some(filename.into()),
+                mime_type: Some("application/pdf".into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     let key = keys::original(doc.id);
     app.state.store.put(&key, bytes.into()).await.unwrap();
     app.state
         .document_repo
-        .set_file_path(doc.id, &key)
+        .set_file_path(app.vault, doc.id, &key)
         .await
         .unwrap();
     doc.id
@@ -475,7 +526,11 @@ async fn deleting_a_document_removes_all_of_its_objects() {
     let app = test_app().await;
     let id = stored_document(&app, "a.pdf", b"original").await;
     let other = stored_document(&app, "b.pdf", b"keep me").await;
-    app.state.document_repo.set_page_count(id, 3).await.unwrap();
+    app.state
+        .document_repo
+        .set_page_count(app.vault, id, 3)
+        .await
+        .unwrap();
     for key in [
         keys::thumbnail(id),
         keys::page(id, 2),
@@ -540,13 +595,16 @@ async fn document_with_file(app: &TestApp, mime: &str, name: &str, data: &[u8]) 
     let doc = app
         .state
         .document_repo
-        .create(CreateDocument {
-            title: "File".into(),
-            content: None,
-            original_filename: Some(name.into()),
-            mime_type: Some(mime.into()),
-            ..Default::default()
-        })
+        .create(
+            app.vault,
+            CreateDocument {
+                title: "File".into(),
+                content: None,
+                original_filename: Some(name.into()),
+                mime_type: Some(mime.into()),
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
     let path = keys::original(doc.id);
@@ -557,7 +615,7 @@ async fn document_with_file(app: &TestApp, mime: &str, name: &str, data: &[u8]) 
         .unwrap();
     app.state
         .document_repo
-        .set_file_path(doc.id, &path)
+        .set_file_path(app.vault, doc.id, &path)
         .await
         .unwrap();
     doc.id

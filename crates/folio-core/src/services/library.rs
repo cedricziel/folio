@@ -13,7 +13,7 @@ use super::{Importer, SearchServiceFacade};
 use crate::error::{Error, Result};
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocumentType, CreateTag, Document, DocumentFilter,
-    DocumentSource, DocumentType, Id, Tag, UpdateDocument,
+    DocumentSource, DocumentType, Id, Tag, UpdateDocument, UserId, VaultId,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
@@ -89,6 +89,8 @@ pub struct NewUpload {
     pub source: DocumentSource,
     /// Tags attached together with the record
     pub tag_ids: Vec<Id>,
+    /// Who is uploading; contributors may later edit their own uploads
+    pub uploaded_by: Option<UserId>,
 }
 
 /// Archive operations shared by non-REST adapters
@@ -128,20 +130,20 @@ impl LibraryService {
         }
     }
 
-    pub async fn list_tags(&self) -> Result<Vec<Tag>> {
-        self.tags.list().await
+    pub async fn list_tags(&self, vault: VaultId) -> Result<Vec<Tag>> {
+        self.tags.list(vault).await
     }
 
-    pub async fn list_correspondents(&self) -> Result<Vec<Correspondent>> {
-        self.correspondents.list().await
+    pub async fn list_correspondents(&self, vault: VaultId) -> Result<Vec<Correspondent>> {
+        self.correspondents.list(vault).await
     }
 
-    pub async fn list_document_types(&self) -> Result<Vec<DocumentType>> {
-        self.document_types.list().await
+    pub async fn list_document_types(&self, vault: VaultId) -> Result<Vec<DocumentType>> {
+        self.document_types.list(vault).await
     }
 
     /// Search documents by text and metadata
-    pub async fn search(&self, query: DocumentQuery) -> Result<Vec<DocumentHit>> {
+    pub async fn search(&self, vault: VaultId, query: DocumentQuery) -> Result<Vec<DocumentHit>> {
         let limit = query.limit.max(1);
         let text = query
             .text
@@ -151,17 +153,17 @@ impl LibraryService {
 
         let mut tag_ids = Vec::new();
         if !query.tags.is_empty() {
-            let known = self.tags.list().await?;
+            let known = self.tags.list(vault).await?;
             for name in &query.tags {
                 tag_ids.push(find_by_name(&known, name, |t| &t.name, "tag")?.id);
             }
         }
         let correspondent_id = match &query.correspondent {
-            Some(name) => Some(self.find_correspondent(name).await?.id),
+            Some(name) => Some(self.find_correspondent(vault, name).await?.id),
             None => None,
         };
         let document_type_id = match &query.document_type {
-            Some(name) => Some(self.find_document_type(name).await?.id),
+            Some(name) => Some(self.find_document_type(vault, name).await?.id),
             None => None,
         };
 
@@ -179,7 +181,7 @@ impl LibraryService {
         if let Some(text) = text {
             let allowed: HashSet<Id> = self
                 .documents
-                .list_ids(Some(metadata_filter.clone()))
+                .list_ids(vault, Some(metadata_filter.clone()))
                 .await?
                 .into_iter()
                 .collect();
@@ -187,7 +189,7 @@ impl LibraryService {
             // Semantic search is best effort: it needs a configured AI provider
             let semantic: Vec<_> = self
                 .semantic
-                .search_documents(text, limit * SEMANTIC_OVERFETCH)
+                .search_documents(vault, text, limit * SEMANTIC_OVERFETCH)
                 .await
                 .unwrap_or_default()
                 .into_iter()
@@ -200,15 +202,18 @@ impl LibraryService {
             // the slots that are left
             let literal = self
                 .documents
-                .list_ids(Some(DocumentFilter {
-                    search_query: Some(text.to_string()),
-                    ..metadata_filter
-                }))
+                .list_ids(
+                    vault,
+                    Some(DocumentFilter {
+                        search_query: Some(text.to_string()),
+                        ..metadata_filter
+                    }),
+                )
                 .await?;
             let mut seen = HashSet::new();
             for id in literal.into_iter().take(limit) {
                 seen.insert(id);
-                if let Some(doc) = self.documents.find_by_id(id).await? {
+                if let Some(doc) = self.documents.find_by_id(vault, id).await? {
                     hits.push((doc, scores.get(&id).copied()));
                 }
             }
@@ -220,12 +225,12 @@ impl LibraryService {
         } else {
             for id in self
                 .documents
-                .list_ids(Some(metadata_filter))
+                .list_ids(vault, Some(metadata_filter))
                 .await?
                 .into_iter()
                 .take(limit)
             {
-                if let Some(doc) = self.documents.find_by_id(id).await? {
+                if let Some(doc) = self.documents.find_by_id(vault, id).await? {
                     hits.push((doc, None));
                 }
             }
@@ -235,7 +240,7 @@ impl LibraryService {
 
         let mut out = Vec::with_capacity(hits.len());
         for (document, score) in hits {
-            let tags = self.documents.get_tags(document.id).await?;
+            let tags = self.documents.get_tags(vault, document.id).await?;
             let snippet = document
                 .content
                 .as_deref()
@@ -250,21 +255,22 @@ impl LibraryService {
         Ok(out)
     }
 
-    pub async fn get_document(&self, id: Id) -> Result<DocumentDetail> {
-        let document = self.require_document(id).await?;
-        let tags = self.documents.get_tags(id).await?;
+    pub async fn get_document(&self, vault: VaultId, id: Id) -> Result<DocumentDetail> {
+        let document = self.require_document(vault, id).await?;
+        let tags = self.documents.get_tags(vault, id).await?;
         Ok(DocumentDetail { document, tags })
     }
 
     /// A document with a slice of its extracted text, `cursor` being a character offset
     pub async fn read_document(
         &self,
+        vault: VaultId,
         id: Id,
         cursor: Option<usize>,
         max_chars: usize,
     ) -> Result<(DocumentDetail, TextPage)> {
-        let document = self.require_document(id).await?;
-        let tags = self.documents.get_tags(id).await?;
+        let document = self.require_document(vault, id).await?;
+        let tags = self.documents.get_tags(vault, id).await?;
 
         let content = document.content.as_deref().unwrap_or_default();
         let total_chars = content.chars().count();
@@ -279,8 +285,8 @@ impl LibraryService {
     }
 
     /// Original file bytes of a document, if one was stored
-    pub async fn read_file(&self, id: Id) -> Result<Option<(Document, Vec<u8>)>> {
-        let document = self.require_document(id).await?;
+    pub async fn read_file(&self, vault: VaultId, id: Id) -> Result<Option<(Document, Vec<u8>)>> {
+        let document = self.require_document(vault, id).await?;
         match document.file_path.clone() {
             Some(path) => {
                 let data = self.files.get_bytes(&path).await?;
@@ -290,8 +296,13 @@ impl LibraryService {
         }
     }
 
-    pub async fn update_metadata(&self, id: Id, update: MetadataUpdate) -> Result<DocumentDetail> {
-        self.require_document(id).await?;
+    pub async fn update_metadata(
+        &self,
+        vault: VaultId,
+        id: Id,
+        update: MetadataUpdate,
+    ) -> Result<DocumentDetail> {
+        self.require_document(vault, id).await?;
 
         // Reject bad input before the first write so a failure changes nothing
         if update.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
@@ -308,12 +319,12 @@ impl LibraryService {
         }
 
         let correspondent_id = match update.correspondent {
-            Some(Some(name)) => Some(Some(self.ensure_correspondent(&name).await?.id)),
+            Some(Some(name)) => Some(Some(self.ensure_correspondent(vault, &name).await?.id)),
             Some(None) => Some(None),
             None => None,
         };
         let document_type_id = match update.document_type {
-            Some(Some(name)) => Some(Some(self.ensure_document_type(&name).await?.id)),
+            Some(Some(name)) => Some(Some(self.ensure_document_type(vault, &name).await?.id)),
             Some(None) => Some(None),
             None => None,
         };
@@ -321,7 +332,7 @@ impl LibraryService {
             Some(names) => {
                 let mut ids = Vec::with_capacity(names.len());
                 for name in names {
-                    ids.push(self.ensure_tag(name).await?.id);
+                    ids.push(self.ensure_tag(vault, name).await?.id);
                 }
                 Some(ids)
             }
@@ -335,6 +346,7 @@ impl LibraryService {
         {
             self.documents
                 .update(
+                    vault,
                     id,
                     UpdateDocument {
                         title: update.title.map(|t| t.trim().to_string()),
@@ -347,35 +359,49 @@ impl LibraryService {
                 .await?;
         }
 
-        self.get_document(id).await
+        self.get_document(vault, id).await
     }
 
     /// Attach tags by name, creating missing ones
-    pub async fn add_tags(&self, id: Id, names: &[String]) -> Result<DocumentDetail> {
-        self.require_document(id).await?;
+    pub async fn add_tags(
+        &self,
+        vault: VaultId,
+        id: Id,
+        names: &[String],
+    ) -> Result<DocumentDetail> {
+        self.require_document(vault, id).await?;
         for name in names {
             non_empty(name, "tag")?;
         }
         for name in names {
-            let tag = self.ensure_tag(name).await?;
-            self.documents.add_tag(id, tag.id).await?;
+            let tag = self.ensure_tag(vault, name).await?;
+            self.documents.add_tag(vault, id, tag.id).await?;
         }
-        self.get_document(id).await
+        self.get_document(vault, id).await
     }
 
     /// Detach tags by name; names that match no tag are ignored
-    pub async fn remove_tags(&self, id: Id, names: &[String]) -> Result<DocumentDetail> {
-        self.require_document(id).await?;
+    pub async fn remove_tags(
+        &self,
+        vault: VaultId,
+        id: Id,
+        names: &[String],
+    ) -> Result<DocumentDetail> {
+        self.require_document(vault, id).await?;
         for name in names {
-            if let Some(tag) = self.lookup_tag(name).await? {
-                self.documents.remove_tag(id, tag.id).await?;
+            if let Some(tag) = self.lookup_tag(vault, name).await? {
+                self.documents.remove_tag(vault, id, tag.id).await?;
             }
         }
-        self.get_document(id).await
+        self.get_document(vault, id).await
     }
 
     /// Store a file, create its document record, and queue processing
-    pub async fn upload(&self, upload: NewUpload) -> Result<(Document, ProcessingStatus)> {
+    pub async fn upload(
+        &self,
+        vault: VaultId,
+        upload: NewUpload,
+    ) -> Result<(Document, ProcessingStatus)> {
         if upload.data.is_empty() {
             return Err(Error::Validation("file content is empty".into()));
         }
@@ -393,24 +419,27 @@ impl LibraryService {
 
         let document = self
             .importer
-            .import(NewUpload {
-                title: Some(title),
-                mime_type: Some(mime_type),
-                ..upload
-            })
+            .import(
+                vault,
+                NewUpload {
+                    title: Some(title),
+                    mime_type: Some(mime_type),
+                    ..upload
+                },
+            )
             .await?;
         let status = self.queue.processing_status(document.id).await?;
         Ok((document, status))
     }
 
-    pub async fn processing_status(&self, id: Id) -> Result<ProcessingStatus> {
-        self.require_document(id).await?;
+    pub async fn processing_status(&self, vault: VaultId, id: Id) -> Result<ProcessingStatus> {
+        self.require_document(vault, id).await?;
         self.queue.processing_status(id).await
     }
 
-    async fn require_document(&self, id: Id) -> Result<Document> {
+    async fn require_document(&self, vault: VaultId, id: Id) -> Result<Document> {
         self.documents
-            .find_by_id(id)
+            .find_by_id(vault, id)
             .await?
             .ok_or_else(|| Error::NotFound {
                 entity_type: "Document",
@@ -418,74 +447,91 @@ impl LibraryService {
             })
     }
 
-    async fn lookup_tag(&self, name: &str) -> Result<Option<Tag>> {
+    async fn lookup_tag(&self, vault: VaultId, name: &str) -> Result<Option<Tag>> {
         let name = name.trim();
-        let tags = self.tags.list().await?;
+        let tags = self.tags.list(vault).await?;
         Ok(tags.into_iter().find(|t| t.name.eq_ignore_ascii_case(name)))
     }
 
-    async fn lookup_correspondent(&self, name: &str) -> Result<Option<Correspondent>> {
+    async fn lookup_correspondent(
+        &self,
+        vault: VaultId,
+        name: &str,
+    ) -> Result<Option<Correspondent>> {
         let name = name.trim();
-        let all = self.correspondents.list().await?;
+        let all = self.correspondents.list(vault).await?;
         Ok(all.into_iter().find(|c| c.name.eq_ignore_ascii_case(name)))
     }
 
-    async fn lookup_document_type(&self, name: &str) -> Result<Option<DocumentType>> {
+    async fn lookup_document_type(
+        &self,
+        vault: VaultId,
+        name: &str,
+    ) -> Result<Option<DocumentType>> {
         let name = name.trim();
-        let all = self.document_types.list().await?;
+        let all = self.document_types.list(vault).await?;
         Ok(all.into_iter().find(|t| t.name.eq_ignore_ascii_case(name)))
     }
 
-    async fn find_correspondent(&self, name: &str) -> Result<Correspondent> {
-        self.lookup_correspondent(name)
+    async fn find_correspondent(&self, vault: VaultId, name: &str) -> Result<Correspondent> {
+        self.lookup_correspondent(vault, name)
             .await?
             .ok_or_else(|| unknown("correspondent", name))
     }
 
-    async fn find_document_type(&self, name: &str) -> Result<DocumentType> {
-        self.lookup_document_type(name)
+    async fn find_document_type(&self, vault: VaultId, name: &str) -> Result<DocumentType> {
+        self.lookup_document_type(vault, name)
             .await?
             .ok_or_else(|| unknown("document type", name))
     }
 
-    async fn ensure_tag(&self, name: &str) -> Result<Tag> {
+    async fn ensure_tag(&self, vault: VaultId, name: &str) -> Result<Tag> {
         let name = non_empty(name, "tag")?;
-        match self.lookup_tag(name).await? {
+        match self.lookup_tag(vault, name).await? {
             Some(tag) => Ok(tag),
             None => {
                 self.tags
-                    .create(CreateTag {
-                        name: name.to_string(),
-                        color: None,
-                    })
+                    .create(
+                        vault,
+                        CreateTag {
+                            name: name.to_string(),
+                            color: None,
+                        },
+                    )
                     .await
             }
         }
     }
 
-    async fn ensure_correspondent(&self, name: &str) -> Result<Correspondent> {
+    async fn ensure_correspondent(&self, vault: VaultId, name: &str) -> Result<Correspondent> {
         let name = non_empty(name, "correspondent")?;
-        match self.lookup_correspondent(name).await? {
+        match self.lookup_correspondent(vault, name).await? {
             Some(found) => Ok(found),
             None => {
                 self.correspondents
-                    .create(CreateCorrespondent {
-                        name: name.to_string(),
-                    })
+                    .create(
+                        vault,
+                        CreateCorrespondent {
+                            name: name.to_string(),
+                        },
+                    )
                     .await
             }
         }
     }
 
-    async fn ensure_document_type(&self, name: &str) -> Result<DocumentType> {
+    async fn ensure_document_type(&self, vault: VaultId, name: &str) -> Result<DocumentType> {
         let name = non_empty(name, "document type")?;
-        match self.lookup_document_type(name).await? {
+        match self.lookup_document_type(vault, name).await? {
             Some(found) => Ok(found),
             None => {
                 self.document_types
-                    .create(CreateDocumentType {
-                        name: name.to_string(),
-                    })
+                    .create(
+                        vault,
+                        CreateDocumentType {
+                            name: name.to_string(),
+                        },
+                    )
                     .await
             }
         }

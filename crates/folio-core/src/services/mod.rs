@@ -7,6 +7,7 @@ mod importer;
 mod ingest;
 mod library;
 mod outbox_dispatcher;
+mod vaults;
 mod workflow_engine;
 
 pub use importer::Importer;
@@ -17,6 +18,7 @@ pub use library::{
 pub use outbox_dispatcher::{
     retry_delay, BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher,
 };
+pub use vaults::{VaultService, ARCHIVE_NAME, PERSONAL_NAME};
 pub use workflow_engine::WorkflowEngine;
 
 use std::sync::Arc;
@@ -24,7 +26,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::error::Result;
-use crate::models::{CreateDocument, Document, DocumentFilter, Id};
+use crate::models::{CreateDocument, Document, DocumentFilter, Id, VaultId};
 use crate::ports::{
     DocumentRepository, EmbeddedChunk, EmbeddingService, OcrService, SearchResult, SearchService,
 };
@@ -41,23 +43,27 @@ impl DocumentService {
     }
 
     /// Get a document by ID
-    pub async fn get(&self, id: Id) -> Result<Option<Document>> {
-        self.document_repo.find_by_id(id).await
+    pub async fn get(&self, vault: VaultId, id: Id) -> Result<Option<Document>> {
+        self.document_repo.find_by_id(vault, id).await
     }
 
     /// List documents with optional filtering
-    pub async fn list(&self, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
-        self.document_repo.list(filter).await
+    pub async fn list(
+        &self,
+        vault: VaultId,
+        filter: Option<DocumentFilter>,
+    ) -> Result<Vec<Document>> {
+        self.document_repo.list(vault, filter).await
     }
 
     /// Create a new document
-    pub async fn create(&self, params: CreateDocument) -> Result<Document> {
-        self.document_repo.create(params).await
+    pub async fn create(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
+        self.document_repo.create(vault, params).await
     }
 
     /// Delete a document
-    pub async fn delete(&self, id: Id) -> Result<()> {
-        self.document_repo.delete(id).await
+    pub async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        self.document_repo.delete(vault, id).await
     }
 }
 
@@ -94,6 +100,7 @@ impl IngestService {
     /// 4. Store embedding for search
     pub async fn ingest(
         &self,
+        vault: VaultId,
         title: String,
         data: &[u8],
         filename: Option<String>,
@@ -105,29 +112,40 @@ impl IngestService {
         // Create document record
         let doc = self
             .document_repo
-            .create(CreateDocument {
-                title,
-                content: Some(content.clone()),
-                original_filename: filename,
-                mime_type: Some(mime_type),
-                ..Default::default()
-            })
+            .create(
+                vault,
+                CreateDocument {
+                    title,
+                    content: Some(content.clone()),
+                    original_filename: filename,
+                    mime_type: Some(mime_type),
+                    ..Default::default()
+                },
+            )
             .await?;
 
-        self.embed(doc.id, &content).await?;
+        self.embed(vault, doc.id, &content).await?;
 
         Ok(doc)
     }
 
     /// Re-process an existing document (regenerate OCR and embedding)
-    pub async fn reprocess(&self, id: Id, data: &[u8], mime_type: &str) -> Result<Document> {
+    pub async fn reprocess(
+        &self,
+        vault: VaultId,
+        id: Id,
+        data: &[u8],
+        mime_type: &str,
+    ) -> Result<Document> {
         // Get existing document
-        let _existing = self.document_repo.find_by_id(id).await?.ok_or_else(|| {
-            crate::error::Error::NotFound {
+        let _existing = self
+            .document_repo
+            .find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| crate::error::Error::NotFound {
                 entity_type: "Document",
                 id: id.to_string(),
-            }
-        })?;
+            })?;
 
         // Extract text
         let content = self.ocr_service.extract_text(data, mime_type).await?;
@@ -136,6 +154,7 @@ impl IngestService {
         let doc = self
             .document_repo
             .update(
+                vault,
                 id,
                 crate::models::UpdateDocument {
                     content: Some(content.clone()),
@@ -144,13 +163,13 @@ impl IngestService {
             )
             .await?;
 
-        self.embed(id, &content).await?;
+        self.embed(vault, id, &content).await?;
 
         Ok(doc)
     }
 
     /// Embed the whole text as a single chunk and store it for search
-    async fn embed(&self, id: Id, content: &str) -> Result<()> {
+    async fn embed(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
         if content.is_empty() {
             return Ok(());
         }
@@ -166,7 +185,7 @@ impl IngestService {
             })
             .collect();
         self.search_service
-            .store_chunks(id, &batch.model, &chunks)
+            .store_chunks(vault, id, &batch.model, &chunks)
             .await
     }
 }
@@ -200,11 +219,16 @@ impl SearchServiceFacade {
     }
 
     /// Search for documents using natural language query
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    pub async fn search(
+        &self,
+        vault: VaultId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
         let batch = self.embedding_service.embed(&[query]).await?;
         let vector = batch.vectors.first().map(Vec::as_slice).unwrap_or_default();
         self.search_service
-            .search(&batch.model, vector, limit)
+            .search(vault, &batch.model, vector, limit)
             .await
     }
 
@@ -212,9 +236,14 @@ impl SearchServiceFacade {
     ///
     /// Semantic search is best effort: with embeddings disabled or failing, or
     /// before any document is embedded, literal matching still answers.
-    pub async fn hybrid_search(&self, query: &str, limit: usize) -> Result<Vec<ScoredDocument>> {
+    pub async fn hybrid_search(
+        &self,
+        vault: VaultId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ScoredDocument>> {
         let semantic = self
-            .search_documents(query, limit)
+            .search_documents(vault, query, limit)
             .await
             .unwrap_or_default();
         let scores: std::collections::HashMap<Id, f32> =
@@ -222,10 +251,13 @@ impl SearchServiceFacade {
 
         let literal = self
             .document_repo
-            .list(Some(DocumentFilter {
-                search_query: Some(query.to_string()),
-                ..Default::default()
-            }))
+            .list(
+                vault,
+                Some(DocumentFilter {
+                    search_query: Some(query.to_string()),
+                    ..Default::default()
+                }),
+            )
             .await?;
 
         let mut seen = std::collections::HashSet::new();
@@ -242,10 +274,19 @@ impl SearchServiceFacade {
 
     /// Search by natural language query and resolve hits to full documents,
     /// skipping hits whose document no longer exists
-    pub async fn search_documents(&self, query: &str, limit: usize) -> Result<Vec<ScoredDocument>> {
+    pub async fn search_documents(
+        &self,
+        vault: VaultId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<ScoredDocument>> {
         let mut results = Vec::new();
-        for hit in self.search(query, limit).await? {
-            if let Some(document) = self.document_repo.find_by_id(hit.document_id).await? {
+        for hit in self.search(vault, query, limit).await? {
+            if let Some(document) = self
+                .document_repo
+                .find_by_id(vault, hit.document_id)
+                .await?
+            {
                 results.push(ScoredDocument {
                     document,
                     score: hit.score,

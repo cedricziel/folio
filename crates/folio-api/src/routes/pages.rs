@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use folio_core::models::{
     Correspondent, Document, DocumentSource, DocumentStatus, DocumentType, SourceKind,
-    UpdateDocument,
+    UpdateDocument, UserId, VaultId,
 };
 use folio_core::ports::{keys, DocumentStore, StoredObject};
 use folio_core::services::NewUpload;
@@ -21,6 +21,7 @@ use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use crate::vault::{DefaultVault, Uploader};
 
 use super::file_response::{harden, harden_inline};
 use super::view::{self, Counts, DocumentRow, Nav, Sidebar, TagView};
@@ -82,6 +83,7 @@ fn parse_id(value: &Option<String>) -> Option<Uuid> {
 
 /// Main index page: the inbox, or every document when a view or filter asks for it
 async fn index_page(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<FilterQuery>,
 ) -> ApiResult<Html<String>> {
@@ -93,9 +95,14 @@ async fn index_page(
     let filtered = correspondent_id.is_some() || document_type_id.is_some() || tag_id.is_some();
     let view_all = filtered || query.view.as_deref() == Some("all");
 
-    let all = state.document_repo.list(None).await?;
-    let sidebar =
-        Sidebar::build(&state, if view_all { Nav::All } else { Nav::Inbox }, &all).await?;
+    let all = state.document_repo.list(vault, None).await?;
+    let sidebar = Sidebar::build(
+        &state,
+        vault,
+        if view_all { Nav::All } else { Nav::Inbox },
+        &all,
+    )
+    .await?;
     let counts = Counts::from_documents(&all);
 
     let active_filter = correspondent_id
@@ -115,12 +122,15 @@ async fn index_page(
     let documents = if filtered {
         state
             .document_repo
-            .list(Some(DocumentFilter {
-                correspondent_id,
-                document_type_id,
-                tag_ids: tag_id.map(|id| vec![id]),
-                ..Default::default()
-            }))
+            .list(
+                vault,
+                Some(DocumentFilter {
+                    correspondent_id,
+                    document_type_id,
+                    tag_ids: tag_id.map(|id| vec![id]),
+                    ..Default::default()
+                }),
+            )
             .await?
     } else if view_all {
         all
@@ -145,7 +155,7 @@ async fn index_page(
         lede,
         view_all,
         active_filter,
-        rows: view::rows(&state, documents).await?,
+        rows: view::rows(DefaultVault(vault), &state, documents).await?,
         total: counts.total,
         counts,
     };
@@ -165,12 +175,15 @@ struct DocumentsFrameTemplate {
 }
 
 /// Documents list (for Turbo Frame)
-async fn documents_list(State(state): State<AppState>) -> ApiResult<Html<String>> {
-    let documents = state.document_repo.list(None).await?;
+async fn documents_list(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Html<String>> {
+    let documents = state.document_repo.list(vault, None).await?;
     let total = documents.len();
 
     let template = DocumentsFrameTemplate {
-        rows: view::rows(&state, documents).await?,
+        rows: view::rows(DefaultVault(vault), &state, documents).await?,
         total,
         view_all: true,
     };
@@ -201,12 +214,13 @@ struct DocumentViewTemplate {
 
 /// Document detail (full page view)
 async fn document_detail(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let document = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| crate::error::ApiError::not_found("Document not found"))?;
 
@@ -214,7 +228,7 @@ async fn document_detail(
     let correspondent = if let Some(correspondent_id) = document.correspondent_id {
         state
             .correspondent_repo
-            .find_by_id(correspondent_id)
+            .find_by_id(vault, correspondent_id)
             .await?
     } else {
         None
@@ -223,7 +237,7 @@ async fn document_detail(
     let document_type = if let Some(document_type_id) = document.document_type_id {
         state
             .document_type_repo
-            .find_by_id(document_type_id)
+            .find_by_id(vault, document_type_id)
             .await?
     } else {
         None
@@ -231,18 +245,18 @@ async fn document_detail(
 
     let tags: Vec<TagView> = state
         .document_repo
-        .get_tags(document.id)
+        .get_tags(vault, document.id)
         .await?
         .iter()
         .map(TagView::from)
         .collect();
 
     // Fetch all options for editing
-    let all_correspondents = state.correspondent_repo.list().await?;
-    let all_document_types = state.document_type_repo.list().await?;
+    let all_correspondents = state.correspondent_repo.list(vault).await?;
+    let all_document_types = state.document_type_repo.list(vault).await?;
     let all_tags: Vec<TagView> = state
         .tag_repo
-        .list()
+        .list(vault)
         .await?
         .iter()
         .map(TagView::from)
@@ -266,7 +280,7 @@ async fn document_detail(
     facts.push(format!("added {}", document.created_at.format("%Y-%m-%d")));
 
     let template = DocumentViewTemplate {
-        sidebar: Sidebar::load(&state, Nav::None).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::None).await?,
         facts: facts.join(" · "),
         reading: view::reading_label(document.page_count),
         failed,
@@ -323,12 +337,13 @@ fn stream_object(object: StoredObject, content_type: &str) -> Response {
 
 /// Document thumbnail (serves generated thumbnail or placeholder)
 async fn document_thumbnail(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
     let document = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
@@ -386,12 +401,13 @@ fn placeholder_svg(svg: impl Into<String>) -> Response {
 
 /// Document page thumbnail (serves generated thumbnail for a specific page)
 async fn document_page_thumbnail(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path((id, page)): Path<(Uuid, u32)>,
 ) -> ApiResult<Response> {
     let document = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
@@ -432,29 +448,31 @@ pub(super) struct DocumentStreams {
 
 impl DocumentStreams {
     pub(super) async fn added(state: &AppState, document: Document) -> ApiResult<Self> {
+        let vault = document.vault_id;
         Ok(Self {
             row: Some(view::row(state, document).await?),
             prepend: true,
             removed: None,
-            counts: Counts::load(state).await?,
+            counts: Counts::load(state, vault).await?,
         })
     }
 
     pub(super) async fn changed(state: &AppState, document: Document) -> ApiResult<Self> {
+        let vault = document.vault_id;
         Ok(Self {
             row: Some(view::row(state, document).await?),
             prepend: false,
             removed: None,
-            counts: Counts::load(state).await?,
+            counts: Counts::load(state, vault).await?,
         })
     }
 
-    pub(super) async fn removed(state: &AppState, id: Uuid) -> ApiResult<Self> {
+    pub(super) async fn removed(state: &AppState, vault: VaultId, id: Uuid) -> ApiResult<Self> {
         Ok(Self {
             row: None,
             prepend: false,
             removed: Some(id),
-            counts: Counts::load(state).await?,
+            counts: Counts::load(state, vault).await?,
         })
     }
 
@@ -467,6 +485,8 @@ impl DocumentStreams {
 /// Read the uploaded file out of a multipart body, store it and queue processing
 pub(crate) async fn store_upload(
     state: &AppState,
+    vault: VaultId,
+    uploaded_by: Option<UserId>,
     mut multipart: Multipart,
     source: SourceKind,
 ) -> ApiResult<Document> {
@@ -519,14 +539,18 @@ pub(crate) async fn store_upload(
     // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
     let document = state
         .importer
-        .import(NewUpload {
-            title: Some(title),
-            filename: filename.unwrap_or_else(|| "upload".to_string()),
-            mime_type: Some(mime_type),
-            data: file_data,
-            source: DocumentSource::of(source),
-            tag_ids: Vec::new(),
-        })
+        .import(
+            vault,
+            NewUpload {
+                title: Some(title),
+                filename: filename.unwrap_or_else(|| "upload".to_string()),
+                mime_type: Some(mime_type),
+                data: file_data,
+                source: DocumentSource::of(source),
+                tag_ids: Vec::new(),
+                uploaded_by,
+            },
+        )
         .await?;
 
     folio_infra::telemetry::metrics().documents_changed(1);
@@ -542,10 +566,12 @@ fn multipart_error(context: &str, e: axum::extract::multipart::MultipartError) -
 
 /// Upload a document (returns Turbo Stream)
 async fn upload_document(
+    DefaultVault(vault): DefaultVault,
+    Uploader(uploader): Uploader,
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let document = store_upload(&state, multipart, SourceKind::Upload).await?;
+    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Upload).await?;
     let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
@@ -553,19 +579,20 @@ async fn upload_document(
 
 /// Delete a document, then go back to the inbox
 async fn delete_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
     // Verify document exists
     let _ = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
     // Delete the stored files first so a failure leaves the row to retry
-    super::documents::purge_document_files(&state, id).await?;
-    state.document_repo.delete(id).await?;
+    super::documents::purge_document_files(DefaultVault(vault), &state, id).await?;
+    state.document_repo.delete(vault, id).await?;
     folio_infra::telemetry::metrics().documents_changed(-1);
 
     Ok(Redirect::to("/").into_response())
@@ -573,6 +600,7 @@ async fn delete_document(
 
 /// Reprocess a document (re-run OCR, thumbnails, embeddings)
 async fn reprocess_document(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
@@ -581,7 +609,7 @@ async fn reprocess_document(
     // Verify document exists and has a file
     let document = state
         .document_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
 
@@ -627,18 +655,23 @@ struct SearchResultsTemplate {
 
 /// Search documents (returns Turbo Frame)
 async fn search_documents(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult<Html<String>> {
     let mut documents = Vec::new();
-    for result in state.search_documents(&query.q, 10).await? {
-        if let Ok(Some(document)) = state.document_repo.find_by_id(result.document_id).await {
+    for result in state.search_documents(vault, &query.q, 10).await? {
+        if let Ok(Some(document)) = state
+            .document_repo
+            .find_by_id(vault, result.document_id)
+            .await
+        {
             documents.push(document);
         }
     }
 
     let template = SearchResultsTemplate {
-        rows: view::rows(&state, documents).await?,
+        rows: view::rows(DefaultVault(vault), &state, documents).await?,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -658,6 +691,7 @@ pub struct SetCorrespondentForm {
 
 /// Set document correspondent (form handler with redirect)
 async fn set_document_correspondent(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<SetCorrespondentForm>,
@@ -670,6 +704,7 @@ async fn set_document_correspondent(
     state
         .document_repo
         .update(
+            vault,
             id,
             UpdateDocument {
                 correspondent_id: Some(correspondent_id),
@@ -689,6 +724,7 @@ pub struct SetDocumentTypeForm {
 
 /// Set document type (form handler with redirect)
 async fn set_document_type(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<SetDocumentTypeForm>,
@@ -701,6 +737,7 @@ async fn set_document_type(
     state
         .document_repo
         .update(
+            vault,
             id,
             UpdateDocument {
                 document_type_id: Some(document_type_id),
@@ -720,13 +757,14 @@ pub struct AddTagForm {
 
 /// Add a tag to a document (form handler with redirect)
 async fn add_document_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     axum::extract::Form(form): axum::extract::Form<AddTagForm>,
 ) -> ApiResult<Response> {
     if let Some(tag_id_str) = form.tag_id.filter(|s| !s.is_empty()) {
         if let Ok(tag_id) = Uuid::parse_str(&tag_id_str) {
-            state.document_repo.add_tag(id, tag_id).await?;
+            state.document_repo.add_tag(vault, id, tag_id).await?;
         }
     }
 
@@ -742,10 +780,14 @@ pub struct RemoveTagPath {
 
 /// Remove a tag from a document (form handler with redirect)
 async fn remove_document_tag(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(path): Path<RemoveTagPath>,
 ) -> ApiResult<Response> {
-    state.document_repo.remove_tag(path.id, path.tag_id).await?;
+    state
+        .document_repo
+        .remove_tag(vault, path.id, path.tag_id)
+        .await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
 }

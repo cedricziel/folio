@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use folio_core::models::VaultId;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
@@ -20,6 +21,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 /// Placeholder returned in place of stored webhook secrets
 ///
@@ -139,9 +141,10 @@ fn reject_masks(input: &WorkflowInput) -> Result<(), ApiError> {
     )
 )]
 pub(crate) async fn list_workflows(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<Workflow>>> {
-    let workflows = state.workflow_repo.list().await?;
+    let workflows = state.workflow_repo.list(vault).await?;
     Ok(Json(workflows.into_iter().map(redact).collect()))
 }
 
@@ -159,10 +162,11 @@ pub(crate) async fn list_workflows(
     )
 )]
 pub(crate) async fn get_workflow(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<Workflow>> {
-    let workflow = find(&*state.workflow_repo, id).await?;
+    let workflow = find(vault, &*state.workflow_repo, id).await?;
     Ok(Json(redact(workflow)))
 }
 
@@ -180,11 +184,12 @@ pub(crate) async fn get_workflow(
     )
 )]
 pub(crate) async fn create_workflow(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiJson(input): ApiJson<WorkflowInput>,
 ) -> ApiResult<(StatusCode, Json<Workflow>)> {
     reject_masks(&input)?;
-    let workflow = state.workflow_repo.create(input).await?;
+    let workflow = state.workflow_repo.create(vault, input).await?;
     Ok((StatusCode::CREATED, Json(redact(workflow))))
 }
 
@@ -206,13 +211,14 @@ pub(crate) async fn create_workflow(
     )
 )]
 pub(crate) async fn update_workflow(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(mut input): ApiJson<WorkflowInput>,
 ) -> ApiResult<Json<Workflow>> {
-    let existing = find(&*state.workflow_repo, id).await?;
+    let existing = find(vault, &*state.workflow_repo, id).await?;
     restore_secrets(&mut input, &existing)?;
-    let workflow = state.workflow_repo.update(id, input).await?;
+    let workflow = state.workflow_repo.update(vault, id, input).await?;
     Ok(Json(redact(workflow)))
 }
 
@@ -230,10 +236,11 @@ pub(crate) async fn update_workflow(
     )
 )]
 pub(crate) async fn delete_workflow(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
-    state.workflow_repo.delete(id).await?;
+    state.workflow_repo.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -275,10 +282,11 @@ pub struct TestResult {
     )
 )]
 pub(crate) async fn test_workflow(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<TestResult>> {
-    let workflow = find(&*state.workflow_repo, id).await?;
+    let workflow = find(vault, &*state.workflow_repo, id).await?;
     let result = send_test(&state.webhook_client, &workflow, &state.public_url).await?;
     Ok(Json(result))
 }
@@ -354,17 +362,22 @@ pub struct ListRunsQuery {
     )
 )]
 pub(crate) async fn list_runs(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<ListRunsQuery>,
 ) -> ApiResult<Json<Vec<WorkflowRun>>> {
-    find(&*state.workflow_repo, id).await?;
+    find(vault, &*state.workflow_repo, id).await?;
     let limit = query.limit.unwrap_or(DEFAULT_RUN_LIMIT).min(MAX_RUN_LIMIT);
-    Ok(Json(state.workflow_repo.list_runs(id, limit).await?))
+    Ok(Json(state.workflow_repo.list_runs(vault, id, limit).await?))
 }
 
-pub(crate) async fn find(repo: &dyn WorkflowRepository, id: Uuid) -> ApiResult<Workflow> {
-    repo.find_by_id(id)
+pub(crate) async fn find(
+    vault: VaultId,
+    repo: &dyn WorkflowRepository,
+    id: Uuid,
+) -> ApiResult<Workflow> {
+    repo.find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Workflow not found"))
 }

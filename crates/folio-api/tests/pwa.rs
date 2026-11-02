@@ -16,7 +16,7 @@ async fn share_target_stores_the_file_and_returns_to_the_inbox() {
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers()[header::LOCATION], "/");
-    let docs = h.state.document_repo.list(None).await.unwrap();
+    let docs = h.state.document_repo.list(h.vault, None).await.unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].original_filename.as_deref(), Some("scan.png"));
 }

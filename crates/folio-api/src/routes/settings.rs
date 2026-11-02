@@ -16,6 +16,7 @@ use folio_infra::JobType;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 use super::view::{Nav, Sidebar};
 
@@ -69,6 +70,7 @@ struct SettingsQuery {
 
 /// Settings page
 async fn settings_page(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<SettingsQuery>,
 ) -> ApiResult<Html<String>> {
@@ -88,7 +90,7 @@ async fn settings_page(
     };
 
     let template = SettingsTemplate {
-        sidebar: Sidebar::load(&state, Nav::Settings).await?,
+        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
         ai_settings: processing.ai.clone(),
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),
@@ -287,7 +289,10 @@ async fn test_processing_settings(
 }
 
 /// Re-embed every document with the active embedding model
-async fn reembed_all(State(state): State<AppState>) -> ApiResult<Response> {
+async fn reembed_all(
+    DefaultVault(_vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Response> {
     if let Ok(model) = state.embedding_service.model_id().await {
         state.search_service.mark_stale_except(&model).await?;
     }

@@ -7,27 +7,29 @@ Prerequisites, not part of this change:
 - Auth PRs merged: `users` with an admin flag, sessions, first-run setup, local groups, OIDC with a groups claim, forward-auth with a trusted-proxy check and `Remote-Groups`, OAuth tokens. Groups 1, 3 and 5 need them.
 - PostgreSQL platform PR merged: `migrations/sqlite/` and `migrations/postgres/` and a Postgres test database in CI. Groups 1 and 2 need it.
 
+Groups 1 and 2 form the foundation release. Existing HTTP and MCP calls use the authenticated user's default vault, provisioned on the first authenticated request. Explicit vault routes, membership endpoints, action-level role enforcement, the vault switcher, MCP vault selection, and new storage prefixes remain in groups 3–6.
+
 ## 1. Data model, migration and access port (PR 1)
 
-- [ ] 1.1 Add `VaultId`, `Vault`, `VaultRole`, `Principal`, `VaultMember`, `VaultAction` and `Access` to `folio-core/src/models/vault.rs`; first write the failing unit test `role_matrix` that checks every role against every action, including contributor with `uploaded_by` equal to, different from, and `None`, then implement `VaultRole::permits`.
-- [ ] 1.2 Add the `AccessPolicy` port with the default `can` in `folio-core/src/ports/access.rs`; failing test first: `can_maps_roles_to_access` with a stub `effective_role` returning `None`, `Viewer` and `Owner`.
-- [ ] 1.3 Add the ports `VaultRepository`, `MembershipRepository` and `AuditLog` to `folio-core/src/ports/repository.rs` (signatures only; compiles with `cargo check -p folio-core`).
-- [ ] 1.4 Write `NNN_vaults.sql` for SQLite: new tables, `vault_id`/`uploaded_by` on documents, vocabulary table rebuild with `UNIQUE(vault_id, name)`, `users.default_vault_id`, and the `Archive` backfill. Failing test first: `migration_moves_existing_rows_into_archive` loads a pre-change fixture database and asserts every row has the `Archive` vault and the oldest admin owns it; plus `migration_skips_archive_on_empty_db`.
-- [ ] 1.5 Write the PostgreSQL twin of `NNN_vaults.sql`; the same two migration tests run against Postgres in CI and pass.
-- [ ] 1.6 Implement `SqlVaultRepository`, `SqlMembershipRepository` (including the last-direct-owner count and external group sync) and `SqlAuditLog` for both backends; failing tests first: `effective_role_is_highest_of_direct_and_group`, `local_and_external_groups_with_same_name_are_distinct`, `last_direct_owner_cannot_be_removed`, `group_owner_does_not_count_as_last_owner`.
-- [ ] 1.7 Implement `SqlAccessPolicy` (one query, no cache); failing test first: `revoked_grant_is_not_visible_on_next_call`.
-- [ ] 1.8 Hook first-run setup: create `Personal` for the first admin, grant `Archive` if it has no owner, set the default vault; also create `Personal` for each user created afterwards. Failing tests first: `first_run_creates_personal_vault`, `first_run_claims_ownerless_archive`, `new_user_gets_personal_vault`.
-- [ ] 1.9 Run `make format`, `make lint`, `make test` and commit as `feat(core): add vaults, roles and the access policy port` (plus `feat(infra): ...` commits per adapter).
+- [x] 1.1 Add `VaultId`, `Vault`, `VaultRole`, `Principal`, `VaultMember`, `VaultAction` and `Access` to `folio-core/src/models/vault.rs`; first write the failing unit test `role_matrix` that checks every role against every action, including contributor with `uploaded_by` equal to, different from, and `None`, then implement `VaultRole::permits`.
+- [x] 1.2 Add the `AccessPolicy` port with the default `can` in `folio-core/src/ports/access.rs`; failing test first: `can_maps_roles_to_access` with a stub `effective_role` returning `None`, `Viewer` and `Owner`.
+- [x] 1.3 Add the ports `VaultRepository`, `MembershipRepository` and `AuditLog` to `folio-core/src/ports/repository.rs` (signatures only; compiles with `cargo check -p folio-core`).
+- [x] 1.4 Write `NNN_vaults.sql` for SQLite: new tables, `vault_id`/`uploaded_by` on documents, vocabulary table rebuild with `UNIQUE(vault_id, name)`, `users.default_vault_id`, and the `Archive` backfill. Failing test first: `migration_moves_existing_rows_into_archive` loads a pre-change fixture database and asserts every row has the `Archive` vault and the oldest admin owns it; plus `migration_skips_archive_on_empty_db`.
+- [x] 1.5 Write the PostgreSQL twin of `NNN_vaults.sql`; the same two migration tests run against Postgres in CI and pass.
+- [x] 1.6 Implement `SqlVaultRepository`, `SqlMembershipRepository` (including the last-direct-owner count and external group sync) and `SqlAuditLog` for both backends; failing tests first: `effective_role_is_highest_of_direct_and_group`, `local_and_external_groups_with_same_name_are_distinct`, `last_direct_owner_cannot_be_removed`, `group_owner_does_not_count_as_last_owner`.
+- [x] 1.7 Implement `SqlAccessPolicy` (one query, no cache); failing test first: `revoked_grant_is_not_visible_on_next_call`.
+- [x] 1.8 Hook first-run setup: create `Personal` for the first admin, grant `Archive` if it has no owner, set the default vault; also create `Personal` for each user created afterwards. Failing tests first: `first_run_creates_personal_vault`, `first_run_claims_ownerless_archive`, `new_user_gets_personal_vault`.
+- [x] 1.9 Run `make format`, `make lint`, `make test` and commit as `feat(core): add vaults, roles and the access policy port` (plus `feat(infra): ...` commits per adapter).
 
 ## 2. Repository scoping and isolation tests (PR 2, depends on 1)
 
-- [ ] 2.1 Write the failing contract suite `folio-infra/tests/vault_isolation.rs`, generic over the backend: two vaults with same-named tags, correspondents, types and documents with embeddings; assert that no scoped method called with vault A returns, counts, updates or deletes a vault B row, and that assigning a vault B tag to a vault A document is "not found".
-- [ ] 2.2 Change `DocumentRepository`, `TagRepository`, `CorrespondentRepository` and `DocumentTypeRepository` to take `VaultId` on every method, add `DocumentRepository::locate`, and update the SQLite adapters until 2.1 passes on SQLite.
-- [ ] 2.3 Update the PostgreSQL adapters until 2.1 passes on PostgreSQL in CI.
-- [ ] 2.4 Scope `SearchService::search` to a vault (join on `documents.vault_id`); add the case `search_never_returns_other_vault` to 2.1 before the change.
-- [ ] 2.5 Implement `DocumentRepository::move_to` with name-based vocabulary remapping and the audit entry in one transaction; failing tests first: `move_remaps_tags_by_name`, `move_creates_missing_correspondent_in_target`, `move_writes_audit_entry`.
-- [ ] 2.6 Set `vault_id` and `uploaded_by` on documents created by the worker and the existing upload code paths; the worker uses `locate` before scoped calls. Existing worker tests pass with the new signatures.
-- [ ] 2.7 Run `make format`, `make lint`, `make test`; commit as `refactor(core): scope repositories by vault` and `test(infra): assert cross-vault isolation`.
+- [x] 2.1 Write the failing contract suite `folio-infra/tests/vault_isolation.rs`, generic over the backend: two vaults with same-named tags, correspondents, types and documents with embeddings; assert that no scoped method called with vault A returns, counts, updates or deletes a vault B row, and that assigning a vault B tag to a vault A document is "not found".
+- [x] 2.2 Change `DocumentRepository`, `TagRepository`, `CorrespondentRepository` and `DocumentTypeRepository` to take `VaultId` on every method, add `DocumentRepository::locate`, and update the SQLite adapters until 2.1 passes on SQLite.
+- [x] 2.3 Update the PostgreSQL adapters until 2.1 passes on PostgreSQL in CI.
+- [x] 2.4 Scope `SearchService::search` to a vault (join on `documents.vault_id`); add the case `search_never_returns_other_vault` to 2.1 before the change.
+- [x] 2.5 Implement `DocumentRepository::move_to` with name-based vocabulary remapping and the audit entry in one transaction; failing tests first: `move_remaps_tags_by_name`, `move_creates_missing_correspondent_in_target`, `move_writes_audit_entry`.
+- [x] 2.6 Set `vault_id` and `uploaded_by` on documents created by the worker and the existing upload code paths; the worker uses `locate` before scoped calls. Existing worker tests pass with the new signatures.
+- [x] 2.7 Run `make format`, `make lint`, `make test`; commit as `refactor(core): scope repositories by vault` and `test(infra): assert cross-vault isolation`.
 
 ## 3. JSON API (PR 3, depends on 2 and the auth PRs)
 

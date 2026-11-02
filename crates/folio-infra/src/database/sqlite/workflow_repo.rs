@@ -6,7 +6,9 @@ use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use tracing::instrument;
 
 use folio_core::error::{Error, Result};
-use folio_core::models::{Id, RunStatus, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger};
+use folio_core::models::{
+    Id, RunStatus, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
+};
 use folio_core::ports::WorkflowRepository;
 
 use crate::queue::{insert_job_sqlite as insert_job, JobType};
@@ -80,10 +82,20 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
 
 #[async_trait]
 impl WorkflowRepository for SqliteWorkflowRepository {
-    #[instrument(skip(self))]
-    async fn find_by_id(&self, id: Id) -> Result<Option<Workflow>> {
-        let row = sqlx::query("SELECT * FROM workflows WHERE id = ?")
+    async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ?")
             .bind(id.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        row.map(|(v,)| parse_id(&v).map(VaultId)).transpose()
+    }
+
+    #[instrument(skip(self))]
+    async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
+        let row = sqlx::query("SELECT * FROM workflows WHERE id = ? AND vault_id = ?")
+            .bind(id.to_string())
+            .bind(vault.to_string())
             .fetch_optional(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -91,19 +103,27 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     }
 
     #[instrument(skip(self))]
-    async fn list(&self) -> Result<Vec<Workflow>> {
-        let rows = sqlx::query("SELECT * FROM workflows ORDER BY created_at, name")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(repo_err)?;
+    async fn list(&self, vault: VaultId) -> Result<Vec<Workflow>> {
+        let rows =
+            sqlx::query("SELECT * FROM workflows WHERE vault_id = ? ORDER BY created_at, name")
+                .bind(vault.to_string())
+                .fetch_all(&self.pool)
+                .await
+                .map_err(repo_err)?;
         rows.iter().map(workflow_from_row).collect()
     }
 
     #[instrument(skip(self))]
-    async fn list_enabled(&self, trigger: WorkflowTrigger) -> Result<Vec<Workflow>> {
+    async fn list_enabled(
+        &self,
+        vault: VaultId,
+        trigger: WorkflowTrigger,
+    ) -> Result<Vec<Workflow>> {
         let rows = sqlx::query(
-            "SELECT * FROM workflows WHERE enabled = 1 AND trigger_event = ? ORDER BY created_at",
+            "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND trigger_event = ?
+             ORDER BY created_at",
         )
+        .bind(vault.to_string())
         .bind(trigger.as_str())
         .fetch_all(&self.pool)
         .await
@@ -112,15 +132,16 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     }
 
     #[instrument(skip(self, input))]
-    async fn create(&self, input: WorkflowInput) -> Result<Workflow> {
+    async fn create(&self, vault: VaultId, input: WorkflowInput) -> Result<Workflow> {
         input.validate()?;
         let now = Utc::now();
         let id = Id::new_v4();
         sqlx::query(
-            "INSERT INTO workflows (id, name, enabled, trigger_event, conditions, actions, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id.to_string())
+        .bind(vault.to_string())
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
@@ -145,12 +166,12 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     }
 
     #[instrument(skip(self, input))]
-    async fn update(&self, id: Id, input: WorkflowInput) -> Result<Workflow> {
+    async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow> {
         input.validate()?;
         let now = Utc::now();
         let result = sqlx::query(
             "UPDATE workflows SET name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ? \
-             WHERE id = ?",
+             WHERE id = ? AND vault_id = ?",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -159,6 +180,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
         .bind(now.to_rfc3339())
         .bind(id.to_string())
+        .bind(vault.to_string())
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
@@ -166,13 +188,16 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         if result.rows_affected() == 0 {
             return Err(not_found(id));
         }
-        self.find_by_id(id).await?.ok_or_else(|| not_found(id))
+        self.find_by_id(vault, id)
+            .await?
+            .ok_or_else(|| not_found(id))
     }
 
     #[instrument(skip(self))]
-    async fn delete(&self, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM workflows WHERE id = ?")
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let result = sqlx::query("DELETE FROM workflows WHERE id = ? AND vault_id = ?")
             .bind(id.to_string())
+            .bind(vault.to_string())
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -251,11 +276,18 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     }
 
     #[instrument(skip(self))]
-    async fn list_runs(&self, workflow_id: Id, limit: u32) -> Result<Vec<WorkflowRun>> {
+    async fn list_runs(
+        &self,
+        vault: VaultId,
+        workflow_id: Id,
+        limit: u32,
+    ) -> Result<Vec<WorkflowRun>> {
         let rows = sqlx::query(
-            "SELECT * FROM workflow_runs WHERE workflow_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT r.* FROM workflow_runs r JOIN workflows w ON w.id = r.workflow_id
+             WHERE r.workflow_id = ? AND w.vault_id = ? ORDER BY r.created_at DESC LIMIT ?",
         )
         .bind(workflow_id.to_string())
+        .bind(vault.to_string())
         .bind(limit)
         .fetch_all(&self.pool)
         .await

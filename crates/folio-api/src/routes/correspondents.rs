@@ -11,6 +11,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, Conflict, InternalError, NotFound};
 use crate::state::AppState;
+use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,9 +36,10 @@ pub fn router() -> Router<AppState> {
     )
 )]
 pub(crate) async fn list_correspondents(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<Correspondent>>> {
-    let correspondents = state.correspondent_repo.list().await?;
+    let correspondents = state.correspondent_repo.list(vault).await?;
     Ok(Json(correspondents))
 }
 
@@ -55,12 +57,13 @@ pub(crate) async fn list_correspondents(
     )
 )]
 pub(crate) async fn get_correspondent(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<Correspondent>> {
     let correspondent = state
         .correspondent_repo
-        .find_by_id(id)
+        .find_by_id(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Correspondent not found"))?;
 
@@ -88,12 +91,13 @@ pub struct CreateCorrespondentRequest {
     )
 )]
 pub(crate) async fn create_correspondent(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiJson(req): ApiJson<CreateCorrespondentRequest>,
 ) -> ApiResult<Json<Correspondent>> {
     let correspondent = state
         .correspondent_repo
-        .create(CreateCorrespondent { name: req.name })
+        .create(vault, CreateCorrespondent { name: req.name })
         .await?;
 
     Ok(Json(correspondent))
@@ -122,13 +126,14 @@ pub struct UpdateCorrespondentRequest {
     )
 )]
 pub(crate) async fn update_correspondent(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
     ApiJson(req): ApiJson<UpdateCorrespondentRequest>,
 ) -> ApiResult<Json<Correspondent>> {
     let correspondent = state
         .correspondent_repo
-        .update(id, UpdateCorrespondent { name: req.name })
+        .update(vault, id, UpdateCorrespondent { name: req.name })
         .await?;
 
     Ok(Json(correspondent))
@@ -148,9 +153,10 @@ pub(crate) async fn update_correspondent(
     )
 )]
 pub(crate) async fn delete_correspondent(
+    DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
-    state.correspondent_repo.delete(id).await?;
+    state.correspondent_repo.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

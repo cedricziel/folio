@@ -10,17 +10,21 @@ async fn event_stream_turns_a_new_document_into_turbo_streams() {
     let doc = h
         .state
         .document_repo
-        .create(folio_core::models::CreateDocument {
-            title: "Fresh".into(),
-            content: None,
-            original_filename: None,
-            mime_type: None,
-            ..Default::default()
-        })
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Fresh".into(),
+                content: None,
+                original_filename: None,
+                mime_type: None,
+                ..Default::default()
+            },
+        )
         .await
         .unwrap();
 
     let html = folio_api::routes::turbo_streams_for(
+        folio_api::vault::DefaultVault(h.vault),
         &h.state,
         &folio_api::DocumentEvent::Created {
             document_id: doc.id,
@@ -32,10 +36,14 @@ async fn event_stream_turns_a_new_document_into_turbo_streams() {
     assert!(html.contains("Fresh"));
 
     let html = folio_api::routes::turbo_streams_for(
+        folio_api::vault::DefaultVault(h.vault),
         &h.state,
         &folio_api::DocumentEvent::Deleted {
             document_id: doc.id,
-            snapshot: None,
+            snapshot: Some(std::sync::Arc::new(folio_core::events::DeletedDocument {
+                document: doc.clone(),
+                tags: Vec::new(),
+            })),
         },
     )
     .await
@@ -60,10 +68,13 @@ mod resume {
     async fn create(h: &Harness, title: &str) {
         h.state
             .document_repo
-            .create(CreateDocument {
-                title: title.into(),
-                ..Default::default()
-            })
+            .create(
+                h.vault,
+                CreateDocument {
+                    title: title.into(),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap();
     }

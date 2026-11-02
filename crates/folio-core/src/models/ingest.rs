@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentSource, Id};
+use super::{DocumentSource, Id, VaultId};
 use crate::error::{Error, Result};
 
 /// Marker shown instead of a stored password
@@ -259,6 +259,11 @@ pub struct IngestionSourceDef {
     pub enabled: bool,
     pub origin: SourceOrigin,
     pub config: SourceConfig,
+    /// Where imported documents go; `None` for sources from the configuration,
+    /// which use the instance default vault
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
+    pub vault_id: Option<VaultId>,
 }
 
 /// Fields for creating or replacing a managed source

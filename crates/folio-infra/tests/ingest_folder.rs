@@ -7,7 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Document, FolderAfterImport, FolderConfig, Id, IngestItem, IngestOutcome,
+    Document, FolderAfterImport, FolderConfig, Id, IngestItem, IngestOutcome, VaultId,
 };
 use folio_core::ports::{IngestSink, IngestionSource};
 use folio_infra::FolderSource;
@@ -25,7 +25,10 @@ impl IngestSink for RecordingSink {
             return Err(Error::Storage(message.clone()));
         }
         self.items.lock().unwrap().push(item);
-        Ok(IngestOutcome::Imported(Box::new(Document::new("t"))))
+        Ok(IngestOutcome::Imported(Box::new(Document::new(
+            VaultId::new(),
+            "t",
+        ))))
     }
 }
 
