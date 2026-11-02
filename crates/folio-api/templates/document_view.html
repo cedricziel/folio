@@ -151,15 +151,16 @@
                 </dl>
             </section>
 
+            {% include "partials/document_processing.html" %}
             <section class="panel">
                 <h2 class="heading">Text Folio read</h2>
                 {% match document.content %}
                 {% when Some with (content) %}
                 <pre class="ocr">{{ content }}</pre>
                 {% when None %}
-                {% if failed %}
+                {% if document.ocr_status.as_str() == "failed" %}
                 <div class="f-notice f-notice-danger" role="status">
-                    <p>Folio couldn't read this file. It may be damaged or in a format Folio doesn't know. Read it again, or move it to Trash.</p>
+                    <p>Text extraction did not finish. The original file is unchanged.</p>
                 </div>
                 {% else %}
                 <p><span class="f-status f-status-pending">{{ reading }}</span></p>

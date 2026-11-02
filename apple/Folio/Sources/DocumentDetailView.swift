@@ -69,6 +69,7 @@ struct DocumentDetailView: View {
                         }
                     }
                 }
+                DocumentProcessingView(document: model.document)
                 if !model.document.tags.isEmpty {
                     HStack(spacing: FolioTheme.Spacing.space2) {
                         ForEach(model.document.tags) { TagCapsule(tag: $0) }

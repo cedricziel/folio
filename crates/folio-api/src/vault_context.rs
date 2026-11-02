@@ -63,6 +63,38 @@ pub mod filters {
     use super::*;
 
     #[askama::filter_fn]
+    pub fn processing_status(
+        status: &folio_core::models::ProcessingStatus,
+        _: &dyn askama::Values,
+    ) -> askama::Result<&'static str> {
+        Ok(processing_label(status))
+    }
+
+    fn processing_label(status: &folio_core::models::ProcessingStatus) -> &'static str {
+        use folio_core::models::ProcessingStatus;
+        match status {
+            ProcessingStatus::Pending => "Waiting",
+            ProcessingStatus::Running => "Running",
+            ProcessingStatus::Done => "Completed",
+            ProcessingStatus::Failed => "Last attempt failed",
+            ProcessingStatus::Skipped => "Skipped",
+        }
+    }
+
+    #[askama::filter_fn]
+    pub fn ocr_processing_status(
+        document: &Document,
+        _: &dyn askama::Values,
+    ) -> askama::Result<&'static str> {
+        if document.ocr_status == folio_core::models::ProcessingStatus::Done
+            && document.content.as_deref() == Some("")
+        {
+            return Ok("Completed with no text");
+        }
+        Ok(processing_label(&document.ocr_status))
+    }
+
+    #[askama::filter_fn]
     pub fn vault_url(
         value: impl std::fmt::Display,
         _: &dyn askama::Values,

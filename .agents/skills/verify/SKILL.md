@@ -22,6 +22,10 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 ```
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
+`ProcessingSummaryTests` checks distinct text-extraction and search-indexing states,
+empty OCR completion, skipped work, and last-attempt failure labels. The API
+`routes` suite checks the corresponding rendered detail, and the document lifecycle
+E2E test checks both stage labels in the Processing section.
 `DocumentImportTests` covers mixed PDF and image imports, unsupported files, directories, missing files, and remote URL rejection using temporary files. File-type resolution requires access to macOS type services. For a manual drop check, use an isolated account or simulator and a throwaway server, then drop multiple PDFs and images into the document list, including when it is empty. Check the hover indicator, upload progress, and refreshed list.
 `e2e/tests/documents.spec.ts` covers dropping two files onto the web page, the hover indicator, and completion of both uploads. Run it only against the disposable instance started by the E2E setup.
 `WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
