@@ -72,12 +72,13 @@ private let documentJSON = """
 @Suite(.serialized) struct LiveFolioServiceTests {
     private let baseURL = URL(string: "https://folio.example.com")!
 
-    private func makeService(token: (any BearerTokenProvider)? = nil) -> LiveFolioService {
+    private func makeService(token: (any BearerTokenProvider)? = nil, downloadDirectory: URL? = nil) -> LiveFolioService
+    {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         return LiveFolioService(
             baseURL: baseURL, tokenProvider: token ?? NoToken(),
-            session: URLSession(configuration: configuration)
+            session: URLSession(configuration: configuration), downloadDirectory: downloadDirectory
         )
     }
 
@@ -242,6 +243,47 @@ private let documentJSON = """
         #expect(document.originalFilename == "bill.pdf")
     }
 
+    @Test func repeatedDownloadsKeepEarlierContentsReadable() async throws {
+        let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
+        let service = makeService()
+        StubURLProtocol.handler = { _, _ in
+            .init(contentType: "application/pdf", body: Data("first version".utf8))
+        }
+        let first = try await service.downloadFile(for: document)
+        defer { try? FileManager.default.removeItem(at: first.deletingLastPathComponent()) }
+        StubURLProtocol.handler = { _, _ in
+            .init(contentType: "application/pdf", body: Data("second version".utf8))
+        }
+        let second = try await service.downloadFile(for: document)
+        defer { try? FileManager.default.removeItem(at: second.deletingLastPathComponent()) }
+
+        #expect(first != second)
+        #expect(try Data(contentsOf: first) == Data("first version".utf8))
+        #expect(try Data(contentsOf: second) == Data("second version".utf8))
+    }
+
+    @Test func providerDownloadsUseDistinctFilesInTheSpecifiedDirectory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        StubURLProtocol.handler = { _, _ in
+            .init(contentType: "application/pdf", body: Data("%PDF-1.4".utf8))
+        }
+        let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
+        let service = makeService(downloadDirectory: directory)
+        async let firstDownload = service.downloadFile(for: document)
+        async let secondDownload = service.downloadFile(for: document)
+        let (first, second) = try await (firstDownload, secondDownload)
+
+        #expect(first != second)
+        #expect(first.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL)
+        #expect(second.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL)
+        #expect(first.pathExtension == "pdf")
+        #expect(try Data(contentsOf: first) == Data("%PDF-1.4".utf8))
+        #expect(try Data(contentsOf: second) == Data("%PDF-1.4".utf8))
+        try FileManager.default.removeItem(at: first)
+        #expect(try Data(contentsOf: second) == Data("%PDF-1.4".utf8))
+    }
+
     @Test func downloadKeepsTheFileExtensionForQuickLook() async throws {
         StubURLProtocol.handler = { request, _ in
             #expect(request.url?.path.hasSuffix("/download") == true)
@@ -249,6 +291,7 @@ private let documentJSON = """
         }
         let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
         let url = try await makeService().downloadFile(for: document)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         #expect(url.pathExtension == "pdf")
         #expect(try Data(contentsOf: url) == Data("%PDF-1.4".utf8))
     }
