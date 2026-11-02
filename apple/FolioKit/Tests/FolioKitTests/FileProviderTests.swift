@@ -137,13 +137,21 @@ struct FolioCatalogTests {
         #expect(try await catalog.node(for: .document(UUID(), in: .all)) == nil)
     }
 
-    @Test func workingSetAnchorChangesWhenADocumentChanges() async throws {
-        var doc = document("Letter")
-        let before = try await FolioCatalog(service: MockFolioService(documents: [doc])).changeToken()
-        doc.updatedAt = doc.updatedAt.addingTimeInterval(60)
-        let after = try await FolioCatalog(service: MockFolioService(documents: [doc])).changeToken()
-        #expect(before != after)
-        let same = try await FolioCatalog(service: MockFolioService(documents: [doc])).changeToken()
-        #expect(after == same)
+    @Test func workingSetIncludesEveryDocumentAliasAndItsParents() async throws {
+        let tag = Tag(id: tagID, name: "Taxes")
+        let doc = Document(title: "Letter", correspondentID: personID, documentTypeID: typeID, tags: [tag])
+        let service = MockFolioService(
+            documents: [doc],
+            correspondents: [Correspondent(id: personID, name: "Sender")],
+            types: [DocumentType(id: typeID, name: "Letter")])
+        await service.setTags([tag])
+        let nodes = try await FolioCatalog(service: service).allNodes()
+        let ids = Set(nodes.map(\.id))
+        #expect(ids.contains(.document(doc.id, in: .all)))
+        #expect(ids.contains(.document(doc.id, in: .inbox)))
+        #expect(ids.contains(.document(doc.id, in: .correspondent(personID))))
+        #expect(ids.contains(.document(doc.id, in: .type(typeID))))
+        #expect(ids.contains(.document(doc.id, in: .tag(tagID))))
+        #expect(nodes.allSatisfy { $0.parent == .folder(.root) || ids.contains($0.parent) })
     }
 }

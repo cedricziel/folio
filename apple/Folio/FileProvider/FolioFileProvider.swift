@@ -128,12 +128,16 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
     ) throws -> any NSFileProviderEnumerator {
         let (catalog, _) = try catalog()
         if containerItemIdentifier == .workingSet {
-            return FolioEnumerator(catalog: catalog, container: nil)
+            return FolioEnumerator(
+                catalog: catalog, container: nil,
+                directory: try FolioSyncState.directory(domain: domain, container: containerItemIdentifier))
         }
         guard case let .folder(folder)? = FolioItemID(providerIdentifier: containerItemIdentifier) else {
             throw NSFileProviderError(.noSuchItem)
         }
-        return FolioEnumerator(catalog: catalog, container: folder)
+        return FolioEnumerator(
+            catalog: catalog, container: folder,
+            directory: try FolioSyncState.directory(domain: domain, container: containerItemIdentifier))
     }
 
     private static var unsupported: NSError {
@@ -141,15 +145,11 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension {
     }
 }
 
-/// Lists a folder, or the whole archive for the working set. The working set polls the document list and
-/// compares a change token; once the server pushes `/events`, `signalEnumerator` can replace the polling.
 final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
-    private let catalog: FolioCatalog
-    private let container: FolioItemID.Folder?
+    private let state: FolioSyncState
 
-    init(catalog: FolioCatalog, container: FolioItemID.Folder?) {
-        self.catalog = catalog
-        self.container = container
+    init(catalog: FolioCatalog, container: FolioItemID.Folder?, directory: URL) {
+        state = FolioSyncState(catalog: catalog, container: container, directory: directory)
     }
 
     func invalidate() {}
@@ -157,13 +157,8 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt _: NSFileProviderPage) {
         Task {
             do {
-                let nodes: [FolioNode]
-                if let container {
-                    nodes = try await catalog.children(of: container)
-                } else {
-                    nodes = try await catalog.allNodes()
-                }
-                observer.didEnumerate(nodes.map(FolioProviderItem.init))
+                let snapshot = try await state.initialSnapshot()
+                observer.didEnumerate(snapshot.nodes.map(FolioProviderItem.init))
                 observer.finishEnumerating(upTo: nil)
             } catch {
                 observer.finishEnumeratingWithError(error.providerError)
@@ -174,12 +169,10 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
         Task {
             do {
-                let token = try await catalog.changeToken()
-                let newAnchor = NSFileProviderSyncAnchor(Data(token.utf8))
-                if container == nil, anchor.rawValue != newAnchor.rawValue {
-                    try observer.didUpdate(await catalog.allNodes().map(FolioProviderItem.init))
-                }
-                observer.finishEnumeratingChanges(upTo: newAnchor, moreComing: false)
+                let (snapshot, updated, deleted) = try await state.changes(from: anchor)
+                observer.didUpdate(updated.map(FolioProviderItem.init))
+                observer.didDeleteItems(withIdentifiers: deleted)
+                observer.finishEnumeratingChanges(upTo: snapshot.anchor, moreComing: false)
             } catch {
                 observer.finishEnumeratingWithError(error.providerError)
             }
@@ -188,7 +181,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
 
     func currentSyncAnchor(completionHandler: @escaping (NSFileProviderSyncAnchor?) -> Void) {
         Task {
-            completionHandler((try? await catalog.changeToken()).map { NSFileProviderSyncAnchor(Data($0.utf8)) })
+            completionHandler(try? await state.initialSnapshot().anchor)
         }
     }
 }
@@ -234,7 +227,7 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
 
     var itemVersion: NSFileProviderItemVersion {
         let stamp = Data(String(node.modified.timeIntervalSince1970).utf8)
-        return NSFileProviderItemVersion(contentVersion: stamp, metadataVersion: stamp)
+        return NSFileProviderItemVersion(contentVersion: stamp, metadataVersion: FolioSyncState.metadataVersion(node))
     }
 }
 

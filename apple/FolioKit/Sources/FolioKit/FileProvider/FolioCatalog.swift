@@ -70,22 +70,28 @@ public struct FolioCatalog: Sendable {
         return documentNodes([document], in: .inbox)[0]
     }
 
-    /// Every document under All documents plus the virtual folders: what the working set tracks.
     public func allNodes() async throws -> [FolioNode] {
-        async let documents = children(of: .all)
-        async let people = children(of: .correspondents)
-        async let types = children(of: .types)
-        async let tags = children(of: .tags)
-        return try await documents + people + types + tags
-    }
-
-    /// Changes whenever a document is added, removed or updated; the working set uses it as its sync anchor.
-    public func changeToken() async throws -> String {
-        let documents = try await service.documents(matching: "")
-        let digest = documents.map { "\($0.id.uuidString)\($0.updatedAt.timeIntervalSince1970)" }
-            .sorted().joined()
-            .unicodeScalars.reduce(UInt64(5381)) { ($0 &* 33) &+ UInt64($1.value) }
-        return "\(documents.count)-\(String(digest, radix: 16))"
+        async let listed = service.documents(matching: "")
+        async let people = service.correspondents()
+        async let types = service.documentTypes()
+        async let tags = service.tags()
+        let (documents, correspondents, documentTypes, allTags) = try await (listed, people, types, tags)
+        var nodes = try await children(of: .root)
+        nodes += documentNodes(documents, in: .all)
+        nodes += documentNodes(documents.filter { $0.status != .filed }, in: .inbox)
+        for person in correspondents {
+            nodes.append(folderNode(.correspondent(person.id), person.name, parent: .correspondents))
+            nodes += documentNodes(documents.filter { $0.correspondentID == person.id }, in: .correspondent(person.id))
+        }
+        for type in documentTypes {
+            nodes.append(folderNode(.type(type.id), type.name, parent: .types))
+            nodes += documentNodes(documents.filter { $0.documentTypeID == type.id }, in: .type(type.id))
+        }
+        for tag in allTags {
+            nodes.append(folderNode(.tag(tag.id), tag.name, parent: .tags))
+            nodes += documentNodes(documents.filter { $0.tags.contains { $0.id == tag.id } }, in: .tag(tag.id))
+        }
+        return nodes
     }
 
     private func folderNode(

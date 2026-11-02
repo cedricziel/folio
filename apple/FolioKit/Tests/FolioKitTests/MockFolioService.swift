@@ -26,6 +26,10 @@ actor MockFolioService: FolioService {
         typeList = types
     }
 
+    func setDocuments(_ documents: [Document]) {
+        documentList = documents
+    }
+
     func setFailure(_ error: FolioError?) {
         failure = error
     }
