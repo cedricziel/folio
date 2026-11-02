@@ -12,6 +12,7 @@ mod ingest;
 mod ingest_identity;
 mod metadata;
 mod metadata_field;
+mod processing_attempt;
 mod saved_view;
 mod settings;
 mod source;
@@ -41,6 +42,7 @@ pub use ingest::{
 pub use ingest_identity::IngestItemKey;
 pub use metadata::{MetadataKind, MetadataValue};
 pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
+pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
