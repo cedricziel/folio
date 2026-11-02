@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Document, DocumentSource, Id, SourceConditions, VaultId};
+use super::{Document, DocumentSource, Id, SourceConditions, VaultId, WorkflowTarget};
 use crate::error::{Error, Result};
 
 /// Events a workflow can listen for
@@ -58,6 +58,16 @@ impl WorkflowTrigger {
             Self::DocumentUpdated => "When a document's details change",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
+        }
+    }
+
+    pub fn target(&self) -> WorkflowTarget {
+        match self {
+            Self::DocumentUploaded | Self::DocumentProcessed | Self::DocumentUpdated => {
+                WorkflowTarget::Document
+            }
+            Self::DocumentDeleted => WorkflowTarget::Event,
+            Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
     }
 
@@ -382,14 +392,12 @@ impl WorkflowInput {
                 }
                 _ => {}
             }
-            if self.trigger == WorkflowTrigger::DocumentDeleted && !action.is_webhook() {
-                return invalid("Only webhook actions can run when a document is deleted");
-            }
-            let skips = matches!(action, WorkflowAction::SkipImport);
-            if skips != (self.trigger == WorkflowTrigger::IngestReceived) {
-                return invalid(
-                    "ingest.received workflows take only skip_import, and skip_import needs that trigger",
-                );
+            if !self.trigger.target().accepts(action) {
+                return invalid(if self.trigger == WorkflowTrigger::DocumentDeleted {
+                    "Only webhook actions can run when a document is deleted"
+                } else {
+                    "ingest.received workflows take only skip_import, and skip_import needs that trigger"
+                });
             }
         }
         self.conditions.validate()?;

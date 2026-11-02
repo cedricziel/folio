@@ -20,6 +20,7 @@ mod tag;
 mod vault;
 mod webhook;
 mod workflow;
+mod workflow_trigger;
 
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{
@@ -59,6 +60,11 @@ pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOA
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
+};
+
+pub use workflow_trigger::{
+    WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
+    WorkflowTriggerRegistry,
 };
 
 /// Unique identifier type alias
