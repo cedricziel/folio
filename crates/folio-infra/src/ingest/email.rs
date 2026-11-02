@@ -18,8 +18,8 @@ use tracing::{debug, warn};
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    glob_match, DocumentSource, EmailConfig, EmailOrigin, Id, IngestItem, IngestOutcome,
-    LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport, VaultId,
+    glob_match, DocumentSource, EmailConfig, EmailOrigin, Id, IngestItem, IngestItemKey,
+    IngestOutcome, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport, VaultId,
 };
 use folio_core::ports::{IngestLedger, IngestSink, IngestionSource};
 
@@ -78,6 +78,7 @@ pub struct EmailSource {
 pub struct ParsedMail {
     pub message_id: Option<String>,
     pub items: Vec<IngestItem>,
+    part_ids: Vec<u32>,
 }
 
 /// Content types match case-insensitively, with `image/*` style wildcards
@@ -150,7 +151,8 @@ pub fn parse_mail(
     };
 
     let mut items = Vec::new();
-    for part in message.attachments() {
+    let mut part_ids = Vec::new();
+    for (index, part) in message.attachments().enumerate() {
         // Signature logos and tracking pixels are inline images, not documents.
         let inline_image = part.content_disposition().is_some_and(|d| d.is_inline())
             && part.content_type().is_some_and(|t| t.ctype() == "image");
@@ -174,6 +176,7 @@ pub fn parse_mail(
             continue;
         }
         let filename = safe_name(name);
+        part_ids.push(u32::try_from(index).ok()?.checked_add(1)?);
         items.push(IngestItem {
             data: part.decoded().into_owned(),
             source: DocumentSource::email(
@@ -187,6 +190,7 @@ pub fn parse_mail(
     }
 
     if config.mail_body == MailBody::Eml {
+        part_ids.push(0);
         let title = if subject.trim().is_empty() {
             "message".to_string()
         } else {
@@ -201,7 +205,11 @@ pub fn parse_mail(
         });
     }
 
-    Some(ParsedMail { message_id, items })
+    Some(ParsedMail {
+        message_id,
+        items,
+        part_ids,
+    })
 }
 
 impl EmailSource {
@@ -458,8 +466,16 @@ impl EmailSource {
             let already_done = self.ledger.find(self.vault()?, &key).await?.is_some();
             if !already_done {
                 let mut all_ok = true;
-                for item in mail.items {
-                    match sink.ingest(self.id, item).await {
+                for (item, part_id) in mail.items.into_iter().zip(mail.part_ids) {
+                    let item_key = match validity.filter(|v| *v != 0) {
+                        Some(validity) => IngestItemKey::email(mailbox, validity, uid, part_id)?,
+                        None => IngestItemKey::email_message(
+                            mailbox,
+                            mail.message_id.as_deref().unwrap_or_default(),
+                            part_id,
+                        )?,
+                    };
+                    match sink.ingest_observed(self.id, item_key, item).await {
                         Ok(IngestOutcome::Imported(_)) => report.imported += 1,
                         Ok(IngestOutcome::Busy) => {
                             all_ok = false;
@@ -615,6 +631,20 @@ Content-Transfer-Encoding: base64\r\n\r\nUEsDBA==\r\n\
 Content-Disposition: inline; filename=\"logo.png\"\r\nContent-ID: <logo>\r\n\
 Content-Transfer-Encoding: base64\r\n\r\niVBORw0K\r\n\
 --b--\r\n";
+
+    #[test]
+    fn attachment_identity_does_not_shift_when_allowed_types_change() {
+        let mut only_zip = config(MailBody::None);
+        only_zip.allowed_content_types = vec!["application/zip".into()];
+        let mut all_types = only_zip.clone();
+        all_types.allowed_content_types = vec!["*/*".into()];
+        let zip = parse_mail(MAIL.as_bytes(), "work", "INBOX", &only_zip).unwrap();
+        let all = parse_mail(MAIL.as_bytes(), "work", "INBOX", &all_types).unwrap();
+        assert_eq!(zip.items[0].filename, "x.zip");
+        assert_eq!(all.items[1].filename, "x.zip");
+        assert_eq!(zip.part_ids[0], all.part_ids[1]);
+        assert_ne!(all.part_ids[0], all.part_ids[1]);
+    }
 
     #[test]
     fn extracts_allowed_attachments_with_origin() {

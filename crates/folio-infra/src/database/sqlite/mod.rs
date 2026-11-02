@@ -89,3 +89,6 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::Migr
     }
     Ok(())
 }
+
+mod saved_view_repo;
+pub use saved_view_repo::SqliteSavedViewRepository;

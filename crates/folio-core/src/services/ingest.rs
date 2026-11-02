@@ -14,8 +14,8 @@ use tracing::{debug, info, warn};
 use super::NewUpload;
 use crate::error::{Error, Result};
 use crate::models::{
-    CreateTag, Id, IngestItem, IngestOutcome, IngestionSourceDef, LedgerEntry, PollReport,
-    SourceStatus, VaultId, WorkflowAction, WorkflowTrigger,
+    CreateTag, Id, IngestItem, IngestItemKey, IngestOutcome, IngestionSourceDef, LedgerEntry,
+    PollReport, SourceStatus, VaultId, WorkflowAction, WorkflowTrigger,
 };
 use crate::ports::{
     keys, DocumentImporter, DocumentRepository, DocumentStore, IngestLedger, IngestSink,
@@ -277,6 +277,17 @@ struct BoundSink {
 impl IngestSink for BoundSink {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
         self.inner.ingest(self.vault, source_id, item).await
+    }
+
+    async fn ingest_observed(
+        &self,
+        source_id: Id,
+        key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        self.inner
+            .ingest_observed(self.vault, source_id, key, item)
+            .await
     }
 }
 

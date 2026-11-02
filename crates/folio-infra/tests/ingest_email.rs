@@ -883,3 +883,56 @@ async fn logout_timeout_preserves_the_first_mailbox_failure() {
         .unwrap();
     mailbox.finish().await;
 }
+
+#[tokio::test]
+async fn email_item_identity_survives_retry_but_not_uidvalidity_reset() {
+    use folio_core::models::IngestItemKey;
+
+    #[derive(Default)]
+    struct Observations(Mutex<Vec<IngestItemKey>>);
+    #[async_trait]
+    impl IngestSink for Observations {
+        async fn ingest(&self, _: Id, _: IngestItem) -> Result<IngestOutcome> {
+            Ok(IngestOutcome::Busy)
+        }
+        async fn ingest_observed(
+            &self,
+            source: Id,
+            key: IngestItemKey,
+            item: IngestItem,
+        ) -> Result<IngestOutcome> {
+            self.0.lock().unwrap().push(key);
+            self.ingest(source, item).await
+        }
+    }
+    let raw = no_id_mail("same content");
+    let mailbox = imap::ImapMailbox::with_messages(
+        "UIDPLUS",
+        None,
+        vec![
+            (Some(1), raw.clone()),
+            (Some(1), raw.clone()),
+            (Some(2), raw),
+        ],
+    )
+    .await;
+    let h = Harness::new().await;
+    let source = identity_source(&h, identity_config(mailbox.port));
+    let sink = Observations::default();
+
+    source.poll(&sink).await.unwrap();
+    source.poll(&sink).await.unwrap();
+    source.poll(&sink).await.unwrap();
+
+    {
+        let observations = sink.0.lock().unwrap();
+        assert_eq!(observations.len(), 3);
+        assert_eq!(observations[0], observations[1]);
+        assert_ne!(observations[1], observations[2]);
+    }
+    let states = mailbox.states().await;
+    assert_eq!(states.len(), 3);
+    assert!(states
+        .iter()
+        .all(|state| state.imported_present && !state.imported_deleted));
+}
