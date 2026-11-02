@@ -9,6 +9,8 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var correspondentID: UUID?
     public var documentTypeID: UUID?
     public var pageCount: Int?
+    public var ocrStatus: ProcessingStatus
+    public var embedStatus: ProcessingStatus
     /// Only the list and get endpoints report tags; search results and uploads come back without them.
     public var tags: [Tag]
     public var createdAt: Date
@@ -23,6 +25,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         correspondentID: UUID? = nil,
         documentTypeID: UUID? = nil,
         pageCount: Int? = nil,
+        ocrStatus: ProcessingStatus = .pending,
+        embedStatus: ProcessingStatus = .pending,
         tags: [Tag] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -35,6 +39,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.correspondentID = correspondentID
         self.documentTypeID = documentTypeID
         self.pageCount = pageCount
+        self.ocrStatus = ocrStatus
+        self.embedStatus = embedStatus
         self.tags = tags
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -42,17 +48,35 @@ public struct Document: Identifiable, Hashable, Sendable {
 }
 
 public extension Document {
-    /// The API has no processing state, so it is inferred: no extracted text means the
-    /// server is still reading the file; no correspondent and no type means nobody has filed it.
+    /// State reported by the server for one processing stage.
+    enum ProcessingStatus: String, Sendable {
+        case pending, running, done, failed, skipped
+
+        var isActive: Bool {
+            self == .pending || self == .running
+        }
+    }
+
     enum Status: Equatable, Sendable {
         case reading(pages: Int?)
+        case indexing
+        case failed
         case needsReview
         case filed
     }
 
     var status: Status {
-        if content?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
+        if ocrStatus.isActive {
             return .reading(pages: pageCount)
+        }
+        if ocrStatus == .failed {
+            return .failed
+        }
+        if embedStatus.isActive {
+            return .indexing
+        }
+        if embedStatus == .failed {
+            return .failed
         }
         if correspondentID == nil && documentTypeID == nil {
             return .needsReview

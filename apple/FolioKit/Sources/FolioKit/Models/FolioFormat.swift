@@ -15,6 +15,10 @@ public enum FolioFormat {
             "Reading \(pages) \(pages == 1 ? "page" : "pages")…"
         case .reading(nil):
             "Reading…"
+        case .indexing:
+            "Indexing…"
+        case .failed:
+            "Couldn't process"
         case .needsReview:
             "Needs a look"
         case .filed:

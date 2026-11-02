@@ -45,7 +45,8 @@ struct FolioCatalogTests {
     ) -> Document {
         Document(
             title: title, content: read ? "text" : nil, originalFilename: filename,
-            mimeType: "application/pdf", correspondentID: person, documentTypeID: type
+            mimeType: "application/pdf", correspondentID: person, documentTypeID: type,
+            ocrStatus: read ? .done : .pending, embedStatus: .skipped
         )
     }
 
