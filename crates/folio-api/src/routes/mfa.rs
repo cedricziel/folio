@@ -197,7 +197,7 @@ pub(crate) async fn code_submit(
         return Redirect::to("/login").into_response();
     };
     let page = |error: String, status: StatusCode, next: &str| {
-        let mut response = render(
+        render(
             CodeTemplate {
                 csrf: form.csrf.clone(),
                 error: Some(error),
@@ -205,13 +205,7 @@ pub(crate) async fn code_submit(
                 next: next.to_string(),
             },
             status,
-        );
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            response
-                .headers_mut()
-                .insert(header::RETRY_AFTER, HeaderValue::from(30u64));
-        }
-        response
+        )
     };
 
     let locked = auth
@@ -220,11 +214,14 @@ pub(crate) async fn code_submit(
         .err()
         .max(auth.code_by_user.check(&pending.user_id).err());
     if let Some(seconds) = locked {
-        let response = page(
+        let mut response = page(
             too_many(seconds),
             StatusCode::TOO_MANY_REQUESTS,
             &pending.next,
         );
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds));
         auth.mfa_logins.restore(key, pending, remaining);
         return response;
     }
