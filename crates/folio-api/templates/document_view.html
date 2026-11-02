@@ -167,6 +167,8 @@
                 {% endif %}
                 {% endmatch %}
             </section>
+            <turbo-frame id="document-notes" data-entry-frame src="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note" loading="lazy"><section class="panel"><h2 class="heading">Notes</h2><p role="status">Loading notes…</p><a href="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note">Load notes</a></section></turbo-frame>
+            <turbo-frame id="document-comments" data-entry-frame src="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=comment" loading="lazy"><section class="panel"><h2 class="heading">Comments</h2><p role="status">Loading comments…</p><a href="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=comment">Load comments</a></section></turbo-frame>
         </aside>
     </div>
 </article>

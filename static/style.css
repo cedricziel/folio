@@ -666,6 +666,22 @@ a:not([class]):hover,
   overflow-wrap: anywhere;
 }
 
+.entry-body {
+  margin: var(--space-2) 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.entry + .entry {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-3);
+}
+[data-entry-frame] textarea {
+  display: block;
+  min-height: 8rem;
+  margin-block: var(--space-2);
+}
+
 /* Forms */
 .field {
   display: flex;

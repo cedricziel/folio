@@ -1,0 +1,32 @@
+<turbo-frame id="document-{{ kind }}s" data-entry-frame>
+<section class="panel" aria-labelledby="heading-{{ kind }}s">
+<h2 class="heading" id="heading-{{ kind }}s">{{ heading }}</h2><p data-entry-error role="alert" hidden></p>
+{% match error %}{% when Some with (message) %}<p class="f-notice f-notice-danger" role="alert">{{ message }}</p>{% when None %}{% endmatch %}
+{% match edit_id %}{% when Some with (id) %}
+<form action="{{ "/documents"|vault_url }}/{{ document }}/entries/{{ id }}/edit" method="post">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="failed-edit-{{ kind }}">Edit {{ kind }}</label><textarea class="input" id="failed-edit-{{ kind }}" name="body" required>{{ draft }}</textarea><button class="f-btn f-btn-primary" type="submit">Retry save</button> <a class="f-btn f-btn-quiet" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}">Cancel</a>
+</form>{% when None %}{% endmatch %}
+{% for row in rows %}
+<article class="entry" id="entry-{{ row.entry.id }}">
+<p class="f-meta">{% match row.entry.created_by %}{% when Some with (author) %}{{ author }}{% when None %}Unknown author{% endmatch %} · {{ row.entry.created_at.format("%Y-%m-%d %H:%M UTC") }}{% if row.entry.updated_at != row.entry.created_at %} · Updated{% endif %}</p>
+<pre class="entry-body">{{ row.entry.body }}</pre>
+{% if row.can_edit && !row.is_editing %}<details {% if row.is_editing %}open{% endif %}><summary class="f-btn f-btn-quiet">Edit {{ kind }}</summary>
+<form action="{{ "/documents"|vault_url }}/{{ document }}/entries/{{ row.entry.id }}/edit" method="post">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="edit-{{ row.entry.id }}">{{ heading }} text</label><textarea class="input" id="edit-{{ row.entry.id }}" name="body" required>{% if row.is_editing %}{{ draft }}{% else %}{{ row.entry.body }}{% endif %}</textarea>
+<button class="f-btn f-btn-primary" type="submit">Save</button> <a class="f-btn f-btn-quiet" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}">Cancel</a>
+</form></details>{% endif %}
+{% if row.can_delete %}<form action="{{ "/documents"|vault_url }}/{{ document }}/entries/{{ row.entry.id }}/delete" method="post" data-controller="confirm" data-confirm-message-value="Delete this {{ kind }}?" data-action="submit->confirm#confirm"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="f-btn f-btn-quiet f-btn-danger" type="submit">Delete {{ kind }}</button></form>{% endif %}
+</article>
+{% else %}<p class="hint">{% if kind == "note" %}No notes yet. Add an annotation to this document.{% else %}No comments yet. Start a discussion about this document.{% endif %}</p>{% endfor %}
+{% if has_cursor %}<a class="f-btn f-btn-quiet" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}">First {{ heading|lower }}</a>{% endif %}
+{% match next %}{% when Some with (cursor) %}<a class="f-btn" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}&amp;cursor={{ cursor }}">Next {{ heading|lower }}</a>{% when None %}{% endmatch %}
+{% if can_create %}<details {% if error.is_some() && edit_id.is_none() %}open{% endif %}><summary class="f-btn">Add {{ kind }}</summary>
+<form action="{{ "/documents"|vault_url }}/{{ document }}/entries" method="post">
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="idempotency_key" value="{{ key }}">
+<label for="new-{{ kind }}">New {{ kind }}</label><textarea class="input" id="new-{{ kind }}" name="body" required>{% if edit_id.is_none() %}{{ draft }}{% endif %}</textarea>
+<button class="f-btn f-btn-primary" type="submit">Save {{ kind }}</button> <a class="f-btn f-btn-quiet" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}">Cancel</a>
+</form></details>{% endif %}
+</section>
+</turbo-frame>
