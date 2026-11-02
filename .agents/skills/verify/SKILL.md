@@ -143,6 +143,17 @@ reads, and document-scope separation. OAuth tests require the resource-specific
 metadata URL `/.well-known/oauth-protected-resource/mcp`.
 Do not launch a server against existing data.
 
+## Verify global settings authorization
+
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test pipeline_settings`.
+The real-router tests use temporary SQLite state and test sessions. They cover
+ordinary-user denial, owner/admin access, credential redaction, replacement,
+blank preservation, explicit clearing, and cross-vault re-embedding denial.
+Provider checks use the local `none` providers and do not contact hosted services.
+On macOS, a `system-configuration` NULL-object panic during HTTP-client
+initialization can indicate blocked OS networking configuration access. Rerun
+with that access while keeping the temporary test state.
+
 ## Verify configuration, storage, and provisioning
 
 Run `RUSTC_WRAPPER= cargo test -p folio-infra config::tests --lib` for canonical
@@ -204,14 +215,3 @@ container can connect to the temporary macOS app through
 Linux, then use a temporary harness that removes only the host-platform skip in
 `visual.spec.ts`. Keep the same tour fixtures, viewport, masks, and screenshot
 paths. Recheck without updating snapshots, and remove the container and harness.
-
-## Verify global settings authorization
-
-Run `RUSTC_WRAPPER= cargo test -p folio-api --test pipeline_settings`.
-The real-router tests use temporary SQLite state and test sessions. They cover
-ordinary-user denial, owner/admin access, credential redaction, replacement,
-blank preservation, explicit clearing, and cross-vault re-embedding denial.
-Provider checks use the local `none` providers and do not contact hosted services.
-On macOS, a `system-configuration` NULL-object panic during HTTP-client
-initialization can indicate blocked OS networking configuration access. Rerun
-with that access while keeping the temporary test state.
