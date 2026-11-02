@@ -126,9 +126,11 @@ private let documentJSON = """
         #expect(catalog.vaults == [Vault(id: id, name: "Household", role: .contributor)])
     }
 
-    @Test func oldServerDiscoveryFallsBackToTheDefaultLibrary() async throws {
+    @Test func missingVaultDiscoveryIsAnError() async throws {
         StubURLProtocol.handler = { _, _ in .init(status: 404) }
-        #expect(try await makeService().vaults() == .legacy)
+        await #expect(throws: FolioError.server(status: 404, message: nil)) {
+            _ = try await makeService().vaults()
+        }
     }
 
     @Test func scopedCopiesKeepTheirOwnVaultOnConcurrentGeneratedRequests() async throws {

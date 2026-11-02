@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 struct InboxView: View {
     let serverURL: URL
     let service: any FolioService
-    let vaultID: UUID?
+    let vaultID: UUID
     let canEdit: Bool
     let canUpload: Bool
     let makeUploadDestination: () -> VaultDestinationViewModel
@@ -35,7 +35,7 @@ struct InboxView: View {
 
     init(
         serverURL: URL, service: any FolioService, session: DocumentBrowserSession,
-        vaultID: UUID?,
+        vaultID: UUID,
         canEdit: Bool, canUpload: Bool,
         makeUploadDestination: @escaping () -> VaultDestinationViewModel,
         onSignOut: @escaping () -> Void,

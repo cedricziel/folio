@@ -3,6 +3,10 @@ import Foundation
 @testable import FolioKit
 
 actor MockFolioService: FolioService {
+    static let defaultVault = Vault(
+        id: UUID(uuidString: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff")!, name: "Personal", role: .owner
+    )
+    static let defaultCatalog = VaultCatalog(vaults: [defaultVault], defaultVaultID: defaultVault.id)
     private var vaultCatalog: VaultCatalog
     nonisolated let vaultServices: [UUID: any FolioService]
     var documentList: [Document] = []
@@ -28,7 +32,7 @@ actor MockFolioService: FolioService {
 
     init(
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
-        vaults: VaultCatalog = .legacy, vaultServices: [UUID: any FolioService] = [:]
+        vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:]
     ) {
         vaultCatalog = vaults
         self.vaultServices = vaultServices

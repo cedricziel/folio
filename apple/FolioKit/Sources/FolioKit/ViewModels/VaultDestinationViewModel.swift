@@ -12,7 +12,7 @@ public final class VaultDestinationViewModel {
 
     public init(service: any FolioService, catalog: VaultCatalog? = nil, selectedVaultID: UUID? = nil) {
         rootService = service
-        self.catalog = catalog ?? .legacy
+        self.catalog = catalog ?? .empty
         self.selectedVaultID = selectedVaultID ?? catalog?.defaultVaultID
         isReady = catalog != nil
     }
@@ -26,11 +26,11 @@ public final class VaultDestinationViewModel {
     }
 
     public var canUpload: Bool {
-        isReady && (selectedVault?.role.canUpload ?? catalog.vaults.isEmpty)
+        isReady && selectedVault?.role.canUpload == true
     }
 
     public var canTag: Bool {
-        isReady && (selectedVault?.role.canEdit ?? catalog.vaults.isEmpty)
+        isReady && selectedVault?.role.canEdit == true
     }
 
     public var service: any FolioService {
