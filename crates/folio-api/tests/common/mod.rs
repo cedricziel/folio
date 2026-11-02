@@ -8,7 +8,6 @@ use axum::body::Body;
 use axum::http::{header, Request};
 use axum::Router;
 use http_body_util::BodyExt;
-use uuid::Uuid;
 
 use folio_api::{create_router, AppState, AuthState, EventBroadcaster, IngestionState};
 use folio_core::models::IngestionSourceDef;
@@ -19,6 +18,7 @@ use folio_infra::{
 };
 
 pub struct Harness {
+    _directory: tempfile::TempDir,
     pub app: Router,
     pub state: AppState,
     pub vault: folio_core::models::VaultId,
@@ -57,9 +57,11 @@ pub async fn harness_with(
     configured: Vec<IngestionSourceDef>,
     make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
 ) -> Harness {
-    let dir = std::env::temp_dir().join(format!("folio-test-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let storage = dir.to_string_lossy().to_string();
+    let directory = tempfile::Builder::new()
+        .prefix("folio-test-")
+        .tempdir()
+        .unwrap();
+    let storage = directory.path().to_string_lossy().to_string();
 
     let database = Database::connect(&format!("sqlite:{}/folio.db", storage))
         .await
@@ -109,6 +111,7 @@ pub async fn harness_with(
         repos.access,
     );
     Harness {
+        _directory: directory,
         app: create_router(state.clone(), auth),
         state,
         vault,

@@ -101,7 +101,7 @@ impl Receiver {
             task,
         }
     }
-    async fn app(&self) -> Router {
+    async fn app(&self) -> (Router, common::Harness) {
         let mut h = common::harness().await;
         h.state.client_telemetry = ClientTelemetry::from_lookup(|key| match key {
             "FOLIO_TELEMETRY__CLIENTS_ENABLED" => Some("true".into()),
@@ -113,17 +113,18 @@ impl Receiver {
         })
         .unwrap()
         .map(Arc::new);
-        create_router(
-            h.state,
-            AuthState::new(h.auth_store, None).with_required(false),
-        )
+        let app = create_router(
+            h.state.clone(),
+            AuthState::new(h.auth_store.clone(), None).with_required(false),
+        );
+        (app, h)
     }
 }
 
 #[tokio::test]
 async fn relay_preserves_otlp_body_and_uses_only_server_credentials() {
     let receiver = Receiver::start(StatusCode::OK).await;
-    let app = receiver.app().await;
+    let (app, _harness) = receiver.app().await;
     let response = app
         .clone()
         .oneshot(
@@ -176,7 +177,7 @@ async fn relay_preserves_otlp_body_and_uses_only_server_credentials() {
 #[tokio::test]
 async fn oversized_or_encoded_payloads_do_not_reach_the_collector() {
     let receiver = Receiver::start(StatusCode::OK).await;
-    let app = receiver.app().await;
+    let (app, _harness) = receiver.app().await;
     let oversized = app
         .clone()
         .oneshot(
@@ -209,7 +210,7 @@ async fn oversized_or_encoded_payloads_do_not_reach_the_collector() {
 #[tokio::test]
 async fn collector_redirects_are_not_followed_with_export_credentials() {
     let receiver = Receiver::start(StatusCode::TEMPORARY_REDIRECT).await;
-    let app = receiver.app().await;
+    let (app, _harness) = receiver.app().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -228,7 +229,7 @@ async fn collector_redirects_are_not_followed_with_export_credentials() {
 #[tokio::test]
 async fn an_incomplete_payload_times_out_without_occupying_a_collector_slot() {
     let receiver = Receiver::start(StatusCode::OK).await;
-    let app = receiver.app().await;
+    let (app, _harness) = receiver.app().await;
     let response = app
         .oneshot(
             Request::builder()
@@ -249,7 +250,7 @@ async fn an_incomplete_payload_times_out_without_occupying_a_collector_slot() {
 #[tokio::test]
 async fn export_budget_rejects_excess_requests_without_hiding_configuration() {
     let receiver = Receiver::start(StatusCode::OK).await;
-    let app = receiver.app().await;
+    let (app, _harness) = receiver.app().await;
     for _ in 0..120 {
         let response = app
             .clone()
