@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0](https://github.com/cedricziel/folio/releases/tag/v0.5.0) (2026-11-02)
+
+This release expands local document processing and gives webhook actions distinct delivery identities.
+
+### Before you upgrade
+
+> [!WARNING]
+> **Webhook delivery IDs now identify individual actions.** Use `X-Folio-Run` for run lookups and `X-Folio-Delivery` for deduplication. Finish pending runs before upgrading when deduplication must span the transition. ([#190](https://github.com/cedricziel/folio/pull/190))
+
+### Added
+
+* Configure OCR, embeddings, and processing through config files or environment variables. Fresh installations honor these defaults; saved settings take precedence. ([#182](https://github.com/cedricziel/folio/pull/182))
+* Choose OCRmyPDF for local text recognition from scanned PDFs and images. The container includes its CLI. ([#185](https://github.com/cedricziel/folio/pull/185))
+* Export opt-in browser and Apple telemetry through Folio, keeping export credentials on the server. ([#157](https://github.com/cedricziel/folio/pull/157))
+
+### Fixed
+
+* Stop retaining recovery codes and authenticator setup secrets in Turbo's page cache after navigation. ([#187](https://github.com/cedricziel/folio/pull/187))
+* Reject malformed or omitted classification IDs without clearing existing metadata. Explicit empty values still clear the selected field. ([#189](https://github.com/cedricziel/folio/pull/189))
+
+[Full changelog](https://github.com/cedricziel/folio/compare/v0.4.0...v0.5.0)
+
 ## [0.4.0](https://github.com/cedricziel/folio/compare/v0.3.1...v0.4.0) (2026-11-02)
 
 
