@@ -60,6 +60,7 @@ impl WorkflowEngine {
             DocumentEvent::ThumbnailReady { .. }
             | DocumentEvent::OcrComplete { .. }
             | DocumentEvent::Trashed { .. }
+            | DocumentEvent::PurgeRequested { .. }
             | DocumentEvent::Restored { .. } => None,
         }
     }

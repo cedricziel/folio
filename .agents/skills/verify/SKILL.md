@@ -504,3 +504,11 @@ claims, pagination, retirement, restore conflicts, no-op suppression, and rollba
 when transactional outbox publication fails. It also checks that field events are
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
+
+## Verify permanent deletion events
+
+For permanent deletion, `cargo test -p folio-infra --lib permanent_deletion`
+checks failed object removal, repair of exhausted jobs, preserved causal lineage,
+and system-actor completion. The document transition suite checks distinct purge
+request/completion snapshots, repeat suppression, legacy job payloads, and both
+databases' persisted request lineage. Regenerate OpenAPI after projection changes.
