@@ -12,7 +12,7 @@ mod workflow_repo;
 use std::str::FromStr;
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
-use sqlx::PgPool;
+use sqlx::{migrate::Migrate, PgPool};
 
 pub use auth_repo::PostgresAuthStore;
 pub use document_repo::{
@@ -38,7 +38,23 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
 
 /// Run PostgreSQL database migrations
 pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("../../migrations/postgres").run(pool).await
+    let mut connection = pool.acquire().await?;
+    connection.close_on_drop();
+    connection.lock().await?;
+    let fresh: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NULL")
+        .fetch_one(&mut *connection)
+        .await?;
+    sqlx::migrate!("../../migrations/postgres")
+        .set_locking(false)
+        .run_direct(None, &mut *connection, false)
+        .await?;
+    if fresh {
+        sqlx::query(super::CLEAR_PIPELINE_DEFAULTS)
+            .execute(&mut *connection)
+            .await?;
+    }
+    connection.close().await?;
+    Ok(())
 }
 
 /// Map a sqlx error, turning unique violations into `Duplicate`.

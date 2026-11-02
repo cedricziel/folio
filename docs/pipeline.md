@@ -53,7 +53,9 @@ document again.
 
 Other settings: `processing.auto_ocr`, `processing.auto_embed`,
 `ai.openai_api_key`, `ai.anthropic_api_key` (empty values fall back to
-`config.toml`). Settings are stored in the database and edited on `/settings`.
+`config.toml`). Set pipeline defaults through `config.toml` or environment variables,
+for example `FOLIO_OCR__PROVIDER=none` and `FOLIO_PROCESSING__AUTO_EMBED=false`.
+Saved database values edited on `/settings` override startup configuration.
 
 ## Adding a provider
 

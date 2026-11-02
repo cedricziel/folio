@@ -757,7 +757,13 @@ async fn settings_contract(r: &Repositories) {
     let keys: Vec<_> = by_prefix.iter().map(|s| s.key.as_str()).collect();
     assert_eq!(keys, ["test.a", "test.b", "test.key"]);
     assert_eq!(by_prefix[2].value, "three");
-    assert!(r.settings.list().await.unwrap().len() >= 12);
+    assert!(r
+        .settings
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .any(|setting| { setting.key == "test.key" && setting.value == "three" }));
     assert!(!r.settings.list_by_prefix("ai.").await.unwrap().is_empty());
 
     r.settings.delete("test.a").await.unwrap();
@@ -2433,10 +2439,59 @@ async fn run_atomicity_contract(db: &Database) {
     assert!(r.workflows.create_run(&run_for(44)).await.unwrap());
 }
 
+async fn fresh_database_uses_config_and_preserves_saved_overrides(db: &Database) {
+    let repos = db.repositories().await;
+    let config = folio_infra::config::Config::load_with(
+        "/nonexistent/folio-config.toml",
+        [
+            ("FOLIO_OCR__PROVIDER".to_string(), "none".to_string()),
+            (
+                "FOLIO_PROCESSING__AUTO_OCR".to_string(),
+                "false".to_string(),
+            ),
+        ],
+    )
+    .unwrap();
+    let pipeline = folio_infra::PipelineContext::from_config(repos.settings.clone(), &config);
+    assert!(repos.settings.get("ocr.provider").await.unwrap().is_none());
+    assert!(repos
+        .settings
+        .get("processing.auto_ocr")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(pipeline.settings().await.ocr.provider, "none");
+    assert!(!pipeline.settings().await.processing.auto_ocr);
+    repos
+        .settings
+        .set("ocr.provider", "tesseract")
+        .await
+        .unwrap();
+    repos
+        .settings
+        .set("processing.auto_ocr", "true")
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+    pipeline.invalidate().await;
+    assert_eq!(
+        repos
+            .settings
+            .get("ocr.provider")
+            .await
+            .unwrap()
+            .unwrap()
+            .value,
+        "tesseract"
+    );
+    assert!(pipeline.settings().await.processing.auto_ocr);
+}
+
 async fn run_contract(db: &Database) {
-    db.migrate().await.unwrap();
-    // Migrating twice is a no-op
-    db.migrate().await.unwrap();
+    let (first, second) = tokio::join!(db.migrate(), db.migrate());
+    first.unwrap();
+    second.unwrap();
+    fresh_database_uses_config_and_preserves_saved_overrides(db).await;
     let repos = db.repositories().await;
 
     tags_contract(&repos).await;
@@ -2469,6 +2524,19 @@ async fn sqlite_satisfies_the_contract() {
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("folio.db").display());
     let db = Database::connect(&url).await.unwrap();
     run_contract(&db).await;
+}
+
+#[tokio::test]
+async fn memory_database_survives_initialization() {
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    db.migrate().await.unwrap();
+    let repos = db.repositories().await;
+    repos.settings.set("test.key", "value").await.unwrap();
+    db.migrate().await.unwrap();
+    assert_eq!(
+        repos.settings.get("test.key").await.unwrap().unwrap().value,
+        "value"
+    );
 }
 
 #[tokio::test]

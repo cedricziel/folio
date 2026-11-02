@@ -32,6 +32,10 @@ ln -s "$repo/static" "$dir/static"
     FOLIO_DATABASE__URL="sqlite:$dir/folio.db?mode=rwc" \
     FOLIO_STORAGE__PATH="$dir/storage" \
     FOLIO_AI__PROVIDER=local \
+    FOLIO_OCR__PROVIDER="${FOLIO_VERIFY_OCR_PROVIDER:-tesseract}" \
+    FOLIO_EMBEDDINGS__PROVIDER=none \
+    FOLIO_PROCESSING__AUTO_OCR="${FOLIO_VERIFY_AUTO_OCR:-true}" \
+    FOLIO_PROCESSING__AUTO_EMBED="${FOLIO_VERIFY_AUTO_EMBED:-true}" \
     FOLIO_AUTH__REQUIRED="${FOLIO_VERIFY_AUTH_REQUIRED:-false}" \
     "$bin"
 ) >"$dir/server.log" 2>&1 &

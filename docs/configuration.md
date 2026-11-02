@@ -13,9 +13,12 @@ From lowest to highest:
 4. Settings stored in the database (managed on the `/settings` page)
 
 The database overrides the other layers only for the keys it manages:
-`ai.provider`, `ai.openai_api_key`, `ai.anthropic_api_key`, `ai.ocr_model`,
-`ai.embedding_model` and the `processing.*` toggles. Everything else is fixed at
+`ai.openai_api_key`, `ai.anthropic_api_key`, `ocr.*`, `embeddings.*`,
+and the `processing.*` toggles. Everything else is fixed at
 startup by the first three layers.
+
+New databases use startup pipeline values until settings are saved. Upgrades
+preserve existing database rows, including values seeded by earlier releases.
 
 ## Environment variable naming
 
@@ -32,6 +35,16 @@ startup by the first three layers.
 
 | `config.toml` key | Environment variable | Default | Description |
 | --- | --- | --- | --- |
+| `ocr.provider` | `FOLIO_OCR__PROVIDER` | `tesseract` | OCR provider; see [pipeline](pipeline.md). |
+| `ocr.model` | `FOLIO_OCR__MODEL` | `empty` | Vision model; empty selects the provider default. |
+| `ocr.languages` | `FOLIO_OCR__LANGUAGES` | `eng` | OCR languages joined with `+`, such as `deu+eng`. |
+| `ocr.base_url` | `FOLIO_OCR__BASE_URL` | `empty` | OCR endpoint override. |
+| `embeddings.provider` | `FOLIO_EMBEDDINGS__PROVIDER` | `none` | Embedding provider; `none` disables semantic search. |
+| `embeddings.model` | `FOLIO_EMBEDDINGS__MODEL` | `empty` | Embedding model; empty selects the provider default. |
+| `embeddings.base_url` | `FOLIO_EMBEDDINGS__BASE_URL` | `empty` | Embedding endpoint override. |
+| `processing.auto_ocr` | `FOLIO_PROCESSING__AUTO_OCR` | `true` | Run OCR automatically. |
+| `processing.auto_thumbnail` | `FOLIO_PROCESSING__AUTO_THUMBNAIL` | `true` | Stored thumbnail preference; the worker currently generates thumbnails regardless. |
+| `processing.auto_embed` | `FOLIO_PROCESSING__AUTO_EMBED` | `true` | Generate embeddings automatically when a provider is configured. |
 | `server.host` | `FOLIO_SERVER__HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` in containers. |
 | `server.port` | `FOLIO_SERVER__PORT` | `3000` | TCP port to listen on. |
 | `server.public_url` | `FOLIO_SERVER__PUBLIC_URL` | unset | Externally visible base URL, used in OAuth metadata, redirects and links in webhook payloads. Derived from the request when unset. |

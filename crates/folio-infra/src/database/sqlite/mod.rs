@@ -40,5 +40,33 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
 
 /// Run SQLite database migrations
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::MigrateError> {
-    sqlx::migrate!("../../migrations/sqlite").run(pool).await
+    let mut connection = pool.acquire().await?;
+    let file_backed: bool =
+        sqlx::query_scalar("SELECT file != '' FROM pragma_database_list WHERE name = 'main'")
+            .fetch_one(&mut *connection)
+            .await?;
+    if file_backed {
+        // A connection lock permits the vault migration's explicit transactions.
+        connection.close_on_drop();
+        sqlx::raw_sql("BEGIN EXCLUSIVE; PRAGMA locking_mode = EXCLUSIVE; COMMIT;")
+            .execute(&mut *connection)
+            .await?;
+    }
+    let fresh: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema WHERE name = '_sqlx_migrations')",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    sqlx::migrate!("../../migrations/sqlite")
+        .run_direct(None, &mut *connection, false)
+        .await?;
+    if fresh {
+        sqlx::query(super::CLEAR_PIPELINE_DEFAULTS)
+            .execute(&mut *connection)
+            .await?;
+    }
+    if file_backed {
+        connection.close().await?;
+    }
+    Ok(())
 }

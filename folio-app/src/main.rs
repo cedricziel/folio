@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
     telemetry::metrics().documents_changed(stored_documents as i64);
 
     // Create AI services (providers follow the database settings, config.toml keys as fallback)
-    let pipeline = PipelineContext::new(settings_repo.clone(), config.ai.clone());
+    let pipeline = PipelineContext::from_config(settings_repo.clone(), &config);
     let ocr_service = Arc::new(DynamicOcrService::new(pipeline.clone()));
     let embedding_service = Arc::new(DynamicEmbeddingService::new(pipeline.clone()));
     let search_service = repos.search;

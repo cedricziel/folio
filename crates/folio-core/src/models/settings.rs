@@ -49,6 +49,7 @@ impl AiSettings {
 
 /// Which OCR provider runs and how
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OcrSettings {
     /// Registry id of the provider (`tesseract`, `openai-vision`, `none`, ...)
     pub provider: String,
@@ -73,6 +74,7 @@ impl Default for OcrSettings {
 
 /// Which embedding provider runs and how
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EmbeddingSettings {
     /// Registry id of the provider (`openai`, `ollama`, `fastembed`, `none`)
     pub provider: String,
@@ -94,6 +96,7 @@ impl Default for EmbeddingSettings {
 
 /// Processing configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ProcessingSettings {
     /// Automatically run OCR on uploaded documents
     pub auto_ocr: bool,
@@ -142,27 +145,31 @@ pub struct PipelineSettings {
 impl PipelineSettings {
     /// Build from raw settings rows; unknown or missing keys keep their defaults
     pub fn from_settings(settings: &[Setting]) -> Self {
-        let mut out = Self {
-            processing: ProcessingSettings::from_settings(settings),
-            ai: AiSettings::from_settings(settings),
-            ..Self::default()
-        };
+        Self::default().with_settings(settings)
+    }
 
+    /// Overlay saved rows, retaining configured values for missing keys.
+    pub fn with_settings(mut self, settings: &[Setting]) -> Self {
         for setting in settings {
             let value = setting.value.trim().to_string();
             match setting.key.as_str() {
-                "ocr.provider" if !value.is_empty() => out.ocr.provider = value,
-                "ocr.model" => out.ocr.model = value,
-                "ocr.languages" if !value.is_empty() => out.ocr.languages = value,
-                "ocr.base_url" => out.ocr.base_url = value,
-                "embeddings.provider" if !value.is_empty() => out.embeddings.provider = value,
-                "embeddings.model" => out.embeddings.model = value,
-                "embeddings.base_url" => out.embeddings.base_url = value,
+                "ocr.provider" if !value.is_empty() => self.ocr.provider = value,
+                "ocr.model" => self.ocr.model = value,
+                "ocr.languages" if !value.is_empty() => self.ocr.languages = value,
+                "ocr.base_url" => self.ocr.base_url = value,
+                "embeddings.provider" if !value.is_empty() => self.embeddings.provider = value,
+                "embeddings.model" => self.embeddings.model = value,
+                "embeddings.base_url" => self.embeddings.base_url = value,
+                "processing.auto_ocr" => self.processing.auto_ocr = value == "true",
+                "processing.auto_thumbnail" => self.processing.auto_thumbnail = value == "true",
+                "processing.auto_embed" => self.processing.auto_embed = value == "true",
+                "ai.openai_api_key" => self.ai.openai_api_key = setting.value.clone(),
+                "ai.anthropic_api_key" => self.ai.anthropic_api_key = setting.value.clone(),
                 _ => {}
             }
         }
 
-        out
+        self
     }
 }
 
@@ -206,6 +213,21 @@ mod tests {
         assert_eq!(s.embeddings.base_url, "http://gpu:11434");
         assert!(!s.processing.auto_ocr);
         assert!(!s.processing.auto_embed);
+    }
+
+    #[test]
+    fn saved_rows_override_config_without_resetting_missing_keys() {
+        let mut configured = PipelineSettings::default();
+        configured.ocr.provider = "ollama-vision".into();
+        configured.ocr.model = "vision-model".into();
+        configured.processing.auto_embed = false;
+        let effective = configured.with_settings(&[
+            setting("ocr.provider", "none"),
+            setting("processing.auto_embed", "true"),
+        ]);
+        assert_eq!(effective.ocr.provider, "none");
+        assert_eq!(effective.ocr.model, "vision-model");
+        assert!(effective.processing.auto_embed);
     }
 
     #[test]

@@ -42,6 +42,9 @@ pub use sqlite::{
     SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
+const CLEAR_PIPELINE_DEFAULTS: &str = "DELETE FROM settings WHERE key LIKE 'ocr.%' \
+    OR key LIKE 'embeddings.%' OR key LIKE 'processing.%'";
+
 /// Supported database backends
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseBackend {

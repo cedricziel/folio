@@ -69,7 +69,8 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - MCP at `/mcp`: `claude mcp add --transport http folio-verify "$BASE_URL/mcp"` (remove it afterwards) or a JSON-RPC probe: `curl -sS -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE_URL/mcp"`.
 - Webhooks and workflows: start a local receiver (`python3 -m http.server`, or `nc -l`) on a free port, point the webhook at `http://127.0.0.1:<port>`, run the trigger (upload), and check the receiver log.
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.
-- Real OCR or embeddings: `FOLIO_AI_PROVIDER=local` skips them. Test those providers only with a dedicated test key supplied by the user, never from the environment you inherited.
+- Pipeline startup configuration: run the smoke test with `FOLIO_VERIFY_OCR_PROVIDER=none FOLIO_VERIFY_AUTO_OCR=false FOLIO_VERIFY_AUTO_EMBED=false`. On the fresh database, `/settings` must select `none` and leave both processing checkboxes unchecked; uploads must finish with skipped OCR and embeddings. The scripts pass these test options through the scrubbed environment.
+- Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
 ## Apple navigation
 
