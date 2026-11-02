@@ -13,6 +13,7 @@ pub enum EntryKind {
 }
 
 impl EntryKind {
+    /// Return the stable spelling shared by database kinds and JSON values.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Note => "note",
@@ -68,6 +69,8 @@ pub struct EntryPermissions {
 }
 
 impl EntryPermissions {
+    /// Authors with a writable role may edit; editors may delete any entry but cannot rewrite it.
+    /// Callers must establish current vault membership before evaluating these capabilities.
     pub fn for_member(role: VaultRole, user: &UserId, author: Option<&UserId>) -> Self {
         let own = role >= VaultRole::Contributor && author == Some(user);
         Self {
