@@ -95,6 +95,13 @@ pub trait DocumentRepository: Send + Sync {
     /// Get tags for a document
     async fn get_tags(&self, vault: VaultId, document_id: Id) -> Result<Vec<Tag>>;
 
+    /// Read tags for the requested documents in a vault. Untagged and inaccessible IDs are omitted.
+    async fn tags_for_documents(
+        &self,
+        vault: VaultId,
+        document_ids: &[Id],
+    ) -> Result<std::collections::HashMap<Id, Vec<Tag>>>;
+
     /// Set tags for a document (replaces existing tags)
     async fn set_tags(&self, vault: VaultId, document_id: Id, tag_ids: &[Id]) -> Result<()>;
 

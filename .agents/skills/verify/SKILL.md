@@ -71,3 +71,11 @@ reads, and document-scope separation. Do not launch a server against existing da
 Before a PR, also run `RUSTC_WRAPPER= make format`, `RUSTC_WRAPPER= make lint`, and
 `RUSTC_WRAPPER= make test`. An empty wrapper bypasses a local sccache service when
 the sandbox cannot access it.
+
+## Verify document repository changes
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract`
+with Docker available. The shared contract uses disposable SQLite databases and
+PostgreSQL containers; it covers bounded pagination, stable ordering, cursor
+binding, and batched tags with duplicate IDs and vault isolation. Containers are
+removed after the tests. Do not point these tests at an existing archive.

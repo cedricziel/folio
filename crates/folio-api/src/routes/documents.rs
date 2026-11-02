@@ -139,22 +139,22 @@ async fn present(
         .map(|t| (t.id, t.name))
         .collect();
 
-    futures::future::try_join_all(documents.into_iter().map(|document| {
-        let correspondents = &correspondents;
-        let types = &types;
-        async move {
-            let tags = state
-                .document_repo
-                .get_tags(vault, document.id)
-                .await?
+    let ids: Vec<_> = documents.iter().map(|document| document.id).collect();
+    let mut tags = state.document_repo.tags_for_documents(vault, &ids).await?;
+    Ok(documents
+        .into_iter()
+        .map(|document| {
+            let tags = tags
+                .remove(&document.id)
+                .unwrap_or_default()
                 .into_iter()
-                .map(|t| DocumentTag {
-                    id: t.id,
-                    name: t.name,
-                    color: t.color,
+                .map(|tag| DocumentTag {
+                    id: tag.id,
+                    name: tag.name,
+                    color: tag.color,
                 })
                 .collect();
-            Ok::<_, ApiError>(DocumentView {
+            DocumentView {
                 correspondent: document
                     .correspondent_id
                     .and_then(|id| correspondents.get(&id).cloned()),
@@ -163,10 +163,9 @@ async fn present(
                     .and_then(|id| types.get(&id).cloned()),
                 tags,
                 document,
-            })
-        }
-    }))
-    .await
+            }
+        })
+        .collect())
 }
 
 /// List documents, newest first, with their tags and the names of their correspondent and type
