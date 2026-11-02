@@ -1,5 +1,79 @@
 # Changelog
 
+## [0.7.0](https://github.com/cedricziel/folio/compare/v0.6.0...v0.7.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **apple:** require vault-aware servers and identifiers ([#220](https://github.com/cedricziel/folio/issues/220))
+* **apple:** require vault-aware servers and identifiers
+* remove runtime backward-compatibility paths ([#206](https://github.com/cedricziel/folio/issues/206))
+* **apple:** remove installation identity migration
+* **auth:** require resource-specific MCP metadata discovery
+* **vaults:** remove automatic archive claims
+* **storage:** remove support for previous object layouts
+* **config:** remove obsolete provider and environment aliases
+
+### Features
+
+* **api:** combine literal search with paged document filters ([ac54777](https://github.com/cedricziel/folio/commit/ac547777ebf530827050c56b9c199a15334e5e37))
+* **api:** combine literal search with paged document filters ([#208](https://github.com/cedricziel/folio/issues/208)) ([fa3792e](https://github.com/cedricziel/folio/commit/fa3792e4a0b86c642b33d41602ccd30f25e5d58e))
+* **api:** expose authorized paged document browsing ([3c7000a](https://github.com/cedricziel/folio/commit/3c7000a7ce7d78d802d281ec14d4770db1d4674b))
+* **api:** expose authorized paged document browsing ([#205](https://github.com/cedricziel/folio/issues/205)) ([32e9f6c](https://github.com/cedricziel/folio/commit/32e9f6c3f34612f20418ceed618d0ce3ee20ee22))
+* **apple:** add document drag-and-drop imports ([f07f6e9](https://github.com/cedricziel/folio/commit/f07f6e91ea45285dcf6e4edce6ec619d0fd81ec7))
+* **apple:** add document drag-and-drop imports ([#219](https://github.com/cedricziel/folio/issues/219)) ([b079f30](https://github.com/cedricziel/folio/commit/b079f30e91eb447f8365c4fa0531ebd6d19cacfa))
+* **apple:** add optional biometric app locking ([4c741c4](https://github.com/cedricziel/folio/commit/4c741c41d21b197db471d246e732f54a72ff8ba2))
+* **apple:** add optional biometric app locking ([#216](https://github.com/cedricziel/folio/issues/216)) ([5639e38](https://github.com/cedricziel/folio/commit/5639e38dece475612863c4b7f76e2e4fb874cd8b))
+* **apple:** browse documents with bounded pages ([53c35d8](https://github.com/cedricziel/folio/commit/53c35d8765a3ecd6e8946a6835608aab021471d8))
+* **apple:** browse documents with bounded pages ([#218](https://github.com/cedricziel/folio/issues/218)) ([ed98bf7](https://github.com/cedricziel/folio/commit/ed98bf78cfa13c49a02b04beadaa1d298269276a))
+* **apple:** restore trashed documents with native undo ([5889989](https://github.com/cedricziel/folio/commit/5889989eafbf204d680e219bce9c8199a0ef3b8b))
+* **apple:** restore trashed documents with native undo ([#226](https://github.com/cedricziel/folio/issues/226)) ([a306c0b](https://github.com/cedricziel/folio/commit/a306c0b28beb6e0fda63121865228e8b96647174))
+* **apple:** scope vault browsing and file provider folders ([db5eb16](https://github.com/cedricziel/folio/commit/db5eb16eebe115f0f00ce27262205e2e828c5d6a))
+* **documents:** make deletion recoverable with Trash ([#217](https://github.com/cedricziel/folio/issues/217)) ([08a7fb0](https://github.com/cedricziel/folio/commit/08a7fb0c40ec266f4c4133ea844bc8890179b0ab))
+* **documents:** move deleted documents to recoverable trash ([2d032d5](https://github.com/cedricziel/folio/commit/2d032d5ab6fbbd6b61eb4d520141993a4c3507f5))
+* **vaults:** add library selection across web and Apple ([#210](https://github.com/cedricziel/folio/issues/210)) ([376887a](https://github.com/cedricziel/folio/commit/376887aeba7280a6d3db14ae2cdb39b47438edb4))
+* **vaults:** add scoped library selection to the web app ([aa0e40c](https://github.com/cedricziel/folio/commit/aa0e40c6503ce5a2f72fe10a0e16b9ad57c4e6d9))
+
+
+### Bug Fixes
+
+* **api:** bound literal search term count ([0abc45d](https://github.com/cedricziel/folio/commit/0abc45d8b92eba2f85cb6006c1135d7a1c1b487a))
+* **apple:** protect scans and resume partial uploads ([3651a2c](https://github.com/cedricziel/folio/commit/3651a2cfb9559c9007099655787f510e782b5d39))
+* **apple:** recover sessions without losing the selected server ([ce4514a](https://github.com/cedricziel/folio/commit/ce4514aebc3e7a021f894c136cee0aab6b82731d))
+* **apple:** recover sessions without losing the selected server ([#221](https://github.com/cedricziel/folio/issues/221)) ([01288b4](https://github.com/cedricziel/folio/commit/01288b442598adcda75a3809e6a9a4980a54809a))
+* **apple:** retain attachment failures and original filenames ([3361ff0](https://github.com/cedricziel/folio/commit/3361ff082a4040654b33ecb51ec61d074fba9bb7))
+* **apple:** retain attachment failures and original filenames ([#230](https://github.com/cedricziel/folio/issues/230)) ([f56ba08](https://github.com/cedricziel/folio/commit/f56ba08065d4ebbc0e449ea34ecd6824e315ac56)), closes [#167](https://github.com/cedricziel/folio/issues/167) [#168](https://github.com/cedricziel/folio/issues/168)
+* **apple:** route inbox taps through the document path ([4289e70](https://github.com/cedricziel/folio/commit/4289e7051b2b72e019b9a0431c17c15e4c95e9ba))
+* **apple:** route inbox taps through the document path ([#212](https://github.com/cedricziel/folio/issues/212)) ([523bd05](https://github.com/cedricziel/folio/commit/523bd05ecd8e2e0329572cc839d1c4ed39296e4c))
+* **apple:** support increased contrast in custom colors ([d74b0ce](https://github.com/cedricziel/folio/commit/d74b0ce3c9fe9932dce6585c49e3f1c178c97962))
+* **auth:** reject mismatched forwarded sessions ([88e9dc6](https://github.com/cedricziel/folio/commit/88e9dc6166a127e958ec3f2c3a861385ee55cbbe))
+* **auth:** reject mismatched forwarded sessions ([#232](https://github.com/cedricziel/folio/issues/232)) ([707b29a](https://github.com/cedricziel/folio/commit/707b29a24ec650f06141fcc7e71764e395743779))
+* **auth:** replace deprecated XNonce conversions ([8ebabb2](https://github.com/cedricziel/folio/commit/8ebabb2e2e7c1560ac0c6fa2ab167a694ce474bb))
+* **ci:** allow cold simulator startup in navigation tests ([a8f6f02](https://github.com/cedricziel/folio/commit/a8f6f0282c1aeb6243a14640e9c4b39472621719))
+* **config:** retain global AI provider configuration ([f47c34b](https://github.com/cedricziel/folio/commit/f47c34b841537e640b528015c45b646cc67d4999))
+* **ingest:** restrict IMAP cleanup to imported messages ([1051f37](https://github.com/cedricziel/folio/commit/1051f37ce03defeb4583ecffe489032cda914eef))
+* **ingest:** restrict IMAP cleanup to imported messages ([#211](https://github.com/cedricziel/folio/issues/211)) ([ea134e2](https://github.com/cedricziel/folio/commit/ea134e26a3c1e407c0becd3e60a408b30a5d2b6e))
+* **mcp:** bound original file reads before buffering ([3e79634](https://github.com/cedricziel/folio/commit/3e796347c9fe91d984132a6396a9cd4b3b66dbc4))
+* **mcp:** bound original file reads before buffering ([#233](https://github.com/cedricziel/folio/issues/233)) ([6214f7e](https://github.com/cedricziel/folio/commit/6214f7ea2ff2e9d59622a183c344eb0d061cd9cc)), closes [#139](https://github.com/cedricziel/folio/issues/139)
+* **settings:** restrict global controls to administrators ([ceae988](https://github.com/cedricziel/folio/commit/ceae988a43d9021b24f6b0bb746e7d38e04a961a))
+* **settings:** restrict global controls to administrators ([#235](https://github.com/cedricziel/folio/issues/235)) ([52bdc10](https://github.com/cedricziel/folio/commit/52bdc101b7505f1e7d331f8f8044d8f2efb8444b))
+* **ui:** ignore stale command palette results ([9488758](https://github.com/cedricziel/folio/commit/94887588d03405bffbcbde2d4434c09196edf4fa))
+* **ui:** ignore stale command palette results ([#239](https://github.com/cedricziel/folio/issues/239)) ([ff479ec](https://github.com/cedricziel/folio/commit/ff479ecf4edb5aa3ed3f2e29eee7716db1b12e99))
+* **ui:** render document tags with DOM APIs ([585fa79](https://github.com/cedricziel/folio/commit/585fa790553234c9a04407f11c753a7876a7d23d))
+* **ui:** render document tags with DOM APIs ([#236](https://github.com/cedricziel/folio/issues/236)) ([fdb5152](https://github.com/cedricziel/folio/commit/fdb5152da50307422082fc7ea258a80a1df44fce))
+
+
+### Code Refactoring
+
+* **apple:** remove installation identity migration ([15e8f26](https://github.com/cedricziel/folio/commit/15e8f26db6c12d1e905de2c9a3a221b0fbeb2f0f))
+* **apple:** require vault-aware servers and identifiers ([eb8fd0e](https://github.com/cedricziel/folio/commit/eb8fd0e89b870149121371d4253f17a40c839486))
+* **apple:** require vault-aware servers and identifiers ([#220](https://github.com/cedricziel/folio/issues/220)) ([ac17501](https://github.com/cedricziel/folio/commit/ac17501f4d5691c015c9ef174717ea90ebb65457))
+* **auth:** require resource-specific MCP metadata discovery ([bf76628](https://github.com/cedricziel/folio/commit/bf76628dc2d3804843904179f3c9161583065b4e))
+* **config:** remove obsolete provider and environment aliases ([f3e17c4](https://github.com/cedricziel/folio/commit/f3e17c46d1c20ac4dd306bdb774b949b5f46f50b))
+* remove runtime backward-compatibility paths ([#206](https://github.com/cedricziel/folio/issues/206)) ([73f274e](https://github.com/cedricziel/folio/commit/73f274e89e30fa7f5e81bfdf81ed4d44249921cd))
+* **storage:** remove support for previous object layouts ([035bfaa](https://github.com/cedricziel/folio/commit/035bfaa58ec1aefaf710141aca7cab641f98f0df))
+* **vaults:** remove automatic archive claims ([c28f269](https://github.com/cedricziel/folio/commit/c28f26979855aa6b3c90386d1a72d379c5048cb8))
+
 ## [0.6.0](https://github.com/cedricziel/folio/compare/v0.5.0...v0.6.0) (2026-11-02)
 
 
