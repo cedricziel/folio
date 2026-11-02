@@ -341,6 +341,9 @@ lease loss or renewal timeout, and progress while renewal waits for a connection
 The worker suite also rejects missing embedding vectors before storing chunks or
 publishing completion. Run `cargo test -p folio-core --test embedding_batch` for
 missing or surplus vectors, malformed dimensions, and nonfinite provider output.
+Run `cargo test -p folio-core --test processing_attempts` for retry state, stale
+attempt rejection, terminal immutability, persisted-state restoration, and attempt
+counter exhaustion. These model tests do not verify transactional lease fencing.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
 
