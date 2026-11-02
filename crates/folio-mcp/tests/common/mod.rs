@@ -7,8 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use folio_core::models::{CreateDocument, CreateTag, Document, Id, Tag, UpdateTag};
 use folio_core::ports::{
-    DocumentRepository, EmbeddingBatch, EmbeddingService, SearchService, SettingsRepository,
-    TagRepository,
+    DocumentRepository, DocumentStore, EmbeddingBatch, EmbeddingService, SearchService,
+    SettingsRepository, StoredObject, TagRepository,
 };
 use folio_core::services::LibraryService;
 use folio_infra::{Database, ObjectStoreDocumentStore};
@@ -138,6 +138,40 @@ impl TagRepository for CountingTags {
     }
 }
 
+/// A store that rejects every write, to exercise upload failure handling
+pub struct FailingStore(ObjectStoreDocumentStore);
+
+#[async_trait]
+impl DocumentStore for FailingStore {
+    fn backend(&self) -> &'static str {
+        "failing"
+    }
+    async fn put(&self, _key: &str, _data: bytes::Bytes) -> folio_core::Result<()> {
+        Err(folio_core::Error::Storage("disk full".into()))
+    }
+    async fn get(&self, key: &str) -> folio_core::Result<StoredObject> {
+        self.0.get(key).await
+    }
+    async fn size(&self, key: &str) -> folio_core::Result<Option<u64>> {
+        self.0.size(key).await
+    }
+    async fn exists(&self, key: &str) -> folio_core::Result<bool> {
+        self.0.exists(key).await
+    }
+    async fn copy(&self, from: &str, to: &str) -> folio_core::Result<()> {
+        self.0.copy(from, to).await
+    }
+    async fn delete(&self, key: &str) -> folio_core::Result<()> {
+        self.0.delete(key).await
+    }
+    async fn delete_prefix(&self, prefix: &str) -> folio_core::Result<u64> {
+        self.0.delete_prefix(prefix).await
+    }
+    async fn list(&self, prefix: &str) -> folio_core::Result<Vec<String>> {
+        self.0.list(prefix).await
+    }
+}
+
 pub struct Fixture {
     pub library: Arc<LibraryService>,
     /// Number of times the tags table was listed in full
@@ -157,13 +191,26 @@ impl Fixture {
         embeddings: Arc<dyn EmbeddingService>,
         search: Option<Arc<dyn SearchService>>,
     ) -> Self {
+        let store = ObjectStoreDocumentStore::in_memory();
+        Self::build(embeddings, search, Arc::new(store)).await
+    }
+
+    /// Like [`Fixture::new`] with a store whose writes fail
+    pub async fn with_failing_store() -> Self {
+        let store = FailingStore(ObjectStoreDocumentStore::in_memory());
+        Self::build(Arc::new(NoEmbeddings), None, Arc::new(store)).await
+    }
+
+    async fn build(
+        embeddings: Arc<dyn EmbeddingService>,
+        search: Option<Arc<dyn SearchService>>,
+        storage: Arc<dyn DocumentStore>,
+    ) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let url = format!("sqlite:{}?mode=rwc", dir.path().join("folio.db").display());
         let db = Database::connect(&url).await.unwrap();
         db.migrate().await.unwrap();
         let repos = db.repositories().await;
-
-        let storage = ObjectStoreDocumentStore::in_memory();
 
         let tag_lists = Arc::new(AtomicUsize::new(0));
         let tags = Arc::new(CountingTags {
@@ -177,7 +224,7 @@ impl Fixture {
             repos.document_types,
             embeddings,
             search.unwrap_or(repos.search),
-            Arc::new(storage),
+            storage,
             Arc::new(repos.jobs),
         ));
 

@@ -177,6 +177,23 @@ async fn upload_returns_id_and_pending_status() {
 }
 
 #[tokio::test]
+async fn failed_upload_leaves_no_document_behind() {
+    let fx = Fixture::with_failing_store().await;
+    let client = fx.in_process_client().await;
+    let content = base64::engine::general_purpose::STANDARD.encode(b"hello world");
+
+    let res = call(
+        &client,
+        "upload_document",
+        json!({"filename": "note.txt", "content_base64": content}),
+    )
+    .await;
+
+    assert!(!matches!(res, Ok(r) if r.is_error != Some(true)));
+    assert!(fx.documents.list(None).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn listing_tools_return_vocabulary() {
     let fx = Fixture::new().await;
     let doc = fx.insert("Doc", "x").await;
