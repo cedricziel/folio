@@ -1,6 +1,8 @@
 //! IMAP mailboxes: imports attachments (and optionally whole messages) from new mail
 
 use std::collections::BTreeSet;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,12 +25,39 @@ use folio_core::ports::{IngestLedger, IngestSink, IngestionSource};
 
 use super::mime::guess_mime;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
 
 trait Io: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + std::fmt::Debug> Io for T {}
 
-type ImapSession = Session<Box<dyn Io>>;
+struct ImapSession {
+    inner: Session<Box<dyn Io>>,
+    deadline: Deadline,
+}
+
+struct Deadline {
+    duration: Duration,
+    expired: AtomicBool,
+}
+
+impl Deadline {
+    fn new(duration: Duration) -> Self {
+        Self {
+            duration,
+            expired: AtomicBool::new(false),
+        }
+    }
+
+    async fn run<T>(&self, context: &str, operation: impl Future<Output = Result<T>>) -> Result<T> {
+        match tokio::time::timeout(self.duration, operation).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.expired.store(true, Ordering::Relaxed);
+                Err(imap_err(context, "timed out"))
+            }
+        }
+    }
+}
 
 fn imap_err(context: &str, e: impl std::fmt::Display) -> Error {
     Error::Storage(format!("IMAP {context}: {e}"))
@@ -41,6 +70,7 @@ pub struct EmailSource {
     ledger: Arc<dyn IngestLedger>,
     /// Where the ledger entries live; only polling needs it, not connection tests
     vault: Option<VaultId>,
+    command_timeout: Duration,
 }
 
 /// What was found in one message
@@ -188,7 +218,14 @@ impl EmailSource {
             config,
             ledger,
             vault,
+            command_timeout: COMMAND_TIMEOUT,
         }
+    }
+
+    /// Set the deadline for each IMAP operation, including connection setup and logout.
+    pub fn with_command_timeout(mut self, timeout: Duration) -> Self {
+        self.command_timeout = timeout;
+        self
     }
 
     fn vault(&self) -> Result<VaultId> {
@@ -199,10 +236,14 @@ impl EmailSource {
     async fn connect(&self) -> Result<ImapSession> {
         let password = self.config.resolve_password()?;
         let addr = (self.config.host.as_str(), self.config.port);
-        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
-            .await
-            .map_err(|_| imap_err("connect", "timed out"))?
-            .map_err(|e| imap_err("connect", e))?;
+        let deadline = Deadline::new(self.command_timeout);
+        let tcp = deadline
+            .run("connect", async {
+                TcpStream::connect(addr)
+                    .await
+                    .map_err(|e| imap_err("connect", e))
+            })
+            .await?;
 
         let stream: Box<dyn Io> = match self.config.security {
             MailSecurity::Plain => Box::new(tcp),
@@ -211,24 +252,38 @@ impl EmailSource {
                     .danger_accept_invalid_certs(self.config.accept_invalid_certs)
                     .build()
                     .map_err(|e| imap_err("tls", e))?;
-                let tls = tokio_native_tls::TlsConnector::from(connector)
-                    .connect(&self.config.host, tcp)
-                    .await
-                    .map_err(|e| imap_err("tls handshake", e))?;
+                let connector = tokio_native_tls::TlsConnector::from(connector);
+                let tls = deadline
+                    .run("tls handshake", async {
+                        connector
+                            .connect(&self.config.host, tcp)
+                            .await
+                            .map_err(|e| imap_err("tls handshake", e))
+                    })
+                    .await?;
                 Box::new(tls)
             }
         };
 
         let mut client = async_imap::Client::new(stream);
-        client
-            .read_response()
-            .await
-            .map_err(|e| imap_err("greeting", e))?
-            .ok_or_else(|| imap_err("greeting", "connection closed"))?;
-        client
-            .login(&self.config.username, &password)
-            .await
-            .map_err(|(e, _)| imap_err("login", e))
+        deadline
+            .run("greeting", async {
+                client
+                    .read_response()
+                    .await
+                    .map_err(|e| imap_err("greeting", e))?
+                    .ok_or_else(|| imap_err("greeting", "connection closed"))
+            })
+            .await?;
+        let inner = deadline
+            .run("login", async {
+                client
+                    .login(&self.config.username, &password)
+                    .await
+                    .map_err(|(e, _)| imap_err("login", e))
+            })
+            .await?;
+        Ok(ImapSession { inner, deadline })
     }
 
     async fn search(
@@ -237,13 +292,25 @@ impl EmailSource {
         mailbox: &str,
     ) -> Result<(Option<u32>, BTreeSet<u32>)> {
         let selected = session
-            .select(mailbox)
-            .await
-            .map_err(|e| imap_err(&format!("select {mailbox}"), e))?;
+            .deadline
+            .run("select", async {
+                session
+                    .inner
+                    .select(mailbox)
+                    .await
+                    .map_err(|e| imap_err("select", e))
+            })
+            .await?;
         let uids = session
-            .uid_search(&self.config.criteria)
-            .await
-            .map_err(|e| imap_err("search", e))?;
+            .deadline
+            .run("search", async {
+                session
+                    .inner
+                    .uid_search(&self.config.criteria)
+                    .await
+                    .map_err(|e| imap_err("search", e))
+            })
+            .await?;
         Ok((selected.uid_validity, uids.into_iter().collect()))
     }
 
@@ -271,12 +338,18 @@ impl EmailSource {
 
     async fn fetch_raw(session: &mut ImapSession, uid: u32) -> Result<Option<Vec<u8>>> {
         let fetches: Vec<_> = session
-            .uid_fetch(uid.to_string(), "BODY.PEEK[]")
-            .await
-            .map_err(|e| imap_err("fetch", e))?
-            .try_collect()
-            .await
-            .map_err(|e| imap_err("fetch", e))?;
+            .deadline
+            .run("fetch", async {
+                session
+                    .inner
+                    .uid_fetch(uid.to_string(), "BODY.PEEK[]")
+                    .await
+                    .map_err(|e| imap_err("fetch", e))?
+                    .try_collect()
+                    .await
+                    .map_err(|e| imap_err("fetch", e))
+            })
+            .await?;
         Ok(fetches.iter().find_map(|f| f.body()).map(<[u8]>::to_vec))
     }
 
@@ -287,9 +360,15 @@ impl EmailSource {
         }
 
         let capabilities = session
-            .capabilities()
-            .await
-            .map_err(|e| imap_err("capabilities", e))?;
+            .deadline
+            .run("capabilities", async {
+                session
+                    .inner
+                    .capabilities()
+                    .await
+                    .map_err(|e| imap_err("capabilities", e))
+            })
+            .await?;
         let supports = |extension: &str| {
             capabilities.iter().any(|capability| {
                 matches!(capability, Capability::Atom(name) if name.eq_ignore_ascii_case(extension))
@@ -297,9 +376,15 @@ impl EmailSource {
         };
         if self.config.after_import == MailAfterImport::Move && supports("MOVE") {
             return session
-                .uid_mv(&uid, self.config.move_to.as_deref().unwrap_or_default())
-                .await
-                .map_err(|e| imap_err("UID move", e));
+                .deadline
+                .run("UID move", async {
+                    session
+                        .inner
+                        .uid_mv(&uid, self.config.move_to.as_deref().unwrap_or_default())
+                        .await
+                        .map_err(|e| imap_err("UID move", e))
+                })
+                .await;
         }
         if !supports("UIDPLUS") {
             return Err(imap_err(
@@ -309,9 +394,15 @@ impl EmailSource {
         }
         if self.config.after_import == MailAfterImport::Move {
             session
-                .uid_copy(&uid, self.config.move_to.as_deref().unwrap_or_default())
-                .await
-                .map_err(|e| imap_err("copy", e))?;
+                .deadline
+                .run("copy", async {
+                    session
+                        .inner
+                        .uid_copy(&uid, self.config.move_to.as_deref().unwrap_or_default())
+                        .await
+                        .map_err(|e| imap_err("copy", e))
+                })
+                .await?;
         }
         self.delete(session, &uid).await
     }
@@ -319,12 +410,19 @@ impl EmailSource {
     async fn delete(&self, session: &mut ImapSession, uid: &str) -> Result<()> {
         store(session, uid, "+FLAGS (\\Deleted)").await?;
         session
-            .uid_expunge(uid)
-            .await
-            .map_err(|e| imap_err("UID expunge", e))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| imap_err("UID expunge", e))?;
+            .deadline
+            .run("UID expunge", async {
+                session
+                    .inner
+                    .uid_expunge(uid)
+                    .await
+                    .map_err(|e| imap_err("UID expunge", e))?
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .map_err(|e| imap_err("UID expunge", e))?;
+                Ok(())
+            })
+            .await?;
         Ok(())
     }
 
@@ -395,6 +493,10 @@ impl EmailSource {
             // Also runs for mails recorded earlier whose clean-up failed back then.
             if let Err(e) = self.finish_message(session, uid).await {
                 warn!("Could not clean up message {uid}: {e}");
+                report.failed += 1;
+                if session.deadline.expired.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
             }
         }
         Ok(())
@@ -403,13 +505,32 @@ impl EmailSource {
 
 async fn store(session: &mut ImapSession, uid: &str, query: &str) -> Result<()> {
     session
-        .uid_store(uid, query)
+        .deadline
+        .run("store", async {
+            session
+                .inner
+                .uid_store(uid, query)
+                .await
+                .map_err(|e| imap_err("store", e))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| imap_err("store", e))?;
+            Ok(())
+        })
         .await
-        .map_err(|e| imap_err("store", e))?
-        .try_collect::<Vec<_>>()
+}
+
+async fn logout(session: &mut ImapSession) -> Result<()> {
+    session
+        .deadline
+        .run("logout", async {
+            session
+                .inner
+                .logout()
+                .await
+                .map_err(|e| imap_err("logout", e))
+        })
         .await
-        .map_err(|e| imap_err("store", e))?;
-    Ok(())
 }
 
 #[async_trait]
@@ -426,8 +547,16 @@ impl IngestionSource for EmailSource {
                 warn!("Mailbox {mailbox} of '{}' failed: {e}", self.name);
                 first_error.get_or_insert(e);
             }
+            if session.deadline.expired.load(Ordering::Relaxed) {
+                return match first_error {
+                    Some(e) => Err(e),
+                    None => Ok(report),
+                };
+            }
         }
-        let _ = session.logout().await;
+        if let Err(e) = logout(&mut session).await {
+            first_error.get_or_insert(e);
+        }
         match first_error {
             Some(e) => Err(e),
             None => Ok(report),
@@ -442,7 +571,7 @@ impl IngestionSource for EmailSource {
             let count = uids.len();
             parts.push(format!("{count} matching in {mailbox}"));
         }
-        let _ = session.logout().await;
+        logout(&mut session).await?;
         Ok(format!(
             "Connected as {}: {}",
             self.config.username,

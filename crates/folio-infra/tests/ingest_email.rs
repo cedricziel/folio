@@ -5,6 +5,8 @@
 mod common;
 #[path = "common/imap.rs"]
 mod imap;
+#[path = "common/imap_stall.rs"]
+mod imap_stall;
 
 use std::sync::{Arc, Mutex};
 
@@ -685,4 +687,198 @@ async fn legacy_mailbox_uid_entry_does_not_suppress_a_new_message() {
     assert_eq!(report.imported, 1);
     assert_eq!(sink.0.lock().unwrap().len(), 1);
     assert!(!mailbox.state().await.imported_present);
+}
+
+async fn assert_poll_deadline(phase: &'static str, action: MailAfterImport) {
+    let mut mailbox = imap_stall::StallingMailbox::start(phase).await;
+    let h = Harness::new().await;
+    let mut config = identity_config(mailbox.port);
+    config.after_import = action;
+    config.mailboxes = vec!["INBOX".into(), "Later".into()];
+    config.move_to = Some("Processed".into());
+    let source =
+        identity_source(&h, config).with_command_timeout(std::time::Duration::from_millis(250));
+    let sink = Collect::default();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), source.poll(&sink))
+        .await
+        .unwrap();
+    if matches!(
+        phase,
+        "CAPABILITY" | "UID STORE" | "UID COPY" | "UID MOVE" | "UID EXPUNGE"
+    ) {
+        assert_eq!(first.unwrap().failed, 1);
+        assert!(h
+            .ledger
+            .find(
+                h.vault,
+                &format!("msg:{}:deadline@example.test", h.source_id)
+            )
+            .await
+            .unwrap()
+            .is_some());
+    } else {
+        let error = first.unwrap_err().to_string();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(
+            !error.contains("fixture"),
+            "timeout error exposed credentials"
+        );
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut mailbox.released)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let second = tokio::time::timeout(std::time::Duration::from_secs(5), source.poll(&sink))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.failed, 0);
+    assert_eq!(
+        sink.0.lock().unwrap().len(),
+        1,
+        "retry imported a processed message twice"
+    );
+    mailbox.finish().await;
+}
+
+#[tokio::test]
+async fn stalled_greeting_is_bounded_and_next_poll_recovers() {
+    assert_poll_deadline("greeting", MailAfterImport::MarkRead).await;
+}
+#[tokio::test]
+async fn stalled_login_is_bounded_and_next_poll_recovers() {
+    assert_poll_deadline("LOGIN", MailAfterImport::MarkRead).await;
+}
+#[tokio::test]
+async fn stalled_select_is_bounded_and_next_poll_recovers() {
+    assert_poll_deadline("SELECT", MailAfterImport::MarkRead).await;
+}
+#[tokio::test]
+async fn stalled_search_is_bounded_and_next_poll_recovers() {
+    assert_poll_deadline("UID SEARCH", MailAfterImport::MarkRead).await;
+}
+#[tokio::test]
+async fn stalled_fetch_literal_is_bounded_and_next_poll_recovers() {
+    assert_poll_deadline("UID FETCH", MailAfterImport::MarkRead).await;
+}
+#[tokio::test]
+async fn stalled_capabilities_retain_ledger_and_next_poll_retries_cleanup() {
+    assert_poll_deadline("CAPABILITY", MailAfterImport::Delete).await;
+}
+#[tokio::test]
+async fn stalled_store_collection_retains_ledger_and_next_poll_retries_cleanup() {
+    assert_poll_deadline("UID STORE", MailAfterImport::MarkRead).await;
+}
+#[tokio::test]
+async fn stalled_copy_retains_ledger_and_next_poll_retries_cleanup() {
+    assert_poll_deadline("UID COPY", MailAfterImport::Move).await;
+}
+#[tokio::test]
+async fn stalled_expunge_collection_retains_ledger_and_next_poll_retries_cleanup() {
+    assert_poll_deadline("UID EXPUNGE", MailAfterImport::Delete).await;
+}
+#[tokio::test]
+async fn stalled_logout_is_bounded_and_next_poll_recovers() {
+    assert_poll_deadline("LOGOUT", MailAfterImport::MarkRead).await;
+}
+
+#[tokio::test]
+async fn connection_test_bounds_tls_handshake_and_releases_socket() {
+    let mut mailbox = imap_stall::StallingMailbox::start("tls handshake").await;
+    let h = Harness::new().await;
+    let mut config = identity_config(mailbox.port);
+    config.security = MailSecurity::Tls;
+    let source =
+        identity_source(&h, config).with_command_timeout(std::time::Duration::from_millis(250));
+
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), source.test())
+        .await
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("tls handshake: timed out"), "{error}");
+    assert!(!error.contains("fixture"));
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut mailbox.released)
+        .await
+        .unwrap()
+        .unwrap();
+    mailbox.finish().await;
+}
+
+#[tokio::test]
+async fn stalled_move_retains_ledger_and_next_poll_retries_cleanup() {
+    assert_poll_deadline("UID MOVE", MailAfterImport::Move).await;
+}
+
+async fn assert_connection_test_deadline(phase: &'static str) {
+    let mut mailbox = imap_stall::StallingMailbox::start(phase).await;
+    let h = Harness::new().await;
+    let source = identity_source(&h, identity_config(mailbox.port))
+        .with_command_timeout(std::time::Duration::from_millis(250));
+
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), source.test())
+        .await
+        .unwrap()
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(!error.contains("fixture"));
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut mailbox.released)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), source.test())
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("1 matching in INBOX")
+    );
+    mailbox.finish().await;
+}
+
+#[tokio::test]
+async fn connection_test_bounds_greeting_and_can_reconnect() {
+    assert_connection_test_deadline("greeting").await;
+}
+
+#[tokio::test]
+async fn connection_test_bounds_search_and_can_reconnect() {
+    assert_connection_test_deadline("UID SEARCH").await;
+}
+
+#[tokio::test]
+async fn connection_test_bounds_logout_and_can_reconnect() {
+    assert_connection_test_deadline("LOGOUT").await;
+}
+
+#[tokio::test]
+async fn logout_timeout_preserves_the_first_mailbox_failure() {
+    let mut mailbox = imap_stall::StallingMailbox::start("first error").await;
+    let h = Harness::new().await;
+    let source = identity_source(&h, identity_config(mailbox.port))
+        .with_command_timeout(std::time::Duration::from_millis(250));
+
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        source.poll(&Collect::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("isolated-select-failure"), "{error}");
+    assert!(!error.contains("timed out"), "{error}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), &mut mailbox.released)
+        .await
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), source.test())
+        .await
+        .unwrap()
+        .unwrap();
+    mailbox.finish().await;
 }
