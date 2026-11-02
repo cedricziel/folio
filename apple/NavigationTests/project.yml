@@ -27,6 +27,8 @@ targets:
       - "../Folio/Sources/ScanReviewView.swift"
       - "../Folio/Sources/DocumentScanner.swift"
       - "../Folio/Sources/UploadReviewView.swift"
+      - "../Folio/Sources/OnboardingView.swift"
+      - "../Folio/ShareExtension/ShareView.swift"
     dependencies:
       - package: FolioKit
     settings:

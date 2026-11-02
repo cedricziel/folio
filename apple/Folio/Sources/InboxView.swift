@@ -68,11 +68,37 @@ struct InboxView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $session.path) {
-            sidebar
+        GeometryReader { geometry in
+            let showsPreview = geometry.size.width >= 760
+            NavigationStack(
+                path: Binding(
+                    get: { showsPreview ? [] : session.path },
+                    set: {
+                        if !showsPreview {
+                            session.path = $0
+                        }
+                    }
+                )
+            ) {
+                HStack(spacing: 0) {
+                    sidebar(showsPreview: showsPreview)
+                        .frame(maxWidth: showsPreview ? 320 : .infinity)
+                    if showsPreview {
+                        Divider()
+                        Group {
+                            if let id = session.selection {
+                                documentDestination(id)
+                            } else {
+                                ContentUnavailableView("Select a document", systemImage: "doc.text")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
                 .navigationDestination(for: Document.ID.self) { id in
                     documentDestination(id)
                 }
+            }
         }
         .onChange(of: session.path) { _, path in
             if let id = path.last {
@@ -132,7 +158,10 @@ struct InboxView: View {
             scan: scanAction,
             showInbox: { onNavigate(.inbox) },
             showAll: { onNavigate(.all) },
-            find: { searchFocused = true },
+            find: {
+                session.path = []
+                searchFocused = true
+            },
             deleteSelected: canEdit && !trashHistory.isWorking
                 ? session.selection.flatMap { list.document(for: $0) }.map { document in
                     { pendingDelete = document }
@@ -171,11 +200,11 @@ struct InboxView: View {
         }
     }
 
-    private var sidebar: some View {
+    private func sidebar(showsPreview: Bool) -> some View {
         @Bindable var list = session.list
         return List(selection: documentSelection) {
             ForEach(list.rows) { row in
-                documentLink(row)
+                documentLink(row, showsPreview: showsPreview)
                     .transition(.opacity)
                     .tag(row.id)
                     .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
@@ -313,7 +342,9 @@ struct InboxView: View {
             Button("Move to Trash", role: .destructive) {
                 Task {
                     if await trashHistory.moveToTrash(document, undoManager: undoManager) {
-                        if session.selection == document.id { session.selection = nil }
+                        if session.selection == document.id {
+                            session.selection = nil
+                        }
                         session.path.removeAll { $0 == document.id }
                     }
                 }
@@ -335,34 +366,36 @@ struct InboxView: View {
 
     private var documentSelection: Binding<Document.ID?>? {
         #if os(macOS)
-            $session.selection
+            Binding(
+                get: { session.selection },
+                set: { id in
+                    session.selection = id
+                    session.path = id.map { [$0] } ?? []
+                }
+            )
         #else
             nil
         #endif
     }
 
-    @ViewBuilder
-    private func documentLink(_ row: DocumentRow) -> some View {
-        #if os(iOS)
-            Button {
-                session.selection = row.id
-                session.path = [row.id]
-            } label: {
-                HStack {
-                    DocumentRowView(row: row)
+    private func documentLink(_ row: DocumentRow, showsPreview: Bool) -> some View {
+        Button {
+            session.selection = row.id
+            session.path = [row.id]
+        } label: {
+            HStack {
+                DocumentRowView(row: row)
+                if !showsPreview {
                     Image(systemName: "chevron.right")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.inkMuted)
                         .accessibilityHidden(true)
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-        #else
-            NavigationLink(value: row.id) {
-                DocumentRowView(row: row)
-            }
-        #endif
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("document-\(row.id)")
     }
 
     @ViewBuilder
@@ -472,7 +505,9 @@ struct InboxView: View {
 
     private var canAcceptImport: Bool {
         guard canUpload, !isImporting, pendingUploads == nil, scannedPages == nil, !showScanner else { return false }
-        if case .uploading = uploads.state { return false }
+        if case .uploading = uploads.state {
+            return false
+        }
         return true
     }
 
@@ -488,10 +523,16 @@ struct InboxView: View {
                         continuation.resume(returning: data.flatMap { URL(dataRepresentation: $0, relativeTo: nil) })
                     }
                 }
-                if let url { urls.append(url) } else { failed = true }
+                if let url {
+                    urls.append(url)
+                } else {
+                    failed = true
+                }
             }
             await prepareFiles(urls)
-            if failed { problem = "Couldn't read some dropped files. Try choosing them with Choose files." }
+            if failed {
+                problem = "Couldn't read some dropped files. Try choosing them with Choose files."
+            }
             isImporting = false
         }
         return true

@@ -61,8 +61,8 @@ jobs:
           bundler-cache: true
       - run: brew install xcodegen
       - run: bundle exec fastlane test
-      - name: Test inbox navigation on iPhone
-        timeout-minutes: 15
+      - name: Test navigation on iPhone and iPad
+        timeout-minutes: 25
         run: |
           verify_dir=$(mktemp -d)
           verify_device=""
@@ -81,6 +81,19 @@ jobs:
             -destination "platform=iOS Simulator,id=$verify_device" \
             -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
             -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
+            CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
+          xcrun simctl shutdown "$verify_device" || true
+          xcrun simctl delete "$verify_device"
+          verify_device=""
+          tablet=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if "iPad Pro" in d["name"] and "13-inch" in d["name"]))')
+          verify_device=$(xcrun simctl create Folio-iPad-Navigation-CI "$tablet" "$runtime")
+          xcrun xcodebuild test-without-building -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
+            -destination "platform=iOS Simulator,id=$verify_device" \
+            -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
+            -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
+            -only-testing:NavigationTests/NavigationTests/testWideWindowKeepsDocumentListBesidePreview \
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
             CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
