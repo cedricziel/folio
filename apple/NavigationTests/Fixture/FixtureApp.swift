@@ -1,5 +1,6 @@
 import FolioKit
 import SwiftUI
+import UIKit
 
 typealias Document = FolioKit.Document
 
@@ -11,10 +12,38 @@ typealias Document = FolioKit.Document
 
     var body: some Scene {
         WindowGroup {
-            WorkspaceView(
-                serverURL: URL(string: "https://unused.invalid")!,
-                service: service, onSignOut: {}
-            )
+            if ProcessInfo.processInfo.arguments.contains("--scan-review") {
+                ScanReviewFixture(service: service)
+            } else {
+                WorkspaceView(
+                    serverURL: URL(string: "https://unused.invalid")!,
+                    service: service, onSignOut: {}
+                )
+            }
         }
+    }
+}
+
+private struct ScanReviewFixture: View {
+    let service: any FolioService
+    @State private var presented = false
+
+    var body: some View {
+        Button("Review fixture scan") { presented = true }
+            .sheet(isPresented: $presented) {
+                ScanReviewView(
+                    model: ScanReviewViewModel(
+                        pages: [
+                            UIGraphicsImageRenderer(size: CGSize(width: 100, height: 140))
+                                .image { context in
+                                    UIColor.white.setFill()
+                                    context.fill(CGRect(x: 0, y: 0, width: 100, height: 140))
+                                }.cgImage!
+                        ],
+                        service: service
+                    ),
+                    onFinished: { presented = false }
+                )
+            }
     }
 }

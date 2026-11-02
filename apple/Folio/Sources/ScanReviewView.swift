@@ -5,6 +5,7 @@ import SwiftUI
 /// AI suggestions (From, Type, Date, Amount, tags) are not part of the API yet.
 struct ScanReviewView: View {
     @State var model: ScanReviewViewModel
+    @State private var confirmDiscard = false
     let onFinished: () -> Void
 
     init(model: ScanReviewViewModel, onFinished: @escaping () -> Void) {
@@ -65,7 +66,8 @@ struct ScanReviewView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Discard", action: onFinished)
+                    Button("Discard") { confirmDiscard = true }
+                        .disabled(model.state == .filing)
                 }
             }
             .safeAreaInset(edge: .bottom) {
@@ -84,6 +86,13 @@ struct ScanReviewView: View {
                 .disabled(model.state == .filing || model.destination?.canUpload == false)
                 .padding(FolioTheme.Spacing.space4)
             }
+        }
+        .interactiveDismissDisabled()
+        .alert("Discard this scan?", isPresented: $confirmDiscard) {
+            Button("Discard Scan", role: .destructive, action: onFinished)
+            Button("Keep Scan", role: .cancel) {}
+        } message: {
+            Text("These pages haven't been filed. Discarding the scan permanently removes them.")
         }
     }
 }

@@ -70,6 +70,42 @@ struct TokenGeneratorTests {
         #expect(output.files["Colors.xcassets/focus.colorset/Contents.json"] == nil)
     }
 
+    @Test func emitsHighContrastColorsForBothAppearances() throws {
+        let data = Data(
+            """
+            {"color": {"tokens": [{"name": "ink", "value": {"light": "#1a1f1c", "dark": "#e8ebe7"},
+              "highContrast": {"light": "#000000", "dark": "#ffffff"}}]},
+             "type": {"groups": []}, "spacing": {"tokens": []}, "radius": {"tokens": []}}
+            """.utf8
+        )
+        let output = try TokenGenerator.generate(from: data)
+        let colorSet = try #require(output.files["Colors.xcassets/ink.colorset/Contents.json"])
+        let catalog = try #require(JSONSerialization.jsonObject(with: Data(colorSet.utf8)) as? [String: Any])
+        let colors = try #require(catalog["colors"] as? [[String: Any]])
+        let light = try #require(
+            colors.first {
+                $0["appearances"] as? [[String: String]] == [
+                    ["appearance": "luminosity", "value": "light"],
+                    ["appearance": "contrast", "value": "high"],
+                ]
+            })
+        let dark = try #require(
+            colors.first {
+                $0["appearances"] as? [[String: String]] == [
+                    ["appearance": "luminosity", "value": "dark"],
+                    ["appearance": "contrast", "value": "high"],
+                ]
+            })
+        #expect(
+            (light["color"] as? [String: Any])?["components"] as? [String: String] == [
+                "red": "0.000", "green": "0.000", "blue": "0.000", "alpha": "1.000",
+            ])
+        #expect(
+            (dark["color"] as? [String: Any])?["components"] as? [String: String] == [
+                "red": "1.000", "green": "1.000", "blue": "1.000", "alpha": "1.000",
+            ])
+    }
+
     @Test func emitsThemeWithAliasSpacingAndRadius() throws {
         let theme = try TokenGenerator.generate(from: sample).theme
         #expect(theme.contains("static let paperRaised = Color(\"paperRaised\", bundle: .module)"))

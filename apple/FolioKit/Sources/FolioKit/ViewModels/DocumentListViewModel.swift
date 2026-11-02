@@ -161,16 +161,40 @@ public final class DocumentListViewModel {
         }
     }
 
-    public func delete(_ document: Document) async {
+    @discardableResult
+    public func delete(_ document: Document) async -> Bool {
+        actionError = nil
         do {
             try await service.deleteDocument(id: document.id)
             documents.removeAll { $0.id == document.id }
-            if resolvedDocument?.id == document.id { resolvedDocument = nil }
-            if lookupID == document.id { latestLookup += 1 }
+            if resolvedDocument?.id == document.id {
+                resolvedDocument = nil
+            }
+            if lookupID == document.id {
+                latestLookup += 1
+            }
             lookupError = (document.id, "This document is no longer available.")
             rebuildRows()
+            return true
         } catch {
             actionError = error.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
+    public func restore(_ document: Document) async -> Bool {
+        actionError = nil
+        do {
+            resolvedDocument = try await service.restoreDocument(id: document.id)
+            if lookupError?.id == document.id {
+                lookupError = nil
+            }
+            await load()
+            return true
+        } catch {
+            actionError = error.localizedDescription
+            return false
         }
     }
 

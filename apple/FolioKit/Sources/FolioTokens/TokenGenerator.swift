@@ -17,6 +17,11 @@ public enum TokenGenerator {
     }
 
     public struct ColorToken: Equatable {
+        public struct HighContrast: Decodable, Equatable {
+            public let light: String
+            public let dark: String
+        }
+
         public enum Value: Equatable {
             case themed(light: String, dark: String)
             case alias(String)
@@ -24,6 +29,7 @@ public enum TokenGenerator {
 
         public let name: String
         public let value: Value
+        public let highContrast: HighContrast?
     }
 
     public struct TextStyle: Equatable {
@@ -76,11 +82,14 @@ public enum TokenGenerator {
         let colors = raw.color.tokens.map { token in
             switch token.value {
             case let .themed(light, dark):
-                ColorToken(name: token.name, value: .themed(light: light, dark: dark))
+                ColorToken(
+                    name: token.name, value: .themed(light: light, dark: dark), highContrast: token.highContrast
+                )
             case let .alias(reference):
                 ColorToken(
                     name: token.name,
-                    value: .alias(reference.trimmingCharacters(in: CharacterSet(charactersIn: "{}")))
+                    value: .alias(reference.trimmingCharacters(in: CharacterSet(charactersIn: "{}"))),
+                    highContrast: nil
                 )
             }
         }
@@ -124,19 +133,21 @@ public enum TokenGenerator {
         for color in tokens.colors {
             guard case let .themed(light, dark) = color.value else { continue }
             let path = "Colors.xcassets/\(camelCase(color.name)).colorset/Contents.json"
-            files[path] = try colorSet(light: light, dark: dark)
+            files[path] = try colorSet(light: light, dark: dark, highContrast: color.highContrast)
         }
         return files
     }
 
-    private static var info: [String: Any] { ["author": "folio-tokengen", "version": 1] }
+    private static var info: [String: Any] {
+        ["author": "folio-tokengen", "version": 1]
+    }
 
     private static var catalogInfo: String {
         json(["info": info])
     }
 
-    private static func colorSet(light: String, dark: String) throws -> String {
-        func entry(_ hex: String, dark isDark: Bool) throws -> [String: Any] {
+    private static func colorSet(light: String, dark: String, highContrast: ColorToken.HighContrast?) throws -> String {
+        func entry(_ hex: String, appearances: [[String: String]] = []) throws -> [String: Any] {
             let parts = try components(hex: hex).split(separator: ",").map(String.init)
             var entry: [String: Any] = [
                 "idiom": "universal",
@@ -147,13 +158,28 @@ public enum TokenGenerator {
                     ],
                 ],
             ]
-            if isDark {
-                entry["appearances"] = [["appearance": "luminosity", "value": "dark"]]
+            if !appearances.isEmpty {
+                entry["appearances"] = appearances
             }
             return entry
         }
-        return try json([
-            "colors": [entry(light, dark: false), entry(dark, dark: true)],
+        var colors = try [entry(light), entry(dark, appearances: [["appearance": "luminosity", "value": "dark"]])]
+        if let highContrast {
+            colors += try [
+                entry(
+                    highContrast.light,
+                    appearances: [
+                        ["appearance": "luminosity", "value": "light"], ["appearance": "contrast", "value": "high"],
+                    ]),
+                entry(
+                    highContrast.dark,
+                    appearances: [
+                        ["appearance": "luminosity", "value": "dark"], ["appearance": "contrast", "value": "high"],
+                    ]),
+            ]
+        }
+        return json([
+            "colors": colors,
             "info": info,
         ])
     }
@@ -234,6 +260,7 @@ private struct RawTokens: Decodable {
 
         let name: String
         let value: Value
+        let highContrast: TokenGenerator.ColorToken.HighContrast?
     }
 
     struct Style: Decodable {

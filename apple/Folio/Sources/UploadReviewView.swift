@@ -17,11 +17,14 @@ struct UploadReviewView: View {
                 if let destination = model.destination {
                     Section {
                         VaultDestinationPicker(destination: destination)
-                            .disabled(isUploading)
+                            .disabled(model.hasStarted)
                     }
                 }
-                if case let .failed(message, _) = model.state {
-                    Text(message).foregroundStyle(Color.danger)
+                if case let .failed(message, uploaded) = model.state {
+                    Section {
+                        Text(message).foregroundStyle(Color.danger)
+                        Text("\(uploaded) of \(files.count) uploaded. Retry uploads only the remaining files.")
+                    }
                 }
             }
             .navigationTitle("Upload documents")
@@ -30,7 +33,7 @@ struct UploadReviewView: View {
                     Button("Cancel", action: onFinished).disabled(isUploading)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isUploading ? "Uploading…" : "Upload") {
+                    Button(uploadTitle) {
                         Task {
                             await model.upload(files)
                             if case .finished = model.state {
@@ -38,12 +41,20 @@ struct UploadReviewView: View {
                             }
                         }
                     }
-                    .disabled(isUploading || model.destination?.canUpload == false)
+                    .disabled(isUploading || (!model.hasStarted && model.destination?.canUpload == false))
                 }
             }
         }
         .interactiveDismissDisabled(isUploading)
         .frame(minWidth: 320, minHeight: 240)
+    }
+
+    private var uploadTitle: String {
+        switch model.state {
+        case .uploading: "Uploading…"
+        case .failed: "Retry"
+        default: "Upload"
+        }
     }
 
     private var isUploading: Bool {
