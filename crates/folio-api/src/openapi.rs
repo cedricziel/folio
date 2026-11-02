@@ -39,6 +39,7 @@ use crate::routes::{
         crate::routes::trash::purge,
         documents::upload_document,
         documents::download_document,
+        documents::document_thumbnail,
         documents::search_documents_get,
         documents::search_documents,
         tags::list_tags,
