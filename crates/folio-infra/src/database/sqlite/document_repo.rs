@@ -2,9 +2,13 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use std::sync::Arc;
+
+use sqlx::{QueryBuilder, Sqlite, SqlitePool, Transaction};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
+use super::outbox::insert_event;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
@@ -14,15 +18,47 @@ use folio_core::models::{
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
 };
+use folio_core::{DeletedDocument, DocumentEvent, EventOrigin};
 
 /// SQLite implementation of DocumentRepository
+///
+/// Lifecycle changes (create, update, delete, tag edits) write their outbox
+/// event in the same transaction, so a change is never committed without it.
 pub struct SqliteDocumentRepository {
     pool: SqlitePool,
+    origin: EventOrigin,
+    wake: Arc<Notify>,
 }
 
 impl SqliteDocumentRepository {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            origin: EventOrigin::User,
+            wake: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Attribute the events of this repository's changes to `origin`
+    pub fn with_origin(mut self, origin: EventOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// Signal this when an event was committed
+    pub fn with_wake(mut self, wake: Arc<Notify>) -> Self {
+        self.wake = wake;
+        self
+    }
+
+    async fn emit_in(&self, tx: &mut Transaction<'_, Sqlite>, event: DocumentEvent) -> Result<()> {
+        insert_event(tx, &event, self.origin).await.map(|_| ())
+    }
+
+    async fn commit(&self, tx: Transaction<'_, Sqlite>) -> Result<()> {
+        tx.commit().await.map_err(map_sqlx_error)?;
+        self.wake.notify_one();
+        Ok(())
     }
 }
 
@@ -181,6 +217,47 @@ impl TryFrom<DocumentTypeRow> for DocumentType {
     }
 }
 
+/// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
+fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) {
+    if let Some(id) = filter.correspondent_id {
+        qb.push(" AND correspondent_id = ")
+            .push_bind(id.to_string());
+    }
+    if let Some(id) = filter.document_type_id {
+        qb.push(" AND document_type_id = ")
+            .push_bind(id.to_string());
+    }
+    if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
+        // Duplicates would make the distinct count below unreachable
+        tag_ids.sort();
+        tag_ids.dedup();
+        qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
+        let mut sep = qb.separated(", ");
+        for tag_id in &tag_ids {
+            sep.push_bind(tag_id.to_string());
+        }
+        qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
+            .push_bind(tag_ids.len() as i64)
+            .push(")");
+    }
+    if let Some(query) = filter.search_query {
+        for term in query.split_whitespace() {
+            let pattern = format!("%{}%", escape_like(term));
+            qb.push(" AND (title LIKE ")
+                .push_bind(pattern.clone())
+                .push(" ESCAPE '\\' OR content LIKE ")
+                .push_bind(pattern)
+                .push(" ESCAPE '\\')");
+        }
+    }
+    if let Some(after) = filter.created_after {
+        qb.push(" AND created_at >= ").push_bind(after.to_rfc3339());
+    }
+    if let Some(before) = filter.created_before {
+        qb.push(" AND created_at < ").push_bind(before.to_rfc3339());
+    }
+}
+
 #[async_trait]
 impl DocumentRepository for SqliteDocumentRepository {
     async fn find_by_id(&self, id: Id) -> Result<Option<Document>> {
@@ -207,43 +284,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         );
 
         if let Some(filter) = filter {
-            if let Some(id) = filter.correspondent_id {
-                qb.push(" AND correspondent_id = ")
-                    .push_bind(id.to_string());
-            }
-            if let Some(id) = filter.document_type_id {
-                qb.push(" AND document_type_id = ")
-                    .push_bind(id.to_string());
-            }
-            if let Some(mut tag_ids) = filter.tag_ids.filter(|t| !t.is_empty()) {
-                // Duplicates would make the distinct count below unreachable
-                tag_ids.sort();
-                tag_ids.dedup();
-                qb.push(" AND id IN (SELECT document_id FROM document_tags WHERE tag_id IN (");
-                let mut sep = qb.separated(", ");
-                for tag_id in &tag_ids {
-                    sep.push_bind(tag_id.to_string());
-                }
-                qb.push(") GROUP BY document_id HAVING COUNT(DISTINCT tag_id) = ")
-                    .push_bind(tag_ids.len() as i64)
-                    .push(")");
-            }
-            if let Some(query) = filter.search_query {
-                for term in query.split_whitespace() {
-                    let pattern = format!("%{}%", escape_like(term));
-                    qb.push(" AND (title LIKE ")
-                        .push_bind(pattern.clone())
-                        .push(" ESCAPE '\\' OR content LIKE ")
-                        .push_bind(pattern)
-                        .push(" ESCAPE '\\')");
-                }
-            }
-            if let Some(after) = filter.created_after {
-                qb.push(" AND created_at >= ").push_bind(after.to_rfc3339());
-            }
-            if let Some(before) = filter.created_before {
-                qb.push(" AND created_at < ").push_bind(before.to_rfc3339());
-            }
+            push_filter(&mut qb, filter);
         }
 
         qb.push(" ORDER BY created_at DESC");
@@ -255,6 +296,21 @@ impl DocumentRepository for SqliteDocumentRepository {
             .map_err(map_sqlx_error)?;
 
         rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn list_ids(&self, filter: Option<DocumentFilter>) -> Result<Vec<Id>> {
+        let mut qb = QueryBuilder::<Sqlite>::new("SELECT id FROM documents WHERE 1 = 1");
+        if let Some(filter) = filter {
+            push_filter(&mut qb, filter);
+        }
+        qb.push(" ORDER BY created_at DESC");
+
+        let ids: Vec<String> = qb
+            .build_query_scalar()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        ids.iter().map(|id| parse_uuid(id)).collect()
     }
 
     async fn create(&self, params: CreateDocument) -> Result<Document> {
@@ -300,7 +356,9 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         }
-        tx.commit().await.map_err(map_sqlx_error)?;
+        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+            .await?;
+        self.commit(tx).await?;
 
         Ok(Document {
             id,
@@ -326,11 +384,26 @@ impl DocumentRepository for SqliteDocumentRepository {
             id: id.to_string(),
         })?;
 
-        let title = params.title.unwrap_or(existing.title);
-        let content = params.content.or(existing.content);
+        let title = params.title.unwrap_or_else(|| existing.title.clone());
+        let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
         let now = Utc::now();
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+
+        let tags_changed = if let Some(tags) = params.tag_ids {
+            self.replace_tags(&mut tx, id, &tags).await?
+        } else {
+            false
+        };
+        if title == existing.title
+            && content == existing.content
+            && correspondent_id == existing.correspondent_id
+            && document_type_id == existing.document_type_id
+            && !tags_changed
+        {
+            return Ok(existing);
+        }
 
         sqlx::query(
             "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
@@ -343,9 +416,12 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(document_type_id.map(|id| id.to_string()))
         .bind(now.to_rfc3339())
         .bind(id.to_string())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
+        self.emit_in(&mut tx, DocumentEvent::Updated { document_id: id })
+            .await?;
+        self.commit(tx).await?;
 
         Ok(Document {
             id,
@@ -366,9 +442,18 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn delete(&self, id: Id) -> Result<()> {
+        // Workflows still need to see the document after it is gone.
+        let snapshot = match self.find_by_id(id).await? {
+            Some(document) => Some(Arc::new(DeletedDocument {
+                tags: self.get_tags(id).await?,
+                document,
+            })),
+            None => None,
+        };
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let result = sqlx::query("DELETE FROM documents WHERE id = ?")
             .bind(id.to_string())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
 
@@ -378,8 +463,15 @@ impl DocumentRepository for SqliteDocumentRepository {
                 id: id.to_string(),
             });
         }
-
-        Ok(())
+        self.emit_in(
+            &mut tx,
+            DocumentEvent::Deleted {
+                document_id: id,
+                snapshot,
+            },
+        )
+        .await?;
+        self.commit(tx).await
     }
 
     async fn set_file_path(&self, id: Id, file_path: &str) -> Result<()> {
@@ -518,48 +610,46 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn set_tags(&self, document_id: Id, tag_ids: &[Id]) -> Result<()> {
-        let doc_id_str = document_id.to_string();
-
-        // Delete existing tags
-        sqlx::query("DELETE FROM document_tags WHERE document_id = ?")
-            .bind(&doc_id_str)
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
-
-        // Insert new tags
-        for tag_id in tag_ids {
-            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)")
-                .bind(&doc_id_str)
-                .bind(tag_id.to_string())
-                .execute(&self.pool)
-                .await
-                .map_err(map_sqlx_error)?;
-        }
-
-        Ok(())
+        self.update(
+            document_id,
+            UpdateDocument {
+                tag_ids: Some(tag_ids.to_vec()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn add_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
-        sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)")
-            .bind(document_id.to_string())
-            .bind(tag_id.to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(map_sqlx_error)?;
-
-        Ok(())
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let result =
+            sqlx::query("INSERT OR IGNORE INTO document_tags (document_id, tag_id) VALUES (?, ?)")
+                .bind(document_id.to_string())
+                .bind(tag_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
+                .await?;
+        }
+        self.commit(tx).await
     }
 
     async fn remove_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
-        sqlx::query("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?")
+        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let result = sqlx::query("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?")
             .bind(document_id.to_string())
             .bind(tag_id.to_string())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
-
-        Ok(())
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
+                .await?;
+        }
+        self.commit(tx).await
     }
 }
 
@@ -877,5 +967,46 @@ impl DocumentTypeRepository for SqliteDocumentTypeRepository {
         }
 
         Ok(())
+    }
+}
+
+impl SqliteDocumentRepository {
+    async fn replace_tags(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        document_id: Id,
+        tag_ids: &[Id],
+    ) -> Result<bool> {
+        let mut wanted = tag_ids.to_vec();
+        wanted.sort();
+        wanted.dedup();
+        let current: Vec<String> =
+            sqlx::query_scalar("SELECT tag_id FROM document_tags WHERE document_id = ?")
+                .bind(document_id.to_string())
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        let mut current: Vec<Id> = current
+            .into_iter()
+            .map(|id| parse_uuid(&id))
+            .collect::<Result<_>>()?;
+        current.sort();
+        if current == wanted {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM document_tags WHERE document_id = ?")
+            .bind(document_id.to_string())
+            .execute(&mut **tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        for tag_id in &wanted {
+            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?)")
+                .bind(document_id.to_string())
+                .bind(tag_id.to_string())
+                .execute(&mut **tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
+        Ok(true)
     }
 }

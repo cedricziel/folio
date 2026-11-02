@@ -1981,8 +1981,22 @@
           "events"
         ],
         "summary": "Subscribe to real-time document events",
-        "description": "Each SSE message has the event name from `DocumentEvent` (for example `created`)\nand a JSON `DocumentEvent` as data. Each event is followed by an unnamed message holding the\nTurbo Streams that update the web UI. Comment-only keep-alive frames are sent every 30 seconds.",
+        "description": "Each SSE message has the event name from `DocumentEvent` (for example `created`)\nand a JSON `DocumentEvent` as data. Each event is followed by an unnamed message holding the\nTurbo Streams that update the web UI. Comment-only keep-alive frames are sent every 30 seconds.\n\nMessage ids are the ids of the persisted events. A client that reconnects\nwith `Last-Event-ID` first receives the events it missed (at most 500 from\nthe last hour), then the live stream.",
         "operationId": "streamEvents",
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "Id of the last event received; events after it are replayed first",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Stream of document events",

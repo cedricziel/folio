@@ -1,6 +1,9 @@
 mod common;
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::{Request, State},
@@ -8,6 +11,8 @@ use axum::{
     response::Response,
 };
 use common::Fixture;
+use folio_core::models::Setting;
+use folio_core::ports::SettingsRepository;
 use folio_mcp::{McpAuth, McpOptions};
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::StreamableHttpClientTransport;
@@ -127,7 +132,10 @@ async fn disabled_setting_hides_endpoint() {
     let app = folio_mcp::router(
         fx.library.clone(),
         fx.settings_port(),
-        McpOptions::default(),
+        McpOptions {
+            settings_ttl: Duration::ZERO,
+            ..McpOptions::default()
+        },
     );
     let url = serve(app).await;
     let http = reqwest::Client::new();
@@ -167,5 +175,60 @@ async fn disabled_setting_hides_endpoint() {
     assert!(
         resp.status().is_success(),
         "DB setting overrides config default"
+    );
+}
+
+/// Counts reads against the settings table
+struct CountingSettings {
+    inner: Arc<dyn SettingsRepository>,
+    reads: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl SettingsRepository for CountingSettings {
+    async fn get(&self, key: &str) -> folio_core::Result<Option<Setting>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.get(key).await
+    }
+    async fn list(&self) -> folio_core::Result<Vec<Setting>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.list().await
+    }
+    async fn list_by_prefix(&self, prefix: &str) -> folio_core::Result<Vec<Setting>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.list_by_prefix(prefix).await
+    }
+    async fn set(&self, key: &str, value: &str) -> folio_core::Result<Setting> {
+        self.inner.set(key, value).await
+    }
+    async fn set_many(&self, settings: &[(String, String)]) -> folio_core::Result<()> {
+        self.inner.set_many(settings).await
+    }
+    async fn delete(&self, key: &str) -> folio_core::Result<()> {
+        self.inner.delete(key).await
+    }
+}
+
+#[tokio::test]
+async fn enable_gate_does_not_query_settings_per_request() {
+    let fx = Fixture::new().await;
+    let counting = Arc::new(CountingSettings {
+        inner: fx.settings_port(),
+        reads: AtomicUsize::new(0),
+    });
+    let url = serve(folio_mcp::router(
+        fx.library.clone(),
+        counting.clone(),
+        McpOptions::default(),
+    ))
+    .await;
+    let http = reqwest::Client::new();
+    for _ in 0..5 {
+        http.get(&url).send().await.unwrap();
+    }
+    assert!(
+        counting.reads.load(Ordering::SeqCst) <= 1,
+        "settings were read {} times for 5 requests",
+        counting.reads.load(Ordering::SeqCst)
     );
 }

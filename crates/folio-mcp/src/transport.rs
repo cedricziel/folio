@@ -1,6 +1,7 @@
 //! Streamable HTTP and stdio transports
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Request, State},
@@ -31,6 +32,9 @@ pub struct McpOptions {
     /// Accepted `Host` header values in addition to loopback, which rmcp always
     /// allows to protect local servers from DNS rebinding
     pub allowed_hosts: Vec<String>,
+    /// How long a read of the `mcp.enabled` setting is reused, which is also
+    /// how long a change in /settings takes to apply
+    pub settings_ttl: Duration,
 }
 
 impl Default for McpOptions {
@@ -38,6 +42,7 @@ impl Default for McpOptions {
         Self {
             enabled_by_default: true,
             allowed_hosts: Vec::new(),
+            settings_ttl: Duration::from_secs(5),
         }
     }
 }
@@ -46,6 +51,20 @@ impl Default for McpOptions {
 struct Gate {
     settings: Arc<dyn SettingsRepository>,
     enabled_by_default: bool,
+    ttl: Duration,
+    cached: Arc<Mutex<Option<(Instant, bool)>>>,
+}
+
+impl Gate {
+    async fn enabled(&self) -> bool {
+        let fresh = |(at, value): (Instant, bool)| (at.elapsed() < self.ttl).then_some(value);
+        if let Some(value) = self.cached.lock().unwrap().and_then(fresh) {
+            return value;
+        }
+        let value = is_enabled(self.settings.as_ref(), self.enabled_by_default).await;
+        *self.cached.lock().unwrap() = Some((Instant::now(), value));
+        value
+    }
 }
 
 /// Whether `/mcp` is served: the DB setting wins over the configured default
@@ -57,7 +76,7 @@ pub async fn is_enabled(settings: &dyn SettingsRepository, default: bool) -> boo
 }
 
 async fn enabled_gate(State(gate): State<Gate>, req: Request, next: Next) -> Response {
-    if is_enabled(gate.settings.as_ref(), gate.enabled_by_default).await {
+    if gate.enabled().await {
         next.run(req).await
     } else {
         StatusCode::NOT_FOUND.into_response()
@@ -87,6 +106,8 @@ pub fn router(
     let gate = Gate {
         settings,
         enabled_by_default: options.enabled_by_default,
+        ttl: options.settings_ttl,
+        cached: Arc::default(),
     };
     Router::new()
         .nest_service("/mcp", service)

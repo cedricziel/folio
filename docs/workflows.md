@@ -128,6 +128,13 @@ export function verify(secret, headers, rawBody, toleranceSeconds = 300) {
 - Other responses (for example `404` or `401`) fail the run at once. Redirects are not followed.
 - The run history shows each run's status, attempts, last HTTP status, and last error. After the last attempt the run stays `failed`; Folio does not retry it again.
 
+- A run executes the actions the workflow had when the run was created. Editing a workflow does not change runs that are already queued.
+- Webhook runs have their own worker loop (four at a time), so an unreachable target never delays OCR or thumbnails. If the queue gives up on a run's job for any reason, the run is marked `failed`.
+
+## Durability
+
+Events are written to the database (the `outbox_events` table) in the same transaction as the document change, and a dispatcher then creates the runs. Restarting Folio between a change and its dispatch loses nothing: the pending events are handled after the next start, and handling an event twice never creates a second run. Actions that change a document (tags, correspondent, type) are announced to open browsers like any other change, but do not trigger `document.updated` workflows themselves. Dispatched events are kept for seven days.
+
 **Send test** (`POST /api/workflows/{id}/test`) delivers a sample payload once, signed like a real one, and reports the result. It does not create a run.
 
 ## Network access

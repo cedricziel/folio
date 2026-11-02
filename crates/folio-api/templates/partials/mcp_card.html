@@ -1,0 +1,13 @@
+<div class="panel settings-card">
+    <h2 class="heading">MCP</h2>
+    <p class="hint">Let AI assistants search and organize your archive at <code>/mcp</code>. A change applies within a few seconds.</p>
+
+    <form action="/settings/mcp" method="post">
+        <div class="field">
+            <label><input type="checkbox" name="mcp_enabled" {% if mcp_enabled %}checked{% endif %}> Serve the MCP endpoint</label>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="f-btn f-btn-primary">Save MCP setting</button>
+        </div>
+    </form>
+</div>

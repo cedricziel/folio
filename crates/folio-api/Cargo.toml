@@ -12,7 +12,6 @@ folio-auth = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
-tokio-stream = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 
