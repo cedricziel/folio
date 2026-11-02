@@ -6,6 +6,7 @@
 
 mod anthropic_vision;
 mod none;
+mod ocrmypdf;
 mod ollama_vision;
 mod openai_vision;
 mod tesseract;
@@ -32,6 +33,7 @@ pub fn builtin() -> OcrRegistry {
     let mut r = OcrRegistry::new("OCR");
     r.register("none", none::build)
         .register("tesseract", tesseract::build)
+        .register("ocrmypdf", ocrmypdf::build)
         .register("openai-vision", openai_vision::build)
         .register("anthropic-vision", anthropic_vision::build)
         .register("ollama-vision", ollama_vision::build);
@@ -199,5 +201,34 @@ mod tests {
     async fn non_pdf_goes_straight_to_the_engine() {
         let ocr = TextLayerFirst::new(Arc::new(Fixed("img")));
         assert_eq!(ocr.extract_text(b"x", "image/png").await.unwrap(), "img");
+    }
+
+    #[tokio::test]
+    async fn ocrmypdf_reads_a_rendered_pdf_locally() {
+        let mut ctx = crate::ai::registry::ProviderContext {
+            settings: folio_core::models::PipelineSettings::default(),
+            http: reqwest::Client::new(),
+        };
+        let ocr = builtin().create("ocrmypdf", &ctx).unwrap();
+        if !tool_available("ocrmypdf") {
+            assert!(std::env::var_os("CI").is_none(), "CI must install ocrmypdf");
+            eprintln!("skipping: ocrmypdf not installed");
+            return;
+        }
+        ocr.health().await.unwrap();
+        let out = ocr
+            .extract(&tiny_pdf("Folio invoice reference 4711"), "application/pdf")
+            .await
+            .unwrap();
+        assert_eq!(out.engine, "ocrmypdf");
+        assert!(out.text.contains("4711"), "{}", out.text);
+        ctx.settings.ocr.languages = "eng+folio_missing_language".into();
+        let unavailable = builtin().create("ocrmypdf", &ctx).unwrap();
+        assert!(unavailable
+            .health()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("folio_missing_language"));
     }
 }

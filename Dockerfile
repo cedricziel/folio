@@ -45,6 +45,7 @@ RUN apt-get update \
         poppler-utils \
         imagemagick \
         ghostscript \
+        ocrmypdf \
         tesseract-ocr \
         tesseract-ocr-eng \
         tesseract-ocr-deu \
