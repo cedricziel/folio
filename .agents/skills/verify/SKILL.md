@@ -62,6 +62,31 @@ both short and long absences. macOS screen lock also uses the distributed
 `com.apple.screenIsLocked` notification, so verify it on each supported macOS
 release. These device and visual checks are not covered by the hostless tests.
 
+## Apple inbox navigation
+
+`apple/NavigationTests/project.yml` builds the production workspace, inbox, and
+detail views with a fake service. Its UI test taps a document, returns to the
+list, and opens another document. Model tests alone do not verify row taps.
+
+Generate the fixture outside the checkout with
+`xcodegen generate --spec apple/NavigationTests/project.yml --project "$verify_dir"`.
+Create a fresh iPhone simulator with an installed iOS runtime and save its ID as
+`verify_device`. Run:
+
+```sh
+xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
+  -destination "platform=iOS Simulator,id=$verify_device" \
+  -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
+  -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
+  -parallel-testing-enabled NO -test-timeouts-enabled YES \
+  -maximum-test-execution-time-allowance 45 CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
+```
+
+Bound runner startup separately; XCTest's execution timeout does not cover it.
+On every exit, shut down and delete only `verify_device`, then remove `verify_dir`.
+An accessibility initialization failure before the test taps a row is an
+infrastructure failure, not a navigation regression or a passing check.
+
 ## Apple File Provider
 
 Run `xcrun swift test --package-path apple/FolioKit --scratch-path /tmp/folio-provider-build`.
