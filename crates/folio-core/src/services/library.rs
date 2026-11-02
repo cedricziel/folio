@@ -317,7 +317,11 @@ impl LibraryService {
             None => None,
         };
 
-        if update.title.is_some() || correspondent_id.is_some() || document_type_id.is_some() {
+        if update.title.is_some()
+            || correspondent_id.is_some()
+            || document_type_id.is_some()
+            || tag_ids.is_some()
+        {
             self.documents
                 .update(
                     id,
@@ -326,12 +330,10 @@ impl LibraryService {
                         content: None,
                         correspondent_id,
                         document_type_id,
+                        tag_ids,
                     },
                 )
                 .await?;
-        }
-        if let Some(ids) = tag_ids {
-            self.documents.set_tags(id, &ids).await?;
         }
 
         self.get_document(id).await

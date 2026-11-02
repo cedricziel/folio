@@ -1575,6 +1575,63 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(snapshot.document.title, "renamed");
     assert!(snapshot.tags.is_empty());
 
+    let atomic = r.documents.create(new_document("metadata")).await.unwrap();
+    flush_outbox(&r).await;
+    r.documents
+        .update(
+            atomic.id,
+            UpdateDocument {
+                title: Some("metadata changed".into()),
+                tag_ids: Some(vec![tag.id, tag.id]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        flush_outbox(&r).await.len(),
+        1,
+        "one metadata save emits one event"
+    );
+    r.documents.set_tags(atomic.id, &[tag.id]).await.unwrap();
+    r.documents
+        .update(
+            atomic.id,
+            UpdateDocument {
+                title: Some("metadata changed".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        flush_outbox(&r).await.is_empty(),
+        "unchanged metadata emits no event"
+    );
+    assert!(r
+        .documents
+        .update(
+            atomic.id,
+            UpdateDocument {
+                title: Some("must roll back".into()),
+                tag_ids: Some(vec![Id::new_v4()]),
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(
+        r.documents
+            .find_by_id(atomic.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .title,
+        "metadata changed"
+    );
+    assert_eq!(r.documents.get_tags(atomic.id).await.unwrap()[0].id, tag.id);
+    assert!(flush_outbox(&r).await.is_empty());
+
     // A change whose event cannot be written does not happen either.
     let survivor = r.documents.create(new_document("survivor")).await.unwrap();
     flush_outbox(&r).await;

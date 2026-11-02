@@ -334,12 +334,26 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await?
             .ok_or_else(|| not_found("Document", id))?;
 
-        let title = params.title.unwrap_or(existing.title);
-        let content = params.content.or(existing.content);
+        let title = params.title.unwrap_or_else(|| existing.title.clone());
+        let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
         let now = Utc::now();
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
+
+        let tags_changed = if let Some(tags) = params.tag_ids {
+            self.replace_tags(&mut tx, id, &tags).await?
+        } else {
+            false
+        };
+        if title == existing.title
+            && content == existing.content
+            && correspondent_id == existing.correspondent_id
+            && document_type_id == existing.document_type_id
+            && !tags_changed
+        {
+            return Ok(existing);
+        }
 
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
@@ -505,25 +519,15 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn set_tags(&self, document_id: Id, tag_ids: &[Id]) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
-
-        sqlx::query("DELETE FROM document_tags WHERE document_id = $1")
-            .bind(document_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(repo_err)?;
-
-        for tag_id in tag_ids {
-            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)")
-                .bind(document_id)
-                .bind(tag_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(repo_err)?;
-        }
-        self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-            .await?;
-        self.commit(tx).await
+        self.update(
+            document_id,
+            UpdateDocument {
+                tag_ids: Some(tag_ids.to_vec()),
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn add_tag(&self, document_id: Id, tag_id: Id) -> Result<()> {
@@ -854,5 +858,43 @@ impl DocumentTypeRepository for PostgresDocumentTypeRepository {
             return Err(not_found("DocumentType", id));
         }
         Ok(())
+    }
+}
+
+impl PostgresDocumentRepository {
+    async fn replace_tags(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        document_id: Id,
+        tag_ids: &[Id],
+    ) -> Result<bool> {
+        let mut wanted = tag_ids.to_vec();
+        wanted.sort();
+        wanted.dedup();
+        let current: Vec<Id> =
+            sqlx::query_scalar("SELECT tag_id FROM document_tags WHERE document_id = $1")
+                .bind(document_id)
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(repo_err)?;
+        let mut current = current;
+        current.sort();
+        if current == wanted {
+            return Ok(false);
+        }
+        sqlx::query("DELETE FROM document_tags WHERE document_id = $1")
+            .bind(document_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(repo_err)?;
+        for tag_id in &wanted {
+            sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2)")
+                .bind(document_id)
+                .bind(*tag_id)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_err)?;
+        }
+        Ok(true)
     }
 }
