@@ -2,6 +2,7 @@
 
 mod assets;
 pub mod auth;
+pub(crate) mod browse;
 pub(crate) mod correspondents;
 pub(crate) mod document_types;
 pub(crate) mod documents;
@@ -26,7 +27,7 @@ pub(crate) mod workflows;
 
 pub use events::turbo_streams_for;
 
-use axum::{extract::DefaultBodyLimit, Router};
+use axum::{extract::DefaultBodyLimit, routing::get, Router};
 use tower_http::cors::CorsLayer;
 
 pub use health::HealthChecks;
@@ -122,6 +123,8 @@ fn api_router() -> Router<AppState> {
     Router::new()
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
+        .route("/documents/browse", get(browse::browse_default))
+        .route("/vaults/{vault_id}/documents", get(browse::browse_vault))
         .nest("/tags", tags::router())
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())

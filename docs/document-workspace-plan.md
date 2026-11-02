@@ -90,7 +90,7 @@ Each row includes its first regression test or acceptance check. Use `codex/work
 | 06 | Add text search plus existing filters to the paged backend query. Keep hybrid search unchanged. | 03 | A match outside the first unfiltered page is returned; combined tags use AND; unconfigured AI still returns literal matches. |
 | 07 | Expose Apple filter controls, active-filter chips, sorting, Recently added, and scoped search. | 05, 06 | Search and filters compose; clearing one chip preserves others; added dates and timezone boundaries behave correctly. |
 
-Slice 03 is delivered as 03a, batched tag enrichment using existing routes, then 03b, the paged JSON contract after vault-route integration.
+Slice 03 is delivered as 03a, batched tag enrichment using existing routes, then 03b, paged browsing with per-request access checks. Slice 03b integrates read authorization through the existing access policy and adds `/api/documents/browse` for default-vault clients. Vault management and migration of other routes remain in the access plan.
 
 Milestone exit: users can navigate and retrieve more than 50 documents with combined search and filters. No classification work is needed to benefit from this release.
 

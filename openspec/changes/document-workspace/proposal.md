@@ -8,7 +8,7 @@ The Apple app puts document rows in a narrow sidebar and leaves most of the wind
 
 Implement the sequence in `docs/document-workspace-plan.md`: a reusable document browser, explicit review, taxonomy navigation and management, private saved views, and bulk classification. Deliver the library browser first.
 
-The initial backend increment adds paged repository queries without changing existing callers. JSON route integration depends on the active vault-access change. Preserve the existing web form routes and hybrid search while introducing the new contracts. HTML redesign is outside this change.
+The initial backend increment adds paged repository queries without changing existing callers. JSON browsing uses the access policy delivered by the active vault-access change. The workspace adds read authorization for its two browse routes; vault management and migration of other routes remain separate. Preserve the existing web form routes and hybrid search while introducing the new contracts. HTML redesign is outside this change.
 
 ## Capabilities
 

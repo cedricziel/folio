@@ -9,7 +9,7 @@
 
 ## 3. Library delivery
 - [x] 3.0 Batch document tag enrichment with shared vault-isolation and duplicate-ID regression tests.
-- [ ] 3.1 Implement authorized paged JSON API after vault-route integration, with failing route tests first.
+- [x] 3.1 Implement authorized paged JSON API and default-vault adapter with access-revocation, pagination, and filter regression tests.
 - [x] 3.2 Implement native workspace navigation with failing navigation/restoration tests first.
 - [ ] 3.3 Implement incremental loading, cancellation, and query composition with failing view-model tests first.
 - [ ] 3.4 Implement text search and filter controls, with combined-filter contract tests first.

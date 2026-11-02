@@ -441,3 +441,177 @@ async fn event_stream_closes_before_delivering_events_after_membership_is_revoke
         "a revoked subscriber must receive no event frame"
     );
 }
+
+#[tokio::test]
+async fn browse_pages_are_bounded_and_recheck_vault_access() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "browse-owner").await;
+    let viewer = sign_in(&h, "browse-viewer").await;
+    for title in ["A", "B", "C"] {
+        h.state
+            .document_repo
+            .create(
+                owner.vault,
+                CreateDocument {
+                    title: title.into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let path = format!("/api/vaults/{}/documents?limit=2&sort=title", owner.vault);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let invisible = text(response).await;
+    let unknown = format!("/api/vaults/{}/documents", VaultId::new());
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &unknown, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(text(response).await, invisible);
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            Some(&owner.user),
+        )
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(first["documents"].as_array().unwrap().len(), 2);
+    assert_eq!(first["documents"][0]["title"], "A");
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let next = format!("{path}&cursor={cursor}");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &next, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    let second: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(second["documents"].as_array().unwrap().len(), 1);
+    assert_eq!(second["documents"][0]["title"], "C");
+    assert!(second["next_cursor"].is_null());
+    for suffix in ["limit=0", "limit=101", "sort=invalid", "cursor=garbage"] {
+        let uri = format!("/api/documents/browse?{suffix}");
+        let response = h
+            .app
+            .clone()
+            .oneshot(request("GET", &uri, &owner, Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{suffix}");
+    }
+    let mismatch = format!("/api/documents/browse?sort=oldest&cursor={cursor}");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &mismatch, &owner, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    h.members
+        .revoke(owner.vault, &Principal::User(viewer.user.clone()))
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &next, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", "/api/documents", &owner, Body::empty()))
+        .await
+        .unwrap();
+    let legacy: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(legacy["count"], 3);
+}
+
+#[tokio::test]
+async fn default_browse_keeps_filters_and_enrichment_with_paging_parameters() {
+    let h = common::harness().await;
+    let tag = h
+        .state
+        .tag_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateTag {
+                name: "Insurance".into(),
+                color: Some("#123456".into()),
+            },
+        )
+        .await
+        .unwrap();
+    for title in ["Tagged A", "Tagged B", "Other"] {
+        let doc = h
+            .state
+            .document_repo
+            .create(
+                h.vault,
+                CreateDocument {
+                    title: title.into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        if title.starts_with("Tagged") {
+            h.state
+                .document_repo
+                .add_tag(h.vault, doc.id, tag.id)
+                .await
+                .unwrap();
+        }
+    }
+    let uri = format!("/api/documents/browse?tag_id={}&limit=1&sort=title", tag.id);
+    let response = h.app.clone().oneshot(common::get(&uri)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(first["documents"][0]["title"], "Tagged A");
+    let next = format!("{uri}&cursor={}", first["next_cursor"].as_str().unwrap());
+    let response = h.app.clone().oneshot(common::get(&next)).await.unwrap();
+    let second: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(second["documents"][0]["title"], "Tagged B");
+    assert_eq!(second["documents"][0]["tags"][0]["name"], "Insurance");
+    assert!(second["next_cursor"].is_null());
+    let foreign = h.vault_repository.create("Private", None).await.unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(common::get(&format!(
+            "/api/vaults/{}/documents",
+            foreign.id
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let secured = harness_requiring_login().await;
+    let response = secured
+        .app
+        .clone()
+        .oneshot(common::get("/api/documents/browse"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
