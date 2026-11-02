@@ -2610,6 +2610,103 @@ async fn upload_finalization_contract(db: &Database) {
     );
 }
 
+async fn ocr_completion_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    flush_outbox(&r).await;
+    let doc = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                content: None,
+                ..new_document("OCR transition")
+            },
+        )
+        .await
+        .unwrap();
+    flush_outbox(&r).await;
+
+    let (first, duplicate) = tokio::join!(
+        r.documents.complete_ocr(vault, doc.id, ""),
+        r.documents.complete_ocr(vault, doc.id, ""),
+    );
+    first.unwrap();
+    duplicate.unwrap();
+    let completed = flush_outbox(&r).await;
+    assert_eq!(completed.len(), 1);
+    assert!(
+        matches!(completed[0].event, Some(DocumentEvent::OcrComplete { document_id }) if document_id == doc.id)
+    );
+    assert_eq!(completed[0].envelope.as_ref().unwrap().vault_id(), vault);
+    let empty = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.content.as_deref(), Some(""));
+    assert_eq!(empty.ocr_status, folio_core::models::ProcessingStatus::Done);
+
+    r.documents.complete_ocr(vault, doc.id, "").await.unwrap();
+    assert!(flush_outbox(&r).await.is_empty());
+    assert_eq!(
+        r.documents
+            .find_by_id(vault, doc.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at,
+        empty.updated_at
+    );
+
+    exec(db,
+        &["CREATE TRIGGER refuse_ocr_outbox BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &["CREATE FUNCTION refuse_ocr_outbox() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+          "CREATE TRIGGER refuse_ocr_outbox BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION refuse_ocr_outbox()"],
+    ).await;
+    assert!(r
+        .documents
+        .complete_ocr(vault, doc.id, "must roll back")
+        .await
+        .is_err());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_ocr_outbox"],
+        &[
+            "DROP TRIGGER refuse_ocr_outbox ON outbox_events",
+            "DROP FUNCTION refuse_ocr_outbox()",
+        ],
+    )
+    .await;
+    let retained = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.content.as_deref(), Some(""));
+    assert_eq!(retained.updated_at, empty.updated_at);
+    assert!(flush_outbox(&r).await.is_empty());
+
+    r.documents
+        .complete_ocr(vault, doc.id, "recognized text")
+        .await
+        .unwrap();
+    assert_eq!(flush_outbox(&r).await.len(), 1);
+    assert!(is_not_found(
+        r.documents
+            .complete_ocr(VaultId::new(), doc.id, "wrong vault")
+            .await
+    ));
+    r.documents.delete(vault, doc.id).await.unwrap();
+    flush_outbox(&r).await;
+    assert!(is_not_found(
+        r.documents.complete_ocr(vault, doc.id, "trashed").await
+    ));
+    assert!(flush_outbox(&r).await.is_empty());
+}
+
 async fn outbox_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
@@ -2671,7 +2768,7 @@ async fn outbox_contract(db: &Database) {
     let events = flush_outbox(&r).await;
     let seen: Vec<_> = events
         .iter()
-        .map(|e| (e.event.as_ref().unwrap().event_type(), e.origin))
+        .filter_map(|e| e.event.as_ref().map(|event| (event.event_type(), e.origin)))
         .collect();
     assert_eq!(
         seen,
@@ -2688,7 +2785,7 @@ async fn outbox_contract(db: &Database) {
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
     assert!(events
         .iter()
-        .all(|e| e.event.as_ref().unwrap().document_id() == doc.id));
+        .all(|e| e.envelope.as_ref().and_then(|event| event.document_id()) == Some(doc.id)));
     assert!(matches!(
         events.last().unwrap().event,
         Some(DocumentEvent::Trashed { .. })
@@ -2728,9 +2825,13 @@ async fn outbox_contract(db: &Database) {
         .await
         .unwrap();
     assert_eq!(
-        flush_outbox(&r).await.len(),
+        flush_outbox(&r)
+            .await
+            .iter()
+            .filter(|event| event.event.is_some())
+            .count(),
         1,
-        "one metadata save emits one event"
+        "one metadata save emits one compatibility projection"
     );
     r.documents
         .set_tags(vault, atomic.id, &[tag.id])
@@ -3663,6 +3764,7 @@ async fn run_contract(db: &Database) {
     event_context_contract(db).await;
     upload_finalization_contract(db).await;
     outbox_contract(db).await;
+    ocr_completion_contract(db).await;
     run_atomicity_contract(db).await;
     auth_contract(&repos).await;
     mfa_contract(&repos).await;

@@ -885,9 +885,19 @@ async fn local_actions_are_announced_but_never_trigger_workflows() {
     );
 
     let events = h.pending_events().await;
-    assert_eq!(events.len(), 2, "the tag edit and the correspondent change");
-    assert!(events.iter().all(|e| e.origin == EventOrigin::Workflow
-        && matches!(e.event, Some(DocumentEvent::Updated { document_id }) if document_id == doc.id)));
+    let projections: Vec<_> = events
+        .iter()
+        .filter(|event| event.event.is_some())
+        .collect();
+    assert_eq!(
+        projections.len(),
+        2,
+        "the tag edit and the correspondent change"
+    );
+    assert!(events
+        .iter()
+        .all(|event| event.origin == EventOrigin::Workflow));
+    assert!(projections.iter().all(|event| matches!(event.event, Some(DocumentEvent::Updated { document_id }) if document_id == doc.id)));
 
     // Dispatching them reaches live clients but starts no workflow.
     let broadcaster = EventBroadcaster::default();

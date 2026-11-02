@@ -83,3 +83,6 @@ pub(crate) fn map_write_error(
         _ => folio_core::error::Error::Repository(e.to_string()),
     }
 }
+
+mod saved_view_repo;
+pub use saved_view_repo::PostgresSavedViewRepository;

@@ -143,6 +143,33 @@ fn workflow_body(url: &str) -> Value {
     })
 }
 
+#[tokio::test]
+async fn condition_groups_survive_api_storage_and_html_edits() {
+    let app = test_app().await;
+    let groups = json!({
+        "any": [{"filename_glob": "invoice-*"}, {"mime_type": "image/*"}],
+        "none": [{"filename_glob": "draft-*"}]
+    });
+    let mut body = workflow_body("https://example.com/hook");
+    body["conditions"] = groups.clone();
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["conditions"], groups);
+    let id = created["id"].as_str().unwrap();
+
+    let response = app.router.clone().oneshot(
+        Request::post(format!("/workflows/{id}"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("name=Grouped&trigger=document.uploaded&enabled=on&webhook_url=https%3A%2F%2Fexample.com%2Fhook"))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["name"], "Grouped");
+    assert_eq!(stored["conditions"], groups);
+}
+
 /// A receiver that records requests and answers with a fixed status
 async fn receiver(status: u16) -> (String, Arc<Mutex<Vec<(HeaderMap, String)>>>) {
     type Log = Arc<Mutex<Vec<(HeaderMap, String)>>>;

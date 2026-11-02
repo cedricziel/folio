@@ -5661,6 +5661,22 @@
         "type": "object",
         "description": "Conditions a document must meet; every set condition has to match",
         "properties": {
+          "all": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditions"
+            }
+          },
+          "any": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditions"
+            },
+            "description": "Omitted means unconstrained; an empty list never matches."
+          },
           "correspondent_id": {
             "type": [
               "string",
@@ -5690,6 +5706,12 @@
               "null"
             ],
             "description": "MIME type, exact or with a wildcard subtype such as `image/*`"
+          },
+          "none": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditions"
+            }
           },
           "source": {
             "$ref": "#/components/schemas/SourceConditions",
