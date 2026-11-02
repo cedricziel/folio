@@ -1341,8 +1341,8 @@ async fn ingestion_contract(r: &Repositories) {
     );
     r.sources.delete(vault, created.id).await.unwrap();
     assert!(r.sources.find(vault, created.id).await.unwrap().is_none());
-    assert!(r.sources.status(created.id).await.unwrap().is_none());
-    assert!(is_not_found(r.sources.delete(vault, created.id).await));
+    assert_eq!(r.sources.status(created.id).await.unwrap(), Some(saved));
+    r.sources.delete(vault, created.id).await.unwrap();
 
     // Ledger: the first insert wins, later ones report false
     let entry = LedgerEntry {

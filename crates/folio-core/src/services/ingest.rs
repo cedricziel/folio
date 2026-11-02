@@ -269,6 +269,7 @@ pub struct IngestScheduler {
 
 /// Feeds one pipeline from sources that do not know about vaults
 struct BoundSink {
+    managed: Option<Arc<dyn SourceRepository>>,
     vault: VaultId,
     inner: Arc<dyn VaultIngest>,
 }
@@ -276,6 +277,11 @@ struct BoundSink {
 #[async_trait]
 impl IngestSink for BoundSink {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
+        if let Some(repo) = &self.managed {
+            if repo.find(self.vault, source_id).await?.is_none() {
+                return Err(Error::Conflict("This ingestion source is deleted".into()));
+            }
+        }
         self.inner.ingest(self.vault, source_id, item).await
     }
 }
@@ -382,10 +388,13 @@ impl IngestScheduler {
             };
             info!("Starting ingestion source '{}'", def.name);
             let handle = tokio::spawn(run_source(
+                (def.origin == crate::models::SourceOrigin::Managed).then_some(vault),
                 def.id,
                 def.name.clone(),
                 source,
                 Arc::new(BoundSink {
+                    managed: (def.origin == crate::models::SourceOrigin::Managed)
+                        .then(|| Arc::clone(&self.managed)),
                     vault,
                     inner: Arc::clone(&self.sink),
                 }),
@@ -406,6 +415,7 @@ fn failed_status(error: &str) -> SourceStatus {
 }
 
 async fn run_source(
+    managed_vault: Option<VaultId>,
     id: Id,
     name: String,
     source: Box<dyn crate::ports::IngestionSource>,
@@ -422,6 +432,17 @@ async fn run_source(
             _ = shutdown.changed() => if *shutdown.borrow() { return },
         }
 
+        if let Some(vault) = managed_vault {
+            match repo.find(vault, id).await {
+                Ok(Some(def)) if def.enabled => {}
+                Ok(_) => return,
+                Err(error) => {
+                    warn!("Could not verify ingestion source '{name}': {error}");
+                    wait = interval;
+                    continue;
+                }
+            }
+        }
         let (status, next) = match source.poll(sink.as_ref()).await {
             Ok(PollReport {
                 imported,

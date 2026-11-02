@@ -11,6 +11,7 @@
 
 mod health;
 pub mod postgres;
+mod source_lifecycle;
 pub mod sqlite;
 
 use std::sync::Arc;

@@ -69,9 +69,17 @@ pub trait DocumentImporter: Send + Sync {
 /// Persistence for managed sources and the status of every source
 #[async_trait]
 pub trait SourceRepository: Send + Sync {
+    /// Active managed sources within the vault.
     async fn list(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>>;
-    /// Every managed source of every vault, for the scheduler
+    /// Every active managed source of every vault, for the scheduler
     async fn list_all(&self) -> Result<Vec<IngestionSourceDef>>;
+    /// Retained managed sources excluded from normal reads and scheduling.
+    async fn list_deleted(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>>;
+    /// Look up a retained source only within its vault.
+    async fn find_deleted(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>>;
+    /// Restore the same identity; an active name collision returns a duplicate error.
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<IngestionSourceDef>;
+    /// An active managed source; deleted sources are hidden.
     async fn find(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>>;
     async fn create(
         &self,
@@ -84,6 +92,7 @@ pub trait SourceRepository: Send + Sync {
         id: Id,
         input: IngestionSourceInput,
     ) -> Result<IngestionSourceDef>;
+    /// Move to trash without dropping status or ledger history; repeated deletion is a no-op.
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;
     async fn save_status(&self, id: Id, status: &SourceStatus) -> Result<()>;
     async fn status(&self, id: Id) -> Result<Option<SourceStatus>>;
