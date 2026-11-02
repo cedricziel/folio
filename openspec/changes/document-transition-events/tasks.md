@@ -4,7 +4,7 @@
 
 ## 2. Transactional producers
 - [x] Add failing delta tests for nullable IDs, title changes, duplicate tags, and equivalent reordered sets; implement pure delta derivation.
-- [ ] Add failing SQLite/PostgreSQL repository contracts for update/add/remove/set ingress, rollback, no-op, and immutable context; append transitions atomically.
+- [x] Add failing SQLite/PostgreSQL repository contracts for update/add/remove/set ingress, rollback, no-op, and immutable context; append transitions atomically.
 - [ ] Add failing move and purge contracts for scoped snapshots, retries, and distinct request/completion; implement lifecycle producers.
 - [ ] Add failing HTTP/MCP/workflow/bulk regressions for applicable ingress paths and source-context authorization.
 
@@ -19,6 +19,9 @@
 
 ## Verification record
 
-Initial delta suite failed with missing `folio_core::document_transitions`, then all four tests passed after implementation. After fast-forwarding the task branch to `2da7bff`, `cargo test -p folio-core` passed all 50 tests and `cargo clippy -p folio-core --all-targets -- -D warnings` passed. `make format`, `git diff --check`, and strict OpenSpec validation passed. These scoped checks do not replace the pending full workspace and client verification. The pure delta API is committed as `17e025a` after scoped checks; full workspace lint is running before merge.
+- [PR #261](https://github.com/cedricziel/folio/pull/261) merged the pure delta API and contract as `3355716`. Core tests, Clippy, strict OpenSpec validation, required workspace CI, embedding builds, end-to-end tests, and both container builds passed.
+- Actor #258, ownership #260, envelope #265, and lineage #266 are merged prerequisites. The shared workflow registry is a separate integration.
+- SQLite regression contracts first failed on missing title/tag/move/purge events. Metadata producers then passed six SQLite/PostgreSQL contracts, eight repository contracts, and 35 workflow tests with Docker required.
+- HTML/API classification forms and MCP metadata edits pass their focused ingress checks. Core lineage and cross-vault batch tests pass. Move/purge producers and workflow controls remain pending.
 
-Task worktree: `/private/tmp/folio-document-events`, branch `codex/document-events`. Dependency monitoring: `finish-document-transition-events`. The first PR contains only the pure delta API and this contract; publication is in progress. Foundation envelope/transactional publisher and workflow registry are not merged. Next: inspect merged dependencies, rebase this isolated branch, integrate producer deltas and trigger controls, then run full verification and ship.
+- [PR #271](https://github.com/cedricziel/folio/pull/271) contains `metadata_envelopes` and transactional metadata producers. Commits `35a3ef2` and `a722013` define the date-event integration boundary. Required CI gates merge.
