@@ -89,10 +89,13 @@ Folio watches the folder for changes and also rescans it every `rescan_secs`, be
 Every `poll_interval_secs` Folio logs in, searches each mailbox with `criteria` (`UNSEEN` by default), and imports the attachments whose content type is in `allowed_content_types`. Wildcards such as `image/*` work; an attachment sent as `application/octet-stream` is judged by its file name. Inline images (signature logos) are ignored. Messages are fetched without marking them read, so a failed import leaves them unread and they are tried again.
 
 - **Message as a document.** With `mail_body = "eml"`, the whole message is stored as an `.eml` file in addition to its attachments. Rendering a message to PDF would need a layout engine and fonts and would still lose fidelity; `.eml` keeps everything, headers and inline content included, and any mail client opens it.
-- **After import.** `mark_read` sets `\Seen`, `move` copies the message to `move_to` and removes it from the mailbox, `delete` removes it. These apply only when every attachment of the message was handled.
+- **After import.** `mark_read` sets `\Seen`. `move` uses `UID MOVE` when the server advertises MOVE. Otherwise, it requires UIDPLUS, copies the message to `move_to`, and removes only that UID with `UID EXPUNGE`. `delete` requires UIDPLUS and removes only the imported UID. These actions apply only when every attachment of the message was handled. Unrelated messages, including messages another client marked deleted, retain their flags and stay in the mailbox.
+- **Unsupported cleanup.** Without UIDPLUS, Delete leaves the source message unchanged. When the server advertises neither MOVE nor UIDPLUS, Move leaves the source message unchanged and makes no destination copy. Folio logs the cleanup failure and retains the import ledger entry, so retrying cleanup does not import the document again. Rejected cleanup commands never trigger a mailbox-wide expunge.
 - **Idempotency.** Folio records each processed message id. A message that turns unread again, or whose clean-up failed, is not imported a second time.
 - **TLS.** Connections use implicit TLS (`security = "tls"`, usually port 993). `accept_invalid_certs` allows self-signed certificates, `plain` disables encryption and belongs on trusted networks only. STARTTLS is not supported yet.
 - **Authentication.** Password login only. OAuth2 for Gmail and Microsoft 365 is planned as a later phase; until then use an app password.
+
+On versions before the scoped IMAP cleanup fix, use **Mark Read** or disable the email source as a temporary mitigation. Move and Delete on those versions can expunge unrelated messages already marked deleted by another mail client.
 
 ## De-duplication
 

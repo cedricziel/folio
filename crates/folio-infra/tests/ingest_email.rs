@@ -1,8 +1,10 @@
-//! IMAP ingestion against a GreenMail container.
+//! IMAP ingestion against isolated loopback mailboxes and a GreenMail container.
 //!
-//! Needs Docker. Without it the tests are skipped unless `FOLIO_REQUIRE_DOCKER` is set.
+//! GreenMail tests need Docker and skip without it unless `FOLIO_REQUIRE_DOCKER` is set.
 
 mod common;
+#[path = "common/imap.rs"]
+mod imap;
 
 use std::sync::{Arc, Mutex};
 
@@ -205,37 +207,86 @@ async fn imports_allowed_attachments_once_and_marks_the_mail_read() {
     assert_eq!(sink.0.lock().unwrap().len(), 1);
 }
 
+async fn seed_cleanup_mailbox(gm: &GreenMail, user: &str) {
+    gm.seed(
+        user,
+        &[
+            mail(
+                "imported",
+                "a@x.test",
+                "Import me",
+                &[("a.pdf", "application/pdf", PDF)],
+            ),
+            mail("unrelated", "b@x.test", "Keep me", &[]),
+        ],
+    )
+    .await;
+    let mut session = gm.login(user).await;
+    session.select("INBOX").await.unwrap();
+    session
+        .uid_store("2", "+FLAGS (\\Seen \\Deleted)")
+        .await
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    session.logout().await.unwrap();
+}
+
+async fn assert_unrelated_mail_remains(gm: &GreenMail, user: &str) {
+    let mut session = gm.login(user).await;
+    session.select("INBOX").await.unwrap();
+    let uids = session.uid_search("ALL").await.unwrap();
+    assert_eq!(
+        uids,
+        [2].into_iter().collect(),
+        "only unrelated UID 2 remains"
+    );
+    let deleted = session.uid_search("DELETED").await.unwrap();
+    assert_eq!(
+        deleted, uids,
+        "the unrelated message keeps its deleted flag"
+    );
+    session.logout().await.unwrap();
+}
+
 #[tokio::test]
-async fn after_import_can_move_or_delete_the_mail() {
+async fn move_preserves_unrelated_pre_deleted_mail() {
     let Some(gm) = GreenMail::start().await else {
         return;
     };
-    let h = Harness::new().await;
-    let pdf = [("a.pdf", "application/pdf", PDF)];
-
-    gm.seed("mover", &[mail("m1", "a@x.test", "Move me", &pdf)])
-        .await;
+    seed_cleanup_mailbox(&gm, "mover").await;
     let mut session = gm.login("mover").await;
     session.create("Processed").await.unwrap();
     session.logout().await.unwrap();
+    let h = Harness::new().await;
     let mut config = gm.config("mover");
     config.after_import = MailAfterImport::Move;
     config.move_to = Some("Processed".into());
     let sink = Collect::default();
-    gm.source(config, &h).poll(&sink).await.unwrap();
-    assert!(
-        gm.flags("mover", "INBOX").await.is_empty(),
-        "left the inbox"
-    );
-    assert_eq!(gm.flags("mover", "Processed").await.len(), 1);
 
-    gm.seed("deleter", &[mail("d1", "a@x.test", "Delete me", &pdf)])
-        .await;
+    let report = gm.source(config, &h).poll(&sink).await.unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_unrelated_mail_remains(&gm, "mover").await;
+    assert_eq!(gm.flags("mover", "Processed").await.len(), 1);
+}
+
+#[tokio::test]
+async fn delete_preserves_unrelated_pre_deleted_mail() {
+    let Some(gm) = GreenMail::start().await else {
+        return;
+    };
+    seed_cleanup_mailbox(&gm, "deleter").await;
+    let h = Harness::new().await;
     let mut config = gm.config("deleter");
     config.after_import = MailAfterImport::Delete;
-    gm.source(config, &h).poll(&sink).await.unwrap();
-    assert!(gm.flags("deleter", "INBOX").await.is_empty());
-    assert_eq!(sink.0.lock().unwrap().len(), 2);
+    let sink = Collect::default();
+
+    let report = gm.source(config, &h).poll(&sink).await.unwrap();
+
+    assert_eq!(report.imported, 1);
+    assert_unrelated_mail_remains(&gm, "deleter").await;
 }
 
 #[tokio::test]
@@ -315,4 +366,99 @@ async fn tls_connections_and_failed_logins_are_reported() {
     let mut unreachable = gm.config("carol");
     unreachable.port = 1;
     assert!(gm.source(unreachable, &h).test().await.is_err());
+}
+
+async fn cleanup_state(
+    capabilities: &'static str,
+    action: MailAfterImport,
+    rejected: Option<&'static str>,
+) -> imap::MailboxState {
+    let mailbox = imap::ImapMailbox::start(capabilities, rejected).await;
+    let h = Harness::new().await;
+    let config = serde_json::from_value(serde_json::json!({
+        "host": "127.0.0.1", "port": mailbox.port, "security": "plain",
+        "username": "fixture", "password": "fixture", "mail_body": "eml",
+        "after_import": action, "move_to": "Processed",
+    }))
+    .unwrap();
+    let source = EmailSource::new(
+        h.source_id,
+        "fixture",
+        config,
+        h.ledger.clone(),
+        Some(h.vault),
+    );
+    let sink = Collect::default();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(5), source.poll(&sink))
+        .await
+        .expect("IMAP poll did not finish")
+        .unwrap();
+    assert_eq!(report.imported, 1);
+    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    mailbox.state().await
+}
+
+#[tokio::test]
+async fn uidplus_delete_removes_only_the_imported_uid() {
+    let state = cleanup_state("UIDPLUS", MailAfterImport::Delete, None).await;
+    assert!(!state.imported_present);
+    assert!(state.unrelated_present && state.unrelated_deleted);
+    assert_eq!(state.destination_copies, 0);
+}
+
+#[tokio::test]
+async fn move_extension_works_without_uidplus() {
+    let state = cleanup_state("MOVE", MailAfterImport::Move, None).await;
+    assert!(!state.imported_present);
+    assert!(state.unrelated_present && state.unrelated_deleted);
+    assert_eq!(state.destination_copies, 1);
+}
+
+#[tokio::test]
+async fn uidplus_move_fallback_preserves_unrelated_deleted_mail() {
+    let state = cleanup_state("UIDPLUS", MailAfterImport::Move, None).await;
+    assert!(!state.imported_present);
+    assert!(state.unrelated_present && state.unrelated_deleted);
+    assert_eq!(state.destination_copies, 1);
+}
+
+fn unchanged_mailbox() -> imap::MailboxState {
+    imap::MailboxState {
+        imported_present: true,
+        imported_deleted: false,
+        unrelated_present: true,
+        unrelated_deleted: true,
+        destination_copies: 0,
+    }
+}
+
+#[tokio::test]
+async fn delete_without_uidplus_leaves_source_flags_unchanged() {
+    assert_eq!(
+        cleanup_state("MOVE", MailAfterImport::Delete, None).await,
+        unchanged_mailbox()
+    );
+}
+
+#[tokio::test]
+async fn move_without_move_or_uidplus_leaves_both_mailboxes_unchanged() {
+    assert_eq!(
+        cleanup_state("", MailAfterImport::Move, None).await,
+        unchanged_mailbox()
+    );
+}
+
+#[tokio::test]
+async fn rejected_uid_expunge_never_falls_back_to_mailbox_expunge() {
+    let state = cleanup_state("UIDPLUS", MailAfterImport::Delete, Some("UID EXPUNGE")).await;
+    assert!(state.imported_present && state.imported_deleted);
+    assert!(state.unrelated_present && state.unrelated_deleted);
+}
+
+#[tokio::test]
+async fn rejected_uid_move_never_falls_back_to_copy_or_expunge() {
+    assert_eq!(
+        cleanup_state("MOVE UIDPLUS", MailAfterImport::Move, Some("UID MOVE")).await,
+        unchanged_mailbox()
+    );
 }
