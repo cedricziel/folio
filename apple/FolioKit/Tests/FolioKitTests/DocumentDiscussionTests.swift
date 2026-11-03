@@ -64,6 +64,60 @@ struct DocumentDiscussionTests {
         #expect(model.error != nil)
     }
 
+    @Test func rejectedCreateUnlocksTheDraftWithAFreshKey() async throws {
+        let service = RejectingDiscussionStub(failure: .server(status: 422, message: "Too long"))
+        let model = DocumentDiscussionViewModel(documentID: UUID(), service: service)
+        await model.load()
+        model.beginAdding()
+        model.draft = "Rejected"
+        let key = try #require(model.creationKey)
+        await model.save()
+        #expect(!model.draftIsLocked)
+        #expect(model.isEditing)
+        #expect(model.creationKey != key)
+        #expect(model.error != nil)
+    }
+
+    @Test func cancellingALockedDraftReloadsCommittedEntries() async throws {
+        let service = RejectingDiscussionStub(failure: .unreachable)
+        let model = DocumentDiscussionViewModel(documentID: UUID(), service: service)
+        await model.load()
+        model.beginAdding()
+        model.draft = "Maybe stored"
+        await model.save()
+        #expect(model.draftIsLocked)
+        await service.commitLostEntry()
+        model.cancel()
+        while model.entries.count < 2 { await Task.yield() }
+        #expect(model.entries.map(\.body).contains("Maybe stored"))
+    }
+
+    @Test func entriesDeletedElsewhereLeaveTheList() async throws {
+        let service = RejectingDiscussionStub(failure: .server(status: 404, message: nil))
+        let model = DocumentDiscussionViewModel(documentID: UUID(), service: service)
+        await model.load()
+        let entry = try #require(model.entries.first)
+        model.beginEditing(entry)
+        model.draft = "Too late"
+        await model.save()
+        #expect(!model.isEditing)
+        #expect(model.entries.isEmpty)
+
+        await model.load()
+        await model.delete(try #require(model.entries.first))
+        #expect(model.entries.isEmpty)
+        #expect(model.error == nil)
+    }
+
+    @Test func deniedWritesClearPreviouslyLoadedEntries() async throws {
+        let service = RejectingDiscussionStub(failure: .server(status: 403, message: nil))
+        let model = DocumentDiscussionViewModel(documentID: UUID(), service: service)
+        await model.load()
+        await model.delete(try #require(model.entries.first))
+        #expect(model.entries.isEmpty)
+        #expect(!model.canCreate)
+    }
+
     @Test func revokedAccessClearsPreviouslyLoadedEntries() async {
         let service = DiscussionStub()
         let model = DocumentDiscussionViewModel(documentID: UUID(), service: service)
@@ -109,6 +163,34 @@ private actor DiscussionStub: DocumentEntryService {
         if keys.count == 1 { throw FolioError.unreachable }
         return entry
     }
+}
+
+private actor RejectingDiscussionStub: DocumentEntryService {
+    let failure: FolioError
+    private var stored: [DocumentEntry]
+
+    init(failure: FolioError) {
+        self.failure = failure
+        stored = [Self.make("Existing", at: 1)]
+    }
+
+    private static func make(_ body: String, at time: TimeInterval) -> DocumentEntry {
+        DocumentEntry(
+            id: UUID(), documentID: UUID(), vaultID: UUID(), kind: .note, body: body,
+            createdAt: Date(timeIntervalSince1970: time), updatedAt: Date(timeIntervalSince1970: time),
+            createdBy: "author", canEdit: true, canDelete: true)
+    }
+
+    func commitLostEntry() { stored.append(Self.make("Maybe stored", at: 2)) }
+
+    func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) -> DocumentEntryPage {
+        DocumentEntryPage(entries: stored, nextCursor: nil, canCreate: true)
+    }
+    func createEntry(documentID: UUID, kind: DocumentEntryKind, body: String, key: UUID) throws -> DocumentEntry {
+        throw failure
+    }
+    func updateEntry(documentID: UUID, entryID: UUID, body: String) throws -> DocumentEntry { throw failure }
+    func deleteEntry(documentID: UUID, entryID: UUID) throws { throw failure }
 }
 
 private actor PagedDiscussionStub: DocumentEntryService {

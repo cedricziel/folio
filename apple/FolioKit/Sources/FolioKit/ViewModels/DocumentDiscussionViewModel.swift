@@ -58,15 +58,8 @@ public final class DocumentDiscussionViewModel {
             canCreate = page.canCreate
         } catch {
             guard current == generation else { return }
-            if let failure = error as? FolioError {
-                switch failure {
-                case .signInRequired, .server(status: 403, message: _), .server(status: 404, message: _):
-                    entries = []
-                    nextCursor = nil
-                    canCreate = false
-                default: break
-                }
-            }
+            if Self.status(of: error) == 404 { revokeAccess() }
+            revokeAccessIfDenied(error)
             self.error = error.localizedDescription
         }
         if current == generation { isLoading = false }
@@ -94,6 +87,11 @@ public final class DocumentDiscussionViewModel {
 
     public func cancel() {
         guard !isSaving else { return }
+        if draftIsLocked { Task { await load() } }
+        closeEditor()
+    }
+
+    private func closeEditor() {
         draft = ""
         creationKey = nil
         editingID = nil
@@ -123,10 +121,19 @@ public final class DocumentDiscussionViewModel {
             isLoading = false
             merge([saved])
             isSaving = false
-            cancel()
+            closeEditor()
         } catch {
-            self.error = error.localizedDescription
             isSaving = false
+            let status = Self.status(of: error)
+            if let editingID, status == 404 {
+                entries.removeAll { $0.id == editingID }
+                closeEditor()
+            } else if creationKey != nil, let status, (400..<500).contains(status), ![408, 409, 425, 429].contains(status) {
+                creationKey = UUID()
+                submittedBody = nil
+            }
+            revokeAccessIfDenied(error)
+            self.error = error.localizedDescription
         }
     }
 
@@ -150,7 +157,30 @@ public final class DocumentDiscussionViewModel {
             generation += 1
             isLoading = false
             entries.removeAll { $0.id == entry.id }
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            if Self.status(of: error) == 404 {
+                entries.removeAll { $0.id == entry.id }
+            } else {
+                revokeAccessIfDenied(error)
+                self.error = error.localizedDescription
+            }
+        }
         isSaving = false
+    }
+
+    private static func status(of error: any Error) -> Int? {
+        if case .server(let status, _) = error as? FolioError { return status }
+        return nil
+    }
+
+    private func revokeAccessIfDenied(_ error: any Error) {
+        if case .signInRequired = error as? FolioError { revokeAccess() }
+        if Self.status(of: error) == 403 { revokeAccess() }
+    }
+
+    private func revokeAccess() {
+        entries = []
+        nextCursor = nil
+        canCreate = false
     }
 }
