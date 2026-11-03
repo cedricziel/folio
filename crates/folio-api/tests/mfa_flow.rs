@@ -526,6 +526,34 @@ async fn password_change_signs_out_other_devices() {
 }
 
 #[tokio::test]
+async fn password_change_invalidates_pending_second_factor_logins() {
+    let w = world().await;
+    let (mut here, totp, _codes) = enroll(&w).await;
+    let mut there = Browser::new(&w.app);
+    there.password_login("ada", PASSWORD).await;
+
+    let csrf = here.csrf().await;
+    let code = totp.generate(now() as u64 + 30).to_string();
+    let new = "an entirely new passphrase";
+    let done = here
+        .form(
+            "/settings/security/password",
+            &[
+                ("csrf", &csrf),
+                ("current_password", PASSWORD),
+                ("new_password", new),
+                ("confirm_password", new),
+            ],
+        )
+        .await;
+    assert!(done.location().contains("n=password"));
+
+    let finished = there.submit_code(&code).await;
+    assert_eq!(finished.location(), "/login");
+    assert!(!there.has_session());
+}
+
+#[tokio::test]
 async fn sign_out_everywhere_and_revoking_clients() {
     let w = world().await;
     let mut a = Browser::new(&w.app);
