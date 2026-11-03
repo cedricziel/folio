@@ -192,6 +192,7 @@ impl LibraryService {
             search_query: None,
             created_after: query.created_after,
             created_before: query.created_before,
+            ..Default::default()
         };
 
         let mut hits: Vec<(Document, Option<f32>)> = Vec::new();

@@ -214,15 +214,18 @@ public struct LiveFolioService: FolioService {
             let input = Operations.BrowseDocuments.Input.Query(
                 q: query.text.isEmpty ? nil : query.text,
                 limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
+                reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                documentDateTo: filter.documentDateTo?.rawValue,
                 correspondentId: filter.correspondentID?.uuidString.lowercased(),
                 documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
                 tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
                 createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
             )
             let page = try await client.browseDocuments(query: input).ok.body.json
+            try requireReviewFilters(filter, supported: page.supportsDocumentReviewFilters)
             return try DocumentPage(
                 vaultID: Self.uuid(page.vaultId), documents: page.documents.map { try Document($0) },
-                nextCursor: page.nextCursor
+                nextCursor: page.nextCursor, supportsReviewFilters: page.supportsDocumentReviewFilters == true
             )
         }
     }
@@ -230,6 +233,15 @@ public struct LiveFolioService: FolioService {
     public func document(id: Document.ID) async throws -> Document {
         try await call("documents.get") {
             try await Document(client.getDocument(path: .init(id: id.uuidString.lowercased())).ok.body.json)
+        }
+    }
+
+    public func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document {
+        try await call("documents.review") {
+            try await Document(
+                client.setDocumentReview(
+                    path: .init(id: id.uuidString.lowercased()), body: .json(.init(reviewed: reviewed))
+                ).ok.body.json)
         }
     }
 
@@ -257,12 +269,23 @@ public struct LiveFolioService: FolioService {
     public func documents(filter: DocumentFilter) async throws -> [Document] {
         try await call("documents.filter") {
             let query = Operations.ListDocuments.Input.Query(
+                reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                documentDateTo: filter.documentDateTo?.rawValue,
                 correspondentId: filter.correspondentID?.uuidString.lowercased(),
                 documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
                 tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
                 createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
             )
-            return try await client.listDocuments(query: query).ok.body.json.documents.map { try Document($0) }
+            let response = try await client.listDocuments(query: query).ok.body.json
+            try requireReviewFilters(filter, supported: response.supportsDocumentReviewFilters)
+            return try response.documents.map { try Document($0) }
+        }
+    }
+
+    private func requireReviewFilters(_ filter: DocumentFilter, supported: Bool?) throws {
+        if filter.requiresReviewSupport && supported != true {
+            throw FolioError.server(
+                status: 501, message: "This server does not support review and document date filters.")
         }
     }
 
@@ -578,6 +601,7 @@ extension Document {
             pageCount: raw.pageCount.map(Int.init),
             ocrStatus: .init(raw.ocrStatus), embedStatus: .init(raw.embedStatus),
             documentDate: LiveFolioService.documentDate(raw.documentDate),
+            reviewedAt: raw.reviewedAt, reviewedBy: raw.reviewedBy, reviewOrigin: raw.reviewOrigin,
             createdAt: raw.createdAt, updatedAt: raw.updatedAt
         )
     }
@@ -600,6 +624,8 @@ extension Document {
     init(_ raw: Components.Schemas.DocumentView) throws {
         try self.init(raw.value1)
         canEditDocumentDate = raw.value2.canEditDocumentDate ?? false
+        canReviewDocument = raw.value2.canReviewDocument ?? false
+        reviewed = raw.value2.reviewed
         tags = try raw.value2.tags.map {
             try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
         }

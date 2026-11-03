@@ -221,22 +221,24 @@ impl Document {
 pub enum DocumentStatus {
     /// Text has not been extracted yet
     Processing,
-    /// Folio could not read the file
+    /// A processing stage failed
     Failed,
-    /// Read, but not yet assigned a correspondent or a document type
+    /// Processing finished; no explicit review decision exists
     NeedsReview,
-    /// Read and assigned a correspondent or a document type
+    /// Reviewed with no active or failed processing
     Filed,
 }
 
 impl Document {
     /// Derive the document's inbox status from what is known about it
     pub fn status(&self) -> DocumentStatus {
-        if self.ocr_status.is_active() {
-            DocumentStatus::Processing
-        } else if self.ocr_status == ProcessingStatus::Failed {
+        if self.ocr_status == ProcessingStatus::Failed
+            || self.embed_status == ProcessingStatus::Failed
+        {
             DocumentStatus::Failed
-        } else if self.correspondent_id.is_none() && self.document_type_id.is_none() {
+        } else if self.ocr_status.is_active() || self.embed_status.is_active() {
+            DocumentStatus::Processing
+        } else if self.reviewed_at.is_none() {
             DocumentStatus::NeedsReview
         } else {
             DocumentStatus::Filed
@@ -281,6 +283,11 @@ pub struct UpdateDocument {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DocumentFilter {
+    pub reviewed: Option<bool>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
+    pub document_date_from: Option<DocumentDate>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
+    pub document_date_to: Option<DocumentDate>,
     #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub correspondent_id: Option<Id>,
     #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
@@ -294,6 +301,21 @@ pub struct DocumentFilter {
     pub created_before: Option<DateTime<Utc>>,
 }
 
+impl DocumentFilter {
+    pub fn validate(&self) -> crate::Result<()> {
+        if self
+            .document_date_from
+            .zip(self.document_date_to)
+            .is_some_and(|(from, to)| from > to)
+        {
+            return Err(crate::Error::Validation(
+                "Document date end must not precede its start".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn nullable_date<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Option<Option<DocumentDate>>, D::Error> {
@@ -305,14 +327,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_follows_extraction_and_classification() {
+    fn status_follows_processing_and_explicit_review() {
         let doc = Document::new(VaultId::new(), "Invoice");
         assert_eq!(doc.status(), DocumentStatus::Processing);
 
-        let read = doc.with_content("text");
+        let mut read = doc.with_content("text");
+        read.embed_status = ProcessingStatus::Skipped;
         assert_eq!(read.status(), DocumentStatus::NeedsReview);
 
-        let filed = read.with_document_type(Id::new_v4());
+        let mut filed = read.with_document_type(Id::new_v4());
+        assert_eq!(filed.status(), DocumentStatus::NeedsReview);
+        filed.reviewed_at = Some(Utc::now());
         assert_eq!(filed.status(), DocumentStatus::Filed);
     }
 

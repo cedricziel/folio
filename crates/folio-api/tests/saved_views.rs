@@ -372,3 +372,53 @@ async fn web_editor_preserves_fractional_date_boundaries() {
         view["query"]["filters"]["created_after"]
     );
 }
+
+#[tokio::test]
+async fn web_editor_keeps_review_and_document_date_filters() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let new_path = format!(
+        "/vaults/{}/saved-views/new?reviewed=false&document_date_from=2026-01-01&document_date_to=2026-01-31",
+        alice.vault
+    );
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &new_path, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    assert!(html.contains("<option value=\"false\" selected>Not reviewed</option>"));
+    assert!(html.contains("name=\"document_date_from\" value=\"2026-01-01\""));
+    assert!(html.contains("name=\"document_date_to\" value=\"2026-01-31\""));
+
+    let mut create = request(
+        "POST",
+        &format!("/vaults/{}/saved-views", alice.vault),
+        &alice,
+        Body::from("name=Unreviewed&visibility=private&presentation=list&reviewed=false&document_date_from=2026-01-01&document_date_to=2026-01-31"),
+    );
+    create.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/x-www-form-urlencoded".parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(create).await.unwrap();
+    assert!(response.status().is_redirection());
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/api/vaults/{}/saved-views", alice.vault),
+            &alice,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    let views: serde_json::Value = serde_json::from_str(&common::text(response).await).unwrap();
+    let filters = &views[0]["query"]["filters"];
+    assert_eq!(filters["reviewed"], false);
+    assert_eq!(filters["document_date_from"], "2026-01-01");
+    assert_eq!(filters["document_date_to"], "2026-01-31");
+}
