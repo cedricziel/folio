@@ -28,6 +28,24 @@ const EMBED_BATCH_SIZE: usize = 16;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
+struct ProcessingFailure {
+    reason: folio_core::processing_events::ProcessingReason,
+    #[source]
+    source: BoxError,
+}
+
+fn processing_failure(
+    reason: folio_core::processing_events::ProcessingReason,
+    source: impl Into<BoxError>,
+) -> BoxError {
+    Box::new(ProcessingFailure {
+        reason,
+        source: source.into(),
+    })
+}
+
 async fn run_with_lease<T>(
     queue: &JobQueue,
     job: &Job,
@@ -301,7 +319,15 @@ impl Worker {
                 let error_msg = e.to_string();
                 match self
                     .queue
-                    .fail(&job, &error_msg, true)
+                    .fail_with_reason(
+                        &job,
+                        &error_msg,
+                        true,
+                        e.downcast_ref::<ProcessingFailure>().map_or(
+                            folio_core::processing_events::ProcessingReason::ProviderFailed,
+                            |failure| failure.reason,
+                        ),
+                    )
                     .instrument(span.clone())
                     .await
                 {
@@ -430,6 +456,15 @@ impl Worker {
     }
 
     async fn process_claim(&self, job: &Job) -> Result<(), BoxError> {
+        let scope = match super::processing_scope::prepare_claim(&self.queue, job).await? {
+            super::processing_scope::ClaimPreparation::Ready(scope) => scope,
+            super::processing_scope::ClaimPreparation::Obsolete => {
+                if let Some(document_id) = job.job_type.document_id() {
+                    self.purge_if_deleted(document_id).await?;
+                }
+                return Ok(());
+            }
+        };
         let context = self.queue.context(job.id).await?;
         if let (Some(vault), Some(document)) = (
             context.and_then(|context| context.vault_id),
@@ -441,6 +476,7 @@ impl Worker {
                 .await?
                 .is_some_and(|current| current != vault)
             {
+                warn!(job.id = %job.id, %document, "Skipping job for a document moved to another vault");
                 return Ok(());
             }
         }
@@ -448,14 +484,25 @@ impl Worker {
             None,
             folio_core::mutation::with_lineage(
                 context.map(|context| context.lineage),
-                self.process_job(&job.job_type),
+                super::processing_scope::with_scope(
+                    scope,
+                    Box::pin(self.process_job_with_claim(&job.job_type, Some(job))),
+                ),
             ),
         )
         .await
     }
 
-    /// Process a single job, then clean up after a document that was deleted while it ran
+    #[cfg(test)]
     async fn process_job(&self, job_type: &JobType) -> Result<(), BoxError> {
+        self.process_job_with_claim(job_type, None).await
+    }
+
+    async fn process_job_with_claim(
+        &self,
+        job_type: &JobType,
+        claim: Option<&Job>,
+    ) -> Result<(), BoxError> {
         if let Some(document_id) = job_type.document_id() {
             if !matches!(job_type, JobType::PurgeDocument { .. })
                 && self.document_repo.locate(document_id).await?.is_none()
@@ -464,7 +511,14 @@ impl Worker {
                 return Ok(());
             }
         }
-        let result = self.run_job(job_type).await;
+        let result = if matches!(job_type, JobType::ExtractText { .. }) {
+            match claim {
+                Some(job) => Box::pin(self.process_claimed_ocr(job)).await,
+                None => Box::pin(self.run_job(job_type)).await,
+            }
+        } else {
+            Box::pin(self.run_job(job_type)).await
+        };
         if let Some(document_id) = job_type.document_id() {
             if let Err(e) = self.purge_if_deleted(document_id).await {
                 error!("Failed to purge leftovers of deleted document {document_id}: {e}");
@@ -633,6 +687,59 @@ impl Worker {
                 Err(e)
             }
         }
+    }
+
+    async fn process_claimed_ocr(&self, job: &Job) -> Result<(), BoxError> {
+        use folio_core::processing_events::ProcessingReason;
+        let Some(fence) = self.queue.start_ocr(job).await? else {
+            return Ok(());
+        };
+        let document = self
+            .document_repo
+            .find_by_id(fence.vault_id(), fence.document_id())
+            .await?
+            .ok_or("Document not found")?;
+        if let Some(content) = document
+            .content
+            .as_deref()
+            .filter(|content| !content.is_empty())
+        {
+            self.queue
+                .complete_ocr(&fence, content)
+                .await
+                .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+            return Ok(());
+        }
+        if self.pipeline.settings().await.ocr.provider == "none" {
+            self.queue
+                .skip_ocr(&fence)
+                .await
+                .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+            return Ok(());
+        }
+        let path = document
+            .file_path
+            .as_ref()
+            .ok_or_else(|| processing_failure(ProcessingReason::StorageFailed, "No file path"))?;
+        let data = self
+            .store
+            .get_bytes(path)
+            .await
+            .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+        let mime_type = document
+            .mime_type
+            .as_deref()
+            .unwrap_or("application/octet-stream");
+        let output = self
+            .ocr_service
+            .extract(&data, mime_type)
+            .await
+            .map_err(|error| processing_failure(ProcessingReason::ProviderFailed, error))?;
+        self.queue
+            .complete_ocr(&fence, &output.text)
+            .await
+            .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+        Ok(())
     }
 
     /// Process OCR text extraction
