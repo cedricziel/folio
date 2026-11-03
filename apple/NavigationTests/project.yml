@@ -18,6 +18,8 @@ targets:
       - Fixture
       - "../FolioKit/Tests/FolioKitTests/MockFolioService.swift"
       - "../Folio/Sources/WorkspaceView.swift"
+      - "../Folio/Sources/SavedViewEditor.swift"
+      - "../Folio/Sources/DocumentThumbnailView.swift"
       - "../Folio/Sources/InboxView.swift"
       - "../Folio/Sources/DocumentDetailView.swift"
       - "../Folio/Sources/DocumentProcessingView.swift"

@@ -381,3 +381,58 @@ for (const role of ["viewer", "contributor"]) {
     }
   });
 }
+
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 1000 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`saved views restore filters and support editing and deletion on ${viewport.name}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const name = uniqueTitle("Saved bank statements");
+    await page.goto(`/vaults/${personal.id}/?view=all`);
+    await page.getByRole("link", { name: "Save current view", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill(name);
+    await page.getByLabel("Search", { exact: true }).fill("Private bank");
+    await page.getByRole("combobox", { name: "Sort", exact: true }).selectOption("title");
+    await page.getByRole("combobox", { name: "Display", exact: true }).selectOption("grid");
+    await page.getByRole("button", { name: "Save view", exact: true }).click();
+    await expect(page.getByRole("heading", { name, level: 1 })).toBeVisible();
+    await expect(page.locator(".saved-view-grid")).toBeVisible();
+    const card = await page.locator(".saved-view-grid .f-row").first().boundingBox();
+    expect(card?.width).toBeLessThan(400);
+    await expect(page.locator("main").getByRole("link", { name: new RegExp(personalDocument.title) })).toBeVisible();
+    await capture(page, testInfo, `saved-view-${viewport.name}.png`);
+
+    await page.getByRole("link", { name: "All saved views", exact: true }).click();
+    await page.locator("main").getByRole("link", { name: new RegExp(name) }).click();
+    await page.getByText("Edit saved view", { exact: true }).click();
+    await expect(page.getByLabel("Search", { exact: true })).toHaveValue("Private bank");
+    await expect(page.getByRole("combobox", { name: "Sort", exact: true })).toHaveValue("title");
+    await expect(page.getByRole("combobox", { name: "Display", exact: true })).toHaveValue("grid");
+    await page.getByLabel("Name", { exact: true }).fill(`${name} revised`);
+    await page.getByRole("combobox", { name: "Visible to", exact: true }).selectOption("shared");
+    await page.getByRole("button", { name: "Update saved view", exact: true }).click();
+    await expect(page.getByRole("heading", { name: `${name} revised`, level: 1 })).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete saved view", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/vaults/${personal.id}/saved-views$`));
+    await expect(page.locator("main").getByRole("link", { name: new RegExp(name) })).toHaveCount(0);
+    expect((await page.request.get(`/vaults/${personal.id}/api/documents/${personalDocument.id}`)).status()).toBe(200);
+  });
+}
+
+test("renaming a saved view retains submillisecond date boundaries", async ({ page }) => {
+  const boundary = "2026-01-01T12:00:00.123456789Z";
+  const response = await page.request.post(`/api/vaults/${personal.id}/saved-views`, {
+    data: { name: uniqueTitle("Precise dates"), query: { version: 1, filters: { created_after: boundary } } },
+  });
+  expect(response.status()).toBe(201);
+  const view = await response.json();
+  await page.goto(`/vaults/${personal.id}/saved-views/${view.id}`);
+  await page.getByText("Edit saved view", { exact: true }).click();
+  await expect(page.getByLabel("Added on or after (UTC)", { exact: true })).toHaveValue("2026-01-01T12:00:00.123");
+  await page.getByLabel("Name", { exact: true }).fill(uniqueTitle("Renamed precise dates"));
+  await page.getByRole("button", { name: "Update saved view", exact: true }).click();
+  const updated = await page.request.get(`/api/vaults/${personal.id}/saved-views/${view.id}`);
+  expect((await updated.json()).query.filters.created_after).toBe(boundary);
+});

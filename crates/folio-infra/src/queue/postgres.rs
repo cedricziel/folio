@@ -281,6 +281,17 @@ impl PostgresJobQueue {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
+        let payload: Option<String> = sqlx::query_scalar("SELECT payload::text FROM jobs WHERE job_type = 'purge_document' AND payload->'data'->>'document_id' = $1 ORDER BY created_at DESC, id DESC LIMIT 1")
+            .bind(document_id.to_string()).fetch_optional(&self.pool).await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        payload
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|error| Error::Repository(error.to_string()))
+            })
+            .transpose()
+    }
+
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         let failed: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM (

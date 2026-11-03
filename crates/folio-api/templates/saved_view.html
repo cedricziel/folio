@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{% if is_saved %}{{ name }}{% else %}New saved view{% endif %} - Folio{% endblock %}
+{% block content %}
+<section class="page">
+  <header class="page-head"><h1 class="title">{% if is_saved %}{{ name }}{% else %}Save a view{% endif %}</h1><p class="lede">Keep a search, its filters, and how you prefer to browse.</p></header>
+  <p><a href="{{ "/saved-views"|vault_url }}">All saved views</a></p>
+  {% if let Some(message) = query_error %}<p role="alert" class="f-status f-status-failed">{{ message }}. Edit the filters to use this view again.</p>{% endif %}
+  {% if can_edit %}
+  <details {% if !is_saved %}open{% endif %}>
+    <summary>{% if is_saved %}Edit saved view{% else %}View details{% endif %}</summary>
+    <form action="{{ "/saved-views"|vault_url }}{% if is_saved %}/{{ id }}{% endif %}" method="post" data-turbo="false" class="saved-view-form">
+      {% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}
+      <label>Name<input class="input" name="name" required maxlength="100" value="{{ name }}"></label>
+      <label>Search<input class="input" type="search" name="q" value="{{ search }}"></label>
+      <label>From<select class="select" name="correspondent_id"><option value="">Any correspondent</option>{% for item in correspondents %}<option value="{{ item.id }}" {% if item.selected %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+      <label>Type<select class="select" name="document_type_id"><option value="">Any type</option>{% for item in types %}<option value="{{ item.id }}" {% if item.selected %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+      <fieldset><legend>Must have all selected tags</legend>{% for item in tags %}<label><input type="checkbox" name="tag_id" value="{{ item.id }}" {% if item.selected %}checked{% endif %}> {{ item.name }}</label>{% endfor %}</fieldset>
+      <input type="hidden" name="created_after_original" value="{{ after_original }}">
+      <input type="hidden" name="created_before_original" value="{{ before_original }}">
+      <label>Added on or after (UTC)<input class="input" type="datetime-local" step="any" name="created_after" value="{{ after }}"></label>
+      <label>Added before (UTC)<input class="input" type="datetime-local" step="any" name="created_before" value="{{ before }}"></label>
+      <label>Sort<select class="select" name="sort"><option value="newest" {% if sort == "newest" %}selected{% endif %}>Newest first</option><option value="oldest" {% if sort == "oldest" %}selected{% endif %}>Oldest first</option><option value="title" {% if sort == "title" %}selected{% endif %}>Title</option></select></label>
+      <label>Display<select class="select" name="presentation"><option value="list" {% if presentation == "list" %}selected{% endif %}>List</option><option value="grid" {% if presentation == "grid" %}selected{% endif %}>Grid</option></select></label>
+      <label>Visible to<select class="select" name="visibility"><option value="private" {% if !shared %}selected{% endif %}>Only me</option>{% if can_share %}<option value="shared" {% if shared %}selected{% endif %}>Everyone in this vault</option>{% endif %}</select></label>
+      <button class="f-btn" type="submit">{% if is_saved %}Update saved view{% else %}Save view{% endif %}</button>
+    </form>
+  </details>
+  {% if is_saved %}
+  <form action="{{ "/saved-views"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false" data-controller="confirm" data-confirm-message-value="Delete this saved view? Your documents will remain in the library." data-action="submit->confirm#confirm">
+    {% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}
+    <button class="f-btn f-btn-quiet f-btn-danger" type="submit">Delete saved view</button>
+  </form>
+  {% endif %}
+  {% endif %}
+  <h2 class="heading">Documents</h2>
+  {% if rows.is_empty() && query_error.is_none() %}<p class="lede">No documents match this view.</p>{% endif %}
+  <div class="{% if presentation == "grid" %}saved-view-grid{% else %}f-list{% endif %}">
+    {% for row in rows %}
+    <a class="f-row" href="{{ "/documents"|vault_url }}/{{ row.id }}" data-turbo-frame="_top">
+      {% if presentation == "grid" %}<img loading="lazy" class="saved-view-preview" src="{{ "/documents"|vault_url }}/{{ row.id }}/thumbnail" alt="">{% endif %}
+      <div class="row-main"><h3 class="f-row-title">{{ row.title }}</h3><p class="f-row-sub">{{ row.subline() }}</p><span class="f-meta">{{ row.date }}</span></div>
+    </a>
+    {% endfor %}
+  </div>
+  {% if is_saved && !next.is_empty() %}<p><a class="f-btn" href="{{ "/saved-views"|vault_url }}/{{ id }}?cursor={{ next }}">More documents</a></p>{% endif %}
+</section>
+{% endblock %}

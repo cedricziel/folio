@@ -108,6 +108,7 @@ async fn main() -> Result<()> {
     // Create repositories
     let repos = database.repositories().await;
     let document_repo = repos.documents;
+    let entry_repo = repos.entries;
     let workflow_document_repo = repos.workflow_documents;
     let outbox = repos.outbox;
     let tag_repo = repos.tags;
@@ -250,6 +251,7 @@ async fn main() -> Result<()> {
     let mut state = AppState::new(
         repos.saved_views,
         document_repo.clone(),
+        entry_repo,
         tag_repo,
         correspondent_repo,
         document_type_repo,
