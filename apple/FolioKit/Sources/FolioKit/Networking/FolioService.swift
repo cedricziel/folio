@@ -1,7 +1,7 @@
 import Foundation
 
 /// Everything the app needs from a Folio server. View models depend on this, not on the generated client.
-public protocol FolioService: Sendable {
+public protocol FolioService: DocumentEntryService {
     func vaults() async throws -> VaultCatalog
     func savedViews(after: UUID?) async throws -> [SavedView]
     func savedView(id: UUID) async throws -> SavedView

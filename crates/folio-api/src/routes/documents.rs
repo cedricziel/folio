@@ -125,6 +125,7 @@ pub struct DocumentTag {
     name: String,
     /// Hex color such as "#ff5733", when the tag has one
     color: Option<String>,
+    deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A document together with the names behind its ids
@@ -161,14 +162,14 @@ pub(super) async fn present(
     state: &AppState,
     documents: Vec<Document>,
 ) -> ApiResult<Vec<DocumentView>> {
-    let correspondents: HashMap<_, _> = state
+    let mut correspondents: HashMap<_, _> = state
         .correspondent_repo
         .list(vault)
         .await?
         .into_iter()
         .map(|c| (c.id, c.name))
         .collect();
-    let types: HashMap<_, _> = state
+    let mut types: HashMap<_, _> = state
         .document_type_repo
         .list(vault)
         .await?
@@ -176,6 +177,12 @@ pub(super) async fn present(
         .map(|t| (t.id, t.name))
         .collect();
 
+    for entry in state.correspondent_repo.list_trash(vault).await? {
+        correspondents.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
+    for entry in state.document_type_repo.list_trash(vault).await? {
+        types.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
     let ids: Vec<_> = documents.iter().map(|document| document.id).collect();
     let mut tags = state.document_repo.tags_for_documents(vault, &ids).await?;
     Ok(documents
@@ -191,6 +198,7 @@ pub(super) async fn present(
                     vault_id: tag.vault_id.0,
                     name: tag.name,
                     color: tag.color,
+                    deleted_at: tag.deleted_at,
                 })
                 .collect();
             DocumentView {

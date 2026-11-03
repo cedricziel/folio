@@ -1,0 +1,20 @@
+-- no-transaction
+PRAGMA foreign_keys = OFF;
+BEGIN;
+CREATE TABLE tags_lifecycle (id TEXT PRIMARY KEY, vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE, name TEXT NOT NULL, color TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, created_by TEXT, updated_by TEXT);
+INSERT INTO tags_lifecycle (id, vault_id, name, color, created_at, updated_at) SELECT id, vault_id, name, color, created_at, created_at FROM tags;
+DROP TABLE tags;
+ALTER TABLE tags_lifecycle RENAME TO tags;
+CREATE UNIQUE INDEX tags_live_name ON tags(vault_id, name) WHERE deleted_at IS NULL;
+CREATE TABLE correspondents_lifecycle (id TEXT PRIMARY KEY, vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE, name TEXT NOT NULL,  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, created_by TEXT, updated_by TEXT);
+INSERT INTO correspondents_lifecycle (id, vault_id, name, created_at, updated_at) SELECT id, vault_id, name, created_at, created_at FROM correspondents;
+DROP TABLE correspondents;
+ALTER TABLE correspondents_lifecycle RENAME TO correspondents;
+CREATE UNIQUE INDEX correspondents_live_name ON correspondents(vault_id, name) WHERE deleted_at IS NULL;
+CREATE TABLE document_types_lifecycle (id TEXT PRIMARY KEY, vault_id TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE, name TEXT NOT NULL,  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT, created_by TEXT, updated_by TEXT);
+INSERT INTO document_types_lifecycle (id, vault_id, name, created_at, updated_at) SELECT id, vault_id, name, created_at, created_at FROM document_types;
+DROP TABLE document_types;
+ALTER TABLE document_types_lifecycle RENAME TO document_types;
+CREATE UNIQUE INDEX document_types_live_name ON document_types(vault_id, name) WHERE deleted_at IS NULL;
+COMMIT;
+PRAGMA foreign_keys = ON;

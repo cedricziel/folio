@@ -324,7 +324,7 @@ async fn document_detail(
     let correspondent = if let Some(correspondent_id) = document.correspondent_id {
         state
             .correspondent_repo
-            .find_by_id(vault, correspondent_id)
+            .find_retained(vault, correspondent_id)
             .await?
     } else {
         None
@@ -333,7 +333,7 @@ async fn document_detail(
     let document_type = if let Some(document_type_id) = document.document_type_id {
         state
             .document_type_repo
-            .find_by_id(vault, document_type_id)
+            .find_retained(vault, document_type_id)
             .await?
     } else {
         None

@@ -114,7 +114,7 @@ struct TagCapsule: View {
     let tag: Tag
 
     var body: some View {
-        Label(tag.name, systemImage: "tag")
+        Label(tag.displayName, systemImage: "tag")
             .labelStyle(.titleOnly)
             .font(FolioTheme.Typography.bodySm)
             .foregroundStyle(Color.ink)

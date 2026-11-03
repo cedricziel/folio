@@ -125,6 +125,20 @@ struct CountingTags {
 
 #[async_trait]
 impl TagRepository for CountingTags {
+    async fn find_retained(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Tag>> {
+        self.inner.find_retained(vault, id).await
+    }
+    async fn list_trash(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Tag>> {
+        self.inner.list_trash(vault).await
+    }
+    async fn restore(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<Tag> {
+        self.inner.restore(vault, id).await
+    }
+
     async fn find_by_id(
         &self,
         vault: folio_core::models::VaultId,
@@ -216,6 +230,7 @@ pub struct Fixture {
     pub tag_actors: Arc<std::sync::Mutex<Vec<Option<folio_core::models::UserId>>>>,
     pub delete_tags_after_next_list: Arc<AtomicBool>,
     pub documents: Arc<dyn DocumentRepository>,
+    pub tags: Arc<dyn folio_core::ports::TagRepository>,
     pub outbox: Arc<dyn folio_core::ports::OutboxStore>,
     pub settings: Arc<dyn SettingsRepository>,
     _dir: tempfile::TempDir,
@@ -260,6 +275,7 @@ impl Fixture {
         let tag_lists = Arc::new(AtomicUsize::new(0));
         let tag_actors = Arc::new(std::sync::Mutex::new(Vec::new()));
         let delete_tags_after_next_list = Arc::new(AtomicBool::new(false));
+        let tag_repo = repos.tags.clone();
         let tags = Arc::new(CountingTags {
             inner: repos.tags,
             lists: tag_lists.clone(),
@@ -288,6 +304,7 @@ impl Fixture {
             tag_actors,
             delete_tags_after_next_list,
             documents: repos.documents,
+            tags: tag_repo,
             outbox: repos.outbox,
             settings: repos.settings,
             _dir: dir,
