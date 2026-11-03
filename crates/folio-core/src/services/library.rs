@@ -387,6 +387,7 @@ impl LibraryService {
                     vault,
                     id,
                     UpdateDocument {
+                        document_date: None,
                         title: update.title.map(|t| t.trim().to_string()),
                         content: None,
                         correspondent_id,

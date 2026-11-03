@@ -118,7 +118,7 @@ macro_rules! select_documents {
             "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
             "ocr_status, embed_status, deleted_at, purge_requested_at, ",
-            "created_at, updated_at ",
+            "created_at, updated_at, document_date::text AS document_date ",
             "FROM documents ",
             $tail
         )
@@ -131,6 +131,7 @@ struct DocumentRow {
     vault_id: Uuid,
     uploaded_by: Option<String>,
     title: String,
+    document_date: Option<String>,
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
@@ -157,6 +158,10 @@ impl TryFrom<DocumentRow> for Document {
             vault_id: VaultId(row.vault_id),
             uploaded_by: row.uploaded_by.map(UserId),
             title: row.title,
+            document_date: row
+                .document_date
+                .map(|value| value.parse().map_err(|e: &str| Error::Repository(e.into())))
+                .transpose()?,
             content: row.content,
             original_filename: row.original_filename,
             file_path: row.file_path,
@@ -657,6 +662,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
+        let document_date = params.document_date.unwrap_or(existing.document_date);
         let now = Utc::now();
 
         let tags_changed = if let Some(tags) = params.tag_ids {
@@ -668,6 +674,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             && content == existing.content
             && correspondent_id == existing.correspondent_id
             && document_type_id == existing.document_type_id
+            && document_date == existing.document_date
             && !tags_changed
         {
             return Ok(existing);
@@ -683,14 +690,15 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
-                                  document_type_id = $4, updated_at = $5
-             WHERE id = $6 AND vault_id = $7 AND deleted_at IS NULL",
+                                  document_type_id = $4, updated_at = $5, document_date = $6::text::date
+             WHERE id = $7 AND vault_id = $8 AND deleted_at IS NULL",
         )
         .bind(&title)
         .bind(&content)
         .bind(correspondent_id)
         .bind(document_type_id)
         .bind(now)
+        .bind(document_date.map(|value| value.to_string()))
         .bind(id)
         .bind(vault.0)
         .execute(&mut *tx)
@@ -703,6 +711,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: existing.uploaded_by,
+            document_date,
             title,
             content,
             original_filename: existing.original_filename,
@@ -1659,6 +1668,7 @@ impl PostgresDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: params.uploaded_by,
+            document_date: None,
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,

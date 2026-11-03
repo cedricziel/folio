@@ -73,6 +73,40 @@ private let documentJSON = """
     """
 
 @Suite(.serialized) struct LiveFolioServiceTests {
+    @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {
+        let vault = UUID()
+        let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "PATCH")
+            #expect(
+                request.url?.path
+                    == "/api/documents/\(id.uuidString.lowercased())")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(json?["document_date"] is NSNull)
+            return .init(body: Data(documentJSON.utf8))
+        }
+        let document = try await makeService().scoped(to: vault).setDocumentDate(nil, for: id)
+        #expect(document.documentDate == nil)
+    }
+
+    @Test func dateResponsePreservesHistoricalDayAndEditCapability() async throws {
+        StubURLProtocol.handler = { _, _ in
+            let json = documentJSON.replacingOccurrences(
+                of: "\"title\":", with: "\"document_date\":\"1582-10-10\",\"can_edit_document_date\":true,\"title\":")
+            return .init(body: Data(json.utf8))
+        }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.documentDate?.rawValue == "1582-10-10")
+        #expect(document.canEditDocumentDate)
+    }
+
+    @Test func oldServerDoesNotGrantDateEditingCapability() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(documentJSON.utf8)) }
+        let document = try await makeService().document(id: UUID())
+        #expect(!document.canEditDocumentDate)
+    }
+
     private let baseURL = URL(string: "https://folio.example.com")!
 
     private let savedViewJSON = """

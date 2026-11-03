@@ -190,6 +190,16 @@ public struct LiveFolioService: FolioService {
         }
     }
 
+    public func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
+        try await call("documents.date") {
+            try await Document(
+                client.updateDocumentDate(
+                    path: .init(id: id.uuidString.lowercased()),
+                    body: .json(.init(documentDate: .some(date?.rawValue)))
+                ).ok.body.json)
+        }
+    }
+
     public func documents(matching query: String) async throws -> [Document] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return try await call("documents.list") {
@@ -387,6 +397,12 @@ public struct LiveFolioService: FolioService {
         return ext.map { "document.\($0)" } ?? "document"
     }
 
+    fileprivate static func documentDate(_ value: String?) throws -> DocumentDate? {
+        guard let value else { return nil }
+        guard let date = DocumentDate(rawValue: value) else { throw FolioError.unreadableResponse }
+        return date
+    }
+
     fileprivate static func uuid(_ string: String) throws -> UUID {
         guard let id = UUID(uuidString: string) else { throw FolioError.unreadableResponse }
         return id
@@ -468,6 +484,7 @@ extension Document {
             documentTypeID: raw.documentTypeId.map(LiveFolioService.uuid),
             pageCount: raw.pageCount.map(Int.init),
             ocrStatus: .init(raw.ocrStatus), embedStatus: .init(raw.embedStatus),
+            documentDate: LiveFolioService.documentDate(raw.documentDate),
             createdAt: raw.createdAt, updatedAt: raw.updatedAt
         )
     }
@@ -489,6 +506,7 @@ extension Document {
     /// The list and get endpoints add the document's tags to the plain document.
     init(_ raw: Components.Schemas.DocumentView) throws {
         try self.init(raw.value1)
+        canEditDocumentDate = raw.value2.canEditDocumentDate ?? false
         tags = try raw.value2.tags.map {
             try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color)
         }
