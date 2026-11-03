@@ -69,6 +69,9 @@ const PASSKEY_CEREMONY_TTL: Duration = Duration::from_secs(300);
 /// A password-verified login that still needs its second factor.
 pub(crate) struct MfaLogin {
     pub user_id: String,
+    /// The hash the first factor matched. A password change replaces it, which
+    /// voids the pending login.
+    pub password_hash: String,
     pub next: String,
     pub attempts: u32,
 }
