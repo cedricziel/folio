@@ -126,11 +126,12 @@ async fn review_contract(db: Database) {
         .is_err());
     let restored = r.documents.restore(vault, imported.id).await.unwrap();
     assert_eq!(restored.reviewed_at, reviewed.reviewed_at);
-    let unreviewed = r
-        .documents
-        .set_reviewed(vault, imported.id, false)
-        .await
-        .unwrap();
+    let unreviewed = with_actor(
+        Some(reviewer.clone()),
+        r.documents.set_reviewed(vault, imported.id, false),
+    )
+    .await
+    .unwrap();
     assert_eq!(unreviewed.reviewed_at, None);
     assert_eq!(unreviewed.reviewed_by, None);
     assert_eq!(unreviewed.review_origin, None);
@@ -203,8 +204,7 @@ async fn review_contract(db: Database) {
     let system_unreview = events
         .iter()
         .filter_map(|row| row.envelope.as_ref())
-        .filter(|event| event.event_type() == "document.unreviewed")
-        .next_back()
+        .rfind(|event| event.event_type() == "document.unreviewed")
         .unwrap();
     assert_eq!(system_unreview.actor_id(), None);
     assert_eq!(system_unreview.data()["reason"], "system");
