@@ -2001,4 +2001,22 @@ async fn source_outcomes_require_owner_permission_even_for_editors() {
         .await
         .unwrap();
     assert_eq!(allowed.status(), StatusCode::OK);
+    let page = format!(
+        "/vaults/{}/settings/sources/{}/outcomes",
+        owner.vault, source.id
+    );
+    let denied = h
+        .app
+        .clone()
+        .oneshot(request("GET", &page, &editor, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let allowed = h
+        .app
+        .clone()
+        .oneshot(request("GET", &page, &owner, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
 }
