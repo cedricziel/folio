@@ -66,7 +66,13 @@ pub enum JobType {
     /// Process a newly uploaded document (all steps)
     ProcessDocument { document_id: Uuid },
     /// Remove objects and metadata after an explicit permanent-deletion request.
-    PurgeDocument { document_id: Uuid },
+    PurgeDocument {
+        document_id: Uuid,
+        #[serde(default)]
+        correlation_id: Option<Uuid>,
+        #[serde(default)]
+        causation_id: Option<Uuid>,
+    },
     /// Execute the actions of a workflow run
     ExecuteWorkflowRun { run_id: Uuid },
 }
@@ -78,7 +84,7 @@ impl JobType {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id }
             | JobType::GenerateEmbedding { document_id }
-            | JobType::PurgeDocument { document_id }
+            | JobType::PurgeDocument { document_id, .. }
             | JobType::ProcessDocument { document_id } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
         }
@@ -247,6 +253,10 @@ impl JobQueue {
     /// Find active jobs (pending or processing) for a specific document
     pub async fn find_active_jobs_for_document(&self, document_id: Uuid) -> Result<Vec<Job>> {
         dispatch!(self, find_active_jobs_for_document(document_id))
+    }
+
+    pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
+        dispatch!(self, latest_purge_job(document_id))
     }
 
     /// Whether the latest finished job for any processing stage failed
