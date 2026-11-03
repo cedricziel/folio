@@ -111,13 +111,8 @@
                         {% when None %}<span class="f-meta">Not reviewed</span>{% endmatch %}
                         {% if document|can_edit_document %}
                         <form action="{{ "/documents"|vault_url }}/{{ document.id }}/review" method="post" data-turbo="false" data-controller="document-review" data-action="submit->document-review#submit">
-                            {% if document.reviewed_at.is_some() %}
-                            <input type="hidden" name="reviewed" value="false">
-                            <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">Mark unreviewed</button>
-                            {% else %}
-                            <input type="hidden" name="reviewed" value="true">
-                            <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">Mark reviewed</button>
-                            {% endif %}
+                            <input type="hidden" name="reviewed" value="{{ document.reviewed_at.is_none() }}">
+                            <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">{% if document.reviewed_at.is_some() %}Mark unreviewed{% else %}Mark reviewed{% endif %}</button>
                             <p role="alert" data-document-review-target="error" hidden></p>
                         </form>
                         {% endif %}

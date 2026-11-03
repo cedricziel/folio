@@ -181,6 +181,7 @@ pub(super) async fn present(
     Ok(documents
         .into_iter()
         .map(|document| {
+            let editable = crate::vault_context::can_edit_document(&document);
             let tags = tags
                 .remove(&document.id)
                 .unwrap_or_default()
@@ -193,8 +194,8 @@ pub(super) async fn present(
                 })
                 .collect();
             DocumentView {
-                can_edit_document_date: crate::vault_context::can_edit_document(&document),
-                can_review_document: crate::vault_context::can_edit_document(&document),
+                can_edit_document_date: editable,
+                can_review_document: editable,
                 reviewed: document.reviewed_at.is_some(),
                 correspondent: document
                     .correspondent_id

@@ -1,7 +1,7 @@
 mod common;
 
 use axum::{body::Body, http::Request};
-use folio_core::models::{CreateDocument, ProcessingStatus, ReviewOrigin};
+use folio_core::models::{CreateDocument, ProcessingStage, ProcessingStatus, ReviewOrigin};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -140,4 +140,49 @@ async fn invalid_document_date_bounds_are_rejected_by_list_and_browse() {
     assert_eq!(response.status(), 200);
     let json: Value = serde_json::from_str(&common::text(response).await).unwrap();
     assert_eq!(json["supports_document_review_filters"], true);
+}
+
+#[tokio::test]
+async fn inbox_review_filter_lists_reviewed_documents() {
+    let h = common::harness().await;
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "Already reviewed".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .complete_ocr(h.vault, doc.id, "text")
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .set_stage_status(
+            h.vault,
+            doc.id,
+            ProcessingStage::Embed,
+            ProcessingStatus::Done,
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .set_reviewed(h.vault, doc.id, true)
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(common::get("/?reviewed=true"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(common::text(response).await.contains("Already reviewed"));
 }

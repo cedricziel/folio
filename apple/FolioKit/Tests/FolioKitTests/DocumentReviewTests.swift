@@ -48,6 +48,21 @@ struct DocumentReviewTests {
     }
 }
 
+@MainActor struct DocumentReviewListTests {
+    @Test func inboxReviewFilterKeepsReviewedDocuments() async {
+        let reviewed = Document(title: "Reviewed", ocrStatus: .done, embedStatus: .done, reviewed: true)
+        let service = MockFolioService(documents: [reviewed])
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
+        model.scope = .inbox
+        model.filter = DocumentFilter(reviewed: true)
+        await model.load()
+        #expect(model.rows.map(\.title) == ["Reviewed"])
+        model.filter = DocumentFilter()
+        await model.load()
+        #expect(model.rows.isEmpty)
+    }
+}
+
 struct DocumentReviewFilterTests {
     @Test func inclusiveBoundsRetainTheLiteralDayAndOtherFilters() throws {
         let tag = UUID()

@@ -91,9 +91,6 @@ struct DocumentDetailView: View {
                     if model.savingReview { ProgressView("Saving review…") }
                     if let failure = model.reviewFailure {
                         Text(failure).foregroundStyle(Color.danger)
-                        Button("Retry review") {
-                            Task { try? await model.saveReview(model.document.reviewed != true) }
-                        }.disabled(model.savingReview)
                     }
                 }
                 if model.document.canEditDocumentDate {

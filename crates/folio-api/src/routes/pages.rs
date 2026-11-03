@@ -140,10 +140,9 @@ async fn index_page(
         ..Default::default()
     };
     filter.validate()?;
-    let filtered = taxonomy_filtered
-        || reviewed.is_some()
-        || document_date_from.is_some()
-        || document_date_to.is_some();
+    let has_review_filters =
+        reviewed.is_some() || document_date_from.is_some() || document_date_to.is_some();
+    let filtered = taxonomy_filtered || has_review_filters;
 
     let all = state.document_repo.list(vault, None).await?;
     let sidebar = Sidebar::build(
@@ -175,7 +174,9 @@ async fn index_page(
             .list(vault, Some(filter))
             .await?
             .into_iter()
-            .filter(|document| view_all || document.status() != DocumentStatus::Filed)
+            .filter(|document| {
+                view_all || reviewed.is_some() || document.status() != DocumentStatus::Filed
+            })
             .collect()
     } else if view_all {
         all
@@ -194,17 +195,20 @@ async fn index_page(
         )
     };
 
+    let taxonomy_pairs = |query: &mut url::form_urlencoded::Serializer<String>| {
+        for (key, id) in [
+            ("correspondent_id", correspondent_id),
+            ("document_type_id", document_type_id),
+            ("tag_id", tag_id),
+        ] {
+            if let Some(id) = id {
+                query.append_pair(key, &id.to_string());
+            }
+        }
+    };
     let save_view_url = {
         let mut saved_query = url::form_urlencoded::Serializer::new(String::new());
-        if let Some(id) = correspondent_id {
-            saved_query.append_pair("correspondent_id", &id.to_string());
-        }
-        if let Some(id) = document_type_id {
-            saved_query.append_pair("document_type_id", &id.to_string());
-        }
-        if let Some(id) = tag_id {
-            saved_query.append_pair("tag_id", &id.to_string());
-        }
+        taxonomy_pairs(&mut saved_query);
         if let Some(reviewed) = reviewed {
             saved_query.append_pair("reviewed", &reviewed.to_string());
         }
@@ -216,24 +220,17 @@ async fn index_page(
         }
         format!("/saved-views/new?{}", saved_query.finish())
     };
-    let mut clear_review_query = url::form_urlencoded::Serializer::new(String::new());
-    if view_all {
-        clear_review_query.append_pair("view", "all");
-    }
-    if let Some(id) = correspondent_id {
-        clear_review_query.append_pair("correspondent_id", &id.to_string());
-    }
-    if let Some(id) = document_type_id {
-        clear_review_query.append_pair("document_type_id", &id.to_string());
-    }
-    if let Some(id) = tag_id {
-        clear_review_query.append_pair("tag_id", &id.to_string());
-    }
+    let clear_review_url = {
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        if view_all {
+            query.append_pair("view", "all");
+        }
+        taxonomy_pairs(&mut query);
+        format!("/?{}", query.finish())
+    };
     let template = IndexTemplate {
-        has_review_filters: reviewed.is_some()
-            || document_date_from.is_some()
-            || document_date_to.is_some(),
-        clear_review_url: format!("/?{}", clear_review_query.finish()),
+        has_review_filters,
+        clear_review_url,
         reviewed_filter: reviewed.map(|value| value.to_string()).unwrap_or_default(),
         document_date_from: document_date_from
             .map(|value| value.to_string())

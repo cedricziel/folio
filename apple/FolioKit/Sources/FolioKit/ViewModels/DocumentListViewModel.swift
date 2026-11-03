@@ -266,7 +266,7 @@ public final class DocumentListViewModel {
             if let next = page.nextCursor, seen.contains(next) { throw FolioError.unreadableResponse }
             var ids = knownIDs
             let fresh = page.documents.filter {
-                (scope == .all || $0.status != .filed) && ids.insert($0.id).inserted
+                (showsFiled(request.filter) || $0.status != .filed) && ids.insert($0.id).inserted
             }
             if !fresh.isEmpty || page.nextCursor == nil {
                 return DocumentPage(
@@ -290,8 +290,12 @@ public final class DocumentListViewModel {
         }
     }
 
+    private func showsFiled(_ filter: DocumentFilter) -> Bool {
+        scope == .all || filter.reviewed != nil
+    }
+
     private func rebuildRows() {
-        let shown = scope == .inbox ? documents.filter { $0.status != .filed } : documents
+        let shown = showsFiled(filter) ? documents : documents.filter { $0.status != .filed }
         rows = shown.map { document in
             DocumentRow(
                 document: document,

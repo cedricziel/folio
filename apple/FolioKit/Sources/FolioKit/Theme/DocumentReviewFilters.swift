@@ -2,7 +2,7 @@ import SwiftUI
 
 public struct DocumentReviewFilters: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var review: Int
+    @State private var reviewed: Bool?
     @State private var from: String
     @State private var to: String
     private let original: DocumentFilter
@@ -11,22 +11,23 @@ public struct DocumentReviewFilters: View {
     public init(filter: DocumentFilter, apply: @escaping (DocumentFilter) -> Void) {
         original = filter
         self.apply = apply
-        _review = State(initialValue: filter.reviewed.map { $0 ? 2 : 1 } ?? 0)
+        _reviewed = State(initialValue: filter.reviewed)
         _from = State(initialValue: filter.documentDateFrom?.rawValue ?? "")
         _to = State(initialValue: filter.documentDateTo?.rawValue ?? "")
     }
 
     private var filter: DocumentFilter? {
-        try? original.applyingReview(review == 0 ? nil : review == 2, from: from, to: to)
+        try? original.applyingReview(reviewed, from: from, to: to)
     }
 
     public var body: some View {
-        NavigationStack {
+        let filter = filter
+        return NavigationStack {
             Form {
-                Picker("Review", selection: $review) {
-                    Text("Any review state").tag(0)
-                    Text("Not reviewed").tag(1)
-                    Text("Reviewed").tag(2)
+                Picker("Review", selection: $reviewed) {
+                    Text("Any review state").tag(Bool?.none)
+                    Text("Not reviewed").tag(Bool?.some(false))
+                    Text("Reviewed").tag(Bool?.some(true))
                 }
                 Section {
                     TextField("Document date from", text: $from, prompt: Text("YYYY-MM-DD"))
@@ -40,7 +41,7 @@ public struct DocumentReviewFilters: View {
                             : "Both dates are included. Undated documents do not match a date range.")
                 }
                 Button("Clear review and date filters") {
-                    review = 0; from = ""; to = ""
+                    reviewed = nil; from = ""; to = ""
                 }
             }
             .navigationTitle("Document filters")
