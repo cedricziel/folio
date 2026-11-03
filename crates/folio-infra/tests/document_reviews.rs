@@ -204,7 +204,7 @@ async fn review_contract(db: Database) {
         .iter()
         .filter_map(|row| row.envelope.as_ref())
         .filter(|event| event.event_type() == "document.unreviewed")
-        .last()
+        .next_back()
         .unwrap();
     assert_eq!(system_unreview.actor_id(), None);
     assert_eq!(system_unreview.data()["reason"], "system");
