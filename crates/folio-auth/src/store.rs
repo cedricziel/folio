@@ -117,7 +117,7 @@ pub trait AuthStore: Send + Sync {
         user_id: &str,
         now: i64,
     ) -> Result<Vec<ConnectedClient>, AuthError>;
-    /// Deletes every token the client holds for the user.
+    /// Deletes every token and pending authorization code the client holds for the user.
     async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError>;
 
     async fn get_totp(&self, user_id: &str) -> Result<Option<TotpRecord>, AuthError>;

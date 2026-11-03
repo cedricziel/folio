@@ -41,6 +41,7 @@ use crate::routes::{
         crate::routes::browse::browse_default,
         crate::routes::browse::browse_vault,
         documents::get_document,
+        documents::update_document_date,
         document_entries::list,
         document_entries::create,
         document_entries::update,

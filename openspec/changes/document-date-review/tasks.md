@@ -1,6 +1,6 @@
 ## 1. Contract and dependency
 - [x] 1.1 Inspect existing workspace review, import, storage, and UI contracts.
-- [ ] 1.2 Validate this proposal and reconcile the foundation's merged actor context before schema/API edits.
+- [x] 1.2 Validate this proposal and reconcile the foundation's merged actor context before schema/API edits.
 
 ## 2. Date and review behavior
 - [x] 2.0 Add failing pure-domain date and review regression tests, then implement strict dates and idempotent review decisions without shared schema changes.
