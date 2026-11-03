@@ -82,10 +82,11 @@ impl TryFrom<ValueRow> for DocumentMetadataValue {
 }
 
 fn db_error(error: sqlx::Error) -> Error {
-    if error
-        .as_database_error()
-        .is_some_and(|e| e.is_unique_violation() || e.is_foreign_key_violation())
-    {
+    if error.as_database_error().is_some_and(|e| {
+        e.is_unique_violation()
+            || e.is_foreign_key_violation()
+            || matches!(e.code().as_deref(), Some("40001" | "40P01"))
+    }) {
         Error::Conflict("Metadata value conflicts with a retained value or reference".into())
     } else {
         Error::Repository(error.to_string())
@@ -257,7 +258,7 @@ async fn write_value(
              target_document_id, canonical_key, created_at, updated_at, deleted_at, created_by, updated_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15, $16, $17, $17)"
     };
-    sqlx::query(sql)
+    let result = sqlx::query(sql)
         .bind(vault.0)
         .bind(document)
         .bind(field)
@@ -278,6 +279,11 @@ async fn write_value(
         .execute(conn)
         .await
         .map_err(db_error)?;
+    if result.rows_affected() != 1 {
+        return Err(Error::Repository(
+            "Metadata value no longer matches its field".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -287,6 +293,16 @@ pub(crate) async fn clear_incoming_links(
     vault: VaultId,
     target: Id,
 ) -> Result<()> {
+    sqlx::query(
+        "SELECT id FROM documents WHERE vault_id = $1 AND id <> $2 AND id IN
+         (SELECT document_id FROM metadata_values WHERE vault_id = $1 AND target_document_id = $2 AND deleted_at IS NULL)
+         ORDER BY id FOR UPDATE",
+    )
+    .bind(vault.0)
+    .bind(target)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(db_error)?;
     let rows: Vec<(Id, Id, bool)> = sqlx::query_as(
         "SELECT document_id, field_id, is_unique FROM metadata_values
          WHERE vault_id = $1 AND target_document_id = $2 AND deleted_at IS NULL ORDER BY document_id, field_id FOR UPDATE",
@@ -364,8 +380,14 @@ pub(crate) async fn prepare_move(
 #[async_trait]
 impl MetadataValueRepository for PostgresMetadataValueRepository {
     async fn get(&self, vault: VaultId, document: Id) -> Result<DocumentMetadata> {
-        let mut conn = self.pool.acquire().await.map_err(db_error)?;
-        load(&mut conn, vault, document).await
+        let mut tx = self.pool.begin().await.map_err(db_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+        let metadata = load(&mut tx, vault, document).await?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(metadata)
     }
 
     async fn patch(

@@ -262,7 +262,7 @@ async fn write_value(
              target_document_id, canonical_key, created_at, updated_at, deleted_at, created_by, updated_by)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16, ?17, ?17)"
     };
-    sqlx::query(sql)
+    let result = sqlx::query(sql)
         .bind(vault.to_string())
         .bind(document.to_string())
         .bind(field.to_string())
@@ -283,6 +283,11 @@ async fn write_value(
         .execute(conn)
         .await
         .map_err(db_error)?;
+    if result.rows_affected() != 1 {
+        return Err(Error::Repository(
+            "Metadata value no longer matches its field".into(),
+        ));
+    }
     Ok(())
 }
 
