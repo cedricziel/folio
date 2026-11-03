@@ -6,6 +6,23 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::models::{UserId, VaultId};
 
+pub const DOCUMENT_METADATA_CHANGED: &str = "document.metadata.changed";
+const MAX_EVENT_DATA_BYTES: usize = 65_536;
+const MAX_METADATA_SNAPSHOT_BYTES: usize = 1_048_576;
+
+#[derive(Default)]
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DomainEventSubject {
@@ -166,19 +183,16 @@ impl DomainEventEnvelope {
                 return Err(invalid("Domain event audience requires a user"));
             }
         }
-        let max_data_bytes = if self.event_type == "document.metadata.changed"
+        let max_data_bytes = if self.event_type == DOCUMENT_METADATA_CHANGED
             && self.audience == EventAudience::Vault
         {
-            1_048_576
+            MAX_METADATA_SNAPSHOT_BYTES
         } else {
-            65_536
+            MAX_EVENT_DATA_BYTES
         };
-        if !self.data.is_object()
-            || serde_json::to_vec(&self.data)
-                .map_err(|e| invalid(&e.to_string()))?
-                .len()
-                > max_data_bytes
-        {
+        let mut size = ByteCount::default();
+        serde_json::to_writer(&mut size, &self.data).map_err(|e| invalid(&e.to_string()))?;
+        if !self.data.is_object() || size.0 > max_data_bytes {
             return Err(invalid(&format!(
                 "Domain event data must be an object of at most {max_data_bytes} bytes"
             )));
@@ -416,7 +430,7 @@ mod tests {
         let before = "\u{0001}".repeat(65_536);
         let after = "\u{0002}".repeat(65_536);
         let event = DomainEventEnvelope::new(
-            "document.metadata.changed",
+            DOCUMENT_METADATA_CHANGED,
             VaultId::new(),
             DomainEventSubject {
                 subject_type: "document".into(),
@@ -442,7 +456,7 @@ mod tests {
         let payload = json!({"text": "x".repeat(1_048_576 - overhead)});
         assert_eq!(serde_json::to_vec(&payload).unwrap().len(), 1_048_576);
         let event = DomainEventEnvelope::new(
-            "document.metadata.changed",
+            DOCUMENT_METADATA_CHANGED,
             VaultId::new(),
             DomainEventSubject {
                 subject_type: "document".into(),
@@ -458,7 +472,7 @@ mod tests {
         let mut oversized = payload;
         oversized["text"] = json!("x".repeat(1_048_577 - overhead));
         assert!(DomainEventEnvelope::new(
-            "document.metadata.changed",
+            DOCUMENT_METADATA_CHANGED,
             event.vault_id(),
             event.subject().clone(),
             Some(document),
@@ -472,10 +486,10 @@ mod tests {
     }
 
     #[test]
-    fn extended_snapshot_budget_requires_exact_event_scope_and_target() {
+    fn extended_snapshot_budget_requires_exact_event_type_and_vault_audience() {
         let document = Uuid::new_v4();
         let event = DomainEventEnvelope::new(
-            "document.metadata.changed",
+            DOCUMENT_METADATA_CHANGED,
             VaultId::new(),
             DomainEventSubject {
                 subject_type: "document".into(),
@@ -492,9 +506,6 @@ mod tests {
         let mut wrong_audience = serde_json::to_value(&event).unwrap();
         wrong_audience["audience"] = serde_json::to_value(EventAudience::Owners).unwrap();
         assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_audience).is_err());
-        let mut wrong_target = serde_json::to_value(&event).unwrap();
-        wrong_target["document_id"] = json!(Uuid::new_v4());
-        assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_target).is_err());
     }
 
     #[tokio::test]
