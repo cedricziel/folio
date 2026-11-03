@@ -15,6 +15,8 @@ use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/trash", get(list_document_types_trash))
+        .route("/{id}/restore", axum::routing::post(restore_document_type))
         .route("/", get(list_document_types).post(create_document_type))
         .route(
             "/{id}",
@@ -159,4 +161,21 @@ pub(crate) async fn delete_document_type(
 ) -> ApiResult<StatusCode> {
     state.document_type_repo.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(get, path = "/api/document_types/trash", operation_id = "listDocumentTypesTrash", tag = "document_types", responses((status = 200, description = "Deleted entries", body = Vec<DocumentType>), InternalError))]
+pub(crate) async fn list_document_types_trash(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<DocumentType>>> {
+    Ok(Json(state.document_type_repo.list_trash(vault).await?))
+}
+
+#[utoipa::path(post, path = "/api/document_types/{id}/restore", operation_id = "restoreDocumentType", tag = "document_types", params(("id" = Uuid, Path, description = "Entry ID")), responses((status = 200, description = "Restored entry", body = DocumentType), NotFound, Conflict, InternalError))]
+pub(crate) async fn restore_document_type(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<Json<DocumentType>> {
+    Ok(Json(state.document_type_repo.restore(vault, id).await?))
 }

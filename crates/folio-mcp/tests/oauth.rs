@@ -581,10 +581,11 @@ async fn assert_deleted_tag_is_not_recreated(tool: &'static str) {
         )
         .await
         .unwrap();
+    let tagged_elsewhere = fx.insert("Vocabulary source", "").await;
     fx.library
         .add_tags(
             server.vault,
-            document.id,
+            tagged_elsewhere.id,
             &["existing".into()],
             folio_core::services::VocabularyPolicy::CreateMissing,
         )

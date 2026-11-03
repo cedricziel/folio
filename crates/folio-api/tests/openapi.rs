@@ -111,3 +111,22 @@ fn documents_describe_bearer_auth_and_token_management_requires_session() {
     assert!(spec["paths"]["/api/auth/tokens"]["post"]["responses"]["201"].is_object());
     assert!(spec["paths"]["/api/auth/tokens/{id}"]["delete"]["responses"]["404"].is_object());
 }
+
+#[test]
+fn review_metadata_uses_nullable_inline_types_for_generated_clients() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let fields = &spec["components"]["schemas"]["Document"]["properties"];
+    assert_eq!(
+        fields["reviewed_at"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+    assert_eq!(fields["reviewed_at"]["format"], "date-time");
+    assert_eq!(
+        fields["reviewed_by"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+    assert_eq!(
+        fields["review_origin"]["type"],
+        serde_json::json!(["string", "null"])
+    );
+}

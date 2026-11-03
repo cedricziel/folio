@@ -22,10 +22,12 @@ public struct DocumentPage: Equatable, Sendable {
     public let vaultID: UUID
     public let documents: [Document]
     public let nextCursor: String?
+    public let supportsReviewFilters: Bool
 
-    public init(vaultID: UUID, documents: [Document], nextCursor: String? = nil) {
+    public init(vaultID: UUID, documents: [Document], nextCursor: String? = nil, supportsReviewFilters: Bool = false) {
         self.vaultID = vaultID
         self.documents = documents
         self.nextCursor = nextCursor
+        self.supportsReviewFilters = supportsReviewFilters
     }
 }
