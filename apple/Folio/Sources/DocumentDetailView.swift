@@ -78,6 +78,7 @@ struct DocumentDetailView: View {
                         }
                     }
                 }
+                DocumentProcessingView(document: model.document)
                 Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
                 if let failure = model.metadataFailure {
                     Text(failure).foregroundStyle(Color.danger)
