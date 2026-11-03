@@ -350,7 +350,7 @@ private let documentJSON = """
             return .init(
                 body: Data(
                     """
-                    [{"id":"\(UUID())","vault_id":"\(vault)","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z"}]
+                    [{"id":"\(UUID())","vault_id":"\(vault)","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-14T10:15:30Z"}]
                     """.utf8))
         }
 
@@ -538,6 +538,73 @@ private let documentJSON = """
         }
 
         try await makeService().scoped(to: vault).addTag(tag, to: document)
+    }
+
+    @Test func entryRequestsRetainVaultRetryKeyAndLiteralText() async throws {
+        let vault = UUID()
+        let document = UUID()
+        let entry = UUID()
+        let key = UUID()
+        let body = "<script>literal</script>\nsecond line"
+        let response = try JSONSerialization.data(withJSONObject: [
+            "id": entry.uuidString, "document_id": document.uuidString, "vault_id": vault.uuidString,
+            "kind": "note", "body": body, "created_at": "2026-11-03T01:02:03.123456Z",
+            "updated_at": "2026-11-03T01:02:03Z", "created_by": "author",
+            "can_edit": true, "can_delete": true,
+        ])
+        StubURLProtocol.handler = { request, data in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == key.uuidString.lowercased())
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer entry-token")
+            let json = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: String]
+            #expect(json == ["kind": "note", "body": body])
+            return .init(status: 201, body: response)
+        }
+        let result = try await makeService(token: FixedToken(value: "entry-token")).scoped(to: vault).createEntry(
+            documentID: document, kind: .note, body: body, key: key)
+        #expect(result.body == body)
+        #expect(result.canEdit)
+        #expect(result.vaultID == vault)
+    }
+
+    @Test func entryPagingEscapesCursorAndRetainsCapabilities() async throws {
+        let cursor = "opaque+continuation/="
+        StubURLProtocol.handler = { request, _ in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            #expect(query?.first(where: { $0.name == "cursor" })?.value == cursor)
+            #expect(query?.first(where: { $0.name == "kind" })?.value == "comment")
+            return .init(body: Data("{\"entries\":[],\"next_cursor\":null,\"can_create\":false}".utf8))
+        }
+        let page = try await makeService().entryPage(documentID: UUID(), kind: .comment, cursor: cursor)
+        #expect(!page.canCreate)
+        #expect(page.nextCursor == nil)
+    }
+
+    @Test func entryEditDeleteAndAccessErrors() async throws {
+        let document = UUID()
+        let entry = UUID()
+        StubURLProtocol.handler = { request, data in
+            #expect(request.httpMethod == "PATCH")
+            #expect(
+                request.url?.path.lowercased()
+                    == "/api/documents/\(document.uuidString.lowercased())/entries/\(entry.uuidString.lowercased())")
+            let json = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: String]
+            #expect(json == ["body": "Updated"])
+            return .init(status: 403, body: Data("{\"error\":\"Access revoked\"}".utf8))
+        }
+        await #expect(throws: FolioError.server(status: 403, message: "Access revoked")) {
+            _ = try await makeService().updateEntry(documentID: document, entryID: entry, body: "Updated")
+        }
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "DELETE")
+            return .init(status: 204)
+        }
+        try await makeService().deleteEntry(documentID: document, entryID: entry)
+        StubURLProtocol.handler = { _, _ in .init(body: Data("{}".utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) {
+            _ = try await makeService().entryPage(documentID: document, kind: .note, cursor: nil)
+        }
     }
 
     @Test func surfacesServerErrorMessage() async throws {
