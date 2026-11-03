@@ -405,10 +405,12 @@ mod tests {
     #[test]
     fn counts_split_inbox_from_review() {
         let processing = Document::new(VaultId::new(), "a");
-        let review = Document::new(VaultId::new(), "b").with_content("x");
+        let mut review = Document::new(VaultId::new(), "b").with_content("x");
+        review.embed_status = ProcessingStatus::Done;
         let mut filed = Document::new(VaultId::new(), "c")
             .with_content("x")
             .with_document_type(Id::new_v4());
+        filed.embed_status = ProcessingStatus::Done;
         filed.reviewed_at = Some(chrono::Utc::now());
         let mut unreadable = Document::new(VaultId::new(), "d");
         unreadable.ocr_status = ProcessingStatus::Failed;
