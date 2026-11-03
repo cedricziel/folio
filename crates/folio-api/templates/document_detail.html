@@ -28,5 +28,6 @@
             <button type="submit" class="f-btn f-btn-quiet f-btn-danger">Move to Trash</button>
         </form>
         {% endif %}
+        <a class="f-btn" href="{{ "/documents"|vault_url }}/{{ document.id }}" data-turbo-frame="_top">Open notes and comments</a>
     </div>
 </turbo-frame>

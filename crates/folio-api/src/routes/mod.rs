@@ -4,8 +4,10 @@ mod assets;
 pub mod auth;
 pub(crate) mod browse;
 pub(crate) mod correspondents;
+pub(crate) mod document_entries;
 pub(crate) mod document_types;
 pub(crate) mod documents;
+mod entry_pages;
 mod error_pages;
 pub(crate) mod events;
 mod file_response;
@@ -82,6 +84,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(crate::openapi::router())
         // Page routes (HTMX)
         .merge(pages::router())
+        .merge(entry_pages::router())
         .merge(saved_view_pages::router())
         .merge(trash::router())
         // Manifest, service worker and share target

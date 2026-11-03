@@ -63,6 +63,24 @@ pub struct WebhookDocument {
     pub urls: WebhookUrls,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowEventIdentity {
+    pub event_id: uuid::Uuid,
+    pub mutation_id: uuid::Uuid,
+    pub correlation_id: uuid::Uuid,
+}
+
+impl From<&crate::DomainEventEnvelope> for WorkflowEventIdentity {
+    fn from(event: &crate::DomainEventEnvelope) -> Self {
+        Self {
+            event_id: event.event_id(),
+            mutation_id: event.mutation_id(),
+            correlation_id: event.correlation_id(),
+        }
+    }
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -74,6 +92,8 @@ pub struct WebhookPayload {
     pub version: u32,
     pub occurred_at: DateTime<Utc>,
     pub document: WebhookDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_event: Option<WorkflowEventIdentity>,
 }
 
 impl WebhookPayload {
@@ -87,6 +107,7 @@ impl WebhookPayload {
             version: PAYLOAD_VERSION,
             occurred_at,
             document,
+            source_event: None,
         }
     }
 

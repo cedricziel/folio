@@ -43,6 +43,12 @@ async fn contract(db: Database) {
         )
         .await
         .unwrap();
+    let doc = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(doc.document_date, None);
     let date = "1582-10-10".parse().unwrap();
     let update = || UpdateDocument {
@@ -68,8 +74,14 @@ async fn contract(db: Database) {
     .unwrap();
     assert_eq!(changed.document_date, Some(date));
     assert_eq!(changed.created_at, doc.created_at);
+    let saved = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
     let repeated = r.documents.update(vault, doc.id, update()).await.unwrap();
-    assert_eq!(repeated.updated_at, changed.updated_at);
+    assert_eq!(repeated.updated_at, saved.updated_at);
     let omitted = r
         .documents
         .update(vault, doc.id, UpdateDocument::default())

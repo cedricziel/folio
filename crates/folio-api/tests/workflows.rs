@@ -64,6 +64,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let state = AppState::new(
         repos.saved_views,
         repos.documents,
+        repos.entries,
         repos.tags,
         repos.correspondents,
         repos.document_types,
@@ -430,6 +431,21 @@ async fn pages_render_and_the_form_creates_a_workflow() {
     let (_, html) = send(&app, "GET", "/workflows", None).await;
     assert!(html.contains("Home Assistant"));
     assert!(html.contains("No runs yet"));
+}
+
+#[tokio::test]
+async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["trigger"] = json!("document.tags_changed");
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["trigger"], "document.tags_changed");
+    let id = created["id"].as_str().unwrap();
+    let (status, html) = send(&app, "GET", &format!("/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("value=\"document.tags_changed\" selected"));
+    assert!(html.contains("When document tags change"));
 }
 
 #[tokio::test]

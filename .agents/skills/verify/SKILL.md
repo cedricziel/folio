@@ -179,6 +179,14 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 
 ## Verify ingestion claims
 
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
+with the isolated Cargo settings below. These tests use temporary SQLite databases
+and disposable PostgreSQL containers. They cover atomic outcome/ledger/outbox
+rollback, concurrent replay, stale attempts, changed skip decisions, bounded
+pagination, managed-source ownership, and source failure/recovery transitions.
+Upgrade cases preserve existing ledger rows and emit no historical outcomes.
+Do not treat an unavailable PostgreSQL fixture as a passing parity check.
+
 Folder regressions cover replacement during import, staged retry and restart,
 cancellation, concurrent source instances, and symlink-safe recovery.
 Observation regressions also cover stable keys across staging restart and mailbox
@@ -208,6 +216,12 @@ recursive schema references, and preserving API-created groups through HTML edit
 The core suite also verifies trigger registration, duplicate and unknown selections,
 condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
+For precise metadata transitions, `cargo test -p folio-infra --test workflows`
+checks actual producer dispatch, delayed snapshots, replay deduplication, and
+system-actor lineage after source-outbox deletion. Run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract satisfies_the_contract`
+for SQLite/PostgreSQL producer-to-run persistence, and the workflow API suite
+for trigger selection and web-editor roundtrip.
 
 Run `cargo test -p folio-infra --test workflows` and
 `cargo test -p folio-api --test vaults --test live` for immutable event delivery.
@@ -464,7 +478,11 @@ cancellation, concurrent scopes, detached tasks, actor independence, and envelop
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
 
-## Verify document dates and metadata
+## Verify document notes and comments
+
+Run the [document entry checks](references/document-entries.md).
+
+## Verify document metadata transitions
 
 For date edits, metadata events, moves, and their API/MCP entry points, run the
 [document metadata checks](references/document-metadata.md).
@@ -481,14 +499,17 @@ rename, share, and delete views. Inspect screenshots and confirm that a single
 grid card keeps a bounded width. The precision regression renames a view without
 rounding its stored submillisecond boundaries to the date input's display value.
 
-## Verify typed metadata fields
+Shared navigation changes also require the Linux `visual.spec.ts` suite.
+Inspect its image diffs and update affected baselines before merging.
 
-Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields`
+## Verify typed metadata fields and options
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields --test metadata_options`
 with task-owned build storage, at most two jobs, incremental compilation disabled,
 and zero debug symbols when capacity is constrained. The shared contract uses a
 temporary SQLite database and a disposable PostgreSQL container. It covers scoped
-field reads, server-derived attribution, canonical name uniqueness, concurrent
+field/option reads, server-derived attribution, canonical name uniqueness, concurrent
 claims, pagination, retirement, restore conflicts, no-op suppression, and rollback
-when transactional outbox publication fails. It also checks that field events are
+when outbox publication fails, option identity, and select-field integrity. Events are
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
