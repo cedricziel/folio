@@ -141,7 +141,7 @@ fn parse_optional_uuid(s: Option<String>) -> Result<Option<Uuid>> {
 /// Columns of `documents` read into a [`DocumentRow`]
 const DOC_COLS: &str = "id, vault_id, uploaded_by, title, content, original_filename, file_path,
     mime_type, correspondent_id, document_type_id, page_count, source_type, source_meta,
-    ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at, document_date";
+    ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at, document_date, reviewed_at, reviewed_by, review_origin";
 
 fn not_found(entity_type: &'static str, id: Id) -> Error {
     Error::NotFound {
@@ -172,7 +172,7 @@ async fn require_entry(
     id: Id,
 ) -> Result<()> {
     let found: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT 1 FROM {table} WHERE id = ? AND vault_id = ?"
+        "SELECT 1 FROM {table} WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
     )))
     .bind(id.to_string())
     .bind(vault.to_string())
@@ -190,6 +190,9 @@ struct DocumentRow {
     uploaded_by: Option<String>,
     title: String,
     document_date: Option<String>,
+    reviewed_at: Option<DateTime<Utc>>,
+    reviewed_by: Option<String>,
+    review_origin: Option<String>,
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
@@ -216,6 +219,12 @@ impl TryFrom<DocumentRow> for Document {
             vault_id: VaultId(parse_uuid(&row.vault_id)?),
             uploaded_by: row.uploaded_by.map(UserId),
             title: row.title,
+            reviewed_at: row.reviewed_at,
+            reviewed_by: row.reviewed_by.map(UserId),
+            review_origin: row
+                .review_origin
+                .map(|v| v.parse().map_err(Error::Repository))
+                .transpose()?,
             document_date: row
                 .document_date
                 .map(|value| value.parse().map_err(|e: &str| Error::Repository(e.into())))
@@ -258,6 +267,10 @@ struct TagRow {
     name: String,
     color: Option<String>,
     created_at: String,
+    updated_at: String,
+    deleted_at: Option<String>,
+    created_by: Option<String>,
+    updated_by: Option<String>,
 }
 
 impl TryFrom<TagRow> for Tag {
@@ -273,6 +286,17 @@ impl TryFrom<TagRow> for Tag {
                 .created_at
                 .parse::<DateTime<Utc>>()
                 .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+            updated_at: row
+                .updated_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(e.to_string()))?,
+            deleted_at: row
+                .deleted_at
+                .map(|value| value.parse::<DateTime<Utc>>())
+                .transpose()
+                .map_err(|e| Error::Repository(e.to_string()))?,
+            created_by: row.created_by.map(UserId),
+            updated_by: row.updated_by.map(UserId),
         })
     }
 }
@@ -283,6 +307,10 @@ struct CorrespondentRow {
     vault_id: String,
     name: String,
     created_at: String,
+    updated_at: String,
+    deleted_at: Option<String>,
+    created_by: Option<String>,
+    updated_by: Option<String>,
 }
 
 impl TryFrom<CorrespondentRow> for Correspondent {
@@ -297,6 +325,17 @@ impl TryFrom<CorrespondentRow> for Correspondent {
                 .created_at
                 .parse::<DateTime<Utc>>()
                 .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+            updated_at: row
+                .updated_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(e.to_string()))?,
+            deleted_at: row
+                .deleted_at
+                .map(|value| value.parse::<DateTime<Utc>>())
+                .transpose()
+                .map_err(|e| Error::Repository(e.to_string()))?,
+            created_by: row.created_by.map(UserId),
+            updated_by: row.updated_by.map(UserId),
         })
     }
 }
@@ -307,6 +346,10 @@ struct DocumentTypeRow {
     vault_id: String,
     name: String,
     created_at: String,
+    updated_at: String,
+    deleted_at: Option<String>,
+    created_by: Option<String>,
+    updated_by: Option<String>,
 }
 
 impl TryFrom<DocumentTypeRow> for DocumentType {
@@ -321,6 +364,17 @@ impl TryFrom<DocumentTypeRow> for DocumentType {
                 .created_at
                 .parse::<DateTime<Utc>>()
                 .map_err(|e| Error::Repository(format!("Invalid datetime: {}", e)))?,
+            updated_at: row
+                .updated_at
+                .parse::<DateTime<Utc>>()
+                .map_err(|e| Error::Repository(e.to_string()))?,
+            deleted_at: row
+                .deleted_at
+                .map(|value| value.parse::<DateTime<Utc>>())
+                .transpose()
+                .map_err(|e| Error::Repository(e.to_string()))?,
+            created_by: row.created_by.map(UserId),
+            updated_by: row.updated_by.map(UserId),
         })
     }
 }
@@ -419,7 +473,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
         let tags: Vec<(String,)> = sqlx::query_as(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
-             WHERE dt.document_id = ?",
+             WHERE dt.document_id = ? AND t.deleted_at IS NULL",
         )
         .bind(id.to_string())
         .fetch_all(&mut *tx)
@@ -432,6 +486,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             from,
             to,
             doc.correspondent_id.as_deref(),
+            mutation_id,
         )
         .await?;
         let document_type = remap_by_name(
@@ -440,6 +495,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             from,
             to,
             doc.document_type_id.as_deref(),
+            mutation_id,
         )
         .await?;
 
@@ -450,7 +506,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .map_err(map_sqlx_error)?;
         for (name,) in tags {
             let tag_id = match sqlx::query_as::<_, (String,)>(
-                "SELECT id FROM tags WHERE vault_id = ? AND name = ?",
+                "SELECT id FROM tags WHERE vault_id = ? AND name = ? AND deleted_at IS NULL",
             )
             .bind(to.to_string())
             .bind(&name)
@@ -461,18 +517,23 @@ impl DocumentRepository for SqliteDocumentRepository {
                 Some((existing,)) => existing,
                 None => {
                     let new_id = Id::new_v4().to_string();
+                    let actor = folio_core::mutation::current_actor();
                     sqlx::query(
-                        "INSERT INTO tags (id, vault_id, name, color, created_at)
-                         SELECT ?, ?, name, color, created_at FROM tags
-                         WHERE vault_id = ? AND name = ?",
+                        "INSERT INTO tags (id, vault_id, name, color, created_at, updated_at, created_by, updated_by)
+                         SELECT ?, ?, name, color, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ? FROM tags
+                         WHERE vault_id = ? AND name = ? AND deleted_at IS NULL",
                     )
                     .bind(&new_id)
                     .bind(to.to_string())
+                    .bind(actor.as_ref().map(UserId::as_str))
+                    .bind(actor.as_ref().map(UserId::as_str))
                     .bind(from.to_string())
                     .bind(&name)
                     .execute(&mut *tx)
                     .await
                     .map_err(map_sqlx_error)?;
+                    emit_moved_taxonomy(&mut tx, "tags", to, parse_uuid(&new_id)?, mutation_id)
+                        .await?;
                     new_id
                 }
             };
@@ -672,6 +733,54 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
     }
 
+    async fn set_reviewed(&self, vault: VaultId, id: Id, reviewed: bool) -> Result<Document> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let existing: Document = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Document", id))?;
+
+        if existing.reviewed_at.is_some() == reviewed {
+            return Ok(existing);
+        }
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let mut review = folio_core::models::DocumentReview::default();
+        review.set_reviewed_from_context(reviewed);
+        let decision = review.decision();
+        sqlx::query("UPDATE documents SET reviewed_at = ?, reviewed_by = ?, review_origin = ?, updated_at = ? WHERE id = ? AND vault_id = ?")
+            .bind(decision.map(|d| d.reviewed_at.to_rfc3339()))
+            .bind(decision.and_then(|d| d.reviewed_by.as_ref()).map(|id| id.0.as_str()))
+            .bind(decision.map(|d| d.origin.as_str()))
+            .bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string())
+            .execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        self.emit_metadata_in(&mut tx, &before).await?;
+        let row: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let result = row.try_into()?;
+        self.commit(tx).await?;
+        Ok(result)
+    }
+
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
         let mut tx = self
             .pool
@@ -716,12 +825,11 @@ impl DocumentRepository for SqliteDocumentRepository {
             return Ok(existing);
         }
 
-        let mut conn = self.pool.acquire().await.map_err(map_sqlx_error)?;
         if let Some(c) = correspondent_id.filter(|c| Some(*c) != existing.correspondent_id) {
-            require_entry(&mut conn, "correspondents", "Correspondent", vault, c).await?;
+            require_entry(&mut tx, "correspondents", "Correspondent", vault, c).await?;
         }
         if let Some(t) = document_type_id.filter(|t| Some(*t) != existing.document_type_id) {
-            require_entry(&mut conn, "document_types", "DocumentType", vault, t).await?;
+            require_entry(&mut tx, "document_types", "DocumentType", vault, t).await?;
         }
 
         sqlx::query(
@@ -748,6 +856,9 @@ impl DocumentRepository for SqliteDocumentRepository {
             vault_id: vault,
             uploaded_by: existing.uploaded_by,
             document_date,
+            reviewed_at: existing.reviewed_at,
+            reviewed_by: existing.reviewed_by,
+            review_origin: existing.review_origin,
             title,
             content,
             original_filename: existing.original_filename,
@@ -957,7 +1068,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await?
             .ok_or_else(|| not_found("Document", id))?;
         let document: Document = row.try_into()?;
-        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.vault_id, t.name, t.color, t.created_at FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
+        let tags: Vec<TagRow> = sqlx::query_as("SELECT t.id, t.vault_id, t.name, t.color, t.created_at, t.updated_at, t.deleted_at, t.created_by, t.updated_by FROM tags t JOIN document_tags dt ON t.id = dt.tag_id
              WHERE dt.document_id = ? AND t.vault_id = ?")
             .bind(id.to_string()).bind(vault.to_string()).fetch_all(&mut *tx).await.map_err(map_sqlx_error)?;
         let tags = tags
@@ -1164,7 +1275,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
     async fn get_tags(&self, vault: VaultId, document_id: Id) -> Result<Vec<Tag>> {
         let rows: Vec<TagRow> = sqlx::query_as(
-            "SELECT t.id, t.vault_id, t.name, t.color, t.created_at
+            "SELECT t.id, t.vault_id, t.name, t.color, t.created_at, t.updated_at, t.deleted_at, t.created_by, t.updated_by
              FROM tags t
              INNER JOIN document_tags dt ON t.id = dt.tag_id
              INNER JOIN documents d ON d.id = dt.document_id
@@ -1191,7 +1302,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         // Legacy unbounded list callers can exceed the database's bind limit.
         for chunk in ids.chunks(500) {
             let mut qb = QueryBuilder::<Sqlite>::new(
-                "SELECT dt.document_id, t.id, t.vault_id, t.name, t.color, t.created_at
+                "SELECT dt.document_id, t.id, t.vault_id, t.name, t.color, t.created_at, t.updated_at, t.deleted_at, t.created_by, t.updated_by
                  FROM document_tags dt JOIN tags t ON t.id = dt.tag_id
                  JOIN documents d ON d.id = dt.document_id
                  WHERE t.vault_id = d.vault_id AND d.deleted_at IS NULL AND d.vault_id = ",
@@ -1286,10 +1397,11 @@ async fn remap_by_name(
     from: VaultId,
     to: VaultId,
     id: Option<&str>,
+    mutation_id: Id,
 ) -> Result<Option<String>> {
     let Some(id) = id else { return Ok(None) };
     let name: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT name FROM {table} WHERE id = ? AND vault_id = ?"
+        "SELECT name FROM {table} WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
     )))
     .bind(id)
     .bind(from.to_string())
@@ -1298,7 +1410,7 @@ async fn remap_by_name(
     .map_err(map_sqlx_error)?;
     let Some((name,)) = name else { return Ok(None) };
     let existing: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM {table} WHERE vault_id = ? AND name = ?"
+        "SELECT id FROM {table} WHERE vault_id = ? AND name = ? AND deleted_at IS NULL"
     )))
     .bind(to.to_string())
     .bind(&name)
@@ -1308,377 +1420,494 @@ async fn remap_by_name(
     if let Some((existing,)) = existing {
         return Ok(Some(existing));
     }
+    let actor = folio_core::mutation::current_actor();
+    let now = Utc::now();
     let new_id = Id::new_v4().to_string();
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT INTO {table} (id, vault_id, name, created_at) VALUES (?, ?, ?, ?)"
+        "INSERT INTO {table} (id, vault_id, name, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?)"
     )))
     .bind(&new_id)
     .bind(to.to_string())
     .bind(&name)
-    .bind(Utc::now().to_rfc3339())
+    .bind(now.to_rfc3339())
+    .bind(now.to_rfc3339())
+    .bind(actor.as_ref().map(UserId::as_str))
+    .bind(actor.as_ref().map(UserId::as_str))
     .execute(&mut *conn)
     .await
     .map_err(map_sqlx_error)?;
+    emit_moved_taxonomy(conn, table, to, parse_uuid(&new_id)?, mutation_id).await?;
     Ok(Some(new_id))
 }
 
-/// SQLite implementation of TagRepository
+async fn emit_moved_taxonomy(
+    conn: &mut SqliteConnection,
+    table: &'static str,
+    vault: VaultId,
+    id: Id,
+    mutation_id: Id,
+) -> Result<()> {
+    let (subject, data) = match table {
+        "tags" => {
+            let row: TagRow = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE id = ?").bind(id.to_string()).fetch_one(&mut *conn).await.map_err(map_sqlx_error)?;
+            let value: Tag = row.try_into()?;
+            (
+                "tag",
+                serde_json::to_value(value)
+                    .map_err(|error| Error::Repository(error.to_string()))?,
+            )
+        }
+        "correspondents" => {
+            let row: CorrespondentRow = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE id = ?").bind(id.to_string()).fetch_one(&mut *conn).await.map_err(map_sqlx_error)?;
+            let value: Correspondent = row.try_into()?;
+            (
+                "correspondent",
+                serde_json::to_value(value)
+                    .map_err(|error| Error::Repository(error.to_string()))?,
+            )
+        }
+        "document_types" => {
+            let row: DocumentTypeRow = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE id = ?").bind(id.to_string()).fetch_one(&mut *conn).await.map_err(map_sqlx_error)?;
+            let value: DocumentType = row.try_into()?;
+            (
+                "document_type",
+                serde_json::to_value(value)
+                    .map_err(|error| Error::Repository(error.to_string()))?,
+            )
+        }
+        _ => return Err(Error::Repository("Unsupported taxonomy table".into())),
+    };
+    let event = folio_core::domain_event::DomainEventEnvelope::new(
+        format!("{subject}.created"),
+        vault,
+        folio_core::domain_event::DomainEventSubject {
+            subject_type: subject.into(),
+            id,
+        },
+        None,
+        folio_core::domain_event::EventAudience::Vault,
+        data,
+    )?
+    .with_mutation(mutation_id)?;
+    super::insert_domain_event(conn, &event).await?;
+    Ok(())
+}
+
+async fn emit_taxonomy(
+    conn: &mut SqliteConnection,
+    subject_type: &str,
+    action: &str,
+    vault: VaultId,
+    id: Id,
+    value: &impl serde::Serialize,
+) -> Result<()> {
+    let event = folio_core::domain_event::DomainEventEnvelope::new(
+        format!("{subject_type}.{action}"),
+        vault,
+        folio_core::domain_event::DomainEventSubject {
+            subject_type: subject_type.into(),
+            id,
+        },
+        None,
+        folio_core::domain_event::EventAudience::Vault,
+        serde_json::to_value(value).map_err(|error| Error::Repository(error.to_string()))?,
+    )?;
+    super::insert_domain_event(conn, &event).await?;
+    Ok(())
+}
 pub struct SqliteTagRepository {
     pool: SqlitePool,
 }
-
 impl SqliteTagRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 }
-
 #[async_trait]
 impl TagRepository for SqliteTagRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Tag>> {
-        let row: Option<TagRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, color, created_at FROM tags WHERE id = ? AND vault_id = ?",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let row: Option<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE id = ? AND vault_id = ? AND deleted_at IS NULL").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
-
+    async fn find_retained(&self, vault: VaultId, id: Id) -> Result<Option<Tag>> {
+        let row: Option<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        row.map(TryInto::try_into).transpose()
+    }
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Tag>> {
-        let row: Option<TagRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, color, created_at FROM tags WHERE name = ? AND vault_id = ?",
-        )
-        .bind(name)
-        .bind(vault.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let row: Option<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE name = ? AND vault_id = ? AND deleted_at IS NULL").bind(name).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
-
     async fn list(&self, vault: VaultId) -> Result<Vec<Tag>> {
-        let rows: Vec<TagRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, color, created_at FROM tags WHERE vault_id = ? ORDER BY name",
-        )
-        .bind(vault.to_string())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let rows: Vec<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE vault_id = ? AND deleted_at IS NULL ORDER BY name").bind(vault.to_string()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
-
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Tag>> {
+        let rows: Vec<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE vault_id = ? AND deleted_at IS NOT NULL ORDER BY name").bind(vault.to_string()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
     async fn create(&self, vault: VaultId, params: CreateTag) -> Result<Tag> {
         let id = Id::new_v4();
         let now = Utc::now();
-
-        sqlx::query(
-            "INSERT INTO tags (id, vault_id, name, color, created_at) VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .bind(&params.name)
-        .bind(&params.color)
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| map_write_error(e, "Tag", &params.name))?;
-
-        Ok(Tag {
+        let actor = folio_core::mutation::current_actor();
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        sqlx::query("INSERT INTO tags (id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)")
+ .bind(id.to_string()).bind(vault.to_string()).bind(&params.name).bind(&params.color).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(actor.as_ref().map(UserId::as_str)).bind(actor.as_ref().map(UserId::as_str)).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Tag", &params.name))?;
+        let value = Tag {
             id,
             vault_id: vault,
             name: params.name,
             color: params.color,
             created_at: now,
-        })
+            updated_at: now,
+            deleted_at: None,
+            created_by: actor.clone(),
+            updated_by: actor,
+        };
+        emit_taxonomy(&mut tx, "tag", "created", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
     }
-
     async fn update(&self, vault: VaultId, id: Id, params: UpdateTag) -> Result<Tag> {
-        let existing = self
-            .find_by_id(vault, id)
-            .await?
-            .ok_or_else(|| not_found("Tag", id))?;
-
-        let name = params.name.unwrap_or(existing.name);
-        let color = params.color.unwrap_or(existing.color);
-
-        sqlx::query("UPDATE tags SET name = ?, color = ? WHERE id = ? AND vault_id = ?")
-            .bind(&name)
-            .bind(&color)
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| map_write_error(e, "Tag", &name))?;
-
-        Ok(Tag {
-            id,
-            vault_id: vault,
-            name,
-            color,
-            created_at: existing.created_at,
-        })
-    }
-
-    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM tags WHERE id = ? AND vault_id = ?")
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
+        let row: Option<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: Tag = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Tag", id))?;
+        if value.deleted_at.is_some() {
             return Err(not_found("Tag", id));
         }
-
+        let name = params.name.unwrap_or_else(|| value.name.clone());
+        let color = params.color.unwrap_or_else(|| value.color.clone());
+        if name == value.name && color == value.color {
+            return Ok(value);
+        }
+        value.name = name;
+        value.color = color;
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE tags SET name = ?, color = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(&value.color).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Tag", &value.name))?;
+        emit_taxonomy(&mut tx, "tag", "updated", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
+    }
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: Tag = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Tag", id))?;
+        if value.deleted_at.is_some() {
+            return Ok(());
+        }
+        value.deleted_at = Some(Utc::now());
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE tags SET name = ?, color = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(&value.color).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Tag", &value.name))?;
+        emit_taxonomy(&mut tx, "tag", "deleted", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
+    }
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Tag> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<TagRow> = sqlx::query_as("SELECT id, vault_id, name, color, created_at, updated_at, deleted_at, created_by, updated_by FROM tags WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: Tag = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Tag", id))?;
+        if value.deleted_at.is_none() {
+            return Ok(value);
+        }
+        value.deleted_at = None;
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE tags SET name = ?, color = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(&value.color).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Tag", &value.name))?;
+        emit_taxonomy(&mut tx, "tag", "restored", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
     }
 }
 
-/// SQLite implementation of CorrespondentRepository
 pub struct SqliteCorrespondentRepository {
     pool: SqlitePool,
 }
-
 impl SqliteCorrespondentRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 }
-
 #[async_trait]
 impl CorrespondentRepository for SqliteCorrespondentRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>> {
-        let row: Option<CorrespondentRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, created_at FROM correspondents WHERE id = ? AND vault_id = ?",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let row: Option<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
-
+    async fn find_retained(&self, vault: VaultId, id: Id) -> Result<Option<Correspondent>> {
+        let row: Option<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        row.map(TryInto::try_into).transpose()
+    }
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<Correspondent>> {
-        let row: Option<CorrespondentRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, created_at FROM correspondents WHERE name = ? AND vault_id = ?",
-        )
-        .bind(name)
-        .bind(vault.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let row: Option<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE name = ? AND vault_id = ? AND deleted_at IS NULL").bind(name).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
-
     async fn list(&self, vault: VaultId) -> Result<Vec<Correspondent>> {
-        let rows: Vec<CorrespondentRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, created_at FROM correspondents WHERE vault_id = ? ORDER BY name",
-        )
-        .bind(vault.to_string())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let rows: Vec<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE vault_id = ? AND deleted_at IS NULL ORDER BY name").bind(vault.to_string()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
-
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<Correspondent>> {
+        let rows: Vec<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE vault_id = ? AND deleted_at IS NOT NULL ORDER BY name").bind(vault.to_string()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
     async fn create(&self, vault: VaultId, params: CreateCorrespondent) -> Result<Correspondent> {
         let id = Id::new_v4();
         let now = Utc::now();
-
-        sqlx::query(
-            "INSERT INTO correspondents (id, vault_id, name, created_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .bind(&params.name)
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| map_write_error(e, "Correspondent", &params.name))?;
-
-        Ok(Correspondent {
+        let actor = folio_core::mutation::current_actor();
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        sqlx::query("INSERT INTO correspondents (id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)")
+ .bind(id.to_string()).bind(vault.to_string()).bind(&params.name).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(actor.as_ref().map(UserId::as_str)).bind(actor.as_ref().map(UserId::as_str)).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Correspondent", &params.name))?;
+        let value = Correspondent {
             id,
             vault_id: vault,
             name: params.name,
             created_at: now,
-        })
+            updated_at: now,
+            deleted_at: None,
+            created_by: actor.clone(),
+            updated_by: actor,
+        };
+        emit_taxonomy(&mut tx, "correspondent", "created", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
     }
-
     async fn update(
         &self,
         vault: VaultId,
         id: Id,
         params: UpdateCorrespondent,
     ) -> Result<Correspondent> {
-        let existing = self
-            .find_by_id(vault, id)
-            .await?
-            .ok_or_else(|| not_found("Correspondent", id))?;
-
-        let name = params.name.unwrap_or(existing.name);
-
-        sqlx::query("UPDATE correspondents SET name = ? WHERE id = ? AND vault_id = ?")
-            .bind(&name)
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| map_write_error(e, "Correspondent", &name))?;
-
-        Ok(Correspondent {
-            id,
-            vault_id: vault,
-            name,
-            created_at: existing.created_at,
-        })
-    }
-
-    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM correspondents WHERE id = ? AND vault_id = ?")
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
+        let row: Option<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: Correspondent = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Correspondent", id))?;
+        if value.deleted_at.is_some() {
             return Err(not_found("Correspondent", id));
         }
-
+        let name = params.name.unwrap_or_else(|| value.name.clone());
+        if name == value.name {
+            return Ok(value);
+        }
+        value.name = name;
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE correspondents SET name = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Correspondent", &value.name))?;
+        emit_taxonomy(&mut tx, "correspondent", "updated", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
+    }
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: Correspondent = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Correspondent", id))?;
+        if value.deleted_at.is_some() {
+            return Ok(());
+        }
+        value.deleted_at = Some(Utc::now());
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE correspondents SET name = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Correspondent", &value.name))?;
+        emit_taxonomy(&mut tx, "correspondent", "deleted", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
+    }
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Correspondent> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<CorrespondentRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM correspondents WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: Correspondent = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Correspondent", id))?;
+        if value.deleted_at.is_none() {
+            return Ok(value);
+        }
+        value.deleted_at = None;
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE correspondents SET name = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "Correspondent", &value.name))?;
+        emit_taxonomy(&mut tx, "correspondent", "restored", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
     }
 }
 
-/// SQLite implementation of DocumentTypeRepository
 pub struct SqliteDocumentTypeRepository {
     pool: SqlitePool,
 }
-
 impl SqliteDocumentTypeRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
 }
-
 #[async_trait]
 impl DocumentTypeRepository for SqliteDocumentTypeRepository {
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>> {
-        let row: Option<DocumentTypeRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, created_at FROM document_types WHERE id = ? AND vault_id = ?",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let row: Option<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE id = ? AND vault_id = ? AND deleted_at IS NULL").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
-
+    async fn find_retained(&self, vault: VaultId, id: Id) -> Result<Option<DocumentType>> {
+        let row: Option<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
+        row.map(TryInto::try_into).transpose()
+    }
     async fn find_by_name(&self, vault: VaultId, name: &str) -> Result<Option<DocumentType>> {
-        let row: Option<DocumentTypeRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, created_at FROM document_types WHERE name = ? AND vault_id = ?",
-        )
-        .bind(name)
-        .bind(vault.to_string())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let row: Option<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE name = ? AND vault_id = ? AND deleted_at IS NULL").bind(name).bind(vault.to_string()).fetch_optional(&self.pool).await.map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
-
     async fn list(&self, vault: VaultId) -> Result<Vec<DocumentType>> {
-        let rows: Vec<DocumentTypeRow> = sqlx::query_as(
-            "SELECT id, vault_id, name, created_at FROM document_types WHERE vault_id = ? ORDER BY name",
-        )
-        .bind(vault.to_string())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
+        let rows: Vec<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE vault_id = ? AND deleted_at IS NULL ORDER BY name").bind(vault.to_string()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
         rows.into_iter().map(TryInto::try_into).collect()
     }
-
+    async fn list_trash(&self, vault: VaultId) -> Result<Vec<DocumentType>> {
+        let rows: Vec<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE vault_id = ? AND deleted_at IS NOT NULL ORDER BY name").bind(vault.to_string()).fetch_all(&self.pool).await.map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
     async fn create(&self, vault: VaultId, params: CreateDocumentType) -> Result<DocumentType> {
         let id = Id::new_v4();
         let now = Utc::now();
-
-        sqlx::query(
-            "INSERT INTO document_types (id, vault_id, name, created_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .bind(&params.name)
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| map_write_error(e, "DocumentType", &params.name))?;
-
-        Ok(DocumentType {
+        let actor = folio_core::mutation::current_actor();
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        sqlx::query("INSERT INTO document_types (id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)")
+ .bind(id.to_string()).bind(vault.to_string()).bind(&params.name).bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(actor.as_ref().map(UserId::as_str)).bind(actor.as_ref().map(UserId::as_str)).execute(&mut *tx).await.map_err(|e| map_write_error(e, "DocumentType", &params.name))?;
+        let value = DocumentType {
             id,
             vault_id: vault,
             name: params.name,
             created_at: now,
-        })
+            updated_at: now,
+            deleted_at: None,
+            created_by: actor.clone(),
+            updated_by: actor,
+        };
+        emit_taxonomy(&mut tx, "document_type", "created", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
     }
-
     async fn update(
         &self,
         vault: VaultId,
         id: Id,
         params: UpdateDocumentType,
     ) -> Result<DocumentType> {
-        let existing = self
-            .find_by_id(vault, id)
-            .await?
-            .ok_or_else(|| not_found("DocumentType", id))?;
-
-        let name = params.name.unwrap_or(existing.name);
-
-        sqlx::query("UPDATE document_types SET name = ? WHERE id = ? AND vault_id = ?")
-            .bind(&name)
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| map_write_error(e, "DocumentType", &name))?;
-
-        Ok(DocumentType {
-            id,
-            vault_id: vault,
-            name,
-            created_at: existing.created_at,
-        })
-    }
-
-    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM document_types WHERE id = ? AND vault_id = ?")
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
+        let row: Option<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: DocumentType = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("DocumentType", id))?;
+        if value.deleted_at.is_some() {
             return Err(not_found("DocumentType", id));
         }
-
+        let name = params.name.unwrap_or_else(|| value.name.clone());
+        if name == value.name {
+            return Ok(value);
+        }
+        value.name = name;
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE document_types SET name = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "DocumentType", &value.name))?;
+        emit_taxonomy(&mut tx, "document_type", "updated", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
+    }
+    async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: DocumentType = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("DocumentType", id))?;
+        if value.deleted_at.is_some() {
+            return Ok(());
+        }
+        value.deleted_at = Some(Utc::now());
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE document_types SET name = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "DocumentType", &value.name))?;
+        emit_taxonomy(&mut tx, "document_type", "deleted", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
         Ok(())
     }
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<DocumentType> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        let row: Option<DocumentTypeRow> = sqlx::query_as("SELECT id, vault_id, name, created_at, updated_at, deleted_at, created_by, updated_by FROM document_types WHERE id = ? AND vault_id = ?").bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?;
+        let mut value: DocumentType = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("DocumentType", id))?;
+        if value.deleted_at.is_none() {
+            return Ok(value);
+        }
+        value.deleted_at = None;
+        value.updated_at = Utc::now();
+        value.updated_by = folio_core::mutation::current_actor();
+        sqlx::query("UPDATE document_types SET name = ?, updated_at = ?, updated_by = ?, deleted_at = ? WHERE id = ? AND vault_id = ?").bind(&value.name).bind(value.updated_at.to_rfc3339()).bind(value.updated_by.as_ref().map(UserId::as_str)).bind(value.deleted_at.map(|time| time.to_rfc3339())).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(|e| map_write_error(e, "DocumentType", &value.name))?;
+        emit_taxonomy(&mut tx, "document_type", "restored", vault, id, &value).await?;
+        tx.commit().await.map_err(map_sqlx_error)?;
+        Ok(value)
+    }
 }
-
 impl SqliteDocumentRepository {
     async fn replace_tags(
         &self,
@@ -1688,9 +1917,6 @@ impl SqliteDocumentRepository {
         tag_ids: &[Id],
     ) -> Result<bool> {
         require_document(tx, vault, document_id).await?;
-        for tag in tag_ids {
-            require_entry(tx, "tags", "Tag", vault, *tag).await?;
-        }
         let mut wanted = tag_ids.to_vec();
         wanted.sort();
         wanted.dedup();
@@ -1705,6 +1931,12 @@ impl SqliteDocumentRepository {
             .map(|id| parse_uuid(&id))
             .collect::<Result<_>>()?;
         current.sort();
+        for tag in wanted
+            .iter()
+            .filter(|tag| current.binary_search(tag).is_err())
+        {
+            require_entry(tx, "tags", "Tag", vault, *tag).await?;
+        }
         if current == wanted {
             return Ok(false);
         }
@@ -1830,6 +2062,9 @@ impl SqliteDocumentRepository {
             vault_id: vault,
             uploaded_by: params.uploaded_by,
             document_date: None,
+            reviewed_at: None,
+            reviewed_by: None,
+            review_origin: None,
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,

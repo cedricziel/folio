@@ -95,11 +95,15 @@ public struct Tag: Identifiable, Hashable, Sendable {
     public let id: UUID
     public var name: String
     public var color: String?
+    public var deletedAt: Date?
 
-    public init(id: UUID = UUID(), name: String, color: String? = nil) {
+    public var displayName: String { deletedAt == nil ? name : "\(name) (deleted)" }
+
+    public init(id: UUID = UUID(), name: String, color: String? = nil, deletedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.color = color
+        self.deletedAt = deletedAt
     }
 }
 
