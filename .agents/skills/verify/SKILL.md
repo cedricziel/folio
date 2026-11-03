@@ -548,3 +548,15 @@ checks failed object removal, repair of exhausted jobs, preserved causal lineage
 and system-actor completion. The document transition suite checks distinct purge
 request/completion snapshots, repeat suppression, legacy job payloads, and both
 databases' persisted request lineage. Regenerate OpenAPI after projection changes.
+
+## Verify Apple saved views
+
+Run the isolated Swift package suite above for saved-view query mapping, ownership
+fields, unchanged-query omission on rename, unsupported versions, paging resets,
+cross-vault rejection, and late responses after switching vaults. Run the macOS
+build/authentication/provider checks for the production views.
+The navigation fixture's `testSavedViewCanBeSavedEditedAndDeleted` saves the
+current view, reopens its editor, persists a rename, and deletes it. It retains a
+saved-view screenshot for inspection. Use a fresh simulator and the bounded
+procedure above; compilation or an accessibility timeout before the first tap
+does not verify the controls.
