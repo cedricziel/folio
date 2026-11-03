@@ -563,6 +563,23 @@ async fn awaited_upload_preserves_authenticated_actor_without_reusing_uploader_i
     let (_db, r, vault) = fixture().await;
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let importer = Importer::new(r.documents.clone(), store, Arc::new(r.jobs.clone()));
+    for id in ["authenticated-importer", "contributor-owner"] {
+        r.auth
+            .create_user(folio_auth::User {
+                id: id.into(),
+                username: id.into(),
+                password_hash: "!".into(),
+                created_at: 1,
+                email: None,
+                display_name: None,
+                is_admin: false,
+                is_owner: false,
+                auth_source: "local".into(),
+                external_id: None,
+            })
+            .await
+            .unwrap();
+    }
     let actor = UserId::from("authenticated-importer");
     let mut input = upload();
     input.uploaded_by = Some(UserId::from("contributor-owner"));
