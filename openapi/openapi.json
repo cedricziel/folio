@@ -3002,6 +3002,15 @@
         "operationId": "listSources",
         "parameters": [
           {
+            "name": "deleted",
+            "in": "query",
+            "description": "List deleted managed sources instead of active sources",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "X-Folio-Vault",
             "in": "header",
             "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
@@ -3111,6 +3120,9 @@
           },
           "404": {
             "description": "The vault or resource is not visible"
+          },
+          "409": {
+            "description": "An active source already uses this name"
           },
           "500": {
             "description": "Unexpected server error",
@@ -3283,6 +3295,9 @@
               }
             }
           },
+          "409": {
+            "description": "An active source already uses this name"
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -3307,7 +3322,7 @@
         "tags": [
           "sources"
         ],
-        "summary": "Delete an ingestion source",
+        "summary": "Move a managed source to trash, retaining its settings and import history",
         "operationId": "deleteSource",
         "parameters": [
           {
@@ -3332,7 +3347,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The source was deleted"
+            "description": "The source is in trash"
           },
           "400": {
             "description": "The request is malformed or fails validation",
@@ -3359,6 +3374,85 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/sources/{id}/restore": {
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Restore a managed source with its previous settings.",
+        "operationId": "restoreSource",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The restored source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An active source already uses this name"
           },
           "500": {
             "description": "Unexpected server error",
@@ -7091,6 +7185,27 @@
             "$ref": "#/components/schemas/SourceConfig",
             "description": "Passwords are masked"
           },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Configured sources have no persisted lifecycle metadata."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -7113,6 +7228,19 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "vault_id": {

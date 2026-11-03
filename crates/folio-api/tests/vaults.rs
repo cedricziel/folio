@@ -273,6 +273,7 @@ async fn another_users_default_vault_documents_are_hidden_from_document_and_file
 async fn configured_ingestion_sources_are_visible_only_in_their_import_vault() {
     let source_id = uuid::Uuid::new_v4();
     let source = folio_core::models::IngestionSourceDef {
+        lifecycle: None,
         id: source_id,
         vault_id: None,
         name: "Instance consume folder".into(),
