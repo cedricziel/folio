@@ -8,7 +8,9 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
-use crate::models::{Document, DocumentDate, DocumentSource, Id, NamedRef, Tag, VaultId};
+use crate::models::{
+    Document, DocumentDate, DocumentSource, Id, NamedRef, ReviewOrigin, Tag, UserId, VaultId,
+};
 
 /// What a document looked like just before it was deleted
 ///
@@ -122,6 +124,13 @@ pub enum EventOrigin {
 pub struct EventSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub document_date: Option<DocumentDate>,
+    #[serde(default)]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub reviewed_by: Option<UserId>,
+    #[serde(default)]
+    pub review_origin: Option<ReviewOrigin>,
+
     pub document_id: Id,
     pub vault_id: VaultId,
     pub title: String,
@@ -142,6 +151,9 @@ impl From<&DeletedDocument> for EventSnapshot {
         let doc = &snapshot.document;
         Self {
             document_date: doc.document_date,
+            reviewed_at: doc.reviewed_at,
+            reviewed_by: doc.reviewed_by.clone(),
+            review_origin: doc.review_origin,
             document_id: doc.id,
             vault_id: doc.vault_id,
             title: doc.title.clone(),
@@ -387,6 +399,9 @@ pub fn document_event_envelope(
             let document = &snapshot.document;
             captured = EventSnapshot {
                 document_date: document.document_date,
+                reviewed_at: document.reviewed_at,
+                reviewed_by: document.reviewed_by.clone(),
+                review_origin: document.review_origin,
                 document_id: document.id,
                 vault_id: document.vault_id,
                 title: document.title.clone(),
@@ -418,6 +433,7 @@ pub fn document_event_envelope(
         serde_json::json!({
             "title": context.title, "original_filename": context.original_filename,
             "mime_type": context.mime_type, "created_at": context.created_at, "document_date": context.document_date,
+            "reviewed_at": context.reviewed_at, "reviewed_by": context.reviewed_by, "review_origin": context.review_origin,
             "correspondent_id": context.correspondent_id, "correspondent_name": context.correspondent_name,
             "document_type_id": context.document_type_id, "document_type_name": context.document_type_name,
             "tags": context.tags,
@@ -466,6 +482,9 @@ mod tests {
     fn context() -> EventSnapshot {
         EventSnapshot {
             document_date: None,
+            reviewed_at: None,
+            reviewed_by: None,
+            review_origin: None,
             document_id: Id::new_v4(),
             vault_id: VaultId::new(),
             title: "at occurrence".into(),

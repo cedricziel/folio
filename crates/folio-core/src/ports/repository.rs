@@ -39,6 +39,9 @@ pub trait DocumentRepository: Send + Sync {
         actor: Option<&UserId>,
     ) -> Result<Document>;
 
+    /// Set review from the server actor and clock; unchanged requests preserve attribution.
+    async fn set_reviewed(&self, vault: VaultId, id: Id, reviewed: bool) -> Result<Document>;
+
     /// Find a document by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
 
