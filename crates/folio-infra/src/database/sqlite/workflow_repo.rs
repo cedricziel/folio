@@ -415,7 +415,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(&run.last_error)
         .bind(run.response_status)
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
-        .bind(run.id.to_string()).bind(run.status.as_str())
+        .bind(run.id.to_string())
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
