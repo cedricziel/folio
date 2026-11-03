@@ -63,6 +63,7 @@ private struct FixedToken: BearerTokenProvider {
 private let documentJSON = """
     {"id": "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f", "title": "Jahresabrechnung 2025",
      "vault_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "uploaded_by": "fixture-user",
+     "created_by": "archive-creator", "updated_by": "archive-editor",
      "content": "Rechnungsnummer 2025-00318", "original_filename": "bill.pdf",
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
@@ -298,6 +299,53 @@ private let documentJSON = """
         await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
     }
 
+    @Test func sourceActivityKeepsVaultAndOmitsPrivateDiagnostics() async throws {
+        let vault = UUID(), source = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/sources")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(
+                body: Data(
+                    """
+                    [{"id":"\(source)","vault_id":"\(vault)","name":"Mailbox","enabled":true,
+                      "origin":"config","config":{"password":"private"},
+                      "status":{"last_error":"password=private","last_run_at":"2026-11-02T10:00:00Z",
+                                "last_imported":0,"last_skipped":0,"last_failed":0}}]
+                    """.utf8))
+        }
+        let sources = try await makeService().sourceActivity(vaultID: vault)
+        #expect(sources.count == 1)
+        #expect(sources[0].health == .unavailable)
+        #expect(sources[0].lastCheckedAt != nil)
+        #expect(!String(describing: sources[0]).contains("private"))
+    }
+
+    @Test func sourceOutcomesRetainVaultAndDecodeBoundedResults() async throws {
+        let vault = UUID(), source = UUID(), item = UUID(), attempt = UUID(), event = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/sources/\(source.uuidString.lowercased())/outcomes")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            #expect(query.first { $0.name == "before" }?.value == "8")
+            #expect(query.first { $0.name == "limit" }?.value == "50")
+            return .init(
+                body: Data(
+                    """
+                    {"vault_id":"\(vault)","source_id":"\(source)","next_before":null,"outcomes":[
+                      {"id":7,"vault_id":"\(vault)","source_id":"\(source)","item_id":"\(item)",
+                       "attempt_id":"\(attempt)","event_id":"\(event)","occurred_at":"2026-11-02T10:00:00Z",
+                       "outcome":"failed","document_id":null}
+                    ]}
+                    """.utf8))
+        }
+        let page = try await makeService().sourceOutcomes(vaultID: vault, sourceID: source, before: 8)
+        #expect(page.vaultID == vault)
+        #expect(page.sourceID == source)
+        #expect(page.outcomes.first?.outcome == .failed)
+        #expect(page.outcomes.first?.attemptID == attempt)
+        #expect(page.outcomes.first?.documentID == nil)
+    }
+
     @Test func browseSendsTextFiltersCursorAndImmutableVault() async throws {
         let vault = UUID(), tag = UUID(), correspondent = UUID()
         let query = DocumentBrowseQuery(
@@ -443,6 +491,19 @@ private let documentJSON = """
         #expect(document.createdAt.timeIntervalSince1970 > 1_741_000_000)
         #expect(document.tags.map(\.name) == ["Taxes"])
         #expect(document.tags.first?.color == "#ff5733")
+        #expect(document.createdBy == "archive-creator")
+        #expect(document.updatedBy == "archive-editor")
+    }
+
+    @Test func legacyDocumentWithoutActorMetadataKeepsUnknownAttribution() async throws {
+        var payload = try #require(try JSONSerialization.jsonObject(with: Data(documentJSON.utf8)) as? [String: Any])
+        payload.removeValue(forKey: "created_by")
+        payload.removeValue(forKey: "updated_by")
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        StubURLProtocol.handler = { _, _ in .init(body: body) }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.createdBy == nil)
+        #expect(document.updatedBy == nil)
     }
 
     @Test func completedOcrWithoutTextDoesNotKeepReading() async throws {
