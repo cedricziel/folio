@@ -135,6 +135,12 @@ pub enum FailOutcome {
     LostLease,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobContext {
+    pub vault_id: Option<folio_core::models::VaultId>,
+    pub lineage: folio_core::mutation::MutationLineage,
+}
+
 /// A job in the queue
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -233,6 +239,11 @@ impl JobQueue {
     /// Renew only the current, unexpired claim. An expired claim cannot be revived.
     pub async fn renew(&self, job: &Job) -> Result<bool> {
         dispatch!(self, renew(job))
+    }
+
+    /// Returns the enqueue-time scope, or None for jobs created before context persistence.
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<JobContext>> {
+        dispatch!(self, context(job_id))
     }
 
     /// Get count of pending jobs

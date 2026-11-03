@@ -451,7 +451,7 @@ pub fn document_event_envelope(
 /// Durable consumers read the outbox, and reconnecting clients replay from it.
 #[derive(Clone)]
 pub struct EventBroadcaster {
-    sender: broadcast::Sender<OutboxEvent>,
+    sender: broadcast::Sender<Arc<OutboxEvent>>,
 }
 
 impl EventBroadcaster {
@@ -464,11 +464,11 @@ impl EventBroadcaster {
     /// Send an event to all subscribers
     pub fn send(&self, event: OutboxEvent) {
         // Ignore send errors (no subscribers)
-        let _ = self.sender.send(event);
+        let _ = self.sender.send(Arc::new(event));
     }
 
     /// Subscribe to events
-    pub fn subscribe(&self) -> broadcast::Receiver<OutboxEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<OutboxEvent>> {
         self.sender.subscribe()
     }
 }
