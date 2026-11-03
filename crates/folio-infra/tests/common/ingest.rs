@@ -20,6 +20,7 @@ pub struct Harness {
     pub vault: folio_core::models::VaultId,
     pub pipeline: Arc<IngestPipeline>,
     pub ledger: Arc<dyn IngestLedger>,
+    pub outcomes: Arc<dyn folio_core::ports::IngestOutcomeRepository>,
     pub store: Arc<dyn DocumentStore>,
     pub documents: Arc<dyn DocumentRepository>,
     pub workflows: Arc<dyn WorkflowRepository>,
@@ -57,18 +58,23 @@ impl Harness {
         let workflows = repos.workflows;
         let queue = repos.jobs;
         let ledger = repos.ledger;
-        let pipeline = Arc::new(IngestPipeline::new(
-            documents.clone(),
-            store.clone(),
-            repos.tags,
-            workflows.clone(),
-            ledger.clone(),
-            wrap(Arc::new(Importer::new(
+        let source_id = Id::new_v4();
+        let pipeline = Arc::new(
+            IngestPipeline::new(
                 documents.clone(),
                 store.clone(),
-                Arc::new(queue.clone()),
-            ))),
-        ));
+                repos.tags,
+                workflows.clone(),
+                ledger.clone(),
+                wrap(Arc::new(Importer::new(
+                    documents.clone(),
+                    store.clone(),
+                    Arc::new(queue.clone()),
+                ))),
+            )
+            .with_outcomes(repos.ingest_outcomes.clone())
+            .with_configured_sources([source_id]),
+        );
         let engine = WorkflowEngine::new(
             workflows.clone(),
             documents.clone(),
@@ -82,12 +88,13 @@ impl Harness {
             vault,
             pipeline,
             ledger,
+            outcomes: repos.ingest_outcomes,
             store,
             documents,
             workflows,
             engine,
             outbox: repos.outbox,
-            source_id: Id::new_v4(),
+            source_id,
             dir,
         }
     }

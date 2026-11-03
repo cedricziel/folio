@@ -1,6 +1,6 @@
 //! Automatic ingestion: the import pipeline and the scheduler that feeds it
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,13 +14,14 @@ use tracing::{debug, info, warn};
 use super::NewUpload;
 use crate::error::{Error, Result};
 use crate::models::{
-    CreateTag, Id, IngestItem, IngestItemKey, IngestOutcome, IngestionSourceDef, LedgerEntry,
-    PollReport, SourceStatus, VaultId, WorkflowAction, WorkflowTrigger,
+    CreateTag, Document, Id, IngestAttempt, IngestClaim, IngestItem, IngestItemKey, IngestOutcome,
+    IngestResult, IngestionSourceDef, LedgerEntry, PollReport, SourceStatus, VaultId,
+    WorkflowAction, WorkflowTrigger,
 };
 use crate::ports::{
-    keys, DocumentImporter, DocumentRepository, DocumentStore, IngestLedger, IngestSink,
-    IngestionSourceFactory, SourceRepository, TagRepository, VaultIngest, VaultRepository,
-    WorkflowRepository,
+    keys, DocumentImporter, DocumentRepository, DocumentStore, IngestLedger,
+    IngestOutcomeRepository, IngestSink, IngestionSourceFactory, SourceRepository, TagRepository,
+    VaultIngest, VaultRepository, WorkflowRepository,
 };
 
 enum ClaimOutcome {
@@ -37,6 +38,8 @@ pub struct IngestPipeline {
     workflows: Arc<dyn WorkflowRepository>,
     ledger: Arc<dyn IngestLedger>,
     importer: Arc<dyn DocumentImporter>,
+    outcomes: Option<Arc<dyn IngestOutcomeRepository>>,
+    configured_sources: HashSet<Id>,
 }
 
 impl IngestPipeline {
@@ -55,11 +58,27 @@ impl IngestPipeline {
             workflows,
             ledger,
             importer,
+            outcomes: None,
+            configured_sources: HashSet::new(),
         }
     }
 
-    /// Name of the first enabled `ingest.received` workflow that discards the item
-    async fn discarding_rule(&self, vault: VaultId, item: &IngestItem) -> Result<Option<String>> {
+    pub fn with_outcomes(mut self, outcomes: Arc<dyn IngestOutcomeRepository>) -> Self {
+        self.outcomes = Some(outcomes);
+        self
+    }
+
+    pub fn with_configured_sources(mut self, sources: impl IntoIterator<Item = Id>) -> Self {
+        self.configured_sources = sources.into_iter().collect();
+        self
+    }
+
+    /// Identity and name of the first enabled `ingest.received` workflow that discards the item
+    async fn discarding_rule(
+        &self,
+        vault: VaultId,
+        item: &IngestItem,
+    ) -> Result<Option<(Id, String)>> {
         let rules = self
             .workflows
             .list_enabled(vault, WorkflowTrigger::IngestReceived)
@@ -71,7 +90,7 @@ impl IngestPipeline {
                 w.conditions
                     .matches_candidate(&item.mime_type, &item.filename, &item.source)
             })
-            .map(|w| w.name))
+            .map(|w| (w.id, w.name)))
     }
 
     async fn claim(&self, vault: VaultId, key: &str, source_id: Id) -> Result<ClaimOutcome> {
@@ -143,6 +162,47 @@ impl IngestPipeline {
         })
     }
 
+    async fn import_claim(
+        &self,
+        vault: VaultId,
+        claim: &LedgerEntry,
+        item: IngestItem,
+    ) -> Result<Document> {
+        let tag_ids = self.resolve_tags(vault, &item.tags).await?;
+        self.importer
+            .import_reserved(
+                vault,
+                claim,
+                NewUpload {
+                    title: Some(item.filename.clone()),
+                    filename: item.filename,
+                    mime_type: Some(item.mime_type),
+                    data: item.data,
+                    source: item.source,
+                    tag_ids,
+                    uploaded_by: None,
+                },
+            )
+            .await
+    }
+
+    // Keep the staged input retryable when the outcome transaction could not commit.
+    async fn finish_outcome(
+        outcomes: &dyn IngestOutcomeRepository,
+        attempt: &IngestAttempt,
+        result: IngestResult,
+        document: Option<Id>,
+        claim: Option<&LedgerEntry>,
+    ) -> bool {
+        match outcomes.complete(attempt, result, document, claim).await {
+            Ok(record) => record.is_some(),
+            Err(_) => {
+                warn!("Could not commit ingestion outcome");
+                false
+            }
+        }
+    }
+
     async fn resolve_tags(&self, vault: VaultId, names: &[String]) -> Result<Vec<Id>> {
         let mut ids = Vec::new();
         for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
@@ -189,13 +249,147 @@ pub fn content_key(data: &[u8]) -> String {
 
 #[async_trait]
 impl VaultIngest for IngestPipeline {
+    async fn ingest_observed(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        let Some(outcomes) = &self.outcomes else {
+            return self.ingest(vault, source_id, item).await;
+        };
+        let rule = self.discarding_rule(vault, &item).await?;
+        let decision = rule
+            .as_ref()
+            .map(|(id, _)| id.to_string())
+            .unwrap_or_else(|| "allow".into());
+        let fingerprint = hex::encode(Sha256::digest(decision.as_bytes()));
+        let origin = if self.configured_sources.contains(&source_id) {
+            crate::models::SourceOrigin::Config
+        } else {
+            crate::models::SourceOrigin::Managed
+        };
+        let attempt = match outcomes
+            .claim(
+                vault,
+                source_id,
+                item.source.kind,
+                origin,
+                &key,
+                &fingerprint,
+            )
+            .await?
+        {
+            IngestClaim::Claimed(attempt) => attempt,
+            IngestClaim::Busy => return Ok(IngestOutcome::Busy),
+            IngestClaim::Completed(IngestResult::Skipped) => {
+                return Ok(IngestOutcome::Skipped {
+                    rule: rule.map(|(_, name)| name).unwrap_or_default(),
+                });
+            }
+            IngestClaim::Completed(_) => return Ok(IngestOutcome::Duplicate),
+        };
+        if let Some((_, rule)) = rule {
+            return Ok(
+                if Self::finish_outcome(
+                    outcomes.as_ref(),
+                    &attempt,
+                    IngestResult::Skipped,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    IngestOutcome::Skipped { rule }
+                } else {
+                    IngestOutcome::Busy
+                },
+            );
+        }
+        let content = content_key(&item.data);
+        let claim = match self.claim(vault, &content, source_id).await {
+            Ok(ClaimOutcome::Claimed(claim)) => claim,
+            Ok(ClaimOutcome::Duplicate) => {
+                return Ok(
+                    if Self::finish_outcome(
+                        outcomes.as_ref(),
+                        &attempt,
+                        IngestResult::Duplicate,
+                        None,
+                        None,
+                    )
+                    .await
+                    {
+                        IngestOutcome::Duplicate
+                    } else {
+                        IngestOutcome::Busy
+                    },
+                );
+            }
+            Ok(ClaimOutcome::Busy) => {
+                if outcomes.release(&attempt).await.is_err() {
+                    warn!("Could not release ingestion observation");
+                }
+                return Ok(IngestOutcome::Busy);
+            }
+            Err(error) => {
+                return if Self::finish_outcome(
+                    outcomes.as_ref(),
+                    &attempt,
+                    IngestResult::Failed,
+                    None,
+                    None,
+                )
+                .await
+                {
+                    Err(error)
+                } else {
+                    Ok(IngestOutcome::Busy)
+                };
+            }
+        };
+        match self.import_claim(vault, &claim, item).await {
+            Ok(document) => Ok(
+                if Self::finish_outcome(
+                    outcomes.as_ref(),
+                    &attempt,
+                    IngestResult::Imported,
+                    Some(document.id),
+                    Some(&claim),
+                )
+                .await
+                {
+                    IngestOutcome::Imported(Box::new(document))
+                } else {
+                    IngestOutcome::Busy
+                },
+            ),
+            Err(error) => {
+                if Self::finish_outcome(
+                    outcomes.as_ref(),
+                    &attempt,
+                    IngestResult::Failed,
+                    None,
+                    Some(&claim),
+                )
+                .await
+                {
+                    Err(error)
+                } else {
+                    Ok(IngestOutcome::Busy)
+                }
+            }
+        }
+    }
+
     async fn ingest(
         &self,
         vault: VaultId,
         source_id: Id,
         item: IngestItem,
     ) -> Result<IngestOutcome> {
-        if let Some(rule) = self.discarding_rule(vault, &item).await? {
+        if let Some((_, rule)) = self.discarding_rule(vault, &item).await? {
             debug!("Rule '{rule}' discarded {}", item.filename);
             return Ok(IngestOutcome::Skipped { rule });
         }
@@ -207,25 +401,7 @@ impl VaultIngest for IngestPipeline {
             ClaimOutcome::Busy => return Ok(IngestOutcome::Busy),
         };
 
-        let imported = async {
-            let tag_ids = self.resolve_tags(vault, &item.tags).await?;
-            self.importer
-                .import_reserved(
-                    vault,
-                    &claim,
-                    NewUpload {
-                        title: Some(item.filename.clone()),
-                        filename: item.filename,
-                        mime_type: Some(item.mime_type),
-                        data: item.data,
-                        source: item.source,
-                        tag_ids,
-                        uploaded_by: None,
-                    },
-                )
-                .await
-        }
-        .await;
+        let imported = self.import_claim(vault, &claim, item).await;
 
         match imported {
             Ok(document) => {
@@ -265,6 +441,7 @@ pub struct IngestScheduler {
     sink: Arc<dyn VaultIngest>,
     vaults: Arc<dyn VaultRepository>,
     reload_every: Duration,
+    outcomes: Option<Arc<dyn IngestOutcomeRepository>>,
 }
 
 /// Feeds one pipeline from sources that do not know about vaults
@@ -306,7 +483,13 @@ impl IngestScheduler {
             sink,
             vaults,
             reload_every: Duration::from_secs(5),
+            outcomes: None,
         }
+    }
+
+    pub fn with_outcomes(mut self, outcomes: Arc<dyn IngestOutcomeRepository>) -> Self {
+        self.outcomes = Some(outcomes);
+        self
     }
 
     pub fn with_reload_interval(mut self, every: Duration) -> Self {
@@ -378,29 +561,36 @@ impl IngestScheduler {
                 vault_id: Some(vault),
                 ..def
             };
+            let run = SourceRun {
+                vault,
+                id: def.id,
+                name: def.name.clone(),
+                origin: def.origin,
+                kind: def.config.kind(),
+                managed: Arc::clone(&self.managed),
+                outcomes: self.outcomes.clone(),
+            };
             let source = match self.factory.build(&def) {
                 Ok(source) => source,
                 Err(e) => {
                     warn!("Source '{}' cannot start: {e}", def.name);
-                    let repo = Arc::clone(&self.managed);
-                    let id = def.id;
                     let status = failed_status(&e.to_string());
                     tokio::spawn(async move {
-                        let _ = repo.save_status(id, &status).await;
+                        if run.save_status(&status).await.is_err() {
+                            warn!("Could not save source startup failure");
+                        }
                     });
                     continue;
                 }
             };
             info!("Starting ingestion source '{}'", def.name);
             let handle = tokio::spawn(run_source(
-                def.id,
-                def.name.clone(),
+                run,
                 source,
                 Arc::new(BoundSink {
                     vault,
                     inner: Arc::clone(&self.sink),
                 }),
-                Arc::clone(&self.managed),
                 shutdown.clone(),
             ));
             running.insert(def.id, (fingerprint, handle));
@@ -416,14 +606,36 @@ fn failed_status(error: &str) -> SourceStatus {
     }
 }
 
-async fn run_source(
+struct SourceRun {
+    vault: VaultId,
     id: Id,
     name: String,
+    origin: crate::models::SourceOrigin,
+    kind: crate::models::SourceKind,
+    managed: Arc<dyn SourceRepository>,
+    outcomes: Option<Arc<dyn IngestOutcomeRepository>>,
+}
+
+impl SourceRun {
+    async fn save_status(&self, status: &SourceStatus) -> Result<()> {
+        match &self.outcomes {
+            Some(outcomes) => {
+                outcomes
+                    .record_source_status(self.vault, self.id, self.origin, self.kind, status)
+                    .await
+            }
+            None => self.managed.save_status(self.id, status).await,
+        }
+    }
+}
+
+async fn run_source(
+    run: SourceRun,
     source: Box<dyn crate::ports::IngestionSource>,
     sink: Arc<dyn IngestSink>,
-    repo: Arc<dyn SourceRepository>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let name = &run.name;
     let interval = Duration::from_secs(source.interval_secs().max(1));
     let mut wait = Duration::ZERO;
     loop {
@@ -454,7 +666,7 @@ async fn run_source(
                 (failed_status(&e.to_string()), interval)
             }
         };
-        if let Err(e) = repo.save_status(id, &status).await {
+        if let Err(e) = run.save_status(&status).await {
             warn!("Could not save status of '{name}': {e}");
         }
         wait = next;

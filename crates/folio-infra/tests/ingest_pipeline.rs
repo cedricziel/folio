@@ -653,3 +653,419 @@ async fn retryable_reservation_advances_its_generation_even_if_the_clock_is_behi
     let renewed = h.ledger.find(h.vault, &claim.key).await.unwrap().unwrap();
     assert!(renewed.created_at > future);
 }
+
+#[tokio::test]
+async fn observed_folder_and_mail_outcomes_do_not_repeat_on_polling() {
+    use folio_core::models::{IngestItemKey, IngestResult};
+    use folio_core::ports::VaultIngest;
+    for mail in [false, true] {
+        let h = Harness::new().await;
+        let item = || {
+            if mail {
+                mail_item(
+                    "private@example.test",
+                    "private subject",
+                    "scan.pdf",
+                    b"observed",
+                )
+            } else {
+                file_item(b"observed", &[])
+            }
+        };
+        let key = |generation: u32| {
+            if mail {
+                IngestItemKey::email("INBOX", 1, generation, 0).unwrap()
+            } else {
+                IngestItemKey::folder(b"scan.pdf", &generation.to_be_bytes(), b"observed")
+            }
+        };
+        assert!(matches!(
+            h.pipeline
+                .ingest_observed(h.vault, h.source_id, key(1), item())
+                .await
+                .unwrap(),
+            IngestOutcome::Imported(_)
+        ));
+        for _ in 0..3 {
+            assert!(matches!(
+                h.pipeline
+                    .ingest_observed(h.vault, h.source_id, key(1), item())
+                    .await
+                    .unwrap(),
+                IngestOutcome::Duplicate
+            ));
+        }
+        assert!(matches!(
+            h.pipeline
+                .ingest_observed(h.vault, h.source_id, key(2), item())
+                .await
+                .unwrap(),
+            IngestOutcome::Duplicate
+        ));
+        let page = h
+            .outcomes
+            .page(h.vault, h.source_id, None, 50)
+            .await
+            .unwrap();
+        assert_eq!(page.outcomes.len(), 2);
+        assert_eq!(page.outcomes[0].outcome, IngestResult::Duplicate);
+        assert_eq!(page.outcomes[1].outcome, IngestResult::Imported);
+        assert!(page.outcomes[1].document_id.is_some());
+        assert!(page.outcomes[0].document_id.is_none());
+        let events = h
+            .outbox
+            .claim(100, chrono::Duration::seconds(30), 10)
+            .await
+            .unwrap();
+        let events: Vec<_> = events
+            .into_iter()
+            .filter_map(|event| event.envelope)
+            .filter(|event| event.event_type().starts_with("ingest."))
+            .collect();
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .all(|event| !event.data().to_string().contains("private")));
+    }
+}
+
+#[tokio::test]
+async fn observed_skip_is_synchronous_and_changed_rules_reconsider_the_item() {
+    use folio_core::models::{IngestItemKey, IngestResult};
+    use folio_core::ports::VaultIngest;
+    let h = Harness::new().await;
+    h.rule("skip", SourceConditions::default()).await;
+    let key = IngestItemKey::folder(b"scan.pdf", b"stage", b"skipped");
+    for _ in 0..3 {
+        assert!(matches!(
+            h.pipeline
+                .ingest_observed(
+                    h.vault,
+                    h.source_id,
+                    key.clone(),
+                    file_item(b"skipped", &[])
+                )
+                .await
+                .unwrap(),
+            IngestOutcome::Skipped { .. }
+        ));
+    }
+    assert!(h.documents.list(h.vault, None).await.unwrap().is_empty());
+    let rule = h.workflows.list(h.vault).await.unwrap().remove(0);
+    h.workflows.delete(h.vault, rule.id).await.unwrap();
+    assert!(matches!(
+        h.pipeline
+            .ingest_observed(h.vault, h.source_id, key, file_item(b"skipped", &[]))
+            .await
+            .unwrap(),
+        IngestOutcome::Imported(_)
+    ));
+    let page = h
+        .outcomes
+        .page(h.vault, h.source_id, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(page.outcomes.len(), 2);
+    assert_eq!(page.outcomes[0].item_id, page.outcomes[1].item_id);
+    assert_eq!(page.outcomes[0].outcome, IngestResult::Imported);
+    assert_eq!(page.outcomes[1].outcome, IngestResult::Skipped);
+}
+
+async fn outcome_commit_recovery(
+    item: folio_core::models::IngestItem,
+    key: folio_core::models::IngestItemKey,
+) {
+    use folio_core::models::IngestResult;
+    use folio_core::ports::VaultIngest;
+    let h = Harness::new().await;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}/test.db", h.dir.display()))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_item_event BEFORE INSERT ON outbox_events WHEN NEW.type LIKE 'ingest.%' BEGIN SELECT RAISE(ABORT, 'injected outcome failure'); END").execute(&pool).await.unwrap();
+    assert!(matches!(
+        h.pipeline
+            .ingest_observed(h.vault, h.source_id, key.clone(), item.clone())
+            .await
+            .unwrap(),
+        IngestOutcome::Busy
+    ));
+    let documents = h.documents.list(h.vault, None).await.unwrap();
+    assert_eq!(documents.len(), 1);
+    let document_id = documents[0].id;
+    let claim = h
+        .ledger
+        .find(h.vault, &content_key(&item.data))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.outcome, "claimed");
+    assert_eq!(claim.document_id, Some(document_id));
+    assert!(h
+        .outcomes
+        .page(h.vault, h.source_id, None, 50)
+        .await
+        .unwrap()
+        .outcomes
+        .is_empty());
+    let item_id: String = sqlx::query_scalar("SELECT id FROM ingest_items")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let previous_attempt: String = sqlx::query_scalar("SELECT attempt_id FROM ingest_items")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TRIGGER reject_item_event")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE ingest_items SET lease_expires_at = '2000-01-01T00:00:00Z'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(h
+        .ledger
+        .transition_if_matches(
+            h.vault,
+            &claim,
+            "claimed",
+            chrono::Utc::now() - chrono::Duration::minutes(11)
+        )
+        .await
+        .unwrap());
+    let IngestOutcome::Imported(document) = h
+        .pipeline
+        .ingest_observed(h.vault, h.source_id, key.clone(), item.clone())
+        .await
+        .unwrap()
+    else {
+        panic!("stored import must recover as imported")
+    };
+    assert_eq!(document.id, document_id);
+    assert!(matches!(
+        h.pipeline
+            .ingest_observed(h.vault, h.source_id, key, item)
+            .await
+            .unwrap(),
+        IngestOutcome::Duplicate
+    ));
+    assert_eq!(h.documents.list(h.vault, None).await.unwrap().len(), 1);
+    let page = h
+        .outcomes
+        .page(h.vault, h.source_id, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(page.outcomes.len(), 1);
+    assert_eq!(page.outcomes[0].outcome, IngestResult::Imported);
+    assert_eq!(page.outcomes[0].document_id, Some(document_id));
+    assert_eq!(page.outcomes[0].item_id.to_string(), item_id);
+    assert_ne!(page.outcomes[0].attempt_id.to_string(), previous_attempt);
+    let events = h
+        .outbox
+        .claim(100, chrono::Duration::seconds(30), 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| event.envelope.as_ref())
+            .filter(|event| event.event_type() == "ingest.imported")
+            .count(),
+        1
+    );
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn folder_outcome_commit_failure_recovers_stored_document_without_duplication() {
+    outcome_commit_recovery(
+        file_item(b"recovery", &[]),
+        folio_core::models::IngestItemKey::folder(b"scan.pdf", b"generation", b"recovery"),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn email_outcome_commit_failure_recovers_stored_document_without_duplication() {
+    outcome_commit_recovery(
+        mail_item(
+            "private@example.test",
+            "private subject",
+            "scan.pdf",
+            b"recovery",
+        ),
+        folio_core::models::IngestItemKey::email("INBOX", 1, 7, 0).unwrap(),
+    )
+    .await;
+}
+
+async fn observed_attempt_retry(
+    item: folio_core::models::IngestItem,
+    key: folio_core::models::IngestItemKey,
+    cancel: bool,
+) {
+    use folio_core::models::IngestResult;
+    use folio_core::ports::VaultIngest;
+    let (h, started, release) = gated_harness(true).await;
+    let pipeline = h.pipeline.clone();
+    let vault = h.vault;
+    let source_id = h.source_id;
+    let first_item = item.clone();
+    let first_key = key.clone();
+    let task = tokio::spawn(async move {
+        pipeline
+            .ingest_observed(vault, source_id, first_key, first_item)
+            .await
+    });
+    bounded(started.notified()).await;
+    assert!(matches!(
+        h.pipeline
+            .ingest_observed(vault, source_id, key.clone(), item.clone())
+            .await
+            .unwrap(),
+        IngestOutcome::Busy
+    ));
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}/test.db", h.dir.display()))
+        .await
+        .unwrap();
+    let item_id: String = sqlx::query_scalar("SELECT id FROM ingest_items")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let attempt_id: String = sqlx::query_scalar("SELECT attempt_id FROM ingest_items")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    if cancel {
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(h
+            .outcomes
+            .page(vault, source_id, None, 50)
+            .await
+            .unwrap()
+            .outcomes
+            .is_empty());
+        sqlx::query("UPDATE ingest_items SET lease_expires_at = '2000-01-01T00:00:00Z'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let claim = h
+            .ledger
+            .find(vault, &content_key(&item.data))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(h
+            .ledger
+            .transition_if_matches(
+                vault,
+                &claim,
+                "claimed",
+                chrono::Utc::now() - chrono::Duration::minutes(11)
+            )
+            .await
+            .unwrap());
+    } else {
+        release.notify_one();
+        assert!(bounded(task).await.unwrap().is_err());
+        let failed = h.outcomes.page(vault, source_id, None, 50).await.unwrap();
+        assert_eq!(failed.outcomes.len(), 1);
+        assert_eq!(failed.outcomes[0].outcome, IngestResult::Failed);
+        assert_eq!(failed.outcomes[0].attempt_id.to_string(), attempt_id);
+        assert!(failed.outcomes[0].document_id.is_none());
+    }
+    assert!(matches!(
+        h.pipeline
+            .ingest_observed(vault, source_id, key.clone(), item.clone())
+            .await
+            .unwrap(),
+        IngestOutcome::Imported(_)
+    ));
+    assert!(matches!(
+        h.pipeline
+            .ingest_observed(vault, source_id, key, item)
+            .await
+            .unwrap(),
+        IngestOutcome::Duplicate
+    ));
+    let outcomes = h
+        .outcomes
+        .page(vault, source_id, None, 50)
+        .await
+        .unwrap()
+        .outcomes;
+    assert_eq!(outcomes.len(), if cancel { 1 } else { 2 });
+    assert_eq!(outcomes[0].outcome, IngestResult::Imported);
+    assert_ne!(outcomes[0].attempt_id.to_string(), attempt_id);
+    assert!(outcomes
+        .iter()
+        .all(|outcome| outcome.item_id.to_string() == item_id));
+    assert_eq!(h.documents.list(vault, None).await.unwrap().len(), 1);
+    let events = h
+        .outbox
+        .claim(100, chrono::Duration::seconds(30), 10)
+        .await
+        .unwrap();
+    let events: Vec<_> = events
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .filter(|event| event.event_type().starts_with("ingest."))
+        .collect();
+    assert_eq!(events.len(), outcomes.len());
+    assert!(events.iter().all(|event| !event
+        .data()
+        .to_string()
+        .contains("synthetic import failure")));
+    pool.close().await;
+}
+
+#[tokio::test]
+async fn failed_folder_attempt_retries_with_same_item_and_new_attempt() {
+    observed_attempt_retry(
+        file_item(b"retry", &[]),
+        folio_core::models::IngestItemKey::folder(b"scan.pdf", b"generation", b"retry"),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn failed_email_attempt_retries_with_same_item_and_new_attempt() {
+    observed_attempt_retry(
+        mail_item(
+            "private@example.test",
+            "private subject",
+            "scan.pdf",
+            b"retry",
+        ),
+        folio_core::models::IngestItemKey::email("INBOX", 1, 7, 0).unwrap(),
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cancelled_folder_attempt_retries_without_a_false_terminal_outcome() {
+    observed_attempt_retry(
+        file_item(b"retry", &[]),
+        folio_core::models::IngestItemKey::folder(b"scan.pdf", b"generation", b"retry"),
+        true,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn cancelled_email_attempt_retries_without_a_false_terminal_outcome() {
+    observed_attempt_retry(
+        mail_item(
+            "private@example.test",
+            "private subject",
+            "scan.pdf",
+            b"retry",
+        ),
+        folio_core::models::IngestItemKey::email("INBOX", 1, 7, 0).unwrap(),
+        true,
+    )
+    .await;
+}
