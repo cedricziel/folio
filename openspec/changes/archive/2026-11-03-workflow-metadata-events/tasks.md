@@ -5,5 +5,5 @@
 - [x] Verify audience, delayed metadata, replay, and current-location protections.
 - [x] Regenerate OpenAPI and verify JSON/web roundtrip with the isolated API suite.
 - [x] Complete core, SQLite/PostgreSQL contract, and scoped lint verification.
-- [ ] Verify the generated Swift API through the PR Apple CI job.
-- [ ] Validate, archive, and deliver the change after its registry dependency merges.
+- [x] Verify the generated Swift API through the PR Apple CI job.
+- [x] Validate and archive the change after its registry dependency merges.
