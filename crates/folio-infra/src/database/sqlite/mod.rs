@@ -5,6 +5,10 @@ pub use metadata_option_repo::SqliteMetadataOptionRepository;
 mod metadata_repo;
 pub use metadata_repo::SqliteMetadataFieldRepository;
 
+mod metadata_value_repo;
+pub use metadata_value_repo::SqliteMetadataValueRepository;
+pub(crate) use metadata_value_repo::{clear_incoming_links, prepare_move};
+
 mod auth_repo;
 mod document_entries;
 mod document_repo;
