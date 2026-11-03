@@ -102,6 +102,7 @@ async fn scheduler_commits_failure_and_recovery_in_the_managed_sources_vault() {
     .with_reload_interval(Duration::from_millis(10));
     let task = tokio::spawn(scheduler.run(stopped));
     let mut health_events = vec![];
+    let mut previous_run = None;
     for failure in [Some("private:first"), Some("private:second"), None] {
         let report = match failure {
             Some(message) => Err(Error::Repository(message.into())),
@@ -115,14 +116,16 @@ async fn scheduler_commits_failure_and_recovery_in_the_managed_sources_vault() {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let Some(status) = repos.sources.status(source.id).await.unwrap() {
+                    let fresh = status.last_run_at.is_some() && status.last_run_at != previous_run;
                     let matches = match failure {
-                        Some(message) => status
-                            .last_error
-                            .as_ref()
-                            .is_some_and(|error| error.contains(message)),
+                        Some(message) => status.last_error.as_ref().is_some_and(|error| {
+                            assert!(!error.contains(message));
+                            error == "Folio could not process this source run"
+                        }),
                         None => status.last_error.is_none() && status.last_failed == 1,
                     };
-                    if matches {
+                    if fresh && matches {
+                        previous_run = status.last_run_at;
                         break;
                     }
                 }
