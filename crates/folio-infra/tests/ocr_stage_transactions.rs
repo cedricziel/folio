@@ -145,6 +145,12 @@ impl<'a> Fixture<'a> {
         payloads
             .iter()
             .map(|payload| decode_stored_outbox_payload(payload).unwrap())
+            .filter(|decoded| {
+                !decoded
+                    .envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.event_type().starts_with("vault"))
+            })
             .collect()
     }
 
@@ -635,6 +641,30 @@ async fn moved_and_trashed_documents_cannot_publish(db: &Database) {
     fixture.finish().await;
 }
 
+async fn deleted_vaults_cannot_start_or_publish(db: &Database) {
+    let fixture = Fixture::new(db).await;
+    let delete_vault = format!(
+        "UPDATE vaults SET deleted_at = '2026-11-03T00:00:00Z' WHERE id = '{}'",
+        fixture.vault
+    );
+    let restore_vault = format!(
+        "UPDATE vaults SET deleted_at = NULL WHERE id = '{}'",
+        fixture.vault
+    );
+    fixture.update(delete_vault.clone()).await;
+    assert!(fixture.start().await.unwrap().is_none());
+    fixture.update(restore_vault.clone()).await;
+    let fence = fixture.start().await.unwrap().unwrap();
+    fixture.update(delete_vault).await;
+    assert!(!fixture.complete(&fence, "deleted vault").await.unwrap());
+    assert_eq!(
+        fixture.state().await,
+        ("running".into(), 1, None, "running".into())
+    );
+    fixture.update(restore_vault).await;
+    fixture.finish().await;
+}
+
 async fn noncurrent_and_revision_backed_runs_cannot_execute(db: &Database) {
     let fixture = Fixture::new(db).await;
     fixture
@@ -833,6 +863,7 @@ async fn contract(db: &Database) {
     Box::pin(superseded_embedding_run_keeps_ocr_result(db)).await;
     Box::pin(expired_and_replaced_claims_cannot_publish(db)).await;
     Box::pin(moved_and_trashed_documents_cannot_publish(db)).await;
+    Box::pin(deleted_vaults_cannot_start_or_publish(db)).await;
     Box::pin(noncurrent_and_revision_backed_runs_cannot_execute(db)).await;
     Box::pin(retry_counts_stage_starts_separately_from_queue_attempts(db)).await;
     Box::pin(changed_job_group_and_missing_lineage_reject_existing_fences(db)).await;

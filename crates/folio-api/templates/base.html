@@ -1097,6 +1097,7 @@ Stimulus.register(
   "sse",
   class extends Controller {
     connect() {
+      if (!document.body.dataset.vaultId) return;
       this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
       for (const name of ["trashed", "restored", "purge_requested", "deleted"]) {
@@ -1116,6 +1117,7 @@ Stimulus.register(
 
     disconnect() {
       clearTimeout(this.refreshTimeout);
+      if (!this.source) return;
       Turbo.disconnectStreamSource(this.source);
       this.source.close();
     }
@@ -1656,7 +1658,7 @@ Stimulus.register("integrations", class extends Controller {
     </script>
   </head>
   <body
-    data-vault-id="{{ sidebar.vault_id }}"
+    {% if !sidebar.vaults.is_empty() %}data-vault-id="{{ sidebar.vault_id }}"{% endif %}
     data-controller="dropzone sse toast upload-modal command-palette nav theme hotkeys vault-picker"
     data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop"
   >

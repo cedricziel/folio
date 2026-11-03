@@ -181,6 +181,7 @@ async fn contract(db: Database) {
     let envelopes: Vec<_> = events
         .iter()
         .map(|e| e.envelope.as_ref().unwrap())
+        .filter(|e| e.event_type().starts_with("source."))
         .collect();
     let types: Vec<_> = envelopes.iter().map(|e| e.event_type()).collect();
     assert_eq!(
@@ -296,7 +297,7 @@ async fn upgrade_contract(db: Database) {
         Database::Postgres(pool) => old.run(pool).await.unwrap(),
     }
     let r = db.repositories().await;
-    let vault = r.vaults.instance_default().await.unwrap();
+    let vault = common::legacy_vault(&db).await;
     let id = uuid::Uuid::new_v4();
     let created = chrono::DateTime::parse_from_rfc3339("2026-11-01T12:00:00Z")
         .unwrap()

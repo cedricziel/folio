@@ -540,6 +540,13 @@ isolated Classifications fixture to check large text, loading errors, and Retry.
 The fixture shows the screen in a window, so check macOS sheet sizing by opening
 Classifications from the WorkspaceView sidebar; package tests do not verify layout.
 
+## Verify retained vaults and owner grants
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test vault_lifecycle` against disposable SQLite and PostgreSQL fixtures. It covers scoped actor/lineage metadata, atomic initial ownership, no-op and rollback suppression, protected defaults, retained references, owner-only recovery, permanent audit history after outbox pruning, and cancellation/fencing of pending workflow runs.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test vault_lifecycle --test vaults` for owner, viewer, and unrelated-admin boundaries, forged lifecycle fields, deleted-vault scoping, and management controls. Existing document-focused drains must acknowledge every event while returning only document projections; dedicated lifecycle contracts inspect all envelopes.
+Run the existing repository, workflow, vault-isolation, and ingestion contracts after changes to parent-vault activity checks. A retained vault must not start workflow runs or source polls while deleted; restoring it must not reopen terminal runs.
+Build the disposable E2E fixture and run `npx playwright test vault_lifecycle.spec.ts vaults.spec.ts` from `e2e/` for desktop/mobile creation, deletion, restoration, and existing vault isolation. Do not point these tests at an existing archive. The Apple catalog and destination picker do not implement lifecycle management; native metadata, owner controls, recovery, and isolated native regressions remain required follow-up work.
+
 ## Verify document notes and comments
 
 Run the [document entry checks](references/document-entries.md).

@@ -30,6 +30,7 @@ async fn load(
                 j.correlation_id, j.causation_id
          FROM documents d JOIN jobs j ON j.id = ?
          JOIN processing_stage_runs r ON r.document_id = d.id AND r.job_id = j.id
+         JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
          WHERE d.id = ? AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
            AND d.vault_id = j.origin_vault_id
            AND r.vault_id = j.origin_vault_id AND r.group_id = j.processing_group_id

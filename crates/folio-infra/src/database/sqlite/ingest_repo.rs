@@ -86,7 +86,8 @@ impl SourceRepository for SqliteSourceRepository {
 
     async fn list_all(&self) -> Result<Vec<IngestionSourceDef>> {
         let rows = sqlx::query(
-            "SELECT * FROM ingestion_sources WHERE deleted_at IS NULL ORDER BY created_at, name",
+            "SELECT s.* FROM ingestion_sources s JOIN vaults v ON v.id = s.vault_id
+             WHERE s.deleted_at IS NULL AND v.deleted_at IS NULL ORDER BY s.created_at, s.name",
         )
         .fetch_all(&self.pool)
         .await

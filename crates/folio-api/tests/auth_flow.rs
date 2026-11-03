@@ -1497,6 +1497,29 @@ mod enforcement {
         let read_with_write_only = send(&app, bearer("GET", "/api/documents", &writer)).await;
         assert_eq!(read_with_write_only.status, StatusCode::FORBIDDEN);
     }
+
+    #[tokio::test]
+    async fn document_write_token_cannot_manage_vault_ownership() {
+        let app = guarded(true).await;
+        let session = setup_and_login(&app).await;
+        let writer = api_token(&app, &session, "documents:write").await;
+        let vault = uuid::Uuid::new_v4();
+
+        for (method, uri) in [
+            ("POST", "/api/vaults".to_string()),
+            ("DELETE", format!("/api/vaults/{vault}")),
+            ("POST", format!("/api/vaults/{vault}/members")),
+            (
+                "DELETE",
+                format!("/api/vaults/{vault}/members/user/someone"),
+            ),
+            ("POST", format!("/api/vaults/{vault}/restore")),
+        ] {
+            let response = send(&app, bearer(method, &uri, &writer)).await;
+            assert_eq!(response.status, StatusCode::FORBIDDEN, "{method} {uri}");
+            assert_eq!(response.json()["error"], "insufficient_scope");
+        }
+    }
 }
 
 mod forward {

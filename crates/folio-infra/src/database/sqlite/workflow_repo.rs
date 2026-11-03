@@ -94,7 +94,7 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
 impl WorkflowRepository for SqliteWorkflowRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ? AND deleted_at IS NULL")
+            sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)")
                 .bind(id.to_string())
                 .fetch_optional(&self.pool)
                 .await
@@ -105,7 +105,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
         let row = sqlx::query(
-            "SELECT * FROM workflows WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+            "SELECT * FROM workflows WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -135,7 +135,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         trigger: WorkflowTrigger,
     ) -> Result<Vec<Workflow>> {
         let rows = sqlx::query(
-            "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND deleted_at IS NULL AND trigger_event = ?
+            "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) AND trigger_event = ?
              ORDER BY created_at",
         )
         .bind(vault.to_string())
@@ -339,7 +339,8 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             .await
             .map_err(repo_err)?;
         let owner: Option<String> = sqlx::query_scalar(
-            "SELECT vault_id FROM workflows WHERE id = ? AND deleted_at IS NULL",
+            "SELECT w.vault_id FROM workflows w JOIN vaults v ON v.id = w.vault_id
+             WHERE w.id = ? AND w.deleted_at IS NULL AND v.deleted_at IS NULL",
         )
         .bind(run.workflow_id.to_string())
         .fetch_optional(&mut *tx)
@@ -347,7 +348,8 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .map_err(repo_err)?;
         if owner != Some(run.vault_id.to_string()) {
             return Err(Error::Validation(
-                "Workflow run belongs to an inactive workflow or different vault".into(),
+                "Workflow run belongs to an inactive workflow or vault, or a different vault"
+                    .into(),
             ));
         }
         let mutation_id = run.source_identity()?.map(|source| source.mutation_id);

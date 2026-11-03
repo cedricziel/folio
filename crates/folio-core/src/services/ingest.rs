@@ -447,12 +447,27 @@ pub struct IngestScheduler {
 /// Feeds one pipeline from sources that do not know about vaults
 struct BoundSink {
     vault: VaultId,
+    vaults: Arc<dyn VaultRepository>,
     inner: Arc<dyn VaultIngest>,
+}
+
+impl BoundSink {
+    /// A poll that started before its vault was deleted must not import into it
+    async fn require_active_vault(&self) -> Result<()> {
+        match self.vaults.find(self.vault).await? {
+            Some(_) => Ok(()),
+            None => Err(Error::NotFound {
+                entity_type: "Vault",
+                id: self.vault.to_string(),
+            }),
+        }
+    }
 }
 
 #[async_trait]
 impl IngestSink for BoundSink {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
+        self.require_active_vault().await?;
         self.inner.ingest(self.vault, source_id, item).await
     }
 
@@ -462,6 +477,7 @@ impl IngestSink for BoundSink {
         key: IngestItemKey,
         item: IngestItem,
     ) -> Result<IngestOutcome> {
+        self.require_active_vault().await?;
         self.inner
             .ingest_observed(self.vault, source_id, key, item)
             .await
@@ -549,6 +565,19 @@ impl IngestScheduler {
                     }
                 },
             };
+            match self.vaults.find(vault).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    if let Some((_, handle)) = running.remove(&def.id) {
+                        handle.abort();
+                    }
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Could not check the vault of source '{}': {e}", def.name);
+                    continue;
+                }
+            }
             let fingerprint =
                 serde_json::to_string(&(&def.name, &def.config, vault)).unwrap_or_default();
             if running
@@ -571,6 +600,7 @@ impl IngestScheduler {
                 origin: def.origin,
                 kind: def.config.kind(),
                 managed: Arc::clone(&self.managed),
+                vaults: Arc::clone(&self.vaults),
                 outcomes: self.outcomes.clone(),
             };
             let source = match self.factory.build(&def) {
@@ -592,6 +622,7 @@ impl IngestScheduler {
                 source,
                 Arc::new(BoundSink {
                     vault,
+                    vaults: Arc::clone(&self.vaults),
                     inner: Arc::clone(&self.sink),
                 }),
                 shutdown.clone(),
@@ -627,6 +658,7 @@ struct SourceRun {
     origin: crate::models::SourceOrigin,
     kind: crate::models::SourceKind,
     managed: Arc<dyn SourceRepository>,
+    vaults: Arc<dyn VaultRepository>,
     outcomes: Option<Arc<dyn IngestOutcomeRepository>>,
 }
 
@@ -659,6 +691,15 @@ async fn run_source(
             _ = shutdown.changed() => if *shutdown.borrow() { return },
         }
 
+        match run.vaults.find(run.vault).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return,
+            Err(error) => {
+                warn!("Cannot check vault for source '{name}': {error}");
+                wait = interval;
+                continue;
+            }
+        }
         if run.origin == crate::models::SourceOrigin::Managed {
             match run.managed.find(run.vault, run.id).await {
                 Ok(Some(def)) if def.enabled => {}

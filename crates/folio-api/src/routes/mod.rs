@@ -28,6 +28,7 @@ pub(crate) mod sources;
 pub(crate) mod tags;
 pub(crate) mod tokens;
 pub(crate) mod trash;
+mod vault_pages;
 pub(crate) mod vaults;
 mod view;
 mod workflow_pages;
@@ -101,6 +102,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(workflow_pages::router())
         // Source pages
         .merge(source_pages::router())
+        .merge(vault_pages::router())
         // SSE events
         .merge(events::router())
         // Login, setup and OAuth authorization server
@@ -136,7 +138,33 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
 /// API router for JSON endpoints
 fn api_router() -> Router<AppState> {
     Router::new()
-        .route("/vaults", axum::routing::get(vaults::list_vaults))
+        .route(
+            "/vaults",
+            get(vaults::list_vaults).post(vaults::create_vault),
+        )
+        .route(
+            "/vaults/{vault_id}",
+            get(vaults::get_vault)
+                .put(vaults::rename_vault)
+                .delete(vaults::delete_vault),
+        )
+        .route(
+            "/vaults/{vault_id}/restore",
+            axum::routing::post(vaults::restore_vault),
+        )
+        .route(
+            "/vaults/{vault_id}/default",
+            axum::routing::post(vaults::set_default_vault),
+        )
+        .route(
+            "/vaults/{vault_id}/members",
+            get(vaults::list_members).post(vaults::grant_member),
+        )
+        .route(
+            "/vaults/{vault_id}/members/{principal_type}/{principal_id}",
+            axum::routing::delete(vaults::revoke_member),
+        )
+        .route("/vaults/{vault_id}/history", get(vaults::list_history))
         .merge(saved_views::router())
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())

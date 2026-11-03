@@ -98,6 +98,25 @@ impl WorkflowRunner {
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();
         for (index, action) in actions.iter().enumerate().skip(skip) {
+            let Some(stored) = self.workflows.find_run(run.id).await? else {
+                return Ok(RunOutcome::Failed);
+            };
+            if stored.status.is_terminal() {
+                return Ok(if stored.status == RunStatus::Succeeded {
+                    RunOutcome::Succeeded
+                } else {
+                    RunOutcome::Failed
+                });
+            }
+            if self.workflows.locate(run.workflow_id).await? != Some(vault) {
+                self.finish(
+                    &mut run,
+                    RunStatus::Failed,
+                    Some("Workflow vault is no longer active".into()),
+                )
+                .await?;
+                return Ok(RunOutcome::Failed);
+            }
             if run.event != WorkflowTrigger::DocumentDeleted {
                 if let Some(document_id) = run.document_id {
                     if self.documents.locate(document_id).await? != Some(vault) {

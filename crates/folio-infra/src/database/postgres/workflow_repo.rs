@@ -127,7 +127,7 @@ fn not_found(id: Id) -> Error {
 impl WorkflowRepository for PostgresWorkflowRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
         let row: Option<(Id,)> =
-            sqlx::query_as("SELECT vault_id FROM workflows WHERE id = $1 AND deleted_at IS NULL")
+            sqlx::query_as("SELECT vault_id FROM workflows WHERE id = $1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)")
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await
@@ -138,7 +138,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
         let row: Option<WorkflowRow> = sqlx::query_as(
-            "SELECT * FROM workflows WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL",
+            "SELECT * FROM workflows WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)",
         )
         .bind(id)
         .bind(vault.0)
@@ -168,7 +168,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         trigger: WorkflowTrigger,
     ) -> Result<Vec<Workflow>> {
         let rows: Vec<WorkflowRow> = sqlx::query_as(
-            "SELECT * FROM workflows WHERE vault_id = $1 AND enabled AND deleted_at IS NULL AND trigger_event = $2
+            "SELECT * FROM workflows WHERE vault_id = $1 AND enabled AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) AND trigger_event = $2
              ORDER BY created_at",
         )
         .bind(vault.0)
@@ -356,7 +356,8 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let owner: Option<Id> = sqlx::query_scalar(
-            "SELECT vault_id FROM workflows WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
+            "SELECT w.vault_id FROM workflows w JOIN vaults v ON v.id = w.vault_id
+             WHERE w.id = $1 AND w.deleted_at IS NULL AND v.deleted_at IS NULL FOR SHARE OF w, v",
         )
         .bind(run.workflow_id)
         .fetch_optional(&mut *tx)
@@ -364,7 +365,8 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .map_err(repo_err)?;
         if owner != Some(run.vault_id.0) {
             return Err(Error::Validation(
-                "Workflow run belongs to an inactive workflow or different vault".into(),
+                "Workflow run belongs to an inactive workflow or vault, or a different vault"
+                    .into(),
             ));
         }
         let mutation_id = run.source_identity()?.map(|source| source.mutation_id);

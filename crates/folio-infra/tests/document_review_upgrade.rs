@@ -31,7 +31,7 @@ async fn upgrade_contract(db: Database) {
         Database::Postgres(pool) => legacy.run(pool).await.unwrap(),
     }
     let r = db.repositories().await;
-    let vault = r.vaults.instance_default().await.unwrap();
+    let vault = common::legacy_vault(&db).await;
     let kind = r
         .document_types
         .create(

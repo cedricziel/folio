@@ -90,7 +90,39 @@ pub async fn resolve_default_vault(
         return next.run(request).await;
     }
     let who = user.as_ref().map(|u| UserId(u.id.clone()));
-    let context = match resolve(&resolver.state, &mut request, who.as_ref()).await {
+    let management_response = request.uri().path().starts_with("/api/vaults")
+        || request.uri().path().starts_with("/settings/vaults");
+    let default = match resolver.state.vaults.default_vault(who.as_ref()).await {
+        Ok(default) => Some(default),
+        Err(error) => match who.as_ref() {
+            Some(user) => match resolver.state.vaults.list(Some(user)).await {
+                Ok(vaults) if vaults.is_empty() => None,
+                _ => return ApiError::from(error).into_response(),
+            },
+            None => return ApiError::from(error).into_response(),
+        },
+    };
+    let explicit = request.extensions().get::<RequestedVault>().is_some()
+        || request.headers().contains_key("x-folio-vault");
+    if default.is_none() && !explicit {
+        let path = request.uri().path();
+        if path == "/api/vaults"
+            || path == "/settings/vaults"
+            || path.starts_with("/settings/vaults/")
+        {
+            request.extensions_mut().insert(Uploader(who));
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                "private, no-store".parse().expect("static"),
+            );
+            return response;
+        }
+        if request.method() == Method::GET && matches!(path, "/" | "/settings") {
+            return axum::response::Redirect::to("/settings/vaults").into_response();
+        }
+    }
+    let context = match resolve(&resolver.state, &mut request, who.as_ref(), default).await {
         Ok(context) => context,
         Err(error) => return error.into_response(),
     };
@@ -98,11 +130,15 @@ pub async fn resolve_default_vault(
     request
         .extensions_mut()
         .insert(Uploader(context.user.clone()));
-    let explicit = request.extensions().get::<RequestedVault>().is_some()
-        || request.headers().contains_key("x-folio-vault");
     CURRENT_VAULT
         .scope(context, async move {
             let mut response = next.run(request).await;
+            if management_response {
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    "private, no-store".parse().expect("static"),
+                );
+            }
             if let Some(location) = response
                 .headers()
                 .get(header::LOCATION)
@@ -123,8 +159,8 @@ async fn resolve(
     state: &AppState,
     request: &mut Request,
     user: Option<&UserId>,
+    default: Option<VaultId>,
 ) -> ApiResult<VaultContext> {
-    let default = state.vaults.default_vault(user).await?;
     let header = request
         .headers()
         .get("x-folio-vault")
@@ -156,10 +192,30 @@ async fn resolve(
     if matches!((path, header), (Some(a), Some(b)) if a != b) {
         return Err(ApiError::bad_request("Conflicting vault selections"));
     }
-    let id = path.or(header).unwrap_or(default);
+    let id = path.or(header).or(default).ok_or_else(|| {
+        ApiError::not_found("No active vault; restore or create one in vault settings")
+    })?;
+    let retained_management = request
+        .uri()
+        .path()
+        .strip_prefix("/api/vaults/")
+        .and_then(|path| path.split_once('/').map(|(_, tail)| tail).or(Some("")))
+        .is_some_and(|tail| {
+            (request.method() == Method::GET && matches!(tail, "" | "history"))
+                || (request.method() == Method::POST && tail == "restore")
+                || (request.method() == Method::DELETE && tail.is_empty())
+        });
     let role = match user {
-        Some(user) => state.access.effective_role(user, id).await?,
-        None if id == default => Some(VaultRole::Owner),
+        Some(user) => match state.access.effective_role(user, id).await? {
+            Some(role) => Some(role),
+            None if retained_management
+                && state.vaults.retained_for_owner(user, id).await?.is_some() =>
+            {
+                Some(VaultRole::Owner)
+            }
+            None => None,
+        },
+        None if Some(id) == default => Some(VaultRole::Owner),
         None => None,
     }
     .ok_or_else(|| ApiError::not_found("Vault not found"))?;

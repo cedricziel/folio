@@ -119,7 +119,8 @@ async fn main() -> Result<()> {
     let source_repo = repos.sources;
     let ledger = repos.ledger;
     let auth_store = repos.auth;
-    let vault_service = Arc::new(VaultService::new(repos.vaults.clone(), repos.members));
+    let vault_service =
+        Arc::new(VaultService::new(repos.vaults.clone(), repos.members).with_audit(repos.audit));
 
     let stored_documents = document_repo.list_all().await.map(|d| d.len()).unwrap_or(0);
     telemetry::metrics().documents_changed(stored_documents as i64);

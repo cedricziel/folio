@@ -47,7 +47,9 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
 /// The document must exist in `vault`
 async fn require_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Result<()> {
     let found: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        "SELECT 1 FROM documents d JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+         WHERE d.id = $1 AND d.vault_id = $2 AND d.deleted_at IS NULL
+         FOR UPDATE OF d FOR SHARE OF v",
     )
     .bind(id)
     .bind(vault.0)
@@ -435,7 +437,7 @@ fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Resul
 impl DocumentRepository for PostgresDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
         let row: Option<(Uuid,)> =
-            sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1 AND deleted_at IS NULL")
+            sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)")
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await
@@ -463,11 +465,12 @@ impl DocumentRepository for PostgresDocumentRepository {
         if from == to {
             return doc.try_into();
         }
-        let target: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM vaults WHERE id = $1")
-            .bind(to.0)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(repo_err)?;
+        let target: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR SHARE")
+                .bind(to.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(repo_err)?;
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
@@ -1186,12 +1189,14 @@ impl DocumentRepository for PostgresDocumentRepository {
         let sql = match stage {
             ProcessingStage::Ocr => {
                 select_documents!(
-                    "WHERE deleted_at IS NULL AND ocr_status = 'pending' ORDER BY created_at"
+                    "WHERE deleted_at IS NULL AND ocr_status = 'pending'
+                     AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL) ORDER BY created_at"
                 )
             }
             ProcessingStage::Embed => {
                 select_documents!(
-                    "WHERE deleted_at IS NULL AND embed_status = 'pending' ORDER BY created_at"
+                    "WHERE deleted_at IS NULL AND embed_status = 'pending'
+                     AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL) ORDER BY created_at"
                 )
             }
         };

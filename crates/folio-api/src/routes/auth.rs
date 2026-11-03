@@ -437,6 +437,8 @@ async fn enforce_auth_inner(auth: AuthState, mut request: Request, next: Next) -
                         Some(scope) => scope,
                         None => return StatusCode::FORBIDDEN.into_response(),
                     }
+                } else if !is_read_method(request.method()) && manages_vault(&path) {
+                    VAULT_MANAGEMENT_SCOPE
                 } else if is_read_method(request.method())
                     || path.starts_with("/api/telemetry/")
                     || (request.method() == Method::POST && path == "/api/documents/search")
@@ -500,6 +502,20 @@ fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response
         HeaderValue::from_static("application/json"),
     );
     response
+}
+
+/// Granted to no current OAuth client, so bearer tokens cannot change vault ownership
+const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
+
+/// Vault lifecycle and membership routes; choosing one's own default vault is excluded
+fn manages_vault(path: &str) -> bool {
+    let parts: Vec<_> = path.trim_end_matches('/').split('/').collect();
+    match parts.as_slice() {
+        ["", "api", "vaults", ..] => {
+            !matches!(parts.as_slice(), ["", "api", "vaults", _, "default"])
+        }
+        _ => false,
+    }
 }
 
 fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {

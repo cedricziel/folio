@@ -472,8 +472,22 @@ async fn search_and_move_contract(r: &Repositories) {
             .len(),
         2
     );
-    let source_audit = r.audit.list(a, 10).await.unwrap();
-    let target_audit = r.audit.list(b, 10).await.unwrap();
+    let source_audit: Vec<_> = r
+        .audit
+        .list(a, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.action == "document.moved")
+        .collect();
+    let target_audit: Vec<_> = r
+        .audit
+        .list(b, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.action == "document.moved")
+        .collect();
     assert_eq!(source_audit.len(), 1);
     assert_eq!(target_audit.len(), 1);
     assert_eq!(source_audit[0].actor, Some(actor));
@@ -487,7 +501,16 @@ async fn search_and_move_contract(r: &Repositories) {
         serde_json::json!({ "from": a, "to": b })
     );
     r.documents.move_to(doc.id, b, b, None).await.unwrap();
-    assert_eq!(r.audit.list(b, 10).await.unwrap().len(), 1);
+    assert_eq!(
+        r.audit
+            .list(b, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.action == "document.moved")
+            .count(),
+        1
+    );
 }
 
 async fn membership_contract(r: &Repositories) {
@@ -640,6 +663,7 @@ async fn provisioning_contract(r: &Repositories) {
             .unwrap(),
         Some(VaultRole::Owner)
     );
+    r.vaults.set_default(&newcomer, shared).await.unwrap();
     r.vaults.delete(newcomer_default).await.unwrap();
     assert_eq!(
         service.default_vault(Some(&newcomer)).await.unwrap(),
