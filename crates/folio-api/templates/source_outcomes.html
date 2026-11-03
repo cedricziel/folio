@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "partials/icons.html" as icons %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="page">
+    <header class="page-head">
+        <a href="{{ "/settings/sources"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Sources</a>
+        <div class="page-head-row">
+            <h1 class="title">{{ source_name }}</h1>
+            <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes?limit={{ limit }}" class="f-btn">Refresh</a>
+        </div>
+        <p class="lede">Recent item outcomes. Import rules run before an item is saved.</p>
+        {% if !enabled %}<p class="f-meta">This source is off. Earlier outcomes remain available.</p>{% endif %}
+        {% if unavailable %}
+        <div class="f-notice f-notice-danger" role="status"><p>Source unavailable. Check its connection settings.</p></div>
+        {% else %}
+        {% match last_run %}
+        {% when Some with (when) %}<p class="f-meta">Last check succeeded at {{ when }}.</p>
+        {% when None %}<p class="f-meta">This source has not run yet.</p>
+        {% endmatch %}
+        {% endif %}
+    </header>
+
+    {% if load_failed %}
+    <div class="f-notice f-notice-danger" role="alert">
+        <p>Could not load source outcomes.</p>
+        <a href="{{ retry_path|vault_url }}" class="f-btn">Try again</a>
+    </div>
+    {% else %}
+    {% if rows.is_empty() %}
+    <div class="f-notice"><p>No item outcomes yet. Outcomes appear after this source handles an item.</p></div>
+    {% else %}
+    <div class="f-list" aria-label="Item outcomes">
+        {% for row in rows %}
+        <div class="f-row f-row-plain">
+            <div class="row-main">
+                <span class="f-row-title">{{ row.title }}</span>
+                <div class="f-row-sub"><span class="f-meta">{{ row.explanation }}</span></div>
+                <div class="f-row-sub"><time class="f-meta" datetime="{{ row.occurred_at }}">{{ row.time_label }}</time></div>
+            </div>
+            {% match row.document_id %}
+            {% when Some with (id) %}<a href="{{ "/documents"|vault_url }}/{{ id }}" class="f-btn">Open document</a>
+            {% when None %}
+            {% endmatch %}
+        </div>
+        {% endfor %}
+    </div>
+    {% match next_before %}
+    {% when Some with (cursor) %}
+    <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes?before={{ cursor }}&limit={{ limit }}" class="f-btn">Earlier outcomes</a>
+    {% when None %}
+    {% endmatch %}
+    {% endif %}
+    {% endif %}
+</section>
+{% endblock %}

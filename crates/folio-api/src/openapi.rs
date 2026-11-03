@@ -99,6 +99,7 @@ use crate::routes::{
         workflows::list_runs,
         sources::list_sources,
         sources::get_source,
+        sources::list_source_outcomes,
         sources::create_source,
         sources::update_source,
         sources::delete_source,

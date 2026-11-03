@@ -8,8 +8,8 @@ use folio_core::models::VaultId;
 use folio_core::ports::{
     CorrespondentRepository, DocumentEntryRepository, DocumentImporter, DocumentRepository,
     DocumentStore, DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger,
-    IngestionSourceFactory, OcrService, OutboxStore, SearchResult, SearchService,
-    SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
+    IngestOutcomeReader, IngestionSourceFactory, OcrService, OutboxStore, SearchResult,
+    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
 use folio_core::services::{Importer, SearchServiceFacade, VaultService};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
@@ -26,6 +26,7 @@ pub struct IngestionState {
     /// Sources from environment or `config.toml`, shown read-only
     pub configured: Arc<Vec<IngestionSourceDef>>,
     pub factory: Arc<dyn IngestionSourceFactory>,
+    pub outcomes: Arc<dyn IngestOutcomeReader>,
 }
 
 /// Application state shared across handlers
@@ -67,12 +68,14 @@ impl IngestionState {
     pub fn new(
         managed: Arc<dyn SourceRepository>,
         ledger: Arc<dyn IngestLedger>,
+        outcomes: Arc<dyn IngestOutcomeReader>,
         configured: Vec<IngestionSourceDef>,
     ) -> Self {
         Self {
             managed,
             configured: Arc::new(configured),
             factory: Arc::new(SourceFactory::new(ledger)),
+            outcomes,
         }
     }
 }

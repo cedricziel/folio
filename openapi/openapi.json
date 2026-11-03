@@ -3396,6 +3396,115 @@
         ]
       }
     },
+    "/api/sources/{id}/outcomes": {
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "summary": "Read committed item outcomes for an ingestion source.",
+        "operationId": "listSourceOutcomes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Source ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Return outcomes older than this positive outcome ID",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, from 1 to 100; defaults to 50",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent source outcomes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestOutcomePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/sources/{id}/restore": {
       "post": {
         "tags": [
@@ -7247,6 +7356,99 @@
             "description": "Path relative to the consume folder, using `/` separators"
           }
         }
+      },
+      "IngestOutcomePage": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "source_id",
+          "outcomes"
+        ],
+        "properties": {
+          "next_before": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IngestOutcomeRecord"
+            }
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "IngestOutcomeRecord": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault_id",
+          "source_id",
+          "item_id",
+          "attempt_id",
+          "event_id",
+          "occurred_at",
+          "outcome"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/IngestResult"
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "IngestResult": {
+        "type": "string",
+        "enum": [
+          "imported",
+          "skipped",
+          "duplicate",
+          "failed"
+        ]
       },
       "IngestionSourceInput": {
         "type": "object",
