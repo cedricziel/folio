@@ -6,6 +6,7 @@ pub use metadata_repo::SqliteMetadataFieldRepository;
 mod auth_repo;
 mod document_entries;
 mod document_repo;
+mod ingest_outcomes;
 mod ingest_repo;
 mod outbox;
 mod search;
@@ -24,6 +25,7 @@ pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
 };
+pub use ingest_outcomes::SqliteIngestOutcomeRepository;
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
 pub use outbox::{
     insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,
