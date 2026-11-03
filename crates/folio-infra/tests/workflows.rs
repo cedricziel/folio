@@ -941,7 +941,7 @@ async fn client_refuses_non_http_urls() {
 }
 
 #[tokio::test]
-async fn deleting_a_workflow_removes_its_runs() {
+async fn deleting_and_restoring_a_workflow_preserves_history_without_replaying_runs() {
     let h = Harness::new().await;
     let workflow = h
         .webhook_workflow("http://127.0.0.1:1/x".into(), None)
@@ -950,8 +950,16 @@ async fn deleting_a_workflow_removes_its_runs() {
     let run = h.run_for(&workflow, doc.id).await;
 
     h.workflows.delete(h.vault, workflow.id).await.unwrap();
-    assert!(h.workflows.find_run(run.id).await.unwrap().is_none());
+    let retained = h.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(retained.status, RunStatus::Failed);
+    assert_eq!(retained.actions, run.actions);
+    assert_eq!(retained.payload, run.payload);
+    h.workflows.restore(h.vault, workflow.id).await.unwrap();
     assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+    assert_eq!(
+        h.workflows.find_run(run.id).await.unwrap().unwrap().status,
+        RunStatus::Failed
+    );
 }
 
 #[tokio::test]
@@ -1961,4 +1969,135 @@ async fn event_actor_filters_use_the_producer_context_without_granting_private_a
         .unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].workflow_id, workflow.id);
+}
+
+/// Deletes the workflow just before the runner records its first completed action
+struct DeleteBeforeFirstProgress {
+    inner: Arc<dyn WorkflowRepository>,
+    deleted: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl WorkflowRepository for DeleteBeforeFirstProgress {
+    async fn locate(&self, id: Id) -> folio_core::Result<Option<folio_core::models::VaultId>> {
+        self.inner.locate(id).await
+    }
+    async fn find_by_id(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Workflow>> {
+        self.inner.find_by_id(vault, id).await
+    }
+    async fn list(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list(vault).await
+    }
+    async fn list_deleted(
+        &self,
+        vault: folio_core::models::VaultId,
+    ) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list_deleted(vault).await
+    }
+    async fn find_deleted(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Workflow>> {
+        self.inner.find_deleted(vault, id).await
+    }
+    async fn restore(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.restore(vault, id).await
+    }
+    async fn list_enabled(
+        &self,
+        vault: folio_core::models::VaultId,
+        trigger: WorkflowTrigger,
+    ) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list_enabled(vault, trigger).await
+    }
+    async fn create(
+        &self,
+        vault: folio_core::models::VaultId,
+        input: WorkflowInput,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.create(vault, input).await
+    }
+    async fn update(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        input: WorkflowInput,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.update(vault, id, input).await
+    }
+    async fn delete(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<()> {
+        self.inner.delete(vault, id).await
+    }
+    async fn create_run(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
+        self.inner.create_run(run).await
+    }
+    async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
+        self.inner.find_run(id).await
+    }
+    async fn update_run(&self, run: &WorkflowRun) -> folio_core::Result<()> {
+        if !self.deleted.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.inner.delete(run.vault_id, run.workflow_id).await?;
+        }
+        self.inner.update_run(run).await
+    }
+    async fn list_runs(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        limit: u32,
+    ) -> folio_core::Result<Vec<WorkflowRun>> {
+        self.inner.list_runs(vault, id, limit).await
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_workflow_stops_its_inflight_run_after_the_current_action() {
+    let h = Harness::new().await;
+    let first = h.tag("first").await;
+    let second = h.tag("second").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUploaded,
+            WorkflowConditions::default(),
+            vec![
+                WorkflowAction::AddTags {
+                    tag_ids: vec![first],
+                },
+                WorkflowAction::AddTags {
+                    tag_ids: vec![second],
+                },
+            ],
+        )
+        .await;
+    let document = h.document("stopped.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, document.id).await;
+    let deleting: Arc<dyn WorkflowRepository> = Arc::new(DeleteBeforeFirstProgress {
+        inner: h.workflows.clone(),
+        deleted: std::sync::atomic::AtomicBool::new(false),
+    });
+    let runner = WorkflowRunner::new(deleting, h.documents.clone(), WebhookClient::new());
+
+    assert_eq!(runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    let tags: Vec<Id> = h
+        .documents
+        .get_tags(h.vault, document.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tag| tag.id)
+        .collect();
+    assert_eq!(tags, vec![first]);
+    let stopped = h.run(run.id).await;
+    assert_eq!(stopped.status, RunStatus::Failed);
+    assert_eq!(stopped.last_error.as_deref(), Some("Workflow was deleted"));
 }

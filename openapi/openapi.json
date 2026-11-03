@@ -4863,6 +4863,15 @@
         "operationId": "listWorkflows",
         "parameters": [
           {
+            "name": "deleted",
+            "in": "query",
+            "description": "List retained workflows in trash instead of active workflows.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "X-Folio-Vault",
             "in": "header",
             "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
@@ -5167,7 +5176,7 @@
         "tags": [
           "workflows"
         ],
-        "summary": "Delete a workflow and its run history",
+        "summary": "Move a workflow to trash, preserving history and stopping pending runs",
         "operationId": "deleteWorkflow",
         "parameters": [
           {
@@ -5192,7 +5201,83 @@
         ],
         "responses": {
           "204": {
-            "description": "The workflow was deleted"
+            "description": "The workflow is in trash; pending runs are stopped"
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/workflows/{id}/restore": {
+      "post": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "Restore the configuration without restarting retained execution history.",
+        "operationId": "restoreWorkflow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Workflow ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The restored workflow; secrets are masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workflow"
+                }
+              }
+            }
           },
           "401": {
             "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
@@ -7749,6 +7834,19 @@
             "type": "string",
             "format": "date-time"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -7765,6 +7863,12 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "vault_id": {
             "type": "string",
