@@ -504,6 +504,21 @@ management controls, deleted-workflow history, secret masking, and vault access.
 Regenerate OpenAPI after response or route changes. Never verify workflow delivery
 against an existing webhook receiver or user archive.
 
+## Verify classification lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test taxonomy_lifecycle --test repository_contract`
+for SQLite/PostgreSQL soft deletion, stable identity, retained document references,
+name reuse, restore conflicts, actor metadata, and transactional lifecycle events.
+Run `cargo test -p folio-api --test routes --test web --test openapi` for scoped
+JSON and management routes. Regenerate OpenAPI and run the isolated Apple package
+suite above after schema changes. The MCP OAuth suite also checks that explicit
+tag replacement rejects vocabulary deleted after its initial lookup.
+
+Build `folio-app`, then run `npx playwright test classification-lifecycle.spec.ts`
+from `e2e/` against its disposable setup instance. The suite covers all three
+classification types, retained labels, restore conflicts, vault isolation, and
+viewer restrictions. Inspect its active/trash screenshot attachments.
+
 ## Verify document notes and comments
 
 Run the [document entry checks](references/document-entries.md).
