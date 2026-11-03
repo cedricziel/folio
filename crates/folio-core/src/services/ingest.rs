@@ -375,10 +375,14 @@ impl IngestScheduler {
             };
             match self.vaults.find(vault).await {
                 Ok(Some(_)) => {}
-                Ok(None) | Err(_) => {
+                Ok(None) => {
                     if let Some((_, handle)) = running.remove(&def.id) {
                         handle.abort();
                     }
+                    continue;
+                }
+                Err(e) => {
+                    warn!("Could not check the vault of source '{}': {e}", def.name);
                     continue;
                 }
             }
