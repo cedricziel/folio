@@ -283,6 +283,11 @@ pub struct UpdateDocument {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DocumentFilter {
+    pub reviewed: Option<bool>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
+    pub document_date_from: Option<DocumentDate>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
+    pub document_date_to: Option<DocumentDate>,
     #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
     pub correspondent_id: Option<Id>,
     #[cfg_attr(feature = "openapi", schema(value_type = Option<uuid::Uuid>))]
@@ -294,6 +299,21 @@ pub struct DocumentFilter {
     pub created_after: Option<DateTime<Utc>>,
     /// Only documents created strictly before this instant
     pub created_before: Option<DateTime<Utc>>,
+}
+
+impl DocumentFilter {
+    pub fn validate(&self) -> crate::Result<()> {
+        if self
+            .document_date_from
+            .zip(self.document_date_to)
+            .is_some_and(|(from, to)| from > to)
+        {
+            return Err(crate::Error::Validation(
+                "Document date end must not precede its start".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn nullable_date<'de, D: serde::Deserializer<'de>>(
