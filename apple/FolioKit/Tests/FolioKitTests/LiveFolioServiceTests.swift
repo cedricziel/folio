@@ -436,6 +436,13 @@ private let documentJSON = """
         #expect(await model.error == "Restore failed. An active entry already uses this name.")
     }
 
+    @Test func taxonomyDecodeFailureIsUnreadable() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(#"[{"id":"not-a-uuid"}]"#.utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) {
+            _ = try await makeService().scoped(to: UUID()).taxonomy(.tags, deleted: false)
+        }
+    }
+
     @Test func taxonomySaveTrimsTheName() async throws {
         let vault = UUID()
         StubURLProtocol.handler = { request, body in

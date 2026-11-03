@@ -309,33 +309,40 @@ public struct LiveFolioService: FolioService {
     }
 
     public func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry] {
-        let path = "api/\(kind.rawValue)" + (deleted ? "/trash" : "")
-        let data = try await taxonomyRequest(path: path, method: "GET")
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let value = try decoder.singleValueContainer().decode(String.self)
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: value) { return date }
-            formatter.formatOptions = [.withInternetDateTime]
-            guard let date = formatter.date(from: value) else { throw FolioError.unreadableResponse }
-            return date
+        try await call("taxonomy.list") {
+            let path = "api/\(kind.rawValue)" + (deleted ? "/trash" : "")
+            let data = try await taxonomyRequest(path: path, method: "GET")
+            let transcoder = LenientDateTranscoder()
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .custom { decoder in
+                try transcoder.decode(decoder.singleValueContainer().decode(String.self))
+            }
+            do {
+                return try decoder.decode([TaxonomyEntry].self, from: data)
+            } catch is DecodingError {
+                throw FolioError.unreadableResponse
+            }
         }
-        return try decoder.decode([TaxonomyEntry].self, from: data)
     }
 
     public func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws {
-        let path = "api/\(kind.rawValue)" + (id.map { "/" + $0.uuidString.lowercased() } ?? "")
-        _ = try await taxonomyRequest(path: path, method: id == nil ? "POST" : "PUT", body: ["name": name])
+        try await call("taxonomy.save") {
+            let path = "api/\(kind.rawValue)" + (id.map { "/" + $0.uuidString.lowercased() } ?? "")
+            _ = try await taxonomyRequest(path: path, method: id == nil ? "POST" : "PUT", body: ["name": name])
+        }
     }
 
     public func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
-        _ = try await taxonomyRequest(path: "api/\(kind.rawValue)/\(id.uuidString.lowercased())", method: "DELETE")
+        try await call("taxonomy.delete") {
+            _ = try await taxonomyRequest(path: "api/\(kind.rawValue)/\(id.uuidString.lowercased())", method: "DELETE")
+        }
     }
 
     public func restoreTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
-        _ = try await taxonomyRequest(
-            path: "api/\(kind.rawValue)/\(id.uuidString.lowercased())/restore", method: "POST")
+        try await call("taxonomy.restore") {
+            _ = try await taxonomyRequest(
+                path: "api/\(kind.rawValue)/\(id.uuidString.lowercased())/restore", method: "POST")
+        }
     }
 
     private func taxonomyRequest(path: String, method: String, body: [String: String]? = nil) async throws -> Data {
