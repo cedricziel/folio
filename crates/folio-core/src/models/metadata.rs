@@ -146,7 +146,9 @@ impl MetadataValue {
                         "URL must be absolute HTTP or HTTPS without credentials or whitespace",
                     );
                 }
-                Ok(Self::Url(parsed.into()))
+                let normalized: String = parsed.into();
+                validate_text(&normalized, 8_192, true)?;
+                Ok(Self::Url(normalized))
             }
             value => Ok(value),
         }
