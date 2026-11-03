@@ -4,5 +4,4 @@
 - [x] Verify rollback, replay, fencing, source authority, source health, and migration upgrades on both backends.
 - [x] Document isolated regression commands in the project verify skill.
 - [x] Complete final scoped lint and 202 isolated core/infra tests.
-- [ ] Verify integrated CI and archive this persistence increment.
-- [ ] Publish and merge with required checks and approvals.
+- [x] Verify integrated CI, end-to-end tests, fastembed, both Linux builds, and title lint; archive this persistence increment.
