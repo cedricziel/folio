@@ -65,7 +65,8 @@ impl DomainEventEnvelope {
     /// Capture a committed transition from server context and an allowlisted producer payload.
     ///
     /// Producers must select the data fields permitted for the audience. Invalid
-    /// identifiers, mismatched document targets, and payloads above 64 KiB fail validation.
+    /// identifiers and mismatched document targets fail validation. Data is capped at 64 KiB,
+    /// or 1 MiB for vault-visible document metadata transitions with complete value snapshots.
     pub fn new(
         event_type: impl Into<String>,
         vault_id: VaultId,
@@ -165,15 +166,22 @@ impl DomainEventEnvelope {
                 return Err(invalid("Domain event audience requires a user"));
             }
         }
+        let max_data_bytes = if self.event_type == "document.metadata.changed"
+            && self.audience == EventAudience::Vault
+        {
+            1_048_576
+        } else {
+            65_536
+        };
         if !self.data.is_object()
             || serde_json::to_vec(&self.data)
                 .map_err(|e| invalid(&e.to_string()))?
                 .len()
-                > 65536
+                > max_data_bytes
         {
-            return Err(invalid(
-                "Domain event data must be an object of at most 64 KiB",
-            ));
+            return Err(invalid(&format!(
+                "Domain event data must be an object of at most {max_data_bytes} bytes"
+            )));
         }
         Ok(())
     }
@@ -400,6 +408,93 @@ mod tests {
         let mut data = serde_json::to_value(envelope()).unwrap();
         data["data"] = json!({"name": "x".repeat(65537)});
         assert!(serde_json::from_value::<DomainEventEnvelope>(data).is_err());
+    }
+
+    #[test]
+    fn metadata_changes_retain_maximum_long_text_before_and_after() {
+        let document = Uuid::new_v4();
+        let before = "\u{0001}".repeat(65_536);
+        let after = "\u{0002}".repeat(65_536);
+        let event = DomainEventEnvelope::new(
+            "document.metadata.changed",
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            json!({"changes": [{"field_id": Uuid::new_v4(), "kind": "long_text",
+                "before": {"kind": "long_text", "value": before},
+                "after": {"kind": "long_text", "value": after}}]}),
+        )
+        .expect("valid long text must fit an immutable transition event");
+        let bytes = serde_json::to_vec(&event).unwrap();
+        let decoded: DomainEventEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.data()["changes"][0]["before"]["value"], before);
+        assert_eq!(decoded.data()["changes"][0]["after"]["value"], after);
+    }
+
+    #[test]
+    fn metadata_snapshot_budget_is_bounded_on_construction_and_decode() {
+        let document = Uuid::new_v4();
+        let overhead = serde_json::to_vec(&json!({"text": ""})).unwrap().len();
+        let payload = json!({"text": "x".repeat(1_048_576 - overhead)});
+        assert_eq!(serde_json::to_vec(&payload).unwrap().len(), 1_048_576);
+        let event = DomainEventEnvelope::new(
+            "document.metadata.changed",
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            payload.clone(),
+        )
+        .unwrap();
+        let encoded = serde_json::to_value(&event).unwrap();
+        assert!(serde_json::from_value::<DomainEventEnvelope>(encoded.clone()).is_ok());
+        let mut oversized = payload;
+        oversized["text"] = json!("x".repeat(1_048_577 - overhead));
+        assert!(DomainEventEnvelope::new(
+            "document.metadata.changed",
+            event.vault_id(),
+            event.subject().clone(),
+            Some(document),
+            EventAudience::Vault,
+            oversized.clone(),
+        )
+        .is_err());
+        let mut oversized_envelope = encoded;
+        oversized_envelope["data"] = oversized;
+        assert!(serde_json::from_value::<DomainEventEnvelope>(oversized_envelope).is_err());
+    }
+
+    #[test]
+    fn extended_snapshot_budget_requires_exact_event_scope_and_target() {
+        let document = Uuid::new_v4();
+        let event = DomainEventEnvelope::new(
+            "document.metadata.changed",
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            json!({"text": "x".repeat(65_537)}),
+        )
+        .unwrap();
+        let mut wrong_event = serde_json::to_value(&event).unwrap();
+        wrong_event["event_type"] = json!("document.metadata.changed_extra");
+        assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_event).is_err());
+        let mut wrong_audience = serde_json::to_value(&event).unwrap();
+        wrong_audience["audience"] = serde_json::to_value(EventAudience::Owners).unwrap();
+        assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_audience).is_err());
+        let mut wrong_target = serde_json::to_value(&event).unwrap();
+        wrong_target["document_id"] = json!(Uuid::new_v4());
+        assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_target).is_err());
     }
 
     #[tokio::test]
