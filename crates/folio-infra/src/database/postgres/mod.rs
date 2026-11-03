@@ -1,7 +1,14 @@
 //! PostgreSQL adapters
+mod metadata_option_repo;
+pub use metadata_option_repo::PostgresMetadataOptionRepository;
+
+mod metadata_repo;
+pub use metadata_repo::PostgresMetadataFieldRepository;
 
 mod auth_repo;
+mod document_entries;
 mod document_repo;
+mod ingest_outcomes;
 mod ingest_repo;
 mod outbox;
 mod search;
@@ -15,10 +22,12 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{migrate::Migrate, Connection, PgPool};
 
 pub use auth_repo::PostgresAuthStore;
+pub use document_entries::PostgresDocumentEntryRepository;
 pub use document_repo::{
     PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
     PostgresTagRepository,
 };
+pub use ingest_outcomes::PostgresIngestOutcomeRepository;
 pub use ingest_repo::{PostgresIngestLedger, PostgresSourceRepository};
 pub use outbox::{
     insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,

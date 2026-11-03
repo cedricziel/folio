@@ -10,6 +10,7 @@
 //! an offline cache per backend.
 
 mod health;
+mod ingest_outcomes;
 pub mod postgres;
 mod saved_view;
 pub mod sqlite;
@@ -22,8 +23,8 @@ use tokio::sync::Notify;
 use folio_auth::AuthStore;
 use folio_core::ports::{
     AccessPolicy, AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,
-    IngestLedger, MembershipRepository, OutboxStore, SearchService, SettingsRepository,
-    SourceRepository, TagRepository, VaultRepository, WorkflowRepository,
+    IngestLedger, IngestOutcomeRepository, MembershipRepository, OutboxStore, SearchService,
+    SettingsRepository, SourceRepository, TagRepository, VaultRepository, WorkflowRepository,
 };
 use folio_core::EventOrigin;
 
@@ -97,6 +98,7 @@ impl From<PgPool> for Database {
 
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     /// Writes an outbox event with every lifecycle change
     pub documents: Arc<dyn DocumentRepository>,
@@ -111,6 +113,7 @@ pub struct Repositories {
     pub workflows: Arc<dyn WorkflowRepository>,
     pub sources: Arc<dyn SourceRepository>,
     pub ledger: Arc<dyn IngestLedger>,
+    pub ingest_outcomes: Arc<dyn IngestOutcomeRepository>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
     pub auth: Arc<dyn AuthStore>,
@@ -160,6 +163,10 @@ impl Database {
                     )
                 };
                 Repositories {
+                    entries: Arc::new(
+                        sqlite::SqliteDocumentEntryRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     saved_views: Arc::new(
                         sqlite::SqliteSavedViewRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -174,6 +181,9 @@ impl Database {
                     workflows: Arc::new(SqliteWorkflowRepository::new(pool.clone())),
                     sources: Arc::new(SqliteSourceRepository::new(pool.clone())),
                     ledger: Arc::new(SqliteIngestLedger::new(pool.clone())),
+                    ingest_outcomes: Arc::new(sqlite::SqliteIngestOutcomeRepository::new(
+                        pool.clone(),
+                    )),
                     search: Arc::new(SqliteSearchService::new(pool.clone())),
                     jobs: JobQueue::sqlite(pool.clone()),
                     auth: Arc::new(SqliteAuthStore::new(pool.clone())),
@@ -194,6 +204,10 @@ impl Database {
                     )
                 };
                 Repositories {
+                    entries: Arc::new(
+                        postgres::PostgresDocumentEntryRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     saved_views: Arc::new(
                         postgres::PostgresSavedViewRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -210,6 +224,9 @@ impl Database {
                     workflows: Arc::new(PostgresWorkflowRepository::new(pool.clone())),
                     sources: Arc::new(PostgresSourceRepository::new(pool.clone())),
                     ledger: Arc::new(PostgresIngestLedger::new(pool.clone())),
+                    ingest_outcomes: Arc::new(postgres::PostgresIngestOutcomeRepository::new(
+                        pool.clone(),
+                    )),
                     search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                     jobs: JobQueue::postgres(pool.clone()),
                     auth: Arc::new(PostgresAuthStore::new(pool.clone())),

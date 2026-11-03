@@ -23,7 +23,7 @@ use super::map_write_error;
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
 };
-use folio_core::document_transitions::metadata_envelopes;
+use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
 use folio_core::EventSnapshot;
 
 fn repo_err(e: sqlx::Error) -> Error {
@@ -433,7 +433,11 @@ impl DocumentRepository for PostgresDocumentRepository {
             return Err(not_found("Vault", to.0));
         }
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let mutation_id = Id::new_v4();
+
         let tags: Vec<(String,)> = sqlx::query_as(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
              WHERE dt.document_id = $1 AND t.deleted_at IS NULL FOR SHARE OF t",
@@ -508,6 +512,15 @@ impl DocumentRepository for PostgresDocumentRepository {
         .await
         .map_err(repo_err)?;
 
+        sqlx::query("UPDATE document_entries SET updated_at = $1, updated_by = $2 WHERE document_id = $3 AND vault_id = $4")
+            .bind(Utc::now())
+            .bind(actor.map(UserId::as_str))
+            .bind(id)
+            .bind(to.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+
         for vault in [from, to] {
             sqlx::query(
                 "INSERT INTO audit_events
@@ -523,7 +536,13 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
         }
-        tx.commit().await.map_err(repo_err)?;
+        let after = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        for envelope in move_envelopes(&before, &after, mutation_id)? {
+            insert_domain_event_with_origin(&mut tx, &envelope, self.origin).await?;
+        }
+        self.commit(tx).await?;
 
         self.find_by_id(to, id)
             .await?
@@ -883,15 +902,24 @@ impl DocumentRepository for PostgresDocumentRepository {
         let now = Utc::now();
         sqlx::query("UPDATE documents SET purge_requested_at = $3, updated_at = $3 WHERE id = $1 AND vault_id = $2")
             .bind(id).bind(vault.0).bind(now).execute(&mut *tx).await.map_err(repo_err)?;
+        let context = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let event = DocumentEvent::PurgeRequested { document_id: id };
+        let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
+            .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_postgres(
             &mut *tx,
-            crate::queue::JobType::PurgeDocument { document_id: id },
+            crate::queue::JobType::PurgeDocument {
+                document_id: id,
+                correlation_id: Some(envelope.correlation_id()),
+                causation_id: Some(envelope.event_id()),
+            },
             now,
             crate::queue::DEFAULT_MAX_ATTEMPTS,
         )
         .await?;
-        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
-            .await?;
+        insert_event_with_envelope(&mut tx, &event, self.origin, Some(&context), &envelope).await?;
         self.commit(tx).await
     }
 
@@ -935,7 +963,24 @@ impl DocumentRepository for PostgresDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        insert_event(
+        let envelope = folio_core::domain_event::DomainEventEnvelope::new(
+            "document.purged",
+            vault,
+            folio_core::domain_event::DomainEventSubject {
+                subject_type: "document".into(),
+                id,
+            },
+            Some(id),
+            folio_core::domain_event::EventAudience::Vault,
+            folio_core::events::document_event_envelope(
+                &DocumentEvent::Updated { document_id: id },
+                Some(&context),
+            )?
+            .ok_or_else(|| not_found("Document", id))?
+            .data()
+            .clone(),
+        )?;
+        insert_event_with_envelope(
             &mut tx,
             &DocumentEvent::Deleted {
                 document_id: id,
@@ -943,6 +988,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             },
             self.origin,
             Some(&context),
+            &envelope,
         )
         .await?;
         self.commit(tx).await

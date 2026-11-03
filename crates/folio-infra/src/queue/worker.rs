@@ -342,11 +342,14 @@ impl Worker {
                 .iter()
                 .any(|job| matches!(job.job_type, JobType::PurgeDocument { .. }))
             {
-                self.queue
-                    .enqueue(JobType::PurgeDocument {
+                let job = self.queue.latest_purge_job(document.id).await?.unwrap_or(
+                    JobType::PurgeDocument {
                         document_id: document.id,
-                    })
-                    .await?;
+                        correlation_id: None,
+                        causation_id: None,
+                    },
+                );
+                self.queue.enqueue(job).await?;
             }
         }
 
@@ -481,7 +484,22 @@ impl Worker {
             }
             JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
             JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
-            JobType::PurgeDocument { document_id } => self.purge_requested(*document_id).await,
+            JobType::PurgeDocument {
+                document_id,
+                correlation_id,
+                causation_id,
+            } => {
+                let lineage =
+                    correlation_id.map(|correlation_id| folio_core::mutation::MutationLineage {
+                        correlation_id,
+                        causation_id: *causation_id,
+                    });
+                folio_core::mutation::with_actor(
+                    None,
+                    folio_core::mutation::with_lineage(lineage, self.purge_requested(*document_id)),
+                )
+                .await
+            }
         }
     }
 
@@ -1570,6 +1588,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
+        let original_payload = serde_json::to_value(&job.job_type).unwrap();
+        assert!(original_payload["data"]["causation_id"].is_string());
         f.worker.handle_job(job).await;
 
         assert!(f.repo.find_by_id(vault, f.doc_id).await.unwrap().is_none());
@@ -1598,9 +1618,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(retry.job_type, JobType::PurgeDocument { .. }));
+        assert_eq!(
+            serde_json::to_value(&retry.job_type).unwrap(),
+            original_payload
+        );
         f.worker.store = f.storage.clone();
 
-        f.worker.handle_job(retry).await;
+        folio_core::mutation::with_actor(
+            Some(folio_core::models::UserId::from("unexpected-parent")),
+            f.worker.handle_job(retry),
+        )
+        .await;
+        let payloads: Vec<(String,)> = sqlx::query_as("SELECT payload FROM outbox_events")
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+        let purged = payloads
+            .iter()
+            .map(|(value,)| serde_json::from_str::<serde_json::Value>(value).unwrap())
+            .find(|value| value["envelope"]["event_type"] == "document.purged")
+            .unwrap();
+        assert_eq!(
+            purged["envelope"]["correlation_id"],
+            original_payload["data"]["correlation_id"]
+        );
+        assert_eq!(
+            purged["envelope"]["causation_id"],
+            original_payload["data"]["causation_id"]
+        );
+        assert!(purged["envelope"]["actor_id"].is_null());
 
         assert!(f
             .repo
@@ -1617,6 +1663,8 @@ mod tests {
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None,
             })
             .await
             .unwrap();
@@ -1642,6 +1690,8 @@ mod tests {
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None,
             })
             .await
             .unwrap();
@@ -1684,7 +1734,9 @@ mod tests {
         assert!(f
             .worker
             .process_job(&JobType::PurgeDocument {
-                document_id: f.doc_id
+                document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None
             })
             .await
             .is_err());
@@ -1697,6 +1749,8 @@ mod tests {
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None,
             })
             .await
             .unwrap();

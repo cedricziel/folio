@@ -230,6 +230,7 @@ pub struct Fixture {
     pub tag_actors: Arc<std::sync::Mutex<Vec<Option<folio_core::models::UserId>>>>,
     pub delete_tags_after_next_list: Arc<AtomicBool>,
     pub documents: Arc<dyn DocumentRepository>,
+    pub outbox: Arc<dyn folio_core::ports::OutboxStore>,
     pub settings: Arc<dyn SettingsRepository>,
     _dir: tempfile::TempDir,
 }
@@ -301,6 +302,7 @@ impl Fixture {
             tag_actors,
             delete_tags_after_next_list,
             documents: repos.documents,
+            outbox: repos.outbox,
             settings: repos.settings,
             _dir: dir,
         }

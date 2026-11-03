@@ -93,6 +93,7 @@ fn initials(name: &str) -> String {
 
 /// Data the sidebar needs on every page
 pub struct Sidebar {
+    pub show_counts: bool,
     pub vault_id: VaultId,
     pub vault_name: String,
     pub vault_role: &'static str,
@@ -161,6 +162,7 @@ impl Sidebar {
             .cloned()
             .collect::<Vec<_>>();
         Ok(Self {
+            show_counts: true,
             vault_id: vault,
             vault_name,
             vault_role: vault_role_label(role),
