@@ -83,8 +83,22 @@ struct DocumentDetailView: View {
                     Text(failure).foregroundStyle(Color.danger)
                     Button("Retry details") { Task { await model.refreshMetadata() } }
                 }
+                if let review = model.reviewDescription {
+                    Text(review).font(FolioTheme.Typography.body).foregroundStyle(Color.inkMuted)
+                }
+                if model.document.canReviewDocument {
+                    Button(model.document.reviewed == true ? "Mark unreviewed" : "Mark reviewed") {
+                        Task { try? await model.saveReview(model.document.reviewed != true) }
+                    }
+                    .disabled(model.savingReview)
+                    if model.savingReview { ProgressView("Saving review…") }
+                    if let failure = model.reviewFailure {
+                        Text(failure).foregroundStyle(Color.danger)
+                    }
+                }
                 if model.document.canEditDocumentDate {
                     Button("Edit document date") { editingDate = true }
+                        .disabled(model.savingReview)
                         .font(FolioTheme.Typography.body)
                 }
                 if !model.document.tags.isEmpty {

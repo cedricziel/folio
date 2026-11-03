@@ -92,6 +92,9 @@ struct Editor {
     id: String,
     name: String,
     search: String,
+    reviewed: String,
+    document_date_from: String,
+    document_date_to: String,
     sort: String,
     presentation: String,
     shared: bool,
@@ -222,6 +225,21 @@ async fn editor(
             .map(|view| view.name.clone())
             .unwrap_or_default(),
         search: query.filters.search_query.unwrap_or_default(),
+        reviewed: query
+            .filters
+            .reviewed
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        document_date_from: query
+            .filters
+            .document_date_from
+            .map(|date| date.to_string())
+            .unwrap_or_default(),
+        document_date_to: query
+            .filters
+            .document_date_to
+            .map(|date| date.to_string())
+            .unwrap_or_default(),
         sort,
         presentation: if view
             .as_ref()
