@@ -505,7 +505,10 @@ fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response
 fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
     let parts: Vec<_> = path.trim_end_matches('/').split('/').collect();
     let read = matches!(*method, Method::GET | Method::HEAD);
-    let write = matches!(*method, Method::POST | Method::PUT | Method::DELETE);
+    let write = matches!(
+        *method,
+        Method::POST | Method::PUT | Method::PATCH | Method::DELETE
+    );
     let id = |value: &str| uuid::Uuid::parse_str(value).is_ok();
     let classified = match parts.as_slice() {
         ["", "api", "vaults"] => read,
@@ -520,6 +523,12 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
             if id(document) =>
         {
             *method == Method::POST
+        }
+        ["", "api", "documents", document, "entries"] if id(document) => {
+            read || *method == Method::POST
+        }
+        ["", "api", "documents", document, "entries", entry] if id(document) && id(entry) => {
+            matches!(*method, Method::PATCH | Method::DELETE)
         }
         ["", "api", "documents", document, "purge"] if id(document) => *method == Method::DELETE,
         ["", "api", "documents", document, "tags", tag] if id(document) && id(tag) => {

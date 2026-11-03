@@ -8,8 +8,9 @@
 - [x] Write failing core regressions for text validation, authorship/moderation, wire kinds, and bounded scoped continuations; implement the entry model.
 - [x] Verify entry models with OpenAPI enabled and run core lint/tests: 51 tests pass; all-target core clippy passes with warnings denied.
 - [x] Write failing shared repository regressions for scoped CRUD, pagination, soft deletion, document moves, and purge; implement both adapters and additive migrations in the reserved 20261102163000–20261102163999 range. Check main for collisions and test upgrades across dependency merge orders.
-- [ ] In progress: write failing router tests for author editing, moderation, spoofed actors, viewer denial, revoked membership, malformed cursors, and cross-vault IDs; implement JSON routes.
-- [ ] Generate OpenAPI and verify generated Swift client compilation.
+- [x] Write failing router tests for author editing, moderation, spoofed actors, viewer denial, revoked membership, malformed cursors, and cross-vault IDs; implement JSON routes.
+- [x] Generate OpenAPI from the four entry operations; five schema tests pass.
+- [ ] In progress: verify generated Swift client compilation in the queued isolated native build.
 
 - [ ] Write failing request regressions for lost responses, concurrent matching keys, conflicting payloads, revoked access, and deleted-entry retries; persist creation receipts atomically and retain draft keys in both clients.
 
@@ -21,7 +22,8 @@
 - [ ] Verify access after revocation and document moves, recursion protection, and trigger selection in web and Apple workflow editors.
 
 ## 4. Usable clients
-- [ ] Write failing web regressions for separate sections, CRUD, failed drafts, pagination, and viewer controls; implement HTML routes and templates.
+- [x] Write failing web regressions for CRUD, failed drafts, pagination, and viewer controls; implement HTML routes and separate note/comment sections.
+- [x] Verify lost-response creation retries, CRUD, and accessibility at desktop/mobile widths in the disposable browser fixture.
 - [ ] Write failing native state/service tests for CRUD, permission capabilities, failed drafts, and pagination; implement Apple discussion UI.
 - [ ] Verify web and native accessibility, empty states, and error recovery in isolated fixtures.
 
