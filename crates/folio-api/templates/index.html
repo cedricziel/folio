@@ -10,6 +10,28 @@
         <p class="lede">{{ lede }}</p>
     </header>
 
+    <details class="panel" {% if has_review_filters %}open{% endif %}>
+        <summary>Review and document date filters{% if has_review_filters %} (applied){% endif %}</summary>
+        <form action="{{ "/"|vault_url }}" method="get">
+            {% if view_all %}<input type="hidden" name="view" value="all">{% endif %}
+            {% if !correspondent_filter.is_empty() %}<input type="hidden" name="correspondent_id" value="{{ correspondent_filter }}">{% endif %}
+            {% if !type_filter.is_empty() %}<input type="hidden" name="document_type_id" value="{{ type_filter }}">{% endif %}
+            {% if !tag_filter.is_empty() %}<input type="hidden" name="tag_id" value="{{ tag_filter }}">{% endif %}
+            <label>Review
+                <select name="reviewed" class="select">
+                    <option value="" {% if reviewed_filter.is_empty() %}selected{% endif %}>Any review state</option>
+                    <option value="false" {% if reviewed_filter == "false" %}selected{% endif %}>Not reviewed</option>
+                    <option value="true" {% if reviewed_filter == "true" %}selected{% endif %}>Reviewed</option>
+                </select>
+            </label>
+            <label>Document date from <input type="date" name="document_date_from" class="input" value="{{ document_date_from }}" min="0001-01-01" max="9999-12-31"></label>
+            <label>Document date to <input type="date" name="document_date_to" class="input" value="{{ document_date_to }}" min="0001-01-01" max="9999-12-31"></label>
+            <p class="hint">Both dates are included. Undated documents do not match a date range.</p>
+            <button type="submit" class="f-btn">Apply filters</button>
+            {% if has_review_filters %}<a class="f-btn f-btn-quiet" href="{{ clear_review_url|vault_url }}">Clear review and date filters</a>{% endif %}
+        </form>
+    </details>
+
     {% match active_filter %}
     {% when Some with (label) %}
     <p class="filter-line">

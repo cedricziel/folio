@@ -98,6 +98,30 @@
                         <span class="f-meta">{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}Not set{% endmatch %}</span>
                         {% endif %}
                     </dd>
+                    <dt>Review</dt>
+                    <dd>
+                        {% match document.reviewed_at %}
+                        {% when Some with (reviewed_at) %}
+                        <span class="f-meta">Reviewed {{ reviewed_at.format("%Y-%m-%d") }}
+                            {% match document.review_origin %}{% when Some with (origin) %}
+                            {% if origin.as_str() == "legacy_classification" %}(legacy classification){% else if origin.as_str() == "system" %}(system){% endif %}
+                            {% match document.reviewed_by %}{% when Some with (reviewer) %}by {{ reviewer }}{% when None %}{% endmatch %}
+                            {% when None %}{% endmatch %}
+                        </span>
+                        {% when None %}<span class="f-meta">Not reviewed</span>{% endmatch %}
+                        {% if document|can_edit_document %}
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/review" method="post" data-turbo="false" data-controller="document-review" data-action="submit->document-review#submit">
+                            {% if document.reviewed_at.is_some() %}
+                            <input type="hidden" name="reviewed" value="false">
+                            <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">Mark unreviewed</button>
+                            {% else %}
+                            <input type="hidden" name="reviewed" value="true">
+                            <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">Mark reviewed</button>
+                            {% endif %}
+                            <p role="alert" data-document-review-target="error" hidden></p>
+                        </form>
+                        {% endif %}
+                    </dd>
                     <dt>Imported</dt>
                     <dd><span class="f-meta">{{ document.created_at.format("%Y-%m-%d") }}</span></dd>
 
