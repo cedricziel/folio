@@ -457,11 +457,12 @@ impl DocumentRepository for PostgresDocumentRepository {
         if from == to {
             return doc.try_into();
         }
-        let target: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM vaults WHERE id = $1")
-            .bind(to.0)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(repo_err)?;
+        let target: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM vaults WHERE id = $1 AND deleted_at IS NULL FOR SHARE")
+                .bind(to.0)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(repo_err)?;
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }

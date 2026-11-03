@@ -473,11 +473,12 @@ impl DocumentRepository for SqliteDocumentRepository {
         if from == to {
             return doc.try_into();
         }
-        let target: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM vaults WHERE id = ?")
-            .bind(to.to_string())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
+        let target: Option<(i64,)> =
+            sqlx::query_as("SELECT 1 FROM vaults WHERE id = ? AND deleted_at IS NULL")
+                .bind(to.to_string())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
