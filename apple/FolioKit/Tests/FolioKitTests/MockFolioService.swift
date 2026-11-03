@@ -20,6 +20,21 @@ actor MockFolioService: FolioService {
     }
     func setSavedViews(_ views: [SavedView]) { savedViewValues = views }
 
+    private var detailGate: CheckedContinuation<Void, Never>?
+    private var detailStarted: CheckedContinuation<Void, Never>?
+    private var suspendDetailRequests = false
+
+    func suspendDocumentReads() { suspendDetailRequests = true }
+    func waitForDocumentRead() async {
+        guard detailGate == nil else { return }
+        await withCheckedContinuation { detailStarted = $0 }
+    }
+    func releaseDocumentReads() {
+        suspendDetailRequests = false
+        detailGate?.resume()
+        detailGate = nil
+    }
+
     func savedViews(after: UUID?) async throws -> [SavedView] {
         if let failure { throw failure }
         let values = Array(
@@ -233,6 +248,13 @@ actor MockFolioService: FolioService {
         if let failure { throw failure }
         guard let document = documentList.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: nil)
+        }
+        if suspendDetailRequests {
+            await withCheckedContinuation { continuation in
+                detailGate = continuation
+                detailStarted?.resume()
+                detailStarted = nil
+            }
         }
         return document
     }

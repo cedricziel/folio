@@ -29,6 +29,7 @@ public final class DocumentDetailViewModel {
 
     private let service: any FolioService
     private var loading = false
+    private var metadataWrites = 0
 
     public init(
         document: Document, correspondent: String?, type: String?, service: any FolioService
@@ -53,12 +54,15 @@ public final class DocumentDetailViewModel {
 
     public func saveDocumentDate(_ date: DocumentDate?) async throws {
         let updated = try await service.setDocumentDate(date, for: document.id)
+        metadataWrites += 1
         applyMetadata(updated)
     }
 
     public func refreshMetadata() async {
+        let writes = metadataWrites
         do {
             let updated = try await service.document(id: document.id)
+            guard writes == metadataWrites else { return }
             applyMetadata(updated)
             metadataFailure = nil
         } catch is CancellationError {
