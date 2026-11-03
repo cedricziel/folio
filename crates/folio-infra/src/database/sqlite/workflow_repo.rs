@@ -5,9 +5,11 @@ use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use tracing::instrument;
 
+use super::insert_domain_event;
+use crate::database::workflow_lifecycle::workflow_event;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Id, RunStatus, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
+    Id, RunStatus, UserId, VaultId, Workflow, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 use folio_core::ports::WorkflowRepository;
 
@@ -55,6 +57,12 @@ fn workflow_from_row(row: &SqliteRow) -> Result<Workflow> {
         actions: serde_json::from_str(row.get("actions")).map_err(repo_err)?,
         created_at: parse_time(row.get("created_at"))?,
         updated_at: parse_time(row.get("updated_at"))?,
+        deleted_at: row
+            .get::<Option<&str>, _>("deleted_at")
+            .map(parse_time)
+            .transpose()?,
+        created_by: row.get::<Option<String>, _>("created_by").map(UserId),
+        updated_by: row.get::<Option<String>, _>("updated_by").map(UserId),
     })
 }
 
@@ -85,33 +93,38 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
 #[async_trait]
 impl WorkflowRepository for SqliteWorkflowRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ? AND deleted_at IS NULL")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(repo_err)?;
         row.map(|(v,)| parse_id(&v).map(VaultId)).transpose()
     }
 
     #[instrument(skip(self))]
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
-        let row = sqlx::query("SELECT * FROM workflows WHERE id = ? AND vault_id = ?")
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let row = sqlx::query(
+            "SELECT * FROM workflows WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         row.as_ref().map(workflow_from_row).transpose()
     }
 
     #[instrument(skip(self))]
     async fn list(&self, vault: VaultId) -> Result<Vec<Workflow>> {
-        let rows =
-            sqlx::query("SELECT * FROM workflows WHERE vault_id = ? ORDER BY created_at, name")
-                .bind(vault.to_string())
-                .fetch_all(&self.pool)
-                .await
-                .map_err(repo_err)?;
+        let rows = sqlx::query(
+            "SELECT * FROM workflows WHERE vault_id = ? AND deleted_at IS NULL
+             ORDER BY created_at, name",
+        )
+        .bind(vault.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
         rows.iter().map(workflow_from_row).collect()
     }
 
@@ -122,7 +135,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         trigger: WorkflowTrigger,
     ) -> Result<Vec<Workflow>> {
         let rows = sqlx::query(
-            "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND trigger_event = ?
+            "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND deleted_at IS NULL AND trigger_event = ?
              ORDER BY created_at",
         )
         .bind(vault.to_string())
@@ -133,14 +146,42 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         rows.iter().map(workflow_from_row).collect()
     }
 
+    async fn list_deleted(&self, vault: VaultId) -> Result<Vec<Workflow>> {
+        let rows = sqlx::query(
+            "SELECT * FROM workflows WHERE vault_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, name",
+        )
+        .bind(vault.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.iter().map(workflow_from_row).collect()
+    }
+
+    async fn find_deleted(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
+        let row = sqlx::query(
+            "SELECT * FROM workflows WHERE id = ? AND vault_id = ? AND deleted_at IS NOT NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        row.as_ref().map(workflow_from_row).transpose()
+    }
+
     #[instrument(skip(self, input))]
     async fn create(&self, vault: VaultId, input: WorkflowInput) -> Result<Workflow> {
         input.validate()?;
-        let now = Utc::now();
         let id = Id::new_v4();
-        sqlx::query(
-            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        let now = Utc::now().to_rfc3339();
+        let actor = folio_core::mutation::current_actor();
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let row = sqlx::query(
+            "INSERT INTO workflows (id, vault_id, name, enabled, trigger_event, conditions, actions, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -149,76 +190,167 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(input.trigger.as_str())
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
-        .bind(now.to_rfc3339())
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
+        .bind(&now)
+        .bind(&now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(actor.as_ref().map(UserId::as_str))
+        .fetch_one(&mut *tx)
         .await
         .map_err(repo_err)?;
-
-        Ok(Workflow {
-            id,
-            vault_id: vault,
-            name: input.name,
-            enabled: input.enabled,
-            trigger: input.trigger,
-            conditions: input.conditions,
-            actions: input.actions,
-            created_at: now,
-            updated_at: now,
-        })
+        let workflow = workflow_from_row(&row)?;
+        insert_domain_event(&mut tx, &workflow_event(&workflow, "created")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(workflow)
     }
 
     #[instrument(skip(self, input))]
     async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow> {
         input.validate()?;
-        let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE workflows SET name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ? \
-             WHERE id = ? AND vault_id = ?",
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let row = sqlx::query(
+            "SELECT * FROM workflows WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?
+        .ok_or_else(|| not_found(id))?;
+        let existing = workflow_from_row(&row)?;
+        if existing.name == input.name
+            && existing.enabled == input.enabled
+            && existing.trigger == input.trigger
+            && existing.conditions == input.conditions
+            && existing.actions == input.actions
+        {
+            return Ok(existing);
+        }
+        let actor = folio_core::mutation::current_actor();
+        let row = sqlx::query(
+            "UPDATE workflows SET name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.trigger.as_str())
         .bind(serde_json::to_string(&input.conditions).map_err(repo_err)?)
         .bind(serde_json::to_string(&input.actions).map_err(repo_err)?)
-        .bind(now.to_rfc3339())
+        .bind(Utc::now().to_rfc3339())
+        .bind(actor.as_ref().map(UserId::as_str))
         .bind(id.to_string())
         .bind(vault.to_string())
-        .execute(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(repo_err)?;
-
-        if result.rows_affected() == 0 {
-            return Err(not_found(id));
-        }
-        self.find_by_id(vault, id)
-            .await?
-            .ok_or_else(|| not_found(id))
+        let workflow = workflow_from_row(&row)?;
+        insert_domain_event(&mut tx, &workflow_event(&workflow, "updated")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(workflow)
     }
 
-    #[instrument(skip(self))]
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM workflows WHERE id = ? AND vault_id = ?")
-            .bind(id.to_string())
-            .bind(vault.to_string())
-            .execute(&self.pool)
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(repo_err)?;
-        if result.rows_affected() == 0 {
-            return Err(not_found(id));
+        let row = sqlx::query("SELECT * FROM workflows WHERE id = ? AND vault_id = ?")
+            .bind(id.to_string())
+            .bind(vault.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(repo_err)?
+            .ok_or_else(|| not_found(id))?;
+        let existing = workflow_from_row(&row)?;
+        if existing.deleted_at.is_some() {
+            return Ok(());
         }
+        let actor = folio_core::mutation::current_actor();
+        let now = Utc::now().to_rfc3339();
+        let row = sqlx::query(
+            "UPDATE workflows SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+        )
+        .bind(Some(&now))
+        .bind(&now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let workflow = workflow_from_row(&row)?;
+        sqlx::query(
+            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow was deleted', finished_at = ? WHERE workflow_id = ? AND status = 'pending'",
+        )
+        .bind(&now)
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        insert_domain_event(&mut tx, &workflow_event(&workflow, "deleted")?).await?;
+        tx.commit().await.map_err(repo_err)?;
         Ok(())
+    }
+
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Workflow> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let row = sqlx::query("SELECT * FROM workflows WHERE id = ? AND vault_id = ?")
+            .bind(id.to_string())
+            .bind(vault.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(repo_err)?
+            .ok_or_else(|| not_found(id))?;
+        let existing = workflow_from_row(&row)?;
+        if existing.deleted_at.is_none() {
+            return Ok(existing);
+        }
+        let actor = folio_core::mutation::current_actor();
+        let now = Utc::now().to_rfc3339();
+        let row = sqlx::query(
+            "UPDATE workflows SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+        )
+        .bind(None::<String>)
+        .bind(&now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let workflow = workflow_from_row(&row)?;
+        insert_domain_event(&mut tx, &workflow_event(&workflow, "restored")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(workflow)
     }
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
-        if self.locate(run.workflow_id).await? != Some(run.vault_id) {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let owner: Option<String> = sqlx::query_scalar(
+            "SELECT vault_id FROM workflows WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(run.workflow_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        if owner != Some(run.vault_id.to_string()) {
             return Err(Error::Validation(
-                "Workflow run belongs to a different vault".into(),
+                "Workflow run belongs to an inactive workflow or different vault".into(),
             ));
         }
         let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
              last_error, response_status, payload, actions, source_event_id, created_at, finished_at, mutation_id) \
@@ -271,9 +403,9 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn update_run(&self, run: &WorkflowRun) -> Result<()> {
-        sqlx::query(
+        let updated = sqlx::query(
             "UPDATE workflow_runs SET status = ?, attempts = ?, completed_actions = ?, last_error = ?, \
-             response_status = ?, finished_at = ? WHERE id = ?",
+             response_status = ?, finished_at = ? WHERE id = ? AND status = 'pending'",
         )
         .bind(run.status.as_str())
         .bind(run.attempts)
@@ -285,6 +417,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
+        if updated.rows_affected() == 0 {
+            return Err(Error::Conflict(
+                "Workflow run is already terminal or missing".into(),
+            ));
+        }
         Ok(())
     }
 

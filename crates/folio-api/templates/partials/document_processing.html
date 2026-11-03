@@ -1,0 +1,12 @@
+<section class="panel" aria-label="Processing">
+    <h2 class="heading">Processing</h2>
+    <dl class="f-meta-list">
+        <dt>Text extraction</dt>
+        <dd>{{ document|ocr_processing_status }}</dd>
+        <dt>Search indexing</dt>
+        <dd>{{ document.embed_status|processing_status }}</dd>
+    </dl>
+    {% if document.embed_status.as_str() == "failed" %}
+    <p class="hint">Search indexing did not finish. The original file is unchanged.</p>
+    {% endif %}
+</section>

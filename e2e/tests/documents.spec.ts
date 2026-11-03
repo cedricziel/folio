@@ -56,6 +56,10 @@ test.describe("document lifecycle", () => {
     await page.getByRole("link", { name: new RegExp(title) }).click();
     await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}$/);
     await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+    const processing = page.getByRole("region", { name: "Processing", exact: true });
+    await expect(processing).toBeVisible();
+    await expect(processing.getByText("Text extraction", { exact: true })).toBeVisible();
+    await expect(processing.getByText("Search indexing", { exact: true })).toBeVisible();
   });
 
   test("search finds the document by title", async ({ page }) => {

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
@@ -18,7 +18,7 @@ use folio_core::models::{
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
-use super::workflows::{find, send_test, SECRET_MASK};
+use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::vault::DefaultVault;
@@ -34,6 +34,8 @@ pub fn router() -> Router<AppState> {
         .route("/workflows/{id}", get(edit_page).post(update))
         .route("/workflows/{id}/toggle", post(toggle))
         .route("/workflows/{id}/delete", post(delete))
+        .route("/workflows/{id}/restore", post(restore))
+        .route("/workflows/{id}/history", get(history))
         .route("/workflows/{id}/test", post(test))
 }
 
@@ -84,6 +86,7 @@ impl From<&WorkflowRun> for RunView {
 }
 
 struct WorkflowRow {
+    lifecycle_summary: String,
     id: String,
     name: String,
     enabled: bool,
@@ -94,6 +97,7 @@ struct WorkflowRow {
 #[derive(Template)]
 #[template(path = "workflows.html")]
 struct ListTemplate {
+    deleted: bool,
     sidebar: Sidebar,
     title: String,
     rows: Vec<WorkflowRow>,
@@ -102,9 +106,15 @@ struct ListTemplate {
 async fn list_page(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
+    Query(query): Query<WorkflowListQuery>,
 ) -> ApiResult<Html<String>> {
     let mut rows = Vec::new();
-    for workflow in state.workflow_repo.list(vault).await? {
+    let workflows = if query.deleted {
+        state.workflow_repo.list_deleted(vault).await?
+    } else {
+        state.workflow_repo.list(vault).await?
+    };
+    for workflow in workflows {
         let last_run = state
             .workflow_repo
             .list_runs(vault, workflow.id, 1)
@@ -112,6 +122,7 @@ async fn list_page(
             .first()
             .map(RunView::from);
         rows.push(WorkflowRow {
+            lifecycle_summary: lifecycle_summary(&workflow),
             id: workflow.id.to_string(),
             name: workflow.name,
             enabled: workflow.enabled,
@@ -120,10 +131,64 @@ async fn list_page(
         });
     }
     render(ListTemplate {
+        deleted: query.deleted,
         sidebar: Sidebar::load(&state, vault, Nav::Workflows).await?,
         title: "Workflows - Folio".into(),
         rows,
     })
+}
+
+fn lifecycle_summary(workflow: &Workflow) -> String {
+    match workflow.deleted_at {
+        Some(at) => format!("Deleted {}", at.format("%Y-%m-%d %H:%M UTC")),
+        None => format!(
+            "Created {}, updated {}",
+            workflow.created_at.format("%Y-%m-%d %H:%M UTC"),
+            workflow.updated_at.format("%Y-%m-%d %H:%M UTC")
+        ),
+    }
+}
+
+#[derive(Template)]
+#[template(path = "workflow_history.html")]
+struct HistoryTemplate {
+    sidebar: Sidebar,
+    title: String,
+    id: String,
+    name: String,
+    deleted: bool,
+    lifecycle_summary: String,
+    runs: Vec<RunView>,
+}
+
+async fn history(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let workflow = find_retained(vault, &*state.workflow_repo, id).await?;
+    let runs = state
+        .workflow_repo
+        .list_runs(vault, id, RUN_HISTORY)
+        .await?;
+    render(HistoryTemplate {
+        sidebar: Sidebar::load(&state, vault, Nav::Workflows).await?,
+        title: format!("{} history - Folio", workflow.name),
+        id: id.to_string(),
+        deleted: workflow.deleted_at.is_some(),
+        lifecycle_summary: lifecycle_summary(&workflow),
+        name: workflow.name,
+        runs: runs.iter().map(RunView::from).collect(),
+    })
+}
+
+async fn restore(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Redirect> {
+    state.workflow_repo.restore(vault, id).await?;
+    Ok(Redirect::to("/workflows"))
 }
 
 /// What the form shows, whether it came from a stored workflow or a rejected submission
