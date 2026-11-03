@@ -21,6 +21,7 @@ mod tag;
 mod vault;
 mod webhook;
 mod workflow;
+mod workflow_event_conditions;
 mod workflow_trigger;
 
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
@@ -69,6 +70,7 @@ pub use workflow::{
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
+pub use workflow_event_conditions::{WorkflowActorCondition, WorkflowEventConditions};
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
     WorkflowTriggerRegistry,
