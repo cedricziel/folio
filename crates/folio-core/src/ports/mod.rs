@@ -25,7 +25,7 @@ pub use ingest::{
     DocumentImporter, IngestLedger, IngestOutcomeReader, IngestOutcomeRepository, IngestSink,
     IngestionSource, IngestionSourceFactory, SourceRepository, VaultIngest,
 };
-pub use metadata::{MetadataFieldRepository, MetadataOptionRepository};
+pub use metadata::{MetadataFieldRepository, MetadataOptionRepository, MetadataValueRepository};
 pub use outbox::OutboxStore;
 pub use repository::{
     AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,
