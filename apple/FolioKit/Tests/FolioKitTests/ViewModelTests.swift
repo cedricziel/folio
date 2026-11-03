@@ -203,6 +203,35 @@ struct DocumentStatusTests {
         await model.search("")
         #expect(model.correspondents[person.id] == "Stadtwerke")
     }
+
+    @Test func lookupsKeepTrashedNamesAndReloadAfterChanges() async throws {
+        let person = Correspondent(name: "Stadtwerke")
+        let trashedID = UUID()
+        let trashed = try JSONDecoder.taxonomy.decode(
+            TaxonomyEntry.self,
+            from: Data(
+                """
+                {"id":"\(trashedID)","vault_id":"\(UUID())","name":"Old landlord",
+                "created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-15T10:15:30Z",
+                "deleted_at":"2025-03-15T10:15:30Z"}
+                """.utf8))
+        let service = MockFolioService(documents: [Document(title: "A")], correspondents: [person])
+        await service.setTrashedTaxonomy([trashed], kind: .correspondents)
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
+        await model.search("")
+        #expect(model.correspondents[trashedID] == "Old landlord (deleted)")
+        await service.setCorrespondents([Correspondent(id: person.id, name: "City utilities")])
+        await model.reloadLookups()
+        #expect(model.correspondents[person.id] == "City utilities")
+    }
+}
+
+extension JSONDecoder {
+    static var taxonomy: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
 }
 
 @MainActor struct DocumentDetailViewModelTests {

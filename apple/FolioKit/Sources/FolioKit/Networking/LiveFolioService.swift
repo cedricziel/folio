@@ -403,6 +403,56 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         }
     }
 
+    public func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry] {
+        try await call("taxonomy.list") {
+            let path = "api/\(kind.rawValue)" + (deleted ? "/trash" : "")
+            let data = try await taxonomyRequest(path: path, method: "GET")
+            let transcoder = LenientDateTranscoder()
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .custom { decoder in
+                try transcoder.decode(decoder.singleValueContainer().decode(String.self))
+            }
+            do {
+                return try decoder.decode([TaxonomyEntry].self, from: data)
+            } catch is DecodingError {
+                throw FolioError.unreadableResponse
+            }
+        }
+    }
+
+    public func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws {
+        try await call("taxonomy.save") {
+            let path = "api/\(kind.rawValue)" + (id.map { "/" + $0.uuidString.lowercased() } ?? "")
+            _ = try await taxonomyRequest(path: path, method: id == nil ? "POST" : "PUT", body: ["name": name])
+        }
+    }
+
+    public func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
+        try await call("taxonomy.delete") {
+            _ = try await taxonomyRequest(path: "api/\(kind.rawValue)/\(id.uuidString.lowercased())", method: "DELETE")
+        }
+    }
+
+    public func restoreTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
+        try await call("taxonomy.restore") {
+            _ = try await taxonomyRequest(
+                path: "api/\(kind.rawValue)/\(id.uuidString.lowercased())/restore", method: "POST")
+        }
+    }
+
+    private func taxonomyRequest(path: String, method: String, body: [String: String]? = nil) async throws -> Data {
+        var request = URLRequest(url: endpoint(path))
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            request.httpBody = try JSONEncoder().encode(body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+        try check(response, body: data)
+        return data
+    }
+
     public func tags() async throws -> [Tag] {
         try await call("tags.list") {
             try await client.listTags().ok.body.json.map {
