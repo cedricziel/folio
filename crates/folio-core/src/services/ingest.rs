@@ -269,7 +269,6 @@ pub struct IngestScheduler {
 
 /// Feeds one pipeline from sources that do not know about vaults
 struct BoundSink {
-    managed: Option<Arc<dyn SourceRepository>>,
     vault: VaultId,
     inner: Arc<dyn VaultIngest>,
 }
@@ -277,11 +276,6 @@ struct BoundSink {
 #[async_trait]
 impl IngestSink for BoundSink {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
-        if let Some(repo) = &self.managed {
-            if repo.find(self.vault, source_id).await?.is_none() {
-                return Err(Error::Conflict("This ingestion source is deleted".into()));
-            }
-        }
         self.inner.ingest(self.vault, source_id, item).await
     }
 
@@ -374,7 +368,10 @@ impl IngestScheduler {
             };
             let fingerprint =
                 serde_json::to_string(&(&def.name, &def.config, vault)).unwrap_or_default();
-            if running.get(&def.id).is_some_and(|(f, _)| *f == fingerprint) {
+            if running
+                .get(&def.id)
+                .is_some_and(|(f, handle)| *f == fingerprint && !handle.is_finished())
+            {
                 continue;
             }
             if let Some((_, old)) = running.remove(&def.id) {
@@ -404,8 +401,6 @@ impl IngestScheduler {
                 def.name.clone(),
                 source,
                 Arc::new(BoundSink {
-                    managed: (def.origin == crate::models::SourceOrigin::Managed)
-                        .then(|| Arc::clone(&self.managed)),
                     vault,
                     inner: Arc::clone(&self.sink),
                 }),
