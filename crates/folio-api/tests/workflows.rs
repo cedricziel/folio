@@ -60,7 +60,12 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let ai = Config::default().ai;
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
-    let ingestion = IngestionState::new(repos.sources, repos.ledger, Vec::new());
+    let ingestion = IngestionState::new(
+        repos.sources,
+        repos.ledger,
+        repos.ingest_outcomes,
+        Vec::new(),
+    );
     let state = AppState::new(
         repos.saved_views,
         repos.documents,

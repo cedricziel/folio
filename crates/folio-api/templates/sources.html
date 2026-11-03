@@ -32,7 +32,7 @@
     {% else %}
     <div class="f-list">
         {% for row in rows %}
-        <div class="f-row f-row-plain">
+        <div class="f-row f-row-plain source-row">
             <div class="row-main">
                 {% if row.read_only || row.deleted %}
                 <span class="f-row-title">{{ row.name }}</span>
@@ -67,6 +67,7 @@
                     <button type="submit" class="f-btn f-btn-primary">Restore</button>
                 </form>
                 {% else %}
+                <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>
                 <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/test" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">Test</button>
                 </form>
