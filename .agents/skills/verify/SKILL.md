@@ -179,6 +179,14 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 
 ## Verify ingestion claims
 
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
+with the isolated Cargo settings below. These tests use temporary SQLite databases
+and disposable PostgreSQL containers. They cover atomic outcome/ledger/outbox
+rollback, concurrent replay, stale attempts, changed skip decisions, bounded
+pagination, managed-source ownership, and source failure/recovery transitions.
+Upgrade cases preserve existing ledger rows and emit no historical outcomes.
+Do not treat an unavailable PostgreSQL fixture as a passing parity check.
+
 Folder regressions cover replacement during import, staged retry and restart,
 cancellation, concurrent source instances, and symlink-safe recovery.
 Observation regressions also cover stable keys across staging restart and mailbox

@@ -10,6 +10,7 @@ mod document_type;
 mod file_identity;
 mod ingest;
 mod ingest_identity;
+mod ingest_outcome;
 mod metadata;
 mod metadata_field;
 mod processing_attempt;
@@ -41,6 +42,10 @@ pub use ingest::{
     SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
+pub use ingest_outcome::{
+    IngestAttempt, IngestClaim, IngestOutcomePage, IngestOutcomeRecord, IngestResult,
+    SourceHealthChange,
+};
 pub use metadata::{MetadataKind, MetadataValue};
 pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
