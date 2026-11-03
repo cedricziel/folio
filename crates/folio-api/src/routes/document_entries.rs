@@ -89,7 +89,7 @@ fn writable(context: &VaultContext) -> ApiResult<()> {
 }
 
 #[utoipa::path(get, path = "/api/documents/{id}/entries", operation_id = "listDocumentEntries", tag = "documents",
-    params(("id" = Uuid, Path), EntryQuery), responses((status = 200, body = EntryPageView), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
+    params(("id" = Uuid, Path), EntryQuery), responses((status = 200, description = "Scoped notes or comments", body = EntryPageView), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
 pub(crate) async fn list(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
@@ -137,7 +137,7 @@ pub(crate) async fn list(
 
 #[utoipa::path(post, path = "/api/documents/{id}/entries", operation_id = "createDocumentEntry", tag = "documents",
     params(("id" = Uuid, Path), ("Idempotency-Key" = Uuid, Header, description = "Required nonnil UUID retained across retries")), request_body = CreateEntryRequest,
-    responses((status = 201, body = EntryView), (status = 403, description = "Read-only membership"), (status = 410, description = "The original entry was deleted"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::Conflict, crate::openapi::InternalError))]
+    responses((status = 201, description = "Created entry or matching creation replay", body = EntryView), (status = 403, description = "Read-only membership"), (status = 410, description = "The original entry was deleted"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::Conflict, crate::openapi::InternalError))]
 pub(crate) async fn create(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
@@ -177,7 +177,7 @@ pub(crate) async fn create(
 
 #[utoipa::path(patch, path = "/api/documents/{id}/entries/{entry_id}", operation_id = "updateDocumentEntry", tag = "documents",
     params(("id" = Uuid, Path), ("entry_id" = Uuid, Path)), request_body = UpdateEntryRequest,
-    responses((status = 200, body = EntryView), (status = 403, description = "Only a writable author may edit"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
+    responses((status = 200, description = "Updated entry", body = EntryView), (status = 403, description = "Only a writable author may edit"), crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
 pub(crate) async fn update(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
