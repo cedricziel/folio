@@ -1,7 +1,10 @@
 //! Job queue for background processing (SQLite or PostgreSQL)
 
 mod postgres;
+mod processing_scope;
+mod recovery;
 mod sqlite;
+pub mod stages;
 mod worker;
 
 pub(crate) use postgres::insert_job as insert_job_postgres;
@@ -137,6 +140,7 @@ pub enum FailOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JobContext {
+    pub processing_group_id: Option<Uuid>,
     pub vault_id: Option<folio_core::models::VaultId>,
     pub lineage: folio_core::mutation::MutationLineage,
 }
@@ -234,6 +238,39 @@ impl JobQueue {
     /// Mark a job as failed, rescheduling it when `retry` is set and attempts remain
     pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
         dispatch!(self, fail(job, error, retry))
+    }
+
+    pub async fn fail_with_reason(
+        &self,
+        job: &Job,
+        error: &str,
+        retry: bool,
+        reason: folio_core::processing_events::ProcessingReason,
+    ) -> Result<FailOutcome> {
+        dispatch!(self, fail_with_reason(job, error, retry, reason))
+    }
+
+    pub async fn start_ocr(&self, job: &Job) -> Result<Option<stages::OcrStageFence>> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::start_ocr(queue.pool(), job).await,
+            Self::Postgres(queue) => stages::postgres::start_ocr(queue.pool(), job).await,
+        }
+    }
+
+    pub async fn complete_ocr(&self, fence: &stages::OcrStageFence, content: &str) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::complete_ocr(queue.pool(), fence, content).await,
+            Self::Postgres(queue) => {
+                stages::postgres::complete_ocr(queue.pool(), fence, content).await
+            }
+        }
+    }
+
+    pub async fn skip_ocr(&self, fence: &stages::OcrStageFence) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::skip_ocr(queue.pool(), fence).await,
+            Self::Postgres(queue) => stages::postgres::skip_ocr(queue.pool(), fence).await,
+        }
     }
 
     /// Renew only the current, unexpired claim. An expired claim cannot be revived.

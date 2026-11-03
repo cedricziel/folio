@@ -29,6 +29,7 @@ pub use document_repo::{
 };
 pub use ingest_outcomes::SqliteIngestOutcomeRepository;
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
+pub(crate) use outbox::capture_document;
 pub use outbox::{
     insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,
     SqliteOutboxStore,

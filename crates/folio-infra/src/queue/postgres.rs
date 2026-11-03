@@ -5,8 +5,8 @@
 //! same job twice.
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::PgPool;
-use tracing::{debug, error, info, instrument, warn};
+use sqlx::{PgConnection, PgPool};
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
@@ -14,13 +14,18 @@ use folio_core::error::{Error, Result};
 use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
-pub(crate) async fn insert_job<'e>(
-    executor: impl sqlx::Executor<'e, Database = sqlx::Postgres>,
+pub(crate) async fn insert_job(
+    conn: &mut PgConnection,
     job_type: JobType,
     scheduled_at: DateTime<Utc>,
     max_attempts: i32,
 ) -> Result<Uuid> {
-    let id = Uuid::new_v4();
+    let plan =
+        super::processing_scope::postgres::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
+    if plan.existing {
+        return Ok(plan.id);
+    }
+    let id = plan.id;
     let now = Utc::now();
     let type_name = job_type.type_name();
     let lineage =
@@ -33,9 +38,9 @@ pub(crate) async fn insert_job<'e>(
 
     sqlx::query(
         "INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts,
-                           created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id)
+                           created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id)
          VALUES ($1, $2, $3::jsonb, 'pending', 0, $4, $5, $5, $6,
-                 (SELECT vault_id FROM documents WHERE id = $7), $8, $9)",
+                 $7, $8, $9, $10)",
     )
     .bind(id)
     .bind(type_name)
@@ -43,12 +48,15 @@ pub(crate) async fn insert_job<'e>(
     .bind(max_attempts)
     .bind(now)
     .bind(scheduled_at)
-    .bind(job_type.document_id())
+    .bind(plan.vault_id)
     .bind(lineage.correlation_id)
     .bind(lineage.causation_id)
-    .execute(executor)
+    .bind(plan.group_id)
+    .execute(&mut *conn)
     .await
     .map_err(repo_err("Failed to enqueue job"))?;
+
+    super::processing_scope::postgres::finish_enqueue(conn, &job_type, &plan).await?;
 
     debug!("Enqueued job {} of type {}", id, type_name);
     Ok(id)
@@ -116,6 +124,10 @@ impl PostgresJobQueue {
         Self { pool }
     }
 
+    pub(super) fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     #[instrument(skip(self))]
     pub async fn enqueue(&self, job_type: JobType) -> Result<Uuid> {
         self.enqueue_delayed(job_type, Utc::now()).await
@@ -138,7 +150,16 @@ impl PostgresJobQueue {
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<Uuid> {
-        insert_job(&self.pool, job_type, scheduled_at, max_attempts).await
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to begin enqueue"))?;
+        let id = insert_job(&mut tx, job_type, scheduled_at, max_attempts).await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to commit enqueue"))?;
+        Ok(id)
     }
 
     pub async fn dequeue(&self, class: Option<JobClass>) -> Result<Option<Job>> {
@@ -198,58 +219,38 @@ impl PostgresJobQueue {
     }
 
     pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
-        let now = Utc::now();
-        let retrying = retry && job.attempts < job.max_attempts;
-        let result = if retrying {
-            let delay_seconds = 2_i64.pow(job.attempts as u32) * 10;
-            let retry_at = now + Duration::seconds(delay_seconds);
-            sqlx::query(
-                "UPDATE jobs SET status = 'pending', error = $1, scheduled_at = $2, updated_at = $3, claim_id = NULL, lease_expires_at = NULL WHERE id = $4 AND claim_id = $5 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint",
-            )
-            .bind(error)
-            .bind(retry_at)
-            .bind(now)
-            .bind(job.id)
-            .bind(job.claim_id)
-            .execute(&self.pool)
-            .await
-        } else {
-            sqlx::query(
-                "UPDATE jobs SET status = 'failed', error = $1, completed_at = $2, updated_at = $3, claim_id = NULL, lease_expires_at = NULL WHERE id = $4 AND claim_id = $5 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint",
-            )
-            .bind(error)
-            .bind(now)
-            .bind(now)
-            .bind(job.id)
-            .bind(job.claim_id)
-            .execute(&self.pool)
-            .await
-        }
-        .map_err(|e| Error::Repository(format!("Failed to fail job: {e}")))?;
-        if result.rows_affected() == 0 {
-            return Ok(FailOutcome::LostLease);
-        }
-        Ok(if retrying {
-            warn!(job.id = %job.id, job.attempt = job.attempts, %error, "Job failed; scheduled retry");
-            FailOutcome::Retrying
-        } else {
-            error!(job.id = %job.id, job.attempt = job.attempts, %error, "Job permanently failed");
-            FailOutcome::GaveUp
-        })
+        self.fail_with_reason(
+            job,
+            error,
+            retry,
+            folio_core::processing_events::ProcessingReason::ProviderFailed,
+        )
+        .await
+    }
+
+    pub async fn fail_with_reason(
+        &self,
+        job: &Job,
+        error: &str,
+        retry: bool,
+        reason: folio_core::processing_events::ProcessingReason,
+    ) -> Result<FailOutcome> {
+        super::recovery::postgres::fail(&self.pool, job, error, retry, reason).await
     }
 
     pub async fn context(&self, job_id: Uuid) -> Result<Option<super::JobContext>> {
-        let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-            "SELECT origin_vault_id, correlation_id, causation_id FROM jobs WHERE id = $1",
+        let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT origin_vault_id, correlation_id, causation_id, processing_group_id FROM jobs WHERE id = $1",
         )
         .bind(job_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(repo_err("Failed to read job context"))?;
-        let Some((vault, Some(correlation), causation)) = row else {
+        let Some((vault, Some(correlation), causation, group)) = row else {
             return Ok(None);
         };
         Ok(Some(super::JobContext {
+            processing_group_id: group,
             vault_id: vault.map(folio_core::models::VaultId),
             lineage: folio_core::mutation::MutationLineage {
                 correlation_id: correlation,
@@ -279,18 +280,7 @@ impl PostgresJobQueue {
     }
 
     pub async fn reset_stuck(&self) -> Result<i64> {
-        let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE jobs SET status = 'pending', updated_at = $1, claim_id = NULL, lease_expires_at = NULL WHERE status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= floor(extract(epoch FROM clock_timestamp()))::bigint)",
-        )
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Repository(format!("Failed to recover expired jobs: {e}")))?;
-        if result.rows_affected() > 0 {
-            info!("Recovered {} expired jobs", result.rows_affected());
-        }
-        Ok(result.rows_affected() as i64)
+        super::recovery::postgres::reset_stuck(&self.pool).await
     }
 
     pub async fn find_active_jobs_for_document(&self, document_id: Uuid) -> Result<Vec<Job>> {
