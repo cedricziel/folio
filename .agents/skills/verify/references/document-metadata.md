@@ -26,3 +26,14 @@ and API form entry points and malformed-ID preservation. Run
 `cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
 metadata edits and the persisted title delta. Both use isolated fixtures.
 
+## Verify explicit review persistence
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_reviews --test document_review_upgrade`
+with task-owned build storage, two jobs, and zero debug symbols. The disposable
+SQLite and PostgreSQL fixtures verify processing-independent review decisions,
+server attribution, concurrent retries, unchanged timestamps on no-ops, scoped
+writes, and rollback when the generic outbox event fails. Each review transition
+must share its mutation and correlation with exactly one generic Updated event.
+The upgrade fixture verifies legacy migration provenance without changing import
+or update timestamps and without publishing review events. Trash and restore
+preserve review decisions; review writes to trashed documents fail.
