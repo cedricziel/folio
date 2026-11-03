@@ -5,7 +5,7 @@
 ## 2. Transactional producers
 - [x] Add failing delta tests for nullable IDs, title changes, duplicate tags, and equivalent reordered sets; implement pure delta derivation.
 - [x] Add failing SQLite/PostgreSQL repository contracts for update/add/remove/set ingress, rollback, no-op, and immutable context; append transitions atomically.
-- [ ] Add failing move and purge contracts for scoped snapshots, retries, and distinct request/completion; implement lifecycle producers.
+- [x] Add failing move and purge contracts for scoped snapshots, retries, and distinct request/completion; implement lifecycle producers.
 - [ ] Add failing HTTP/MCP/workflow/bulk regressions for applicable ingress paths and source-context authorization.
 
 ## 3. Workflow controls
@@ -25,3 +25,6 @@
 - HTML/API classification forms and MCP metadata edits pass their focused ingress checks. Core lineage and cross-vault batch tests pass. Move/purge producers and workflow controls remain pending.
 
 - [PR #271](https://github.com/cedricziel/folio/pull/271) contains `metadata_envelopes` and transactional metadata producers. Commits `35a3ef2` and `a722013` define the date-event integration boundary. Merged as `ce6ac01`; required CI, embedding builds, end-to-end tests, and both container builds passed.
+
+- [PR #284](https://github.com/cedricziel/folio/pull/284) merged scoped move events as `b04292f`. Eight transition tests, workspace lint, and strict OpenSpec validation passed before publication.
+- Purge request/completion producers pass eleven transition tests, eight repository contracts, and two worker retry tests. Five OpenAPI checks, final workspace lint, and both persisted-lineage lookups pass. Coordinated Swift generation remains pending.

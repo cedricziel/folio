@@ -2798,7 +2798,7 @@ async fn outbox_contract(db: &Database) {
             .iter()
             .map(|event| event.event.as_ref().unwrap().event_type())
             .collect::<Vec<_>>(),
-        ["trashed", "deleted"]
+        ["purge_requested", "deleted"]
     );
     let DocumentEvent::Deleted { snapshot, .. } = deleted[1].event.as_ref().unwrap() else {
         panic!("permanent deletion emits a deleted event");
@@ -3245,6 +3245,60 @@ async fn run_atomicity_contract(db: &Database) {
     assert!(r.workflows.find_run(doomed.id).await.unwrap().is_none());
     assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 2);
     assert!(r.workflows.create_run(&run_for(44)).await.unwrap());
+}
+
+async fn workflow_mutation_dedup_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    let input = || workflow_input("mutation dedup", WorkflowTrigger::DocumentUpdated);
+    let first = r.workflows.create(vault, input()).await.unwrap();
+    let second = r.workflows.create(vault, input()).await.unwrap();
+    let mutation = Id::new_v4();
+    let correlation = Id::new_v4();
+    let run_for = |workflow_id, mutation_id, source_event_id| {
+        WorkflowRun::new(
+            vault,
+            workflow_id,
+            WorkflowTrigger::DocumentUpdated,
+            None,
+            serde_json::json!({"source_event": {
+                "event_id": Id::new_v4(), "mutation_id": mutation_id,
+                "correlation_id": correlation
+            }})
+            .to_string(),
+        )
+        .with_source_event(source_event_id)
+    };
+    let queued = r.jobs.pending_count().await.unwrap();
+    let left = run_for(first.id, mutation, 7001);
+    let right = run_for(first.id, mutation, 7002);
+    let (left, right) = tokio::join!(
+        r.workflows.create_run(&left),
+        r.workflows.create_run(&right)
+    );
+    assert_eq!(usize::from(left.unwrap()) + usize::from(right.unwrap()), 1);
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 1);
+    assert!(!r
+        .workflows
+        .create_run(&run_for(first.id, mutation, 7003))
+        .await
+        .unwrap());
+    assert!(r
+        .workflows
+        .create_run(&run_for(second.id, mutation, 7004))
+        .await
+        .unwrap());
+    assert!(r
+        .workflows
+        .create_run(&run_for(first.id, Id::new_v4(), 7005))
+        .await
+        .unwrap());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 3);
+    let mut invalid = run_for(first.id, Id::new_v4(), 7006);
+    invalid.payload = serde_json::json!({"source_event": {"mutation_id": "invalid"}}).to_string();
+    assert!(r.workflows.create_run(&invalid).await.is_err());
+    assert!(r.workflows.find_run(invalid.id).await.unwrap().is_none());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 3);
 }
 
 async fn fresh_database_uses_config_and_preserves_saved_overrides(db: &Database) {
@@ -3838,6 +3892,7 @@ async fn run_contract(db: &Database) {
     mfa_contract(&repos).await;
     trash_contract(db, &repos).await;
     metadata_workflow_dispatch_contract(db).await;
+    workflow_mutation_dedup_contract(db).await;
 }
 
 #[tokio::test]
