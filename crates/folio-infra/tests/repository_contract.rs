@@ -2798,7 +2798,7 @@ async fn outbox_contract(db: &Database) {
             .iter()
             .map(|event| event.event.as_ref().unwrap().event_type())
             .collect::<Vec<_>>(),
-        ["trashed", "deleted"]
+        ["purge_requested", "deleted"]
     );
     let DocumentEvent::Deleted { snapshot, .. } = deleted[1].event.as_ref().unwrap() else {
         panic!("permanent deletion emits a deleted event");
@@ -3109,6 +3109,74 @@ async fn outbox_contract(db: &Database) {
         replay_ids(later, hour_ago).await,
         [earlier],
         "reconnect must recover a lower id delivered after the acknowledged event"
+    );
+}
+
+async fn metadata_workflow_dispatch_contract(db: &Database) {
+    use folio_core::services::WorkflowEngine;
+    use folio_infra::{ObjectStoreDocumentStore, StorageFileMetadata};
+
+    let r = db.repositories().await;
+    let vault = r.vaults.create("Metadata workflow", None).await.unwrap().id;
+    let document = r
+        .documents
+        .create(vault, new_document("before"))
+        .await
+        .unwrap();
+    let workflow = r
+        .workflows
+        .create(
+            vault,
+            workflow_input("title event", WorkflowTrigger::DocumentTitleChanged),
+        )
+        .await
+        .unwrap();
+    r.documents
+        .update(
+            vault,
+            document.id,
+            UpdateDocument {
+                title: Some("after".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let event = r
+        .outbox
+        .replay(0, Utc::now() - Duration::days(1), 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.envelope.as_ref().is_some_and(|envelope| {
+                envelope.event_type() == "document.title_changed"
+                    && envelope.document_id() == Some(document.id)
+            })
+        })
+        .unwrap();
+    assert!(event.event.is_none());
+    let engine = WorkflowEngine::new(
+        r.workflows.clone(),
+        r.documents.clone(),
+        r.correspondents.clone(),
+        r.document_types.clone(),
+        Arc::new(StorageFileMetadata::new(Arc::new(
+            ObjectStoreDocumentStore::in_memory(),
+        ))),
+        "http://folio.test",
+    );
+    let runs = engine.handle(&event).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, workflow.id);
+    assert!(engine.handle(&event).await.unwrap().is_empty());
+    let stored = r.workflows.find_run(runs[0].id).await.unwrap().unwrap();
+    assert_eq!(stored.event, WorkflowTrigger::DocumentTitleChanged);
+    let body: serde_json::Value = serde_json::from_str(&stored.payload).unwrap();
+    assert_eq!(body["document"]["title"], "after");
+    assert_eq!(
+        body["source_event"]["event_id"],
+        event.envelope.as_ref().unwrap().event_id().to_string()
     );
 }
 
@@ -3769,6 +3837,7 @@ async fn run_contract(db: &Database) {
     auth_contract(&repos).await;
     mfa_contract(&repos).await;
     trash_contract(db, &repos).await;
+    metadata_workflow_dispatch_contract(db).await;
 }
 
 #[tokio::test]

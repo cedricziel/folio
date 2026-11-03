@@ -1070,7 +1070,7 @@ Stimulus.register(
     connect() {
       this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
-      for (const name of ["trashed", "restored", "deleted"]) {
+      for (const name of ["trashed", "restored", "purge_requested", "deleted"]) {
         this.source.addEventListener(name, () => {
           if (!document.getElementById("trash-content")) return;
           if (this.refreshingTrash) {
