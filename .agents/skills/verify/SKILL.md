@@ -494,39 +494,12 @@ before repository mutations; request bodies cannot establish this context.
 
 ## Verify document notes and comments
 
-Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_entries --test document_entry_schema --test domain_events --test repository_contract`.
-These disposable SQLite and PostgreSQL 17 suites cover scoped entry persistence,
-creation receipts, concurrent retries, event rollback, no-op mutations, all six
-body-free transitions, actor/lineage attribution, moves, and receipt purge.
+Run the [document entry checks](references/document-entries.md).
 
-Run `RUSTC_WRAPPER= cargo test -p folio-api --test document_entries --test entry_pages --test mutation_actor --test personal_tokens`.
-The request fixtures cover contributor access to another member's document,
-author editing, moderation, revoked roles, personal-token scopes, scoped cursors,
-deleted creation retries, escaped HTML, and retained failed forms.
-Regenerate the linked native API schema with
-`RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`.
-
-Build `folio-app`, then run `npx playwright test discussion.spec.ts` from `e2e/`
-with the disposable setup and teardown. Both viewport cases commit a creation
-while dropping its response, retry the retained key/body, then edit and delete.
-They also verify separate sections and run scoped accessibility checks. Never
-set `E2E_BASE_URL` to an existing archive.
 ## Verify document metadata transitions
 
-Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_transitions --test repository_contract --test workflows`
-with a task-owned temporary target directory. These suites use temporary SQLite
-databases, disposable PostgreSQL containers, and loopback webhook fixtures.
-They cover exact title, classification, and tag deltas, no-ops, rollback,
-server-derived actors, shared mutation identities, and compatibility updates.
-Move contracts check source/destination snapshot isolation, rejected vault moves,
-and same-vault no-ops on both databases.
-Domain-only outbox rows have no legacy document projection; assertions about
-compatibility updates must select that projection explicitly.
-
-Run `cargo test -p folio-api --test routes classification_form` for the HTML
-and API form entry points and malformed-ID preservation. Run
-`cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
-metadata edits and the persisted title delta. Both use isolated fixtures.
+For date edits, metadata events, moves, and their API/MCP entry points, run the
+[document metadata checks](references/document-metadata.md).
 
 ## Verify saved-view web controls
 
@@ -544,6 +517,9 @@ Shared navigation changes also require the Linux `visual.spec.ts` suite.
 Inspect its image diffs and update affected baselines before merging.
 
 ## Verify typed metadata fields and options
+
+Run `cargo test -p folio-core --lib --features openapi` for complete long-text event
+snapshots, exact serialized-byte limits, and audience/target validation on decode.
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields --test metadata_options`
 with task-owned build storage, at most two jobs, incremental compilation disabled,

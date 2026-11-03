@@ -141,7 +141,7 @@ fn parse_optional_uuid(s: Option<String>) -> Result<Option<Uuid>> {
 /// Columns of `documents` read into a [`DocumentRow`]
 const DOC_COLS: &str = "id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path,
     mime_type, correspondent_id, document_type_id, page_count, source_type, source_meta,
-    ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at";
+    ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at, document_date";
 
 fn not_found(entity_type: &'static str, id: Id) -> Error {
     Error::NotFound {
@@ -205,6 +205,7 @@ struct DocumentRow {
     created_by: Option<String>,
     updated_by: Option<String>,
     title: String,
+    document_date: Option<String>,
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
@@ -233,6 +234,10 @@ impl TryFrom<DocumentRow> for Document {
             created_by: row.created_by.map(UserId),
             updated_by: row.updated_by.map(UserId),
             title: row.title,
+            document_date: row
+                .document_date
+                .map(|value| value.parse().map_err(|e: &str| Error::Repository(e.into())))
+                .transpose()?,
             content: row.content,
             original_filename: row.original_filename,
             file_path: row.file_path,
@@ -423,6 +428,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
+        super::prepare_move(&mut tx, from, id).await?;
 
         let before = capture_document(&mut tx, id, None)
             .await?
@@ -711,6 +717,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
+        let document_date = params.document_date.unwrap_or(existing.document_date);
         let now = Utc::now();
 
         let tags_changed = if let Some(tags) = params.tag_ids {
@@ -722,6 +729,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             && content == existing.content
             && correspondent_id == existing.correspondent_id
             && document_type_id == existing.document_type_id
+            && document_date == existing.document_date
             && !tags_changed
         {
             return Ok(existing);
@@ -737,7 +745,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
-                                  document_type_id = ?, updated_at = ?, updated_by = ?
+                                  document_type_id = ?, updated_at = ?, document_date = ?, updated_by = ?
              WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
         )
         .bind(&title)
@@ -745,6 +753,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(correspondent_id.map(|id| id.to_string()))
         .bind(document_type_id.map(|id| id.to_string()))
         .bind(now.to_rfc3339())
+        .bind(document_date.map(|value| value.to_string()))
         .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -760,6 +769,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             uploaded_by: existing.uploaded_by,
             created_by: existing.created_by,
             updated_by: folio_core::mutation::current_actor(),
+            document_date,
             title,
             content,
             original_filename: existing.original_filename,
@@ -981,6 +991,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .execute(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;
+        super::clear_incoming_links(&mut tx, vault, id).await?;
         sqlx::query(
             "DELETE FROM documents
              WHERE id = ? AND vault_id = ? AND purge_requested_at IS NOT NULL",
@@ -1827,6 +1838,7 @@ impl SqliteDocumentRepository {
             uploaded_by: params.uploaded_by,
             created_by: folio_core::mutation::current_actor(),
             updated_by: folio_core::mutation::current_actor(),
+            document_date: None,
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,

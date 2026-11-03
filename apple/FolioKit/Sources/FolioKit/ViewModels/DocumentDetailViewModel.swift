@@ -20,26 +20,31 @@ public final class DocumentDetailViewModel {
         case failed(String)
     }
 
-    public let document: Document
+    public let discussion: DocumentDiscussionViewModel
+    public private(set) var document: Document
     public private(set) var preview = Preview.loading
-    public let metadata: [MetadataField]
+    public private(set) var metadata: [MetadataField]
+    public private(set) var metadataFailure: String?
     public let history: [MetadataField]
     /// The document as Spotlight and Shortcuts know it.
     public let summary: DocumentSummary
 
     private let service: any FolioService
     private var loading = false
+    private var metadataWrites = 0
 
     public init(
         document: Document, correspondent: String?, type: String?, service: any FolioService
     ) {
+        discussion = DocumentDiscussionViewModel(documentID: document.id, service: service)
         self.document = document
         self.service = service
         summary = DocumentSummary(document, correspondent: correspondent, documentType: type)
         var fields = [
             MetadataField(label: "From", value: correspondent ?? "Not set", isRecord: false),
             MetadataField(label: "Type", value: type ?? "Not set", isRecord: false),
-            MetadataField(label: "Date", value: FolioFormat.isoDay(document.createdAt), isRecord: true),
+            MetadataField(label: "Document date", value: document.documentDate?.rawValue ?? "Not set", isRecord: true),
+            MetadataField(label: "Imported", value: FolioFormat.isoDay(document.createdAt), isRecord: true),
         ]
         if let pages = document.pageCount {
             fields.append(MetadataField(label: "Pages", value: String(pages), isRecord: true))
@@ -58,6 +63,33 @@ public final class DocumentDetailViewModel {
             history.append(MetadataField(label: "Deleted", value: deletedAt.formatted(), isRecord: true))
         }
         self.history = history
+    }
+
+    public func saveDocumentDate(_ date: DocumentDate?) async throws {
+        let updated = try await service.setDocumentDate(date, for: document.id)
+        metadataWrites += 1
+        applyMetadata(updated)
+    }
+
+    public func refreshMetadata() async {
+        let writes = metadataWrites
+        do {
+            let updated = try await service.document(id: document.id)
+            guard writes == metadataWrites else { return }
+            applyMetadata(updated)
+            metadataFailure = nil
+        } catch is CancellationError {
+        } catch {
+            metadataFailure = error.localizedDescription
+        }
+    }
+
+    private func applyMetadata(_ updated: Document) {
+        document = updated
+        if let index = metadata.firstIndex(where: { $0.label == "Document date" }) {
+            metadata[index] = MetadataField(
+                label: "Document date", value: updated.documentDate?.rawValue ?? "Not set", isRecord: true)
+        }
     }
 
     public func loadPreview() async {

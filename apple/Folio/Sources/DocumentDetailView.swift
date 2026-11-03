@@ -3,6 +3,8 @@ import SwiftUI
 
 struct DocumentDetailView: View {
     @State var model: DocumentDetailViewModel
+    @State private var showingDiscussion = false
+    @State private var editingDate = false
     let vaultID: UUID
 
     init(model: DocumentDetailViewModel, vaultID: UUID) {
@@ -22,7 +24,14 @@ struct DocumentDetailView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+        .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
+        .sheet(isPresented: $editingDate) {
+            DocumentDateEditor(documentDate: model.document.documentDate) { date in
+                try await model.saveDocumentDate(date)
+            }
+        }
         .task { await model.loadPreview() }
+        .task { await model.refreshMetadata() }
         .task { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
     }
 
@@ -68,6 +77,15 @@ struct DocumentDetailView: View {
                                 .textSelection(.enabled)
                         }
                     }
+                }
+                Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
+                if let failure = model.metadataFailure {
+                    Text(failure).foregroundStyle(Color.danger)
+                    Button("Retry details") { Task { await model.refreshMetadata() } }
+                }
+                if model.document.canEditDocumentDate {
+                    Button("Edit document date") { editingDate = true }
+                        .font(FolioTheme.Typography.body)
                 }
                 if !model.document.tags.isEmpty {
                     HStack(spacing: FolioTheme.Spacing.space2) {
