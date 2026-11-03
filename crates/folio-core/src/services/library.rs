@@ -429,11 +429,13 @@ impl LibraryService {
         id: Id,
         names: &[String],
     ) -> Result<DocumentDetail> {
-        self.require_document(vault, id).await?;
-        for name in names {
-            if let Some(tag) = self.lookup_tag(vault, name).await? {
-                self.documents.remove_tag(vault, id, tag.id).await?;
-            }
+        let current = self.get_document(vault, id).await?;
+        for tag in current.tags.iter().filter(|tag| {
+            names
+                .iter()
+                .any(|name| tag.name.eq_ignore_ascii_case(name.trim()))
+        }) {
+            self.documents.remove_tag(vault, id, tag.id).await?;
         }
         self.get_document(vault, id).await
     }
