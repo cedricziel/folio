@@ -3002,6 +3002,15 @@
         "operationId": "listSources",
         "parameters": [
           {
+            "name": "deleted",
+            "in": "query",
+            "description": "List deleted managed sources instead of active sources",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "X-Folio-Vault",
             "in": "header",
             "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
@@ -3111,6 +3120,9 @@
           },
           "404": {
             "description": "The vault or resource is not visible"
+          },
+          "409": {
+            "description": "An active source already uses this name"
           },
           "500": {
             "description": "Unexpected server error",
@@ -3283,6 +3295,9 @@
               }
             }
           },
+          "409": {
+            "description": "An active source already uses this name"
+          },
           "500": {
             "description": "Unexpected server error",
             "content": {
@@ -3307,7 +3322,7 @@
         "tags": [
           "sources"
         ],
-        "summary": "Delete an ingestion source",
+        "summary": "Move a managed source to trash, retaining its settings and import history",
         "operationId": "deleteSource",
         "parameters": [
           {
@@ -3332,7 +3347,7 @@
         ],
         "responses": {
           "204": {
-            "description": "The source was deleted"
+            "description": "The source is in trash"
           },
           "400": {
             "description": "The request is malformed or fails validation",
@@ -3381,13 +3396,13 @@
         ]
       }
     },
-    "/api/sources/{id}/outcomes": {
-      "get": {
+    "/api/sources/{id}/restore": {
+      "post": {
         "tags": [
           "sources"
         ],
-        "summary": "Read committed item outcomes for an ingestion source.",
-        "operationId": "listSourceOutcomes",
+        "summary": "Restore a managed source with its previous settings.",
+        "operationId": "restoreSource",
         "parameters": [
           {
             "name": "id",
@@ -3397,29 +3412,6 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
-          },
-          {
-            "name": "before",
-            "in": "query",
-            "description": "Return outcomes older than this positive outcome ID",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int64",
-              "minimum": 1
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "Page size, from 1 to 100; defaults to 50",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int32",
-              "maximum": 100,
-              "minimum": 1
             }
           },
           {
@@ -3434,21 +3426,11 @@
         ],
         "responses": {
           "200": {
-            "description": "Recent source outcomes",
+            "description": "The restored source",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/IngestOutcomePage"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The request is malformed or fails validation",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/SourceView"
                 }
               }
             }
@@ -3468,6 +3450,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "An active source already uses this name"
           },
           "500": {
             "description": "Unexpected server error",
@@ -6703,99 +6688,6 @@
           }
         }
       },
-      "IngestOutcomePage": {
-        "type": "object",
-        "required": [
-          "vault_id",
-          "source_id",
-          "outcomes"
-        ],
-        "properties": {
-          "next_before": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64"
-          },
-          "outcomes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/IngestOutcomeRecord"
-            }
-          },
-          "source_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "vault_id": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      },
-      "IngestOutcomeRecord": {
-        "type": "object",
-        "required": [
-          "id",
-          "vault_id",
-          "source_id",
-          "item_id",
-          "attempt_id",
-          "event_id",
-          "occurred_at",
-          "outcome"
-        ],
-        "properties": {
-          "attempt_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "document_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "uuid"
-          },
-          "event_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "id": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "item_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "occurred_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "outcome": {
-            "$ref": "#/components/schemas/IngestResult"
-          },
-          "source_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "vault_id": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      },
-      "IngestResult": {
-        "type": "string",
-        "enum": [
-          "imported",
-          "skipped",
-          "duplicate",
-          "failed"
-        ]
-      },
       "IngestionSourceInput": {
         "type": "object",
         "description": "Fields for creating or replacing a managed source",
@@ -7293,6 +7185,27 @@
             "$ref": "#/components/schemas/SourceConfig",
             "description": "Passwords are masked"
           },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Configured sources have no persisted lifecycle metadata."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
           "enabled": {
             "type": "boolean"
           },
@@ -7315,6 +7228,19 @@
               {
                 "type": "null"
               }
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "vault_id": {

@@ -551,7 +551,10 @@ impl IngestScheduler {
             };
             let fingerprint =
                 serde_json::to_string(&(&def.name, &def.config, vault)).unwrap_or_default();
-            if running.get(&def.id).is_some_and(|(f, _)| *f == fingerprint) {
+            if running
+                .get(&def.id)
+                .is_some_and(|(f, handle)| *f == fingerprint && !handle.is_finished())
+            {
                 continue;
             }
             if let Some((_, old)) = running.remove(&def.id) {
@@ -656,6 +659,17 @@ async fn run_source(
             _ = shutdown.changed() => if *shutdown.borrow() { return },
         }
 
+        if run.origin == crate::models::SourceOrigin::Managed {
+            match run.managed.find(run.vault, run.id).await {
+                Ok(Some(def)) if def.enabled => {}
+                Ok(_) => return,
+                Err(error) => {
+                    warn!("Could not verify ingestion source '{name}': {error}");
+                    wait = interval;
+                    continue;
+                }
+            }
+        }
         let (status, next) = match source.poll(sink.as_ref()).await {
             Ok(PollReport {
                 imported,

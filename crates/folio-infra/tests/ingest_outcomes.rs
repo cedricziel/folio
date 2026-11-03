@@ -343,7 +343,37 @@ async fn durable_outcome_contract(database: Database) {
         outcome: "imported".into(),
         created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
     };
-    repos.ledger.insert(vault, &legacy).await.unwrap();
+    // The current ledger code expects later schema; write the legacy row directly.
+    match &database {
+        Database::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
+                 VALUES (?, ?, ?, NULL, ?, ?)",
+            )
+            .bind(vault.to_string())
+            .bind(&legacy.key)
+            .bind(legacy.source_id.to_string())
+            .bind(&legacy.outcome)
+            .bind(legacy.created_at.to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        Database::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
+                 VALUES ($1, $2, $3, NULL, $4, $5)",
+            )
+            .bind(vault.0)
+            .bind(&legacy.key)
+            .bind(legacy.source_id)
+            .bind(&legacy.outcome)
+            .bind(legacy.created_at)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
     database.migrate().await.unwrap();
     database.migrate().await.unwrap();
     let retained = repos

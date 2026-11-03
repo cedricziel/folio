@@ -8,13 +8,15 @@
     <header class="page-head">
         <a href="/settings" class="back-link">{{ icons::arrow_left() }} Settings</a>
         <div class="page-head-row">
-            <h1 class="title">Sources</h1>
+            <h1 class="title">{% if deleted %}Deleted sources{% else %}Sources{% endif %}</h1>
             <div class="head-actions">
+                {% if deleted %}<a href="{{ "/settings/sources"|vault_url }}" class="f-btn">Active sources</a>{% else %}<a href="{{ "/settings/sources?deleted=true"|vault_url }}" class="f-btn">Deleted sources</a>{% endif %}
                 <a href="{{ "/settings/sources/new?kind=email"|vault_url }}" class="f-btn">Add mail account</a>
                 <a href="{{ "/settings/sources/new?kind=folder"|vault_url }}" class="f-btn f-btn-primary">Add folder</a>
             </div>
         </div>
-        <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="{{ "/workflows"|vault_url }}">Workflows</a>.</p>
+        {% if deleted %}<p class="lede">Deleted sources stop importing and keep their import history. Restoring a previously enabled source resumes automatic imports.</p>{% else %}
+        <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="{{ "/workflows"|vault_url }}">Workflows</a>.</p>{% endif %}
     </header>
 
     {% match notice %}
@@ -25,14 +27,14 @@
 
     {% if rows.is_empty() %}
     <div class="f-notice">
-        <p>No sources yet. Add a folder to watch, or a mail account to read.</p>
+        <p>{% if deleted %}No deleted sources.{% else %}No sources yet. Add a folder to watch, or a mail account to read.{% endif %}</p>
     </div>
     {% else %}
     <div class="f-list">
         {% for row in rows %}
         <div class="f-row f-row-plain">
             <div class="row-main">
-                {% if row.read_only %}
+                {% if row.read_only || row.deleted %}
                 <span class="f-row-title">{{ row.name }}</span>
                 {% else %}
                 <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
@@ -43,6 +45,7 @@
                     {% if row.read_only %}<span class="f-meta">From server configuration</span>{% endif %}
                     {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
                 </div>
+                {% match row.lifecycle_summary %}{% when Some with (history) %}<div class="f-row-sub"><span class="f-meta">{{ history }}</span></div>{% when None %}{% endmatch %}
                 <div class="f-row-sub">
                     {% match row.last_run %}
                     {% when Some with (when) %}
@@ -59,6 +62,11 @@
                 {% endmatch %}
             </div>
             <div class="form-actions">
+                {% if row.deleted %}
+                <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/restore" method="post" data-turbo="false">
+                    <button type="submit" class="f-btn f-btn-primary">Restore</button>
+                </form>
+                {% else %}
                 <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>
                 <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/test" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">Test</button>
@@ -67,6 +75,10 @@
                 <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/toggle" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">{% if row.enabled %}Turn off{% else %}Turn on{% endif %}</button>
                 </form>
+                <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/delete" method="post" data-turbo="false">
+                    <button type="submit" class="f-btn f-btn-quiet">Move to trash</button>
+                </form>
+                {% endif %}
                 {% endif %}
             </div>
         </div>
