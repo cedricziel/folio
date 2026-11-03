@@ -1268,7 +1268,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             ProcessingStage::Embed => "embed_status",
         };
         let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND {column} = 'pending' ORDER BY created_at"
+            "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND {column} = 'pending'
+             AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL) ORDER BY created_at"
         )))
         .fetch_all(&self.pool)
         .await

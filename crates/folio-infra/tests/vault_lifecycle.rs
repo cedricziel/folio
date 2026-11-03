@@ -3,8 +3,9 @@ mod common;
 use chrono::{Duration, Utc};
 use folio_auth::User;
 use folio_core::models::{
-    CreateDocument, IngestionSourceInput, Principal, SourceConfig, UserId, VaultId, VaultRole,
-    WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
+    CreateDocument, IngestionSourceInput, Principal, ProcessingStage, SourceConfig, UserId,
+    VaultId, VaultRole, WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun,
+    WorkflowTrigger,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::{EventAudience, OutboxEvent};
@@ -48,6 +49,94 @@ async fn events(r: &Repositories, vault: VaultId) -> Vec<OutboxEvent> {
             })
         })
         .collect()
+}
+
+/// Pending work in a deleted vault is not offered to repair, and returns on restore
+async fn processing_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.create("Pending work", None).await.unwrap().id;
+    let document = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                title: "Pending".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let pending =
+        |docs: Vec<folio_core::models::Document>| docs.iter().any(|d| d.id == document.id);
+    assert!(pending(
+        r.documents
+            .list_pending(ProcessingStage::Ocr)
+            .await
+            .unwrap()
+    ));
+    r.vaults.delete(vault).await.unwrap();
+    assert!(!pending(
+        r.documents
+            .list_pending(ProcessingStage::Ocr)
+            .await
+            .unwrap()
+    ));
+    assert!(r
+        .documents
+        .complete_ocr(vault, document.id, "late text")
+        .await
+        .is_err());
+    r.vaults.restore(vault).await.unwrap();
+    assert!(pending(
+        r.documents
+            .list_pending(ProcessingStage::Ocr)
+            .await
+            .unwrap()
+    ));
+}
+
+/// OCR completion holds the vault row, so a deletion committing first wins cleanly
+async fn ocr_waits_for_a_vault_deletion_in_flight(db: &Database, pool: &sqlx::PgPool) {
+    let r = db.repositories().await;
+    let vault = r.vaults.create("Racing deletion", None).await.unwrap().id;
+    let document = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                title: "Racing".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut deleting = pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM vaults WHERE id = $1 FOR UPDATE")
+        .bind(vault.0)
+        .execute(&mut *deleting)
+        .await
+        .unwrap();
+    let documents = r.documents.clone();
+    let completing = tokio::spawn(async move {
+        documents
+            .complete_ocr(vault, document.id, "late text")
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!completing.is_finished());
+    sqlx::query("UPDATE vaults SET deleted_at = now() WHERE id = $1")
+        .bind(vault.0)
+        .execute(&mut *deleting)
+        .await
+        .unwrap();
+    deleting.commit().await.unwrap();
+    assert!(completing.await.unwrap().is_err());
+    let content: Option<String> = sqlx::query_scalar("SELECT content FROM documents WHERE id = $1")
+        .bind(document.id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(content, None);
 }
 
 async fn lifecycle_contract(db: Database) {
@@ -462,7 +551,8 @@ async fn sqlite_retains_vaults_enforces_owners_and_publishes_transactional_lifec
     ))
     .await
     .unwrap();
-    lifecycle_contract(db).await;
+    lifecycle_contract(db.clone()).await;
+    processing_contract(&db).await;
 }
 
 #[tokio::test]
@@ -480,7 +570,12 @@ async fn postgres_retains_vaults_enforces_owners_and_publishes_transactional_lif
     ))
     .await
     .unwrap();
-    lifecycle_contract(db).await;
+    lifecycle_contract(db.clone()).await;
+    processing_contract(&db).await;
+    let Database::Postgres(pool) = &db else {
+        unreachable!()
+    };
+    ocr_waits_for_a_vault_deletion_in_flight(&db, pool).await;
 }
 
 mod scheduling {
