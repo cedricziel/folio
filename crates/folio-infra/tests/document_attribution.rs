@@ -247,6 +247,28 @@ async fn attribution_contract(db: Database) {
     assert_eq!(system.created_by, Some(creator.clone()));
     assert_eq!(system.updated_by, None);
     assert_eq!(system.uploaded_by, Some(uploader.clone()));
+    with_actor(
+        Some(editor.clone()),
+        r.documents.set_stage_status(
+            vault,
+            document.id,
+            ProcessingStage::Embed,
+            ProcessingStatus::Running,
+        ),
+    )
+    .await
+    .unwrap();
+    with_actor(Some(editor.clone()), r.documents.reset_embedding_status())
+        .await
+        .unwrap();
+    let requeued = r
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requeued.updated_by, None);
+    assert_eq!(requeued.updated_at, system.updated_at);
 
     with_actor(Some(editor.clone()), r.documents.delete(vault, document.id))
         .await
@@ -291,13 +313,11 @@ async fn attribution_contract(db: Database) {
     assert_eq!(same_restore.updated_by, restored.updated_by);
 
     let target = r.vaults.create("Move target", None).await.unwrap().id;
-    let moved = with_actor(
-        Some(editor.clone()),
-        r.documents
-            .move_to(document.id, vault, target, Some(&editor)),
-    )
-    .await
-    .unwrap();
+    let moved = r
+        .documents
+        .move_to(document.id, vault, target, Some(&editor))
+        .await
+        .unwrap();
     assert_eq!(moved.created_at, document.created_at);
     assert_eq!(moved.created_by, Some(creator));
     assert_eq!(moved.updated_by, Some(editor));

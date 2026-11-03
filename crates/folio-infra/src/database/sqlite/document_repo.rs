@@ -505,7 +505,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(correspondent)
         .bind(document_type)
         .bind(Utc::now().to_rfc3339())
-        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .bind(actor.map(UserId::as_str))
         .bind(id.to_string())
         .execute(&mut *tx)
         .await
@@ -1067,16 +1067,14 @@ impl DocumentRepository for SqliteDocumentRepository {
     ) -> Result<()> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                "UPDATE documents SET ocr_status = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND ocr_status != ?"
+                "UPDATE documents SET ocr_status = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND ocr_status != ?"
             }
             ProcessingStage::Embed => {
-                "UPDATE documents SET embed_status = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND embed_status != ?"
+                "UPDATE documents SET embed_status = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND embed_status != ?"
             }
         };
         sqlx::query(sql)
             .bind(status.as_str())
-            .bind(Utc::now().to_rfc3339())
-            .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
             .bind(id.to_string())
             .bind(vault.to_string())
             .bind(status.as_str())
@@ -1146,10 +1144,9 @@ impl DocumentRepository for SqliteDocumentRepository {
                 .map_err(map_sqlx_error)?;
 
         sqlx::query(
-            "UPDATE documents SET updated_at = CASE WHEN embed_status != 'pending' THEN ? ELSE updated_at END, updated_by = CASE WHEN embed_status != 'pending' THEN ? ELSE updated_by END, embed_status = 'pending'
+            "UPDATE documents SET embed_status = 'pending'
              WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''",
         )
-        .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_error)?;

@@ -466,7 +466,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(correspondent)
         .bind(document_type)
         .bind(id)
-        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .bind(actor.map(UserId::as_str))
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -1002,18 +1002,16 @@ impl DocumentRepository for PostgresDocumentRepository {
     ) -> Result<()> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                "UPDATE documents SET ocr_status = $1, updated_at = $4, updated_by = $5 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL AND ocr_status != $1"
+                "UPDATE documents SET ocr_status = $1 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL AND ocr_status != $1"
             }
             ProcessingStage::Embed => {
-                "UPDATE documents SET embed_status = $1, updated_at = $4, updated_by = $5 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL AND embed_status != $1"
+                "UPDATE documents SET embed_status = $1 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL AND embed_status != $1"
             }
         };
         sqlx::query(sql)
             .bind(status.as_str())
             .bind(id)
             .bind(vault.0)
-            .bind(Utc::now())
-            .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -1075,11 +1073,10 @@ impl DocumentRepository for PostgresDocumentRepository {
 
     async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
         sqlx::query_scalar(
-            "UPDATE documents SET updated_at = CASE WHEN embed_status != 'pending' THEN $1 ELSE updated_at END, updated_by = CASE WHEN embed_status != 'pending' THEN $2 ELSE updated_by END, embed_status = 'pending'
+            "UPDATE documents SET embed_status = 'pending'
              WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''
              RETURNING id",
         )
-        .bind(Utc::now()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)
