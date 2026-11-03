@@ -56,6 +56,7 @@ async fn json_request(
 
 fn configured_folder(path: &str) -> IngestionSourceDef {
     IngestionSourceDef {
+        lifecycle: None,
         vault_id: None,
         id: Uuid::new_v4(),
         name: "scans".into(),
@@ -94,7 +95,7 @@ async fn passwords_are_masked_and_a_masked_update_keeps_the_stored_one() {
     let (_, listed) = json_request(&app, "GET", "/api/sources", None).await;
     assert!(!listed.to_string().contains("hunter2"));
 
-    let (status, _) = json_request(
+    let (status, unchanged) = json_request(
         &app,
         "PUT",
         &format!("/api/sources/{id}"),
@@ -102,6 +103,7 @@ async fn passwords_are_masked_and_a_masked_update_keeps_the_stored_one() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["updated_at"], created["updated_at"]);
     let stored = app
         .state
         .ingestion
@@ -228,4 +230,161 @@ async fn the_sources_pages_render_and_save() {
     let (_, listed) = json_request(&app, "GET", "/api/sources", None).await;
     assert_eq!(listed.as_array().unwrap().len(), 2);
     assert_eq!(listed[1]["config"]["password"], "********");
+    assert!(listed[0]["created_at"].is_null());
+    assert!(listed[0]["updated_at"].is_null());
+    assert!(listed[0]["created_by"].is_null());
+}
+
+#[tokio::test]
+async fn managed_sources_can_be_trashed_and_restored_from_the_existing_page() {
+    let h = test_app(Vec::new()).await;
+    let (status, body) = json_request(
+        &h,
+        "POST",
+        "/api/sources",
+        Some(json!({
+            "name": "Lifecycle folder", "config": {"type": "folder", "path": "/unused/source"},
+            "created_by": "forged", "updated_by": "forged"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["id"].as_str().unwrap();
+    assert!(body["created_at"].is_string());
+    assert!(body["created_by"].is_null());
+    let (status, _) = send(&h, "POST", &format!("/settings/sources/{id}/delete"), None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, active) = json_request(&h, "GET", "/api/sources", None).await;
+    assert!(active.as_array().unwrap().is_empty());
+    let (status, page) = send(&h, "GET", "/settings/sources?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Lifecycle folder"));
+    assert!(page.contains(&format!("/{id}/restore")));
+    let (status, _) = send(&h, "POST", &format!("/settings/sources/{id}/restore"), None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, restored) = json_request(&h, "GET", &format!("/api/sources/{id}"), None).await;
+    assert_eq!(restored["id"], body["id"]);
+    assert_eq!(restored["created_at"], body["created_at"]);
+    assert!(restored["deleted_at"].is_null());
+}
+
+async fn source_session(h: &Harness, name: &str, role: folio_core::models::VaultRole) -> String {
+    h.auth_store
+        .create_user(folio_auth::User {
+            id: name.into(),
+            username: name.into(),
+            password_hash: "!".into(),
+            created_at: 1,
+            email: None,
+            display_name: None,
+            is_admin: false,
+            is_owner: false,
+            auth_source: "local".into(),
+            external_id: None,
+        })
+        .await
+        .unwrap();
+    let user = folio_core::models::UserId::from(name);
+    h.members
+        .grant(
+            h.vault,
+            &folio_core::models::Principal::User(user.clone()),
+            role,
+            None,
+        )
+        .await
+        .unwrap();
+    h.vault_repository
+        .set_default(&user, h.vault)
+        .await
+        .unwrap();
+    let token = format!("source-session-{name}");
+    h.auth_store
+        .create_session(folio_auth::Session {
+            id_hash: folio_auth::crypto::hash_token(&token),
+            user_id: name.into(),
+            expires_at: i64::MAX / 2,
+            created_at: 1,
+            user_agent: None,
+        })
+        .await
+        .unwrap();
+    format!("folio_session={token}")
+}
+
+#[tokio::test]
+async fn source_trash_and_restore_preserve_owner_authorization_and_server_actors() {
+    let h = common::harness_requiring_login().await;
+    let owner = source_session(&h, "source-owner", folio_core::models::VaultRole::Owner).await;
+    let editor = source_session(&h, "source-editor", folio_core::models::VaultRole::Editor).await;
+    let input: folio_core::models::IngestionSourceInput = serde_json::from_value(json!({
+        "name": "Restricted source", "config": {"type": "folder", "path": "/unused/source"}
+    }))
+    .unwrap();
+    let source = h
+        .state
+        .ingestion
+        .managed
+        .create(h.vault, input)
+        .await
+        .unwrap();
+    h.state
+        .ingestion
+        .managed
+        .delete(h.vault, source.id)
+        .await
+        .unwrap();
+    let denied = h
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/sources/{}/restore", source.id))
+                .header("cookie", &editor)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let deleted_list = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/sources?deleted=true")
+                .header("cookie", &editor)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted_list.status(), StatusCode::FORBIDDEN);
+    let cross_origin = h
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/sources/{}/restore", source.id))
+                .header("cookie", &owner)
+                .header("origin", "https://untrusted.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cross_origin.status(), StatusCode::FORBIDDEN);
+    let restored = h
+        .app
+        .clone()
+        .oneshot(
+            Request::post(format!("/api/sources/{}/restore", source.id))
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::OK);
+    let body = common::text(restored).await;
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["updated_by"], "source-owner");
+    assert!(body["deleted_at"].is_null());
 }

@@ -101,7 +101,7 @@
     {% when Some with (id) %}
     <div class="form-actions">
         <form action="{{ "/settings/sources"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false">
-            <button type="submit" class="f-btn f-btn-danger">Delete source</button>
+            <button type="submit" class="f-btn f-btn-danger">Move to trash</button>
         </form>
     </div>
     {% when None %}

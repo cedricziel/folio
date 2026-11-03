@@ -492,6 +492,19 @@ cancellation, concurrent scopes, detached tasks, actor independence, and envelop
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
 
+## Verify managed source lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test source_lifecycle`
+with disposable SQLite and PostgreSQL fixtures. The shared contract covers actor
+metadata, retained import ledger and status, disabled scheduling after deletion,
+claim fencing, active-name reuse, restore conflicts, no-op suppression, and atomic
+source/outbox rollback. Configured sources remain outside managed lifecycle storage.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test sources --test vaults` for the
+existing management page, deleted-source listing, restore controls, masked credentials,
+and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite
+above when changing source response fields. Never poll an existing folder or mailbox
+while verifying source management.
+
 ## Verify classification lifecycle
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test taxonomy_lifecycle --test repository_contract`

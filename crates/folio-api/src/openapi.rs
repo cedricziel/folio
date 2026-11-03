@@ -91,6 +91,7 @@ use crate::routes::{
         sources::create_source,
         sources::update_source,
         sources::delete_source,
+        sources::restore_source,
         sources::test_source,
     ),
     components(schemas(ErrorResponse, WebhookPayload)),
