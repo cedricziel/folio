@@ -818,7 +818,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             .bind(id).bind(vault.0).bind(Utc::now()).execute(&mut *tx).await.map_err(repo_err)?;
         if document.file_path.is_some() {
             crate::queue::insert_job_postgres(
-                &mut *tx,
+                &mut tx,
                 crate::queue::JobType::ProcessDocument { document_id: id },
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
@@ -862,7 +862,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
             .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_postgres(
-            &mut *tx,
+            &mut tx,
             crate::queue::JobType::PurgeDocument {
                 document_id: id,
                 correlation_id: Some(envelope.correlation_id()),

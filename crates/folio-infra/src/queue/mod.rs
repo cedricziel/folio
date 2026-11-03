@@ -140,7 +140,6 @@ pub enum FailOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JobContext {
-    pub processing_group_id: Option<Uuid>,
     pub vault_id: Option<folio_core::models::VaultId>,
     pub lineage: folio_core::mutation::MutationLineage,
 }
@@ -257,19 +256,27 @@ impl JobQueue {
         }
     }
 
-    pub async fn complete_ocr(&self, fence: &stages::OcrStageFence, content: &str) -> Result<bool> {
+    /// `embed` false skips embedding with `provider_disabled` instead of queueing it.
+    pub async fn complete_ocr(
+        &self,
+        fence: &stages::OcrStageFence,
+        content: &str,
+        embed: bool,
+    ) -> Result<bool> {
         match self {
-            Self::Sqlite(queue) => stages::sqlite::complete_ocr(queue.pool(), fence, content).await,
+            Self::Sqlite(queue) => {
+                stages::sqlite::complete_ocr(queue.pool(), fence, content, embed).await
+            }
             Self::Postgres(queue) => {
-                stages::postgres::complete_ocr(queue.pool(), fence, content).await
+                stages::postgres::complete_ocr(queue.pool(), fence, content, embed).await
             }
         }
     }
 
-    pub async fn skip_ocr(&self, fence: &stages::OcrStageFence) -> Result<bool> {
+    pub async fn skip_ocr(&self, fence: &stages::OcrStageFence, embed: bool) -> Result<bool> {
         match self {
-            Self::Sqlite(queue) => stages::sqlite::skip_ocr(queue.pool(), fence).await,
-            Self::Postgres(queue) => stages::postgres::skip_ocr(queue.pool(), fence).await,
+            Self::Sqlite(queue) => stages::sqlite::skip_ocr(queue.pool(), fence, embed).await,
+            Self::Postgres(queue) => stages::postgres::skip_ocr(queue.pool(), fence, embed).await,
         }
     }
 

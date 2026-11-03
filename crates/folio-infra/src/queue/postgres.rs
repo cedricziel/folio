@@ -239,18 +239,17 @@ impl PostgresJobQueue {
     }
 
     pub async fn context(&self, job_id: Uuid) -> Result<Option<super::JobContext>> {
-        let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
-            "SELECT origin_vault_id, correlation_id, causation_id, processing_group_id FROM jobs WHERE id = $1",
+        let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT origin_vault_id, correlation_id, causation_id FROM jobs WHERE id = $1",
         )
         .bind(job_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(repo_err("Failed to read job context"))?;
-        let Some((vault, Some(correlation), causation, group)) = row else {
+        let Some((vault, Some(correlation), causation)) = row else {
             return Ok(None);
         };
         Ok(Some(super::JobContext {
-            processing_group_id: group,
             vault_id: vault.map(folio_core::models::VaultId),
             lineage: folio_core::mutation::MutationLineage {
                 correlation_id: correlation,

@@ -9,6 +9,9 @@ use super::{
 };
 use crate::queue::{Job, JobType};
 
+/// Group, origin vault, correlation, and creation time of a claimed job.
+type ClaimRow = (Option<String>, Option<String>, Option<String>, String);
+
 async fn document(conn: &mut PgConnection, id: Uuid) -> Result<Option<(String, bool)>> {
     sqlx::query_as("SELECT vault_id::text, (deleted_at IS NOT NULL OR purge_requested_at IS NOT NULL) FROM documents WHERE id = $1::uuid FOR UPDATE")
         .bind(id.to_string()).fetch_optional(conn).await.map_err(repo_err)
@@ -154,7 +157,7 @@ pub(super) async fn prepare_claim(pool: &PgPool, job: &Job) -> Result<ClaimPrepa
         return Ok(ClaimPreparation::Obsolete);
     }
     lock_job(&mut tx, job.id).await?;
-    let row: Option<(Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
+    let row: Option<ClaimRow> = sqlx::query_as(
         "SELECT processing_group_id::text, origin_vault_id::text, correlation_id::text, created_at::text FROM jobs
          WHERE id = $1::uuid AND claim_id = $2::uuid AND attempts = $3 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint AND job_type = $4
            AND payload->>'type' = $5 AND payload->'data'->>'document_id' = $6")

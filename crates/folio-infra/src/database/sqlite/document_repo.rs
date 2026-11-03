@@ -861,7 +861,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if document.file_path.is_some() {
             crate::queue::insert_job_sqlite(
-                &mut *tx,
+                &mut tx,
                 crate::queue::JobType::ProcessDocument { document_id: id },
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
@@ -910,7 +910,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
             .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_sqlite(
-            &mut *tx,
+            &mut tx,
             crate::queue::JobType::PurgeDocument {
                 document_id: id,
                 correlation_id: Some(envelope.correlation_id()),

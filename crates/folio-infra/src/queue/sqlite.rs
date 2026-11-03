@@ -239,19 +239,18 @@ impl SqliteJobQueue {
     }
 
     pub async fn context(&self, job_id: Uuid) -> Result<Option<super::JobContext>> {
-        let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-            "SELECT origin_vault_id, correlation_id, causation_id, processing_group_id FROM jobs WHERE id = ?",
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT origin_vault_id, correlation_id, causation_id FROM jobs WHERE id = ?",
         )
         .bind(job_id.to_string())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Error::Repository(e.to_string()))?;
-        let Some((vault, Some(correlation), causation, group)) = row else {
+        let Some((vault, Some(correlation), causation)) = row else {
             return Ok(None);
         };
         let parse = |id: String| Uuid::parse_str(&id).map_err(|e| Error::Repository(e.to_string()));
         Ok(Some(super::JobContext {
-            processing_group_id: group.map(parse).transpose()?,
             vault_id: vault
                 .map(parse)
                 .transpose()?

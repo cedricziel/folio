@@ -149,13 +149,14 @@ async fn root_supersedes_all_stages(db: &Database) {
         2
     );
     assert_eq!(
-        f.queue
-            .context(new)
-            .await
-            .unwrap()
-            .unwrap()
-            .processing_group_id,
-        Some(new)
+        count(
+            db,
+            format!(
+                "SELECT COUNT(*) FROM jobs WHERE id = '{new}' AND processing_group_id = '{new}'"
+            )
+        )
+        .await,
+        1
     );
 }
 
@@ -416,22 +417,20 @@ async fn unrelated_processing_roots_do_not_inherit_group(db: &Database) {
     assert_ne!(other, job.id);
     assert_ne!(fresh, job.id);
     assert_eq!(
-        f.queue
-            .context(other)
-            .await
-            .unwrap()
-            .unwrap()
-            .processing_group_id,
-        Some(other)
+        count(
+            db,
+            format!("SELECT COUNT(*) FROM jobs WHERE id = '{other}' AND processing_group_id = '{other}'")
+        )
+        .await,
+        1
     );
     assert_eq!(
-        f.queue
-            .context(fresh)
-            .await
-            .unwrap()
-            .unwrap()
-            .processing_group_id,
-        Some(fresh)
+        count(
+            db,
+            format!("SELECT COUNT(*) FROM jobs WHERE id = '{fresh}' AND processing_group_id = '{fresh}'")
+        )
+        .await,
+        1
     );
 }
 

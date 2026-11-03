@@ -9,6 +9,9 @@ use super::{
 };
 use crate::queue::{Job, JobType};
 
+/// Group, origin vault, correlation, and creation time of a claimed job.
+type ClaimRow = (Option<String>, Option<String>, Option<String>, String);
+
 async fn document(conn: &mut SqliteConnection, id: Uuid) -> Result<Option<(String, bool)>> {
     sqlx::query_as("SELECT vault_id, (deleted_at IS NOT NULL OR purge_requested_at IS NOT NULL) FROM documents WHERE id = ?")
         .bind(id.to_string())
@@ -152,7 +155,7 @@ pub(super) async fn prepare_claim(pool: &SqlitePool, job: &Job) -> Result<ClaimP
     if deleted {
         return Ok(ClaimPreparation::Obsolete);
     }
-    let row: Option<(Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
+    let row: Option<ClaimRow> = sqlx::query_as(
         "SELECT processing_group_id, origin_vault_id, correlation_id, created_at FROM jobs
          WHERE id = ? AND claim_id = ? AND attempts = ? AND status = 'processing' AND lease_expires_at > unixepoch() AND job_type = ?
            AND json_extract(payload, '$.type') = ? AND json_extract(payload, '$.data.document_id') = ?")
