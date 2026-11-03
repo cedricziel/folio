@@ -108,7 +108,7 @@ async fn attribution_contract(db: Database) {
     )
     .await
     .unwrap();
-    assert_eq!(unchanged.updated_at, document.updated_at);
+    assert_eq!(unchanged.updated_at, persisted.updated_at);
     assert_eq!(unchanged.updated_by, document.updated_by);
     let updated = with_actor(
         Some(editor.clone()),
@@ -123,7 +123,7 @@ async fn attribution_contract(db: Database) {
     )
     .await
     .unwrap();
-    assert_eq!(updated.created_at, document.created_at);
+    assert_eq!(updated.created_at, persisted.created_at);
     assert_eq!(updated.created_by, document.created_by);
     assert_eq!(updated.updated_by, Some(editor.clone()));
     assert_eq!(updated.uploaded_by, Some(uploader.clone()));
@@ -321,7 +321,7 @@ async fn attribution_contract(db: Database) {
     .unwrap();
     assert_eq!(restored.updated_by, Some(creator.clone()));
     assert_eq!(restored.created_by, Some(creator.clone()));
-    assert_eq!(restored.created_at, document.created_at);
+    assert_eq!(restored.created_at, persisted.created_at);
     let same_restore = with_actor(
         Some(editor.clone()),
         r.documents.restore(vault, document.id),
@@ -337,7 +337,7 @@ async fn attribution_contract(db: Database) {
         .move_to(document.id, vault, target, Some(&editor))
         .await
         .unwrap();
-    assert_eq!(moved.created_at, document.created_at);
+    assert_eq!(moved.created_at, persisted.created_at);
     assert_eq!(moved.created_by, Some(creator));
     assert_eq!(moved.updated_by, Some(editor));
     assert_eq!(moved.uploaded_by, Some(uploader));
