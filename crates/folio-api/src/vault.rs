@@ -230,6 +230,9 @@ async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiR
             None => None,
         }
         .ok_or_else(|| ApiError::not_found("Document not found"))?;
+        if operation == "entries" || operation.starts_with("entries/") {
+            return Ok(VaultAction::CreateDocument);
+        }
         return Ok(if lifecycle {
             VaultAction::DeleteDocument {
                 uploaded_by: document.uploaded_by,
