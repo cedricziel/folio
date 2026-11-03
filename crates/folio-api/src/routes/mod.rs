@@ -19,6 +19,7 @@ mod oidc;
 mod pages;
 mod pending;
 mod pwa;
+mod saved_view_pages;
 pub(crate) mod saved_views;
 mod security;
 mod settings;
@@ -84,6 +85,7 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         // Page routes (HTMX)
         .merge(pages::router())
         .merge(entry_pages::router())
+        .merge(saved_view_pages::router())
         .merge(trash::router())
         // Manifest, service worker and share target
         .merge(pwa::router())

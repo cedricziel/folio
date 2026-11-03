@@ -2,11 +2,11 @@
 
 - [x] Inspect existing models, API authorization, workspace guidance, and dependency chats.
 - [x] Define typed values, exact amounts, lifecycle, uniqueness, references, and both client experiences.
-- [ ] Validate OpenSpec and confirm merged foundation and logical document contract before shared implementation.
+- [x] Validate OpenSpec and integrate merged actor #258, ownership #260, and transactional event #265 prerequisites. Logical document links continue to use documents.id.
 
 ## 2. Domain and persistence
 
-- [ ] Publish typed field/option definitions. Eight test-first `metadata_fields` regressions, all 76 core tests, core clippy, and workspace make lint pass.
+- [x] Merge field/option model PR #267 as c5d9a72621709a4be87e243f9953b5fd67d56144. Eight test-first `metadata_fields` regressions, all 76 core tests, core clippy, and workspace make lint pass.
 
 - [x] Write failing `metadata_validation` tests for exact decimals, false/null, date validity, currency, URL, and type mismatches; implement domain types and validation. All 22 regressions and 46 existing core tests pass with the openapi feature. Workspace make lint and make format also pass.
 - [ ] Write failing shared `metadata_repository_contract` tests for audit actors, live uniqueness, option identity, atomic patches, concurrent edits, vault isolation, trash/purge, and move rejection; implement new SQLite/PostgreSQL migrations and adapters.
@@ -28,7 +28,7 @@
 
 - [x] Merge the independent validation increment as PR #259, merge commit d35618363509284c41bed910aca362d07c7f158b. CI, e2e, fastembed, and title lint passed. The full metadata feature remains incomplete.
 
-- [ ] Update the project verify skill with new meaningful regressions.
+- [x] Update the project verify skill with the shared typed-field repository contract; extend it as later metadata behaviors land.
 - [ ] Run make format, make lint, make test, required PostgreSQL contracts, isolated Apple tests/build, and isolated web checks.
 - [ ] Validate changed specs, archive the completed change, and open reviewable PRs after foundation integration.
 - [ ] Resolve CI, review findings, and conflicts; verify every deliverable merged.
@@ -40,3 +40,9 @@
 - [ ] Write failing outbox contract tests for committed metadata transitions, no-op suppression, rollback, retry identity, purge clearing, vault scope, and causation; publish events in mutation transactions.
 - [ ] Verify metadata triggers and typed conditions are selectable in web and Apple workflows; reject document-only actions for field/option events.
 - [ ] Include event integration, CI, and merged PR verification in completion criteria.
+
+## Current verification checkpoint
+
+- In progress: publish and merge transactional field storage on `codex/metadata-field-storage`. The initial shared repository test failed on missing port/adapters before implementation; its log is `/private/tmp/folio-metadata-repository-red.log`.
+- Both field adapters and matching 20261102162000 migrations compile. SQLite and required disposable PostgreSQL contracts pass, including concurrency, pagination, lifecycle, no-op, and rollback behavior. Scoped core/infra clippy also passes.
+- The earlier target was reclaimed after the resource warning. The bounded storage test resumed with 15 GiB free. After integrating current main, both required database cases pass, including trusted correlation/causation. Evidence is `/private/tmp/folio-metadata-storage-integrated.log`; the task target is `/private/tmp/folio-metadata-storage-target`. Builds use two jobs, incremental disabled, and zero debug symbols. Finish the post-integration scoped lint, then publish; no Apple build slot is assigned.

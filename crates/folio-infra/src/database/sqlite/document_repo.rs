@@ -11,7 +11,7 @@ use uuid::Uuid;
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
 };
-use folio_core::document_transitions::metadata_envelopes;
+use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
@@ -406,6 +406,11 @@ impl DocumentRepository for SqliteDocumentRepository {
             return Err(not_found("Vault", to.0));
         }
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let mutation_id = Id::new_v4();
+
         let tags: Vec<(String,)> = sqlx::query_as(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
              WHERE dt.document_id = ?",
@@ -512,7 +517,13 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         }
-        tx.commit().await.map_err(map_sqlx_error)?;
+        let after = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        for envelope in move_envelopes(&before, &after, mutation_id)? {
+            insert_domain_event_with_origin(&mut tx, &envelope, self.origin).await?;
+        }
+        self.commit(tx).await?;
 
         self.find_by_id(to, id)
             .await?

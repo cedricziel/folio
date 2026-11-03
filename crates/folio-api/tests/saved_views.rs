@@ -253,3 +253,122 @@ async fn cross_vault_filter_is_rejected_without_saving() {
         .unwrap();
     assert_eq!(common::text(response).await, "[]");
 }
+
+#[tokio::test]
+async fn cross_origin_saved_view_form_is_rejected() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let mut req = request(
+        "POST",
+        &format!("/vaults/{}/saved-views", alice.vault),
+        &alice,
+        Body::from("name=Bad&visibility=private&presentation=list"),
+    );
+    req.headers_mut()
+        .insert(header::ORIGIN, "https://untrusted.invalid".parse().unwrap());
+    req.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/x-www-form-urlencoded".parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn unavailable_filter_remains_explicit_and_deletable_in_web_editor() {
+    use folio_core::models::{
+        DocumentFilter, SavedViewInput, SavedViewQuery, VaultRole, ViewPresentation, ViewVisibility,
+    };
+    use folio_core::ports::SavedViewAccess;
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let missing_tag = uuid::Uuid::new_v4();
+    let view = h
+        .state
+        .saved_views
+        .create(
+            alice.vault,
+            &SavedViewAccess {
+                user: alice.user.clone(),
+                role: VaultRole::Owner,
+            },
+            SavedViewInput {
+                name: "Retained filter".into(),
+                visibility: ViewVisibility::Private,
+                presentation: ViewPresentation::List,
+                query: SavedViewQuery {
+                    filters: DocumentFilter {
+                        tag_ids: Some(vec![missing_tag]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/vaults/{}/saved-views/{}", alice.vault, view.id),
+            &alice,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = common::text(response).await;
+    assert!(body.contains("A saved-view tag is unavailable"));
+    assert!(body.contains(&format!("value=\"{missing_tag}\" checked")));
+    assert!(body.contains("Delete saved view"));
+}
+
+#[tokio::test]
+async fn web_editor_preserves_fractional_date_boundaries() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let path = format!("/api/vaults/{}/saved-views", alice.vault);
+    let response = h.app.clone().oneshot(request(
+        "POST", &path, &alice,
+        Body::from(r#"{"name":"Precise dates","query":{"version":1,"filters":{"created_after":"2026-01-01T12:00:00.123456789Z"}}}"#),
+    )).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let view: serde_json::Value = serde_json::from_str(&common::text(response).await).unwrap();
+    let id = view["id"].as_str().unwrap();
+    let web_path = format!("/vaults/{}/saved-views/{id}", alice.vault);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &web_path, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(common::text(response)
+        .await
+        .contains("value=\"2026-01-01T12:00:00.123\""));
+    let mut update = request("POST", &web_path, &alice, Body::from("name=Renamed&visibility=private&presentation=list&created_after=2026-01-01T12%3A00%3A00.123&created_after_original=2026-01-01T12%3A00%3A00.123456789Z"));
+    update.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/x-www-form-urlencoded".parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(update).await.unwrap();
+    assert!(response.status().is_redirection());
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{path}/{id}"),
+            &alice,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    let updated: serde_json::Value = serde_json::from_str(&common::text(response).await).unwrap();
+    assert_eq!(
+        updated["query"]["filters"]["created_after"],
+        view["query"]["filters"]["created_after"]
+    );
+}
