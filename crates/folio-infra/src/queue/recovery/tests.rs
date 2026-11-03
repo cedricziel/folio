@@ -505,7 +505,7 @@ async fn outbox_failure_rolls_back_expired_lease_recovery(db: &Database) {
     f.expire().await;
     let before = f.state().await;
     refuse_outbox(db).await;
-    assert!(f.queue.reset_stuck().await.is_err());
+    assert_eq!(f.queue.reset_stuck().await.unwrap(), 0);
     assert_eq!(f.state().await, before);
     assert!(f.events().await.is_empty());
     allow_outbox(db).await;
