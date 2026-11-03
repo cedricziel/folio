@@ -107,6 +107,26 @@ struct DocumentDetailView: View {
                         ForEach(model.document.tags) { TagCapsule(tag: $0) }
                     }
                 }
+                DisclosureGroup("History") {
+                    Grid(
+                        alignment: .leading, horizontalSpacing: FolioTheme.Spacing.space4,
+                        verticalSpacing: FolioTheme.Spacing.space2
+                    ) {
+                        ForEach(model.history) { field in
+                            GridRow {
+                                Text(field.label)
+                                    .font(FolioTheme.Typography.bodySm)
+                                    .foregroundStyle(Color.inkMuted)
+                                Text(field.value)
+                                    .font(field.isRecord ? FolioTheme.Typography.meta : FolioTheme.Typography.bodySm)
+                                    .foregroundStyle(Color.ink)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+                .font(FolioTheme.Typography.bodySm)
+                .foregroundStyle(Color.inkMuted)
             }
             .padding(FolioTheme.Spacing.space4)
             .frame(maxWidth: .infinity, alignment: .leading)

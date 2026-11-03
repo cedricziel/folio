@@ -5944,6 +5944,13 @@
             "format": "date-time",
             "description": "When the document was created in the system"
           },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Server-derived creator; unknown legacy and system actors remain null."
+          },
           "deleted_at": {
             "type": [
               "string",
@@ -6047,6 +6054,13 @@
             "type": "string",
             "format": "date-time",
             "description": "When the document was last updated"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Server-derived actor of the latest meaningful change."
           },
           "uploaded_by": {
             "type": [
