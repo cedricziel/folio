@@ -1239,10 +1239,10 @@ async fn workflows_contract(r: &Repositories) {
     );
     assert!(runs.windows(2).all(|w| w[0].created_at >= w[1].created_at));
 
-    // Deleting a workflow removes its runs
     r.workflows.delete(vault, off.id).await.unwrap();
-    assert!(r.workflows.find_run(run.id).await.unwrap().is_none());
-    assert!(is_not_found(r.workflows.delete(vault, off.id).await));
+    let retained = r.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(retained.status, folio_core::models::RunStatus::Failed);
+    r.workflows.delete(vault, off.id).await.unwrap();
 }
 
 async fn ingestion_contract(r: &Repositories) {

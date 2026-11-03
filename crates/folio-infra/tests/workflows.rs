@@ -941,7 +941,7 @@ async fn client_refuses_non_http_urls() {
 }
 
 #[tokio::test]
-async fn deleting_a_workflow_removes_its_runs() {
+async fn deleting_and_restoring_a_workflow_preserves_history_without_replaying_runs() {
     let h = Harness::new().await;
     let workflow = h
         .webhook_workflow("http://127.0.0.1:1/x".into(), None)
@@ -950,8 +950,16 @@ async fn deleting_a_workflow_removes_its_runs() {
     let run = h.run_for(&workflow, doc.id).await;
 
     h.workflows.delete(h.vault, workflow.id).await.unwrap();
-    assert!(h.workflows.find_run(run.id).await.unwrap().is_none());
+    let retained = h.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(retained.status, RunStatus::Failed);
+    assert_eq!(retained.actions, run.actions);
+    assert_eq!(retained.payload, run.payload);
+    h.workflows.restore(h.vault, workflow.id).await.unwrap();
     assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+    assert_eq!(
+        h.workflows.find_run(run.id).await.unwrap().unwrap().status,
+        RunStatus::Failed
+    );
 }
 
 #[tokio::test]

@@ -13,6 +13,7 @@ mod health;
 pub mod postgres;
 mod saved_view;
 pub mod sqlite;
+mod workflow_lifecycle;
 
 use std::sync::Arc;
 

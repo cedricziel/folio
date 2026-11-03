@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Document, DocumentSource, Id, SourceConditions, VaultId};
+use super::{Document, DocumentSource, Id, SourceConditions, UserId, VaultId};
 use crate::error::{Error, Result};
 
 /// Events a workflow can listen for
@@ -335,6 +335,14 @@ pub struct Workflow {
     pub actions: Vec<WorkflowAction>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub deleted_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub created_by: Option<UserId>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub updated_by: Option<UserId>,
 }
 
 /// Fields for creating or replacing a workflow

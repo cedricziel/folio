@@ -71,6 +71,7 @@ use crate::routes::{
         workflows::create_workflow,
         workflows::update_workflow,
         workflows::delete_workflow,
+        workflows::restore_workflow,
         workflows::test_workflow,
         workflows::list_runs,
         sources::list_sources,

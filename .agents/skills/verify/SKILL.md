@@ -461,3 +461,15 @@ The core suite also covers trusted event lineage: nested clearing and restoratio
 cancellation, concurrent scopes, detached tasks, actor independence, and envelope
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
+
+## Verify workflow configuration lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_lifecycle --test workflows --test repository_contract`
+with disposable SQLite and PostgreSQL fixtures. The lifecycle contract covers
+server actors, no-op timestamps, retained configuration and run history, deletion
+rollback, terminal-state fencing, inactive queue admission, and legacy upgrades.
+Restore must preserve failed pending runs rather than replay their queued jobs.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test workflows --test vaults` for
+management controls, deleted-workflow history, secret masking, and vault access.
+Regenerate OpenAPI after response or route changes. Never verify workflow delivery
+against an existing webhook receiver or user archive.
