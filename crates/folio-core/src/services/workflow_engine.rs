@@ -13,6 +13,7 @@ use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
     WorkflowRepository,
 };
+use crate::DomainEventEnvelope;
 
 use super::outbox_dispatcher::EventConsumer;
 
@@ -77,14 +78,34 @@ impl WorkflowEngine {
         {
             return Ok(Vec::new());
         }
-        let Some(event) = outbox_event.event.as_ref() else {
+        let (trigger, document_id, ctx, occurred_at) = if let Some(event) = &outbox_event.event {
+            let Some(trigger) = Self::trigger_for(event) else {
+                return Ok(Vec::new());
+            };
+            (
+                trigger,
+                event.document_id(),
+                self.load_context(outbox_event, event).await?,
+                outbox_event.created_at,
+            )
+        } else if let Some(envelope) = &outbox_event.envelope {
+            let Some(trigger) = WorkflowTrigger::parse(envelope.event_type()) else {
+                return Ok(Vec::new());
+            };
+            if !matches!(
+                trigger,
+                WorkflowTrigger::DocumentTitleChanged
+                    | WorkflowTrigger::DocumentTagsChanged
+                    | WorkflowTrigger::DocumentCorrespondentChanged
+                    | WorkflowTrigger::DocumentTypeChanged
+            ) {
+                return Ok(Vec::new());
+            }
+            let ctx = Self::metadata_context(envelope)?;
+            (trigger, ctx.document_id, ctx, envelope.occurred_at())
+        } else {
             return Ok(Vec::new());
         };
-        let Some(trigger) = Self::trigger_for(event) else {
-            return Ok(Vec::new());
-        };
-        let document_id = event.document_id();
-        let ctx = self.load_context(outbox_event, event).await?;
         let vault = ctx.vault_id;
         if outbox_event
             .envelope
@@ -93,10 +114,13 @@ impl WorkflowEngine {
         {
             return Ok(Vec::new());
         }
-        if !matches!(event, DocumentEvent::Deleted { .. })
+        if trigger != WorkflowTrigger::DocumentDeleted
             && self.documents.locate(document_id).await? != Some(vault)
         {
-            debug!("Event {} document {document_id} is no longer active in its originating vault; skipping", outbox_event.id);
+            debug!(
+                "Event {} document {document_id} is no longer active in its originating vault; skipping",
+                outbox_event.id
+            );
             return Ok(Vec::new());
         }
         let candidates = self.workflows.list_enabled(vault, trigger).await?;
@@ -112,7 +136,12 @@ impl WorkflowEngine {
                     Some(body) => body.clone(),
                     None => {
                         let body = self
-                            .build_payload(trigger, &ctx, outbox_event.created_at)
+                            .build_payload(
+                                trigger,
+                                &ctx,
+                                occurred_at,
+                                outbox_event.envelope.as_ref(),
+                            )
                             .await?;
                         payload_json = Some(body.clone());
                         body
@@ -137,7 +166,7 @@ impl WorkflowEngine {
                     error!(
                         "Workflow {} failed on {}: {e}",
                         workflow.id,
-                        event.event_type()
+                        trigger.as_str()
                     );
                     first_error.get_or_insert(e);
                 }
@@ -147,6 +176,26 @@ impl WorkflowEngine {
             Some(e) => Err(e),
             None => Ok(runs),
         }
+    }
+
+    fn metadata_context(envelope: &DomainEventEnvelope) -> Result<EventSnapshot> {
+        let document_id = envelope.document_id().ok_or_else(|| {
+            Error::Repository("Document metadata event has no document target".into())
+        })?;
+        if envelope.subject().subject_type != "document" || envelope.subject().id != document_id {
+            return Err(Error::Repository(
+                "Document metadata event target is invalid".into(),
+            ));
+        }
+        let mut data = envelope.data().clone();
+        data["document_id"] = serde_json::json!(document_id);
+        data["vault_id"] = serde_json::json!(envelope.vault_id());
+        data["file_path"] = serde_json::Value::Null;
+        serde_json::from_value(data).map_err(|error| {
+            Error::Repository(format!(
+                "Document metadata event lacks a valid occurrence snapshot: {error}"
+            ))
+        })
     }
 
     async fn load_context(
@@ -182,7 +231,11 @@ impl WorkflowEngine {
                 return Ok(context);
             }
         }
-        Err(Error::Repository(format!("Cannot deliver outbox event {} ({}): historical document/vault context is missing or invalid; its original metadata cannot be reconstructed", outbox_event.id, event.event_type())))
+        Err(Error::Repository(format!(
+            "Cannot deliver outbox event {} ({}): historical document/vault context is missing or invalid; its original metadata cannot be reconstructed",
+            outbox_event.id,
+            event.event_type()
+        )))
     }
 
     async fn build_payload(
@@ -190,16 +243,18 @@ impl WorkflowEngine {
         trigger: WorkflowTrigger,
         ctx: &EventSnapshot,
         occurred_at: DateTime<Utc>,
+        source_event: Option<&DomainEventEnvelope>,
     ) -> Result<String> {
         let size = match &ctx.file_path {
             Some(path) => self.files.size(path).await,
             None => None,
         };
-        let payload = WebhookPayload::new(
+        let mut payload = WebhookPayload::new(
             trigger,
             occurred_at,
             WebhookDocument::from_snapshot(ctx, size, &self.public_url),
         );
+        payload.source_event = source_event.map(Into::into);
         serde_json::to_string(&payload)
             .map_err(|e| Error::Repository(format!("Failed to encode payload: {e}")))
     }

@@ -7,12 +7,19 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
-    WorkflowTrigger,
+    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction,
+    WorkflowEventIdentity, WorkflowRun, WorkflowTrigger,
 };
+use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
 
 use super::webhook::{WebhookClient, WebhookRequest};
+
+#[derive(serde::Deserialize)]
+struct PayloadContext {
+    #[serde(default)]
+    source_event: Option<WorkflowEventIdentity>,
+}
 
 /// Attempts per run before it is marked failed
 pub const MAX_ATTEMPTS: u32 = 5;
@@ -89,6 +96,13 @@ impl WorkflowRunner {
             return Ok(RunOutcome::Failed);
         };
 
+        let context: PayloadContext = serde_json::from_str(&run.payload).map_err(|error| {
+            Error::Repository(format!("Invalid captured workflow payload: {error}"))
+        })?;
+        let lineage = context.source_event.map(|source| MutationLineage {
+            correlation_id: source.correlation_id,
+            causation_id: Some(source.event_id),
+        });
         run.attempts += 1;
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();
@@ -106,7 +120,12 @@ impl WorkflowRunner {
                     }
                 }
             }
-            match self.perform(vault, index, action, &run).await {
+            match with_actor(
+                None,
+                with_lineage(lineage, self.perform(vault, index, action, &run)),
+            )
+            .await
+            {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);

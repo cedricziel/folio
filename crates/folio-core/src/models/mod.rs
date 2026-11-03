@@ -10,6 +10,7 @@ mod document_type;
 mod file_identity;
 mod ingest;
 mod ingest_identity;
+mod ingest_outcome;
 mod metadata;
 mod metadata_field;
 mod processing_attempt;
@@ -41,6 +42,10 @@ pub use ingest::{
     SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
+pub use ingest_outcome::{
+    IngestAttempt, IngestClaim, IngestOutcomePage, IngestOutcomeRecord, IngestResult,
+    SourceHealthChange,
+};
 pub use metadata::{MetadataKind, MetadataValue};
 pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
@@ -56,7 +61,9 @@ pub use vault::{
     Access, AuditEvent, GroupId, NewAuditEvent, Principal, UserId, Vault, VaultAction, VaultId,
     VaultMember, VaultRole,
 };
-pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOAD_VERSION};
+pub use webhook::{
+    NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
+};
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
