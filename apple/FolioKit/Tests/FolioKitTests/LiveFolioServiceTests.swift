@@ -152,6 +152,53 @@ private let documentJSON = """
         await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
     }
 
+    @Test func sourceActivityKeepsVaultAndOmitsPrivateDiagnostics() async throws {
+        let vault = UUID(), source = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/sources")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(
+                body: Data(
+                    """
+                    [{"id":"\(source)","vault_id":"\(vault)","name":"Mailbox","enabled":true,
+                      "origin":"config","config":{"password":"private"},
+                      "status":{"last_error":"password=private","last_run_at":"2026-11-02T10:00:00Z",
+                                "last_imported":0,"last_skipped":0,"last_failed":0}}]
+                    """.utf8))
+        }
+        let sources = try await makeService().sourceActivity(vaultID: vault)
+        #expect(sources.count == 1)
+        #expect(sources[0].health == .unavailable)
+        #expect(sources[0].lastCheckedAt != nil)
+        #expect(!String(describing: sources[0]).contains("private"))
+    }
+
+    @Test func sourceOutcomesRetainVaultAndDecodeBoundedResults() async throws {
+        let vault = UUID(), source = UUID(), item = UUID(), attempt = UUID(), event = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/sources/\(source.uuidString.lowercased())/outcomes")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            #expect(query.first { $0.name == "before" }?.value == "8")
+            #expect(query.first { $0.name == "limit" }?.value == "50")
+            return .init(
+                body: Data(
+                    """
+                    {"vault_id":"\(vault)","source_id":"\(source)","next_before":null,"outcomes":[
+                      {"id":7,"vault_id":"\(vault)","source_id":"\(source)","item_id":"\(item)",
+                       "attempt_id":"\(attempt)","event_id":"\(event)","occurred_at":"2026-11-02T10:00:00Z",
+                       "outcome":"failed","document_id":null}
+                    ]}
+                    """.utf8))
+        }
+        let page = try await makeService().sourceOutcomes(vaultID: vault, sourceID: source, before: 8)
+        #expect(page.vaultID == vault)
+        #expect(page.sourceID == source)
+        #expect(page.outcomes.first?.outcome == .failed)
+        #expect(page.outcomes.first?.attemptID == attempt)
+        #expect(page.outcomes.first?.documentID == nil)
+    }
+
     @Test func browseSendsTextFiltersCursorAndImmutableVault() async throws {
         let vault = UUID(), tag = UUID(), correspondent = UUID()
         let query = DocumentBrowseQuery(

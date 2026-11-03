@@ -8,7 +8,7 @@ import UniformTypeIdentifiers
 /// Talks to a Folio server. JSON endpoints go through the generated client; file transfer uses
 /// URLSession directly because the generated client cannot set per-part content types on uploads
 /// or accept the server's file-specific download content types.
-public struct LiveFolioService: FolioService {
+public struct LiveFolioService: FolioService, SourceActivityService {
     private let baseURL: URL
     private let tokenProvider: any BearerTokenProvider
     private let session: URLSession
@@ -50,6 +50,68 @@ public struct LiveFolioService: FolioService {
             baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
             downloadDirectory: downloadDirectory, vaultID: vaultID
         )
+    }
+
+    public func sourceActivity(vaultID: UUID) async throws -> [SourceActivity] {
+        let scoped = LiveFolioService(
+            baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
+            downloadDirectory: downloadDirectory, vaultID: vaultID
+        )
+        return try await scoped.call("sources.activity") {
+            let request = URLRequest(url: scoped.endpoint("api/sources"))
+            let (data, response) = try await scoped.authorizedTransfer(request) { try await session.data(for: $0) }
+            try scoped.check(response, body: data)
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            decoder.dateDecodingStrategy = .custom { decoder in
+                try LenientDateTranscoder().decode(decoder.singleValueContainer().decode(String.self))
+            }
+            let rows = try decoder.decode([SourceActivityWire].self, from: data)
+            return try rows.map { row in
+                guard row.vaultId == vaultID else { throw FolioError.unreadableResponse }
+                let health: SourceActivity.Health
+                if !row.enabled {
+                    health = .off
+                } else if row.status?.lastError != nil {
+                    health = .unavailable
+                } else if row.status?.lastRunAt != nil {
+                    health = .available
+                } else {
+                    health = .notChecked
+                }
+                return SourceActivity(
+                    id: row.id, vaultID: vaultID, name: row.name, health: health, lastCheckedAt: row.status?.lastRunAt)
+            }
+        }
+    }
+
+    public func sourceOutcomes(vaultID: UUID, sourceID: UUID, before: Int64?) async throws -> SourceOutcomePage {
+        let scoped = LiveFolioService(
+            baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
+            downloadDirectory: downloadDirectory, vaultID: vaultID
+        )
+        return try await scoped.call("sources.outcomes") {
+            let response = try await scoped.client.listSourceOutcomes(
+                path: .init(id: sourceID.uuidString.lowercased()),
+                query: .init(before: before, limit: 50)
+            )
+            let page = try response.ok.body.json
+            guard try Self.uuid(page.vaultId) == vaultID, try Self.uuid(page.sourceId) == sourceID else {
+                throw FolioError.unreadableResponse
+            }
+            let outcomes = try page.outcomes.map { row in
+                guard try Self.uuid(row.vaultId) == vaultID, try Self.uuid(row.sourceId) == sourceID,
+                    let result = SourceOutcome.Result(rawValue: row.outcome.rawValue)
+                else { throw FolioError.unreadableResponse }
+                return SourceOutcome(
+                    id: row.id, itemID: try Self.uuid(row.itemId), attemptID: try Self.uuid(row.attemptId),
+                    occurredAt: row.occurredAt, outcome: result,
+                    documentID: try row.documentId.map(Self.uuid)
+                )
+            }
+            return SourceOutcomePage(
+                vaultID: vaultID, sourceID: sourceID, outcomes: outcomes, nextBefore: page.nextBefore)
+        }
     }
 
     public func vaults() async throws -> VaultCatalog {
@@ -397,4 +459,16 @@ extension Document {
             try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color)
         }
     }
+}
+
+private struct SourceActivityWire: Decodable {
+    struct Status: Decodable {
+        let lastError: String?
+        let lastRunAt: Date?
+    }
+    let id: UUID
+    let vaultId: UUID
+    let name: String
+    let enabled: Bool
+    let status: Status?
 }
