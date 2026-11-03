@@ -404,6 +404,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
+        super::prepare_move(&mut tx, from, id).await?;
 
         let before = capture_document(&mut tx, id, None)
             .await?
@@ -907,6 +908,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             .execute(&mut *tx)
             .await
             .map_err(repo_err)?;
+        super::clear_incoming_links(&mut tx, vault, id).await?;
         sqlx::query(
             "DELETE FROM documents
              WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NOT NULL",
