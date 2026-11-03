@@ -72,6 +72,12 @@ async fn contract(db: &Database, id_type: &str, migration: &str, false_value: &s
         )
         .replace("'ocr'", "'embedding'");
     execute(db, &planned).await.unwrap();
+    execute(
+        db,
+        &format!("UPDATE processing_stage_runs SET is_current = {false_value}"),
+    )
+    .await
+    .unwrap();
     assert!(
         execute(db, &planned.replace("000000000009", "000000000010"))
             .await
