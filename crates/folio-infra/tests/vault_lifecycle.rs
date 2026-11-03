@@ -218,8 +218,11 @@ async fn lifecycle_contract(db: Database) {
         .unwrap();
 
     r.vaults.set_default(&owner, vault.id).await.unwrap();
-    assert!(r.vaults.delete(vault.id).await.is_err());
+    assert!(with_actor(Some(owner.clone()), r.vaults.delete(vault.id))
+        .await
+        .is_err());
     r.vaults.set_default(&owner, fallback).await.unwrap();
+    r.vaults.set_default(&viewer, vault.id).await.unwrap();
     let document = r
         .documents
         .create(
@@ -414,6 +417,8 @@ async fn lifecycle_contract(db: Database) {
         .create("Group recovery", Some(&admin))
         .await
         .unwrap();
+    assert_eq!(shared.created_by.as_ref(), Some(&admin));
+    assert_eq!(shared.updated_by.as_ref(), Some(&admin));
     r.members
         .grant(shared.id, &Principal::Group(group), VaultRole::Owner, None)
         .await

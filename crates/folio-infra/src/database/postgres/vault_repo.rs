@@ -95,7 +95,7 @@ impl PostgresVaultRepository {
             }
         }
         let now = Utc::now();
-        let actor = current_actor();
+        let actor = current_actor().or_else(|| owner.cloned());
         let id = VaultId::new();
         sqlx::query("INSERT INTO vaults (id, name, created_by, created_at, updated_at, updated_by) VALUES ($1, $2, $3, $4, $4, $3)")
             .bind(id.0).bind(&name).bind(actor.as_ref().map(UserId::as_str)).bind(now)
@@ -224,8 +224,9 @@ impl VaultRepository for PostgresVaultRepository {
             return Ok(());
         }
         let (defaults,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM users u WHERE default_vault_id = $1 AND EXISTS (SELECT 1 FROM vault_members dm WHERE dm.vault_id = $1 AND (dm.user_id = u.id OR dm.group_id IN (SELECT group_id FROM auth_group_members WHERE user_id = u.id)))")
+            sqlx::query_as("SELECT COUNT(*) FROM users WHERE id = $2 AND default_vault_id = $1")
                 .bind(id.0)
+                .bind(current_actor().as_ref().map(UserId::as_str))
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
