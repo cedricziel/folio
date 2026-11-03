@@ -500,11 +500,13 @@ mod scheduling {
         built: Arc<Mutex<Vec<Uuid>>>,
         polled: mpsc::UnboundedSender<(Uuid, bool)>,
         gate: Option<Arc<Gate>>,
+        observed: bool,
     }
     struct Source {
         id: Uuid,
         polled: mpsc::UnboundedSender<(Uuid, bool)>,
         gate: Option<Arc<Gate>>,
+        observed: bool,
     }
 
     impl IngestionSourceFactory for Factory {
@@ -514,6 +516,7 @@ mod scheduling {
                 id: def.id,
                 polled: self.polled.clone(),
                 gate: self.gate.clone(),
+                observed: self.observed,
             }))
         }
     }
@@ -523,9 +526,13 @@ mod scheduling {
             let rejected = if let Some(gate) = &self.gate {
                 gate.started.notify_one();
                 gate.release.notified().await;
-                sink.ingest(self.id, common::ingest::file_item(b"late source item", &[]))
-                    .await
-                    .is_err()
+                let item = common::ingest::file_item(b"late source item", &[]);
+                if self.observed {
+                    let key = folio_core::models::IngestItemKey::folder(b"late.pdf", b"1", b"late");
+                    sink.ingest_observed(self.id, key, item).await.is_err()
+                } else {
+                    sink.ingest(self.id, item).await.is_err()
+                }
             } else {
                 false
             };
@@ -590,6 +597,7 @@ mod scheduling {
             built: built.clone(),
             polled,
             gate: None,
+            observed: false,
         });
         let (stop, shutdown) = watch::channel(false);
         let scheduler = IngestScheduler::new(
@@ -613,6 +621,15 @@ mod scheduling {
 
     #[tokio::test]
     async fn a_configured_poll_cannot_import_after_its_vault_is_deleted() {
+        poll_after_vault_deletion(false).await;
+    }
+
+    #[tokio::test]
+    async fn an_observed_poll_cannot_import_after_its_vault_is_deleted() {
+        poll_after_vault_deletion(true).await;
+    }
+
+    async fn poll_after_vault_deletion(observed: bool) {
         let (_db, r, _dir) = fixture().await;
         let vault = r.vaults.create("In-flight source", None).await.unwrap().id;
         let gate = Arc::new(Gate {
@@ -625,6 +642,7 @@ mod scheduling {
             built,
             polled,
             gate: Some(gate.clone()),
+            observed,
         });
         let sink = pipeline(&r);
         let (stop, shutdown) = watch::channel(false);

@@ -451,15 +451,23 @@ struct BoundSink {
     inner: Arc<dyn VaultIngest>,
 }
 
+impl BoundSink {
+    /// A poll that started before its vault was deleted must not import into it
+    async fn require_active_vault(&self) -> Result<()> {
+        match self.vaults.find(self.vault).await? {
+            Some(_) => Ok(()),
+            None => Err(Error::NotFound {
+                entity_type: "Vault",
+                id: self.vault.to_string(),
+            }),
+        }
+    }
+}
+
 #[async_trait]
 impl IngestSink for BoundSink {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
-        if self.vaults.find(self.vault).await?.is_none() {
-            return Err(Error::NotFound {
-                entity_type: "Vault",
-                id: self.vault.to_string(),
-            });
-        }
+        self.require_active_vault().await?;
         self.inner.ingest(self.vault, source_id, item).await
     }
 
@@ -469,6 +477,7 @@ impl IngestSink for BoundSink {
         key: IngestItemKey,
         item: IngestItem,
     ) -> Result<IngestOutcome> {
+        self.require_active_vault().await?;
         self.inner
             .ingest_observed(self.vault, source_id, key, item)
             .await
