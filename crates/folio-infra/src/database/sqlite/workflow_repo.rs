@@ -405,7 +405,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     async fn update_run(&self, run: &WorkflowRun) -> Result<()> {
         let updated = sqlx::query(
             "UPDATE workflow_runs SET status = ?, attempts = ?, completed_actions = ?, last_error = ?, \
-             response_status = ?, finished_at = ? WHERE id = ? AND (status = 'pending' OR status = ?)",
+             response_status = ?, finished_at = ? WHERE id = ? AND status = 'pending'",
         )
         .bind(run.status.as_str())
         .bind(run.attempts)
@@ -414,7 +414,6 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(run.response_status)
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
         .bind(run.id.to_string())
-        .bind(run.status.as_str())
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;

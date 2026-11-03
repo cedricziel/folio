@@ -425,7 +425,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         let updated = sqlx::query(
             "UPDATE workflow_runs SET status = $1, attempts = $2, completed_actions = $3,
                                       last_error = $4, response_status = $5, finished_at = $6
-             WHERE id = $7 AND (status = 'pending' OR status = $1)",
+             WHERE id = $7 AND status = 'pending'",
         )
         .bind(run.status.as_str())
         .bind(run.attempts as i32)
