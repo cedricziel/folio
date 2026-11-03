@@ -7,19 +7,13 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction,
-    WorkflowEventIdentity, WorkflowRun, WorkflowTrigger,
+    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
+    WorkflowTrigger,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
 
 use super::webhook::{WebhookClient, WebhookRequest};
-
-#[derive(serde::Deserialize)]
-struct PayloadContext {
-    #[serde(default)]
-    source_event: Option<WorkflowEventIdentity>,
-}
 
 /// Attempts per run before it is marked failed
 pub const MAX_ATTEMPTS: u32 = 5;
@@ -96,10 +90,7 @@ impl WorkflowRunner {
             return Ok(RunOutcome::Failed);
         };
 
-        let context: PayloadContext = serde_json::from_str(&run.payload).map_err(|error| {
-            Error::Repository(format!("Invalid captured workflow payload: {error}"))
-        })?;
-        let lineage = context.source_event.map(|source| MutationLineage {
+        let lineage = run.source_identity()?.map(|source| MutationLineage {
             correlation_id: source.correlation_id,
             causation_id: Some(source.event_id),
         });

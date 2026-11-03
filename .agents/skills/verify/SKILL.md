@@ -216,6 +216,13 @@ recursive schema references, and preserving API-created groups through HTML edit
 The core suite also verifies trigger registration, duplicate and unknown selections,
 condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
+The same core and API suites cover subject and actor conditions, explicit system
+attribution, mixed event/document branches, unavailable entry body filters, and
+preserving event filters through HTML edits. The workflow suite verifies that
+captured actors override ambient dispatcher context without granting private access.
+The shared repository contract also verifies concurrent mutation deduplication,
+separate workflows, distinct mutations sharing a correlation, invalid captured
+identity rejection, and legacy source-event deduplication on both databases.
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run
@@ -377,6 +384,13 @@ packages so stale artifacts from the other checkout cannot satisfy a check.
 
 ## Verify worker leases
 
+Run `cargo test -p folio-infra --test processing_job_context` for enqueue-time vault
+and trusted lineage retention through retry and vault move in both databases.
+Worker `processing_claim` tests cover restored source lineage, system attribution,
+and rejection before work starts in a different vault. This preflight check does
+not establish transactional result fencing for moves during provider execution.
+
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test queue_leases`
 against disposable SQLite and PostgreSQL fixtures. The shared contract covers
 renewal of long-running work, expired-owner recovery, stale renewal and completion,
@@ -527,3 +541,15 @@ checks failed object removal, repair of exhausted jobs, preserved causal lineage
 and system-actor completion. The document transition suite checks distinct purge
 request/completion snapshots, repeat suppression, legacy job payloads, and both
 databases' persisted request lineage. Regenerate OpenAPI after projection changes.
+
+## Verify Apple saved views
+
+Run the isolated Swift package suite above for saved-view query mapping, ownership
+fields, unchanged-query omission on rename, unsupported versions, paging resets,
+cross-vault rejection, and late responses after switching vaults. Run the macOS
+build/authentication/provider checks for the production views.
+The navigation fixture's `testSavedViewCanBeSavedEditedAndDeleted` saves the
+current view, reopens its editor, persists a rename, and deletes it. It retains a
+saved-view screenshot for inspection. Use a fresh simulator and the bounded
+procedure above; compilation or an accessibility timeout before the first tap
+does not verify the controls.
