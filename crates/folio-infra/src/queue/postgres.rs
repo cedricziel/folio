@@ -23,13 +23,19 @@ pub(crate) async fn insert_job<'e>(
     let id = Uuid::new_v4();
     let now = Utc::now();
     let type_name = job_type.type_name();
+    let lineage =
+        folio_core::mutation::current_lineage().unwrap_or(folio_core::mutation::MutationLineage {
+            correlation_id: Uuid::new_v4(),
+            causation_id: None,
+        });
     let payload = serde_json::to_string(&job_type)
         .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
 
     sqlx::query(
         "INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts,
-                           created_at, updated_at, scheduled_at)
-         VALUES ($1, $2, $3::jsonb, 'pending', 0, $4, $5, $5, $6)",
+                           created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id)
+         VALUES ($1, $2, $3::jsonb, 'pending', 0, $4, $5, $5, $6,
+                 (SELECT vault_id FROM documents WHERE id = $7), $8, $9)",
     )
     .bind(id)
     .bind(type_name)
@@ -37,6 +43,9 @@ pub(crate) async fn insert_job<'e>(
     .bind(max_attempts)
     .bind(now)
     .bind(scheduled_at)
+    .bind(job_type.document_id())
+    .bind(lineage.correlation_id)
+    .bind(lineage.causation_id)
     .execute(executor)
     .await
     .map_err(repo_err("Failed to enqueue job"))?;
@@ -227,6 +236,26 @@ impl PostgresJobQueue {
             error!(job.id = %job.id, job.attempt = job.attempts, %error, "Job permanently failed");
             FailOutcome::GaveUp
         })
+    }
+
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<super::JobContext>> {
+        let row: Option<(Option<Uuid>, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT origin_vault_id, correlation_id, causation_id FROM jobs WHERE id = $1",
+        )
+        .bind(job_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err("Failed to read job context"))?;
+        let Some((vault, Some(correlation), causation)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(super::JobContext {
+            vault_id: vault.map(folio_core::models::VaultId),
+            lineage: folio_core::mutation::MutationLineage {
+                correlation_id: correlation,
+                causation_id: causation,
+            },
+        }))
     }
 
     pub async fn pending_count(&self) -> Result<i64> {
