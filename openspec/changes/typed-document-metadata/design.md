@@ -1,10 +1,10 @@
 ## Dependencies and delivery
 
-Worktree: `/private/tmp/folio-typed-metadata`. Validation PR #259 uses `codex/typed-metadata`; the next field-definition increment uses `codex/metadata-definitions`.
+Worktree: `/private/tmp/folio-typed-metadata`. Validation PR #259 is merged. Field-definition PR #267 uses `codex/metadata-definitions`; transactional field storage uses `codex/metadata-field-storage`.
 Foundation chat: `01a19e17-80c0-7302-85f5-4eff22bc5608`.
 Versioning chat: `01a19e18-494a-76d0-9f6c-63df47f79bdd`.
 
-Integrate shared schema and API changes after foundation merges. Deliver storage and domain validation, JSON and web behavior, then native Apple behavior in reviewable PRs. Completion requires all three, their verification, and merges.
+Actor #258, ownership #260, and transactional envelope #265 are merged and integrated. Shared schema and API implementation is unblocked. Deliver storage and domain validation, JSON and web behavior, then native Apple behavior in reviewable PRs. Completion requires all three, their verification, and merges.
 
 ## Storage and lifecycle
 
@@ -12,7 +12,7 @@ Definitions, options, and values have explicit vault_id, created_at, updated_at,
 
 Use typed columns with a discriminator and database CHECK constraints, not an arbitrary JSON payload. A value belongs to one definition and one logical document. Composite vault-qualified foreign keys prevent cross-vault document, definition, and option references. Only one live value may exist per document and definition. Values cleared by a user retain lifecycle attribution. Permanent document purge removes its values and clears incoming link values transactionally.
 
-Live field names are unique within a vault after trimming and case normalization. Retiring a definition hides it from new editing but retains its values for read-only display. Restore returns a conflict if the name has been reused. A field kind cannot change while any retained value exists, including a cleared value. Create a replacement definition to migrate kinds explicitly. Required or unique constraints cannot be enabled while existing live documents violate them. Required applies to a complete metadata edit, not upload ingestion, so new documents may start incomplete. The UI marks incomplete required fields.
+Live field names are unique within a vault after trimming and case normalization. Retiring a definition prevents new assignments and edits but retains existing values for display. Editors may explicitly clear retained assignments, including assignments to retired fields. Restore returns a conflict if the name has been reused. A field kind cannot change while any retained value exists, including a cleared value. Create a replacement definition to migrate kinds explicitly. Enabling required marks missing values incomplete and applies validation to subsequent complete metadata edits. Enabling unique is rejected when retained values collide. Required applies to a complete metadata edit, not upload ingestion, so new documents may start incomplete. The UI marks incomplete required fields.
 
 Retired options retain IDs and existing values. They cannot be newly assigned. Rename changes labels without changing assignments. Select options belong to exactly one field. Restoring an option checks live label uniqueness within that field.
 
@@ -30,7 +30,7 @@ Unique values compare canonical forms per definition within a vault. Text compar
 
 Values and links attach to documents.id. Replacing or restoring file revisions does not rewrite metadata. Source document trash retains all values. Target trash retains incoming links and restore reconnects them automatically. Purging a target clears incoming link values with a system actor in the same transaction. A required link can become incomplete after purge, and the UI must show that state. Purging a source cascades its own values.
 
-A vault move must reject a document with retained metadata values or incoming links with 409 until those references are explicitly cleared. This avoids silently carrying definitions into another vault or disclosing target details. The existing DocumentRepository::move_to implementations must check this condition inside their transactions before remapping classifications. Composite foreign keys also reject out-of-vault updates. Metadata's move guard is a dependency contract for foundation and versioning integration.
+A vault move must reject a document with non-cleared metadata values or incoming links with 409 until those references are explicitly cleared. Clearing a link removes its target reference. Once no values or incoming links remain, the move transaction removes cleared value tombstones and the old vault metadata revision record before changing document ownership. Immutable transition events retain the prior history. This avoids silently carrying definitions into another vault or disclosing target details. The existing DocumentRepository::move_to implementations must check this condition inside their transactions before remapping classifications. Composite foreign keys also reject out-of-vault updates. Metadata's move guard is a dependency contract for foundation and versioning integration.
 
 ## API and authorization
 
@@ -54,7 +54,7 @@ Reuse web form components, spacing, typography, and colors from design/tokens.js
 
 Reuse the existing durable outbox and foundation's versioned event envelope. Required envelope data includes event ID, occurrence time, vault ID, subject type and ID, nullable server-derived actor, and correlation/causation identifiers. Never create a second event bus.
 
-Stable event names are `metadata.field.created`, `metadata.field.updated`, `metadata.field.deleted`, `metadata.field.restored`, corresponding `metadata.option.*` lifecycle events, and `document.metadata.changed`. Field and option events are non-document events. Value changes target a logical document ID and identify changed field IDs, kinds, and authorized typed before/after values. Clearing values during target purge emits the same value-change event for affected source documents, with system attribution and purge causation. Payloads capture immutable transition data and never require reading a deleted subject later.
+Stable event names are `metadata_field.created`, `metadata_field.updated`, `metadata_field.deleted`, `metadata_field.restored`, corresponding `metadata_option.*` lifecycle events, and `document.metadata.changed`. Field and option events are non-document events. Value changes target a logical document ID and identify changed field IDs, kinds, and authorized typed before/after values. Clearing values during target purge emits the same value-change event for affected source documents, with system attribution and purge causation. Payloads capture immutable transition data and never require reading a deleted subject later.
 
 Publish outbox records in the same transaction as the mutation. Rejected patches, rollback, unchanged canonical values, repeated retirement/restoration, and retries of a committed request emit no duplicate transition. A single atomic document patch emits one value-change event containing its changed fields. Workflow writes propagate correlation/causation and use the shared recursion guard. Retired definition values remain readable under existing vault access rules. Reject a document move with retained values or incoming links before any metadata event is committed.
 
@@ -62,8 +62,10 @@ The workflow slice consumes these names and payloads using the foundation envelo
 
 ### Shared event API dependency
 
-Foundation proposes `folio_core::domain_event::DomainEventEnvelope`, `DomainEventSubject { subject_type, id }`, and `EventAudience`. Metadata events use `EventAudience::Vault`. Construct the envelope with `new(event_type, vault_id, subject, document_id, audience, data)` and propagate lineage with `with_correlation(correlation_id, causation_id)`. Typed metadata payload structs serialize to the envelope's JSON object; this does not replace typed value persistence.
+Foundation provides `folio_core::domain_event::DomainEventEnvelope`, `DomainEventSubject { subject_type, id }`, and `EventAudience`. Metadata events use `EventAudience::Vault`. Construct the envelope with `new(event_type, vault_id, subject, document_id, audience, data)` and propagate lineage with `with_correlation(correlation_id, causation_id)`. Typed metadata payload structs serialize to the envelope's JSON object; this does not replace typed value persistence.
 
 Append through `folio_infra::database::{sqlite,postgres}::insert_domain_event(&mut Connection, &DomainEventEnvelope)` inside the mutation transaction. Preserve event identity across retries. Foundation owns the `20261102160050_domain_event_identity.sql` migration and legacy event compatibility. Do not duplicate its event identity column or envelope. Verify these proposed signatures against merged source before integration.
 
 Downstream integration must preserve merged personal-token access changes in PR #251 and delayed-event snapshot fixes in PR #252. Rebase onto the merged prerequisite rather than copying its old migration or replacing the current outbox implementation.
+
+The merged envelope requires the first event-name component to match the subject type. Field events therefore use subject type `metadata_field`; option events use `metadata_option`. This replaces the draft dotted names before any metadata producer ships.

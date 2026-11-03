@@ -1962,7 +1962,7 @@ Stimulus.register("integrations", class extends Controller {
           >
             {{ icons::inbox() }}
             <span class="side-label">Inbox</span>
-            {{ counts::inbox_badge(sidebar.inbox_count) }}
+            {% if sidebar.show_counts %}{{ counts::inbox_badge(sidebar.inbox_count) }}{% endif %}
           </a>
           <a
             class="side-link"
@@ -1972,7 +1972,7 @@ Stimulus.register("integrations", class extends Controller {
           >
             {{ icons::files() }}
             <span class="side-label">All documents</span>
-            {{ counts::all_badge(sidebar.total_count) }}
+            {% if sidebar.show_counts %}{{ counts::all_badge(sidebar.total_count) }}{% endif %}
           </a>
           <a
             class="side-link"
@@ -2019,6 +2019,11 @@ Stimulus.register("integrations", class extends Controller {
             </div>
           </details>
         </div>
+
+        {% if sidebar.user.is_some() %}
+        <p class="f-label side-heading">Saved views</p>
+        <a class="side-link" href="{{ "/saved-views"|vault_url }}"><span class="side-label">Browse saved views</span></a>
+        {% endif %}
 
         <div class="side-foot">
           <a

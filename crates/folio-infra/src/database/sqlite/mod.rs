@@ -1,5 +1,8 @@
 //! SQLite adapters
 
+mod metadata_repo;
+pub use metadata_repo::SqliteMetadataFieldRepository;
+
 mod auth_repo;
 mod document_entries;
 mod document_repo;
