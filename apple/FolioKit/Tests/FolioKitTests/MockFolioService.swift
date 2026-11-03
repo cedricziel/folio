@@ -3,6 +3,74 @@ import Foundation
 @testable import FolioKit
 
 actor MockFolioService: FolioService {
+    private var savedViewValues: [SavedView] = []
+    private var savedViewsGate: CheckedContinuation<Void, Never>?
+    private var savedViewsStarted: CheckedContinuation<Void, Never>?
+    private var suspendSavedViewRequests = false
+
+    func suspendSavedViews() { suspendSavedViewRequests = true }
+    func waitForSavedViewsRequest() async {
+        guard savedViewsGate == nil else { return }
+        await withCheckedContinuation { savedViewsStarted = $0 }
+    }
+    func releaseSavedViews() {
+        suspendSavedViewRequests = false
+        savedViewsGate?.resume()
+        savedViewsGate = nil
+    }
+    func setSavedViews(_ views: [SavedView]) { savedViewValues = views }
+
+    func savedViews(after: UUID?) async throws -> [SavedView] {
+        if let failure { throw failure }
+        let values = Array(
+            savedViewValues.sorted { $0.id.uuidString < $1.id.uuidString }
+                .filter { view in after.map { view.id.uuidString > $0.uuidString } ?? true }.prefix(50))
+        if suspendSavedViewRequests {
+            await withCheckedContinuation { continuation in
+                savedViewsGate = continuation
+                savedViewsStarted?.resume()
+                savedViewsStarted = nil
+            }
+        }
+        return values
+    }
+
+    func savedView(id: UUID) async throws -> SavedView {
+        guard let view = savedViewValues.first(where: { $0.id == id }) else {
+            throw FolioError.server(status: 404, message: "Saved view not found")
+        }
+        return view
+    }
+
+    func saveView(_ draft: SavedViewDraft) async throws -> SavedView {
+        if let failure { throw failure }
+        let view = SavedView(
+            id: UUID(), vaultID: vaultCatalog.defaultVaultID ?? Self.defaultVault.id,
+            ownerID: "test-user", name: draft.name, visibility: draft.visibility, query: draft.query,
+            presentation: draft.presentation, createdAt: .distantPast, updatedAt: .distantPast,
+            createdBy: "test-user", updatedBy: "test-user")
+        savedViewValues.append(view)
+        return view
+    }
+
+    func updateSavedView(id: UUID, draft: SavedViewDraft) async throws -> SavedView {
+        if let failure { throw failure }
+        let original = try await savedView(id: id)
+        let view = SavedView(
+            id: id, vaultID: original.vaultID, ownerID: original.ownerID,
+            name: draft.name, visibility: draft.visibility,
+            query: draft.replacesQuery ? draft.query : original.query, presentation: draft.presentation,
+            createdAt: original.createdAt, updatedAt: original.updatedAt.addingTimeInterval(1),
+            createdBy: original.createdBy, updatedBy: "test-user")
+        savedViewValues.removeAll { $0.id == id }
+        savedViewValues.append(view)
+        return view
+    }
+
+    func deleteSavedView(id: UUID) async throws {
+        savedViewValues.removeAll { $0.id == id }
+    }
+
     static let defaultVault = Vault(
         id: UUID(uuidString: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff")!, name: "Personal", role: .owner
     )

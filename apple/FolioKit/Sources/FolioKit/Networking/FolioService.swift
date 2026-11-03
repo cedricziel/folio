@@ -3,6 +3,11 @@ import Foundation
 /// Everything the app needs from a Folio server. View models depend on this, not on the generated client.
 public protocol FolioService: DocumentEntryService {
     func vaults() async throws -> VaultCatalog
+    func savedViews(after: UUID?) async throws -> [SavedView]
+    func savedView(id: UUID) async throws -> SavedView
+    func saveView(_ draft: SavedViewDraft) async throws -> SavedView
+    func updateSavedView(id: UUID, draft: SavedViewDraft) async throws -> SavedView
+    func deleteSavedView(id: UUID) async throws
     /// Returns a service whose requests retain this vault even if the visible library changes.
     func scoped(to vaultID: UUID) -> any FolioService
     func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage

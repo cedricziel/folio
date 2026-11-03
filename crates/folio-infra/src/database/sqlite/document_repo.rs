@@ -757,7 +757,11 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents
              WHERE id = ? AND vault_id = ?"

@@ -1904,3 +1904,61 @@ async fn precise_metadata_dispatch_preserves_snapshot_identity_and_action_lineag
         1
     );
 }
+
+#[tokio::test]
+async fn event_actor_filters_use_the_producer_context_without_granting_private_access() {
+    use folio_core::models::{UserId, WorkflowActorCondition, WorkflowEventConditions};
+    use folio_core::mutation::with_actor;
+
+    let h = Harness::new().await;
+    let doc = h.document("actor.pdf", "application/pdf").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions {
+                event: Some(WorkflowEventConditions {
+                    subject_id: Some(doc.id),
+                    actor: Some(WorkflowActorCondition::User {
+                        user_id: "editor".into(),
+                    }),
+                }),
+                ..Default::default()
+            },
+            unreachable_hook(),
+        )
+        .await;
+    with_actor(
+        Some(UserId::from("editor")),
+        h.documents.update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("updated".into()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    let source = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type() == "document.updated")
+        })
+        .unwrap();
+    let mut private = source.clone();
+    let mut encoded = serde_json::to_value(source.envelope.as_ref().unwrap()).unwrap();
+    encoded["audience"] = serde_json::json!({"type": "user", "user_id": "editor"});
+    private.envelope = Some(serde_json::from_value(encoded).unwrap());
+    assert!(h.engine.handle(&private).await.unwrap().is_empty());
+    let runs = with_actor(Some(UserId::from("dispatcher")), h.engine.handle(&source))
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, workflow.id);
+}
