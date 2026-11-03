@@ -45,3 +45,4 @@
 
 - Envelope budget PR #296 merged as d4cdcaecc4d034df020af7fbc22308e020767b1a after its foundation review.
 - Value persistence on `codex/metadata-value-storage`: paired `20261103090000_metadata_values.sql` migrations, `MetadataValueRepository` with SQLite and PostgreSQL adapters, purge clearing of incoming links with system attribution, and the move guard inside both `move_to` implementations. The `metadata_values` contract covers typed round trips, false versus missing, exact amounts, audit actors, case-sensitive uniqueness, uniqueness and kind changes on fields, retired fields and options, vault isolation, trash and purge, moves, concurrent edits, and outbox rollback. Verification runs in CI because local build capacity was exhausted.
+- Before metadata patches are exposed through routes, SSE replay must be scoped to the subscriber's vault or bounded by bytes, because value-change events can reach 1 MiB.
