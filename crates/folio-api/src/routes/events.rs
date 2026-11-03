@@ -32,7 +32,7 @@ pub async fn turbo_streams_for(
     event: &DocumentEvent,
 ) -> ApiResult<String> {
     let streams = match event {
-        DocumentEvent::Trashed { document_id } => {
+        DocumentEvent::Trashed { document_id } | DocumentEvent::PurgeRequested { document_id } => {
             if state
                 .document_repo
                 .find_trashed_by_id(vault, *document_id)

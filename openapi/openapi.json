@@ -5283,6 +5283,26 @@
           },
           {
             "type": "object",
+            "description": "Permanent deletion was requested.",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "purge_requested"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Document returned from trash.",
             "required": [
               "document_id",
