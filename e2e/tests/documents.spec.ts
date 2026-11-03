@@ -133,3 +133,29 @@ test("document date can be saved and cleared without changing import time", asyn
     await request.delete(`/api/documents/${original.id}`);
   }
 });
+
+test("review can retry a failed write and keeps the selected document", async ({ page, request }) => {
+  const title = uniqueTitle("review-retry");
+  await uploadViaUi(page, title);
+  const { documents } = await (await request.get("/api/documents")).json();
+  const original = documents.find((document: { title: string }) => document.title === title);
+  const reviewPath = `**/documents/${original.id}/review`;
+  try {
+    await page.goto(`/documents/${original.id}`);
+    await page.route(reviewPath, route => route.abort());
+    await page.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Could not save review");
+    expect((await (await request.get(`/api/documents/${original.id}`)).json()).reviewed).toBe(false);
+    await page.unroute(reviewPath);
+    await page.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Mark unreviewed", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/documents/${original.id}$`));
+    const reviewed = await (await request.get(`/api/documents/${original.id}`)).json();
+    expect(reviewed.reviewed).toBe(true);
+    expect(reviewed.created_at).toBe(original.created_at);
+    await page.getByRole("button", { name: "Mark unreviewed", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Mark reviewed", exact: true })).toBeVisible();
+  } finally {
+    await request.delete(`/api/documents/${original.id}`);
+  }
+});

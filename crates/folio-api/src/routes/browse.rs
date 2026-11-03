@@ -32,6 +32,8 @@ pub struct BrowseQuery {
 
 #[derive(Serialize, ToSchema)]
 pub struct BrowseResponse {
+    #[schema(required = false)]
+    supports_document_review_filters: bool,
     vault_id: Uuid,
     documents: Vec<DocumentView>,
     next_cursor: Option<String>,
@@ -107,6 +109,7 @@ async fn browse(
         .transpose()
         .map_err(|_| ApiError::internal("Could not encode cursor"))?;
     Ok(Json(BrowseResponse {
+        supports_document_review_filters: true,
         vault_id: vault.0,
         documents: present(vault, &state, page.documents).await?,
         next_cursor,

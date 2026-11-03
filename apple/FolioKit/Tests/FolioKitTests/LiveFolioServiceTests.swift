@@ -73,6 +73,43 @@ private let documentJSON = """
     """
 
 @Suite(.serialized) struct LiveFolioServiceTests {
+    @Test func reviewMutationUsesSelectedVaultAndMapsExplicitState() async throws {
+        let vault = UUID()
+        let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "PUT")
+            #expect(request.url?.path == "/api/documents/\(id.uuidString.lowercased())/review")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let payload = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(payload?["reviewed"] as? Bool == true)
+            #expect(payload?.count == 1)
+            let json = documentJSON.replacingOccurrences(
+                of: "\"title\":",
+                with:
+                    "\"reviewed\":true,\"can_review_document\":true,\"review_origin\":\"human\",\"reviewed_by\":\"reviewer\",\"title\":"
+            )
+            return .init(body: Data(json.utf8))
+        }
+        let doc = try await makeService().scoped(to: vault).setDocumentReview(true, for: id)
+        #expect(doc.reviewed == true)
+        #expect(doc.canReviewDocument)
+        #expect(doc.reviewedBy == "reviewer")
+        #expect(doc.reviewOrigin == "human")
+    }
+
+    @Test func oldServerDoesNotGrantReviewControlsOrSilentlyBroadenFilters() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(documentJSON.utf8)) }
+        let doc = try await makeService().document(id: UUID())
+        #expect(doc.reviewed == nil)
+        #expect(!doc.canReviewDocument)
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"documents\":[],\"count\":0}".utf8))
+        }
+        await #expect(throws: FolioError.self) {
+            try await makeService().documents(filter: DocumentFilter(reviewed: false))
+        }
+    }
+
     @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {
         let vault = UUID()
         let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!

@@ -41,7 +41,7 @@ pub use file_identity::FileIdentity;
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
-    SourceConfig, SourceOrigin, SourceStatus, REDACTED,
+    SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{

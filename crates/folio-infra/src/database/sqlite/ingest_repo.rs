@@ -4,9 +4,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
+use super::insert_domain_event;
+use crate::database::source_lifecycle::source_event;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Id, IngestionSourceDef, IngestionSourceInput, LedgerEntry, SourceOrigin, SourceStatus, VaultId,
+    Id, IngestionSourceDef, IngestionSourceInput, LedgerEntry, SourceLifecycle, SourceOrigin,
+    SourceStatus, UserId, VaultId,
 };
 use folio_core::ports::{IngestLedger, SourceRepository};
 
@@ -38,6 +41,16 @@ impl SqliteSourceRepository {
 
 fn source_from_row(row: &SqliteRow) -> Result<IngestionSourceDef> {
     Ok(IngestionSourceDef {
+        lifecycle: Some(SourceLifecycle {
+            created_at: parse_time(row.get("created_at"))?,
+            updated_at: parse_time(row.get("updated_at"))?,
+            deleted_at: row
+                .get::<Option<&str>, _>("deleted_at")
+                .map(parse_time)
+                .transpose()?,
+            created_by: row.get::<Option<String>, _>("created_by").map(UserId),
+            updated_by: row.get::<Option<String>, _>("updated_by").map(UserId),
+        }),
         id: parse_id(row.get("id"))?,
         name: row.get("name"),
         enabled: row.get::<i64, _>("enabled") != 0,
@@ -62,7 +75,7 @@ fn write_err(e: sqlx::Error, name: &str) -> Error {
 impl SourceRepository for SqliteSourceRepository {
     async fn list(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>> {
         let rows = sqlx::query(
-            "SELECT * FROM ingestion_sources WHERE vault_id = ? ORDER BY created_at, name",
+            "SELECT * FROM ingestion_sources WHERE vault_id = ? AND deleted_at IS NULL ORDER BY created_at, name",
         )
         .bind(vault.to_string())
         .fetch_all(&self.pool)
@@ -72,20 +85,47 @@ impl SourceRepository for SqliteSourceRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<IngestionSourceDef>> {
-        let rows = sqlx::query("SELECT s.* FROM ingestion_sources s JOIN vaults v ON v.id = s.vault_id WHERE v.deleted_at IS NULL ORDER BY s.created_at, s.name")
-            .fetch_all(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        let rows = sqlx::query(
+            "SELECT s.* FROM ingestion_sources s JOIN vaults v ON v.id = s.vault_id
+             WHERE s.deleted_at IS NULL AND v.deleted_at IS NULL ORDER BY s.created_at, s.name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
         rows.iter().map(source_from_row).collect()
     }
 
     async fn find(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>> {
-        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ?")
+        let row = sqlx::query(
+            "SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        row.as_ref().map(source_from_row).transpose()
+    }
+
+    async fn list_deleted(&self, vault: VaultId) -> Result<Vec<IngestionSourceDef>> {
+        let rows = sqlx::query(
+            "SELECT * FROM ingestion_sources WHERE vault_id = ? AND deleted_at IS NOT NULL ORDER BY deleted_at DESC, name",
+        )
+            .bind(vault.to_string()).fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.iter().map(source_from_row).collect()
+    }
+
+    async fn find_deleted(&self, vault: VaultId, id: Id) -> Result<Option<IngestionSourceDef>> {
+        let row = sqlx::query(
+            "SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ? AND deleted_at IS NOT NULL",
+        )
             .bind(id.to_string())
-            .bind(vault.to_string())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(repo_err)?;
+        .bind(vault.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)?;
         row.as_ref().map(source_from_row).transpose()
     }
 
@@ -94,12 +134,17 @@ impl SourceRepository for SqliteSourceRepository {
         vault: VaultId,
         input: IngestionSourceInput,
     ) -> Result<IngestionSourceDef> {
+        input.validate()?;
         let id = Id::new_v4();
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO ingestion_sources
-                 (id, vault_id, name, enabled, kind, config, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        let actor = folio_core::mutation::current_actor();
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let row = sqlx::query(
+            "INSERT INTO ingestion_sources (id, vault_id, name, enabled, kind, config, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -109,12 +154,15 @@ impl SourceRepository for SqliteSourceRepository {
         .bind(serde_json::to_string(&input.config).map_err(repo_err)?)
         .bind(&now)
         .bind(&now)
-        .execute(&self.pool)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(actor.as_ref().map(UserId::as_str))
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| write_err(e, &input.name))?;
-        self.find(vault, id)
-            .await?
-            .ok_or_else(|| repo_err("Source vanished after insert"))
+        let source = source_from_row(&row)?;
+        insert_domain_event(&mut tx, &source_event(&source, "created")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(source)
     }
 
     async fn update(
@@ -123,51 +171,138 @@ impl SourceRepository for SqliteSourceRepository {
         id: Id,
         input: IngestionSourceInput,
     ) -> Result<IngestionSourceDef> {
-        let result = sqlx::query(
-            "UPDATE ingestion_sources
-             SET name = ?, enabled = ?, kind = ?, config = ?, updated_at = ?
-             WHERE id = ? AND vault_id = ?",
+        input.validate()?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let row = sqlx::query(
+            "SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?
+        .ok_or_else(|| Error::NotFound {
+            entity_type: "Source",
+            id: id.to_string(),
+        })?;
+        let existing = source_from_row(&row)?;
+        if existing.name == input.name
+            && existing.enabled == input.enabled
+            && existing.config == input.config
+        {
+            return Ok(existing);
+        }
+        let actor = folio_core::mutation::current_actor();
+        let row = sqlx::query(
+            "UPDATE ingestion_sources SET name = ?, enabled = ?, kind = ?, config = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
         .bind(input.config.kind().as_str())
         .bind(serde_json::to_string(&input.config).map_err(repo_err)?)
         .bind(Utc::now().to_rfc3339())
+        .bind(actor.as_ref().map(UserId::as_str))
         .bind(id.to_string())
         .bind(vault.to_string())
-        .execute(&self.pool)
+        .fetch_one(&mut *tx)
         .await
         .map_err(|e| write_err(e, &input.name))?;
-        if result.rows_affected() == 0 {
-            return Err(Error::NotFound {
-                entity_type: "Source",
-                id: id.to_string(),
-            });
-        }
-        self.find(vault, id)
-            .await?
-            .ok_or_else(|| repo_err("Source vanished after update"))
+        let source = source_from_row(&row)?;
+        insert_domain_event(&mut tx, &source_event(&source, "updated")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(source)
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let result = sqlx::query("DELETE FROM ingestion_sources WHERE id = ? AND vault_id = ?")
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ?")
             .bind(id.to_string())
             .bind(vault.to_string())
-            .execute(&self.pool)
+            .fetch_optional(&mut *tx)
             .await
-            .map_err(repo_err)?;
-        if result.rows_affected() == 0 {
-            return Err(Error::NotFound {
+            .map_err(repo_err)?
+            .ok_or_else(|| Error::NotFound {
                 entity_type: "Source",
                 id: id.to_string(),
-            });
+            })?;
+        let existing = source_from_row(&row)?;
+        if existing
+            .lifecycle
+            .as_ref()
+            .and_then(|m| m.deleted_at)
+            .is_some()
+        {
+            return Ok(());
         }
-        sqlx::query("DELETE FROM ingestion_status WHERE source_id = ?")
-            .bind(id.to_string())
-            .execute(&self.pool)
+        let actor = folio_core::mutation::current_actor();
+        let now = Utc::now().to_rfc3339();
+        let row = sqlx::query(
+            "UPDATE ingestion_sources SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+        )
+        .bind(Some(&now))
+        .bind(&now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| write_err(e, &existing.name))?;
+        let source = source_from_row(&row)?;
+        insert_domain_event(&mut tx, &source_event(&source, "deleted")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(())
+    }
+
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<IngestionSourceDef> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(repo_err)?;
-        Ok(())
+        let row = sqlx::query("SELECT * FROM ingestion_sources WHERE id = ? AND vault_id = ?")
+            .bind(id.to_string())
+            .bind(vault.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(repo_err)?
+            .ok_or_else(|| Error::NotFound {
+                entity_type: "Source",
+                id: id.to_string(),
+            })?;
+        let existing = source_from_row(&row)?;
+        if existing
+            .lifecycle
+            .as_ref()
+            .and_then(|m| m.deleted_at)
+            .is_none()
+        {
+            return Ok(existing);
+        }
+        let actor = folio_core::mutation::current_actor();
+        let now = Utc::now().to_rfc3339();
+        let row = sqlx::query(
+            "UPDATE ingestion_sources SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+        )
+        .bind(None::<String>)
+        .bind(&now)
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| write_err(e, &existing.name))?;
+        let source = source_from_row(&row)?;
+        insert_domain_event(&mut tx, &source_event(&source, "restored")?).await?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(source)
     }
 
     async fn save_status(&self, id: Id, status: &SourceStatus) -> Result<()> {
@@ -226,6 +361,28 @@ impl SqliteIngestLedger {
     }
 }
 
+async fn ensure_source_active(
+    conn: &mut sqlx::SqliteConnection,
+    vault: VaultId,
+    source_id: Id,
+) -> Result<()> {
+    // Configured sources have no persisted row.
+    let blocked: Option<bool> = sqlx::query_scalar(
+        "SELECT deleted_at IS NOT NULL OR vault_id != ? FROM ingestion_sources WHERE id = ?",
+    )
+    .bind(vault.to_string())
+    .bind(source_id.to_string())
+    .fetch_optional(conn)
+    .await
+    .map_err(repo_err)?;
+    if blocked == Some(true) {
+        return Err(Error::Conflict(
+            "This ingestion source is deleted or belongs to a different vault".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl IngestLedger for SqliteIngestLedger {
     async fn insert(&self, vault: VaultId, entry: &LedgerEntry) -> Result<bool> {
@@ -234,6 +391,12 @@ impl IngestLedger for SqliteIngestLedger {
                 "Ingest entry belongs to a different vault".into(),
             ));
         }
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        ensure_source_active(&mut tx, vault, entry.source_id).await?;
         let result = sqlx::query(
             "INSERT INTO ingest_ledger (vault_id, key, source_id, document_id, outcome, created_at)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -245,9 +408,10 @@ impl IngestLedger for SqliteIngestLedger {
         .bind(entry.document_id.map(|id| id.to_string()))
         .bind(&entry.outcome)
         .bind(entry.created_at.to_rfc3339())
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
+        tx.commit().await.map_err(repo_err)?;
         Ok(result.rows_affected() == 1)
     }
 

@@ -416,6 +416,7 @@ impl IngestScheduler {
             };
             info!("Starting ingestion source '{}'", def.name);
             let handle = tokio::spawn(run_source(
+                (def.origin == crate::models::SourceOrigin::Managed).then_some(vault),
                 def.id,
                 def.name.clone(),
                 source,
@@ -441,6 +442,7 @@ fn failed_status(error: &str) -> SourceStatus {
 }
 
 async fn run_source(
+    managed_vault: Option<VaultId>,
     id: Id,
     name: String,
     source: Box<dyn crate::ports::IngestionSource>,
@@ -464,6 +466,17 @@ async fn run_source(
                 warn!("Cannot check vault for source '{name}': {error}");
                 wait = interval;
                 continue;
+            }
+        }
+        if let Some(vault) = managed_vault {
+            match repo.find(vault, id).await {
+                Ok(Some(def)) if def.enabled => {}
+                Ok(_) => return,
+                Err(error) => {
+                    warn!("Could not verify ingestion source '{name}': {error}");
+                    wait = interval;
+                    continue;
+                }
             }
         }
         let (status, next) = match source.poll(sink.as_ref()).await {

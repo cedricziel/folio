@@ -380,7 +380,15 @@ impl TryFrom<DocumentTypeRow> for DocumentType {
 }
 
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
-fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) {
+fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) -> Result<()> {
+    filter.validate()?;
+    if let Some(reviewed) = filter.reviewed {
+        qb.push(if reviewed {
+            " AND reviewed_at IS NOT NULL"
+        } else {
+            " AND reviewed_at IS NULL"
+        });
+    }
     if let Some(id) = filter.correspondent_id {
         qb.push(" AND correspondent_id = ")
             .push_bind(id.to_string());
@@ -418,6 +426,15 @@ fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) {
     if let Some(before) = filter.created_before {
         qb.push(" AND created_at < ").push_bind(before.to_rfc3339());
     }
+    if let Some(date) = filter.document_date_from {
+        qb.push(" AND document_date >= ")
+            .push_bind(date.to_string());
+    }
+    if let Some(date) = filter.document_date_to {
+        qb.push(" AND document_date <= ")
+            .push_bind(date.to_string());
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -617,7 +634,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         qb.push_bind(vault.to_string());
 
         if let Some(filter) = filter {
-            push_filter(&mut qb, filter);
+            push_filter(&mut qb, filter)?;
         }
 
         qb.push(" ORDER BY created_at DESC");
@@ -642,7 +659,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             "SELECT {DOC_COLS} FROM documents WHERE deleted_at IS NULL AND vault_id = "
         ));
         qb.push_bind(vault.to_string());
-        push_filter(&mut qb, query.filter.clone());
+        push_filter(&mut qb, query.filter.clone())?;
         let (column, direction, comparison) = match query.sort {
             DocumentSort::Newest => ("created_at", "DESC", " < "),
             DocumentSort::Oldest => ("created_at", "ASC", " > "),
@@ -690,7 +707,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         );
         qb.push_bind(vault.to_string());
         if let Some(filter) = filter {
-            push_filter(&mut qb, filter);
+            push_filter(&mut qb, filter)?;
         }
         qb.push(" ORDER BY created_at DESC");
 
@@ -982,7 +999,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if document.file_path.is_some() {
             crate::queue::insert_job_sqlite(
-                &mut *tx,
+                &mut tx,
                 crate::queue::JobType::ProcessDocument { document_id: id },
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
@@ -1031,7 +1048,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
             .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_sqlite(
-            &mut *tx,
+            &mut tx,
             crate::queue::JobType::PurgeDocument {
                 document_id: id,
                 correlation_id: Some(envelope.correlation_id()),

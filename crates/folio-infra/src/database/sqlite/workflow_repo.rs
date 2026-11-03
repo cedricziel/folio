@@ -255,7 +255,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             return Ok(false);
         }
         insert_job(
-            &mut *tx,
+            &mut tx,
             JobType::ExecuteWorkflowRun { run_id: run.id },
             Utc::now(),
             MAX_ATTEMPTS as i32,
