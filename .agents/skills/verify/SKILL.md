@@ -546,3 +546,11 @@ PostgreSQL case with socket access; a skipped backend is not verified parity.
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
 The temporary database fixture holds a competing writer, verifies trash waits,
 and checks that the committed trash snapshot includes the writer's change.
+
+## Verify permanent deletion events
+
+For permanent deletion, `cargo test -p folio-infra --lib permanent_deletion`
+checks failed object removal, repair of exhausted jobs, preserved causal lineage,
+and system-actor completion. The document transition suite checks distinct purge
+request/completion snapshots, repeat suppression, legacy job payloads, and both
+databases' persisted request lineage. Regenerate OpenAPI after projection changes.
