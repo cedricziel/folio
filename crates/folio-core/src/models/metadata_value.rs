@@ -31,7 +31,27 @@ pub struct DocumentMetadata {
 /// One explicit replacement (`Some`) or clear (`None`); fields absent from a patch stay unchanged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MetadataChange {
     pub field_id: uuid::Uuid,
+    /// Required: an explicit `null` clears, so a missing key cannot clear by accident.
+    #[serde(deserialize_with = "Option::deserialize")]
     pub value: Option<MetadataValue>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn change_requires_an_explicit_value_or_null() {
+        let field = uuid::Uuid::new_v4();
+        assert!(
+            serde_json::from_value::<MetadataChange>(serde_json::json!({"field_id": field}))
+                .is_err()
+        );
+        let clear: MetadataChange =
+            serde_json::from_value(serde_json::json!({"field_id": field, "value": null})).unwrap();
+        assert_eq!(clear.value, None);
+    }
 }
