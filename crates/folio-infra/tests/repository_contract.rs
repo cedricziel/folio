@@ -2800,7 +2800,7 @@ async fn outbox_contract(db: &Database) {
             .iter()
             .map(|event| event.event.as_ref().unwrap().event_type())
             .collect::<Vec<_>>(),
-        ["trashed", "deleted"]
+        ["purge_requested", "deleted"]
     );
     let DocumentEvent::Deleted { snapshot, .. } = deleted[1].event.as_ref().unwrap() else {
         panic!("permanent deletion emits a deleted event");
