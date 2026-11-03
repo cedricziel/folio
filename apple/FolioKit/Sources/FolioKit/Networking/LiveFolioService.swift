@@ -372,7 +372,8 @@ extension Document {
             documentTypeID: raw.documentTypeId.map(LiveFolioService.uuid),
             pageCount: raw.pageCount.map(Int.init),
             ocrStatus: .init(raw.ocrStatus), embedStatus: .init(raw.embedStatus),
-            createdAt: raw.createdAt, updatedAt: raw.updatedAt
+            createdAt: raw.createdAt, updatedAt: raw.updatedAt,
+            createdBy: raw.createdBy, updatedBy: raw.updatedBy, deletedAt: raw.deletedAt
         )
     }
 }

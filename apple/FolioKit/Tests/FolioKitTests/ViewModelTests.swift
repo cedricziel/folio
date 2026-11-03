@@ -206,6 +206,21 @@ struct DocumentStatusTests {
 }
 
 @MainActor struct DocumentDetailViewModelTests {
+    @Test func historyShowsImmutableCreatorSystemUpdatesAndDeletion() {
+        let model = DocumentDetailViewModel(
+            document: Document(
+                title: "Retained history", createdBy: "archive-creator", updatedBy: nil,
+                deletedAt: Date(timeIntervalSince1970: 1_741_950_000)),
+            correspondent: nil, type: nil, service: MockFolioService()
+        )
+        let history = Dictionary(uniqueKeysWithValues: model.history.map { ($0.label, $0) })
+        #expect(history["Created by"]?.value == "archive-creator")
+        #expect(history["Updated by"]?.value == "System or unknown")
+        #expect(history["Created"]?.isRecord == true)
+        #expect(history["Updated"]?.isRecord == true)
+        #expect(history["Deleted"]?.isRecord == true)
+    }
+
     @Test func metadataListsRecordsInMono() {
         let model = DocumentDetailViewModel(
             document: Document(

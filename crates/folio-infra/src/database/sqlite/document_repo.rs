@@ -108,7 +108,7 @@ fn parse_optional_uuid(s: Option<String>) -> Result<Option<Uuid>> {
 }
 
 /// Columns of `documents` read into a [`DocumentRow`]
-const DOC_COLS: &str = "id, vault_id, uploaded_by, title, content, original_filename, file_path,
+const DOC_COLS: &str = "id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path,
     mime_type, correspondent_id, document_type_id, page_count, source_type, source_meta,
     ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at";
 
@@ -130,6 +130,20 @@ async fn require_document(conn: &mut SqliteConnection, vault: VaultId, id: Id) -
     .await
     .map_err(map_sqlx_error)?;
     found.map(|_| ()).ok_or_else(|| not_found("Document", id))
+}
+
+async fn stamp_document(conn: &mut SqliteConnection, vault: VaultId, id: Id) -> Result<()> {
+    sqlx::query(
+        "UPDATE documents SET updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+    .bind(id.to_string())
+    .bind(vault.to_string())
+    .execute(conn)
+    .await
+    .map_err(map_sqlx_error)?;
+    Ok(())
 }
 
 /// A vocabulary entry must exist in `vault`; `table` is one of ours, never user input
@@ -157,6 +171,8 @@ struct DocumentRow {
     id: String,
     vault_id: String,
     uploaded_by: Option<String>,
+    created_by: Option<String>,
+    updated_by: Option<String>,
     title: String,
     content: Option<String>,
     original_filename: Option<String>,
@@ -183,6 +199,8 @@ impl TryFrom<DocumentRow> for Document {
             id: parse_uuid(&row.id)?,
             vault_id: VaultId(parse_uuid(&row.vault_id)?),
             uploaded_by: row.uploaded_by.map(UserId),
+            created_by: row.created_by.map(UserId),
+            updated_by: row.updated_by.map(UserId),
             title: row.title,
             content: row.content,
             original_filename: row.original_filename,
@@ -444,13 +462,14 @@ impl DocumentRepository for SqliteDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET vault_id = ?, correspondent_id = ?, document_type_id = ?,
-                                  updated_at = ?
+                                  updated_at = ?, updated_by = ?
              WHERE id = ?",
         )
         .bind(to.to_string())
         .bind(correspondent)
         .bind(document_type)
         .bind(Utc::now().to_rfc3339())
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .bind(id.to_string())
         .execute(&mut *tx)
         .await
@@ -664,7 +683,7 @@ impl DocumentRepository for SqliteDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET title = ?, content = ?, correspondent_id = ?,
-                                  document_type_id = ?, updated_at = ?
+                                  document_type_id = ?, updated_at = ?, updated_by = ?
              WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
         )
         .bind(&title)
@@ -672,6 +691,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(correspondent_id.map(|id| id.to_string()))
         .bind(document_type_id.map(|id| id.to_string()))
         .bind(now.to_rfc3339())
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .bind(id.to_string())
         .bind(vault.to_string())
         .execute(&mut *tx)
@@ -685,6 +705,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: existing.uploaded_by,
+            created_by: existing.created_by,
+            updated_by: folio_core::mutation::current_actor(),
             title,
             content,
             original_filename: existing.original_filename,
@@ -719,8 +741,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             return Ok(());
         }
         let now = Utc::now();
-        sqlx::query("UPDATE documents SET deleted_at = ?, updated_at = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
-            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        sqlx::query("UPDATE documents SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
+            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
             .await?;
         self.commit(tx).await
@@ -800,8 +822,8 @@ impl DocumentRepository for SqliteDocumentRepository {
         sqlx::query("UPDATE documents SET deleted_at = NULL,
                  ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
                  embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
-                 updated_at = ? WHERE id = ? AND vault_id = ? AND purge_requested_at IS NULL")
-            .bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+                 updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND purge_requested_at IS NULL")
+            .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if document.file_path.is_some() {
             crate::queue::insert_job_sqlite(
                 &mut *tx,
@@ -840,8 +862,8 @@ impl DocumentRepository for SqliteDocumentRepository {
             return Ok(());
         }
         let now = Utc::now();
-        sqlx::query("UPDATE documents SET purge_requested_at = ?, updated_at = ? WHERE id = ? AND vault_id = ?")
-            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        sqlx::query("UPDATE documents SET purge_requested_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
+            .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         crate::queue::insert_job_sqlite(
             &mut *tx,
             crate::queue::JobType::PurgeDocument { document_id: id },
@@ -917,11 +939,14 @@ impl DocumentRepository for SqliteDocumentRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(map_sqlx_error)?;
-        let pending: bool = sqlx::query_scalar("SELECT upload_pending FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
+        let (pending, existing_path): (bool, Option<String>) = sqlx::query_as("SELECT upload_pending, file_path FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
             .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
             .ok_or_else(|| not_found("Document", id))?;
-        sqlx::query("UPDATE documents SET file_path = ?, upload_pending = FALSE, updated_at = ? WHERE id = ? AND vault_id = ?")
-            .bind(file_path).bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        if !pending && existing_path.as_deref() == Some(file_path) {
+            return Ok(());
+        }
+        sqlx::query("UPDATE documents SET file_path = ?, upload_pending = FALSE, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
+            .bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if pending {
             self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
                 .await?;
@@ -930,42 +955,18 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
-        let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE documents SET file_path = ?, updated_at = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
-        )
-        .bind(file_path)
-        .bind(now.to_rfc3339())
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .execute(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
+        let result = sqlx::query("UPDATE documents SET file_path = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND file_path IS NOT ?").bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(file_path).execute(&self.pool).await.map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
             return Err(not_found("Document", id));
         }
-
         Ok(())
     }
 
     async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()> {
-        let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE documents SET page_count = ?, updated_at = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
-        )
-        .bind(page_count as i64)
-        .bind(now.to_rfc3339())
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .execute(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
+        let result = sqlx::query("UPDATE documents SET page_count = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND page_count IS NOT ?").bind(page_count as i64).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(page_count as i64).execute(&self.pool).await.map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
             return Err(not_found("Document", id));
         }
-
         Ok(())
     }
 
@@ -978,16 +979,19 @@ impl DocumentRepository for SqliteDocumentRepository {
     ) -> Result<()> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                "UPDATE documents SET ocr_status = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
+                "UPDATE documents SET ocr_status = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND ocr_status != ?"
             }
             ProcessingStage::Embed => {
-                "UPDATE documents SET embed_status = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL"
+                "UPDATE documents SET embed_status = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND embed_status != ?"
             }
         };
         sqlx::query(sql)
             .bind(status.as_str())
+            .bind(Utc::now().to_rfc3339())
+            .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
             .bind(id.to_string())
             .bind(vault.to_string())
+            .bind(status.as_str())
             .execute(&self.pool)
             .await
             .map_err(map_sqlx_error)?;
@@ -995,19 +999,8 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
-        let result = sqlx::query(
-            "UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ?
-             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
-        )
-        .bind(content)
-        .bind(Utc::now().to_rfc3339())
-        .bind(id.to_string())
-        .bind(vault.to_string())
-        .execute(&self.pool)
-        .await
-        .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
+        let result = sqlx::query("UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND (content IS NOT ? OR ocr_status != 'done')").bind(content).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(content).execute(&self.pool).await.map_err(map_sqlx_error)?;
+        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
             return Err(not_found("Document", id));
         }
         Ok(())
@@ -1045,9 +1038,10 @@ impl DocumentRepository for SqliteDocumentRepository {
                 .map_err(map_sqlx_error)?;
 
         sqlx::query(
-            "UPDATE documents SET embed_status = 'pending'
+            "UPDATE documents SET updated_at = CASE WHEN embed_status != 'pending' THEN ? ELSE updated_at END, updated_by = CASE WHEN embed_status != 'pending' THEN ? ELSE updated_by END, embed_status = 'pending'
              WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''",
         )
+        .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&self.pool)
         .await
         .map_err(map_sqlx_error)?;
@@ -1136,6 +1130,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .await
         .map_err(map_sqlx_error)?;
         if result.rows_affected() > 0 {
+            stamp_document(&mut tx, vault, document_id).await?;
             self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
                 .await?;
         }
@@ -1152,6 +1147,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         if result.rows_affected() > 0 {
+            stamp_document(&mut tx, vault, document_id).await?;
             self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
                 .await?;
         }
@@ -1659,8 +1655,8 @@ impl SqliteDocumentRepository {
         let inserted = sqlx::query(
             "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
                                     mime_type, correspondent_id, document_type_id, ocr_status,
-                                    source_type, source_meta, created_at, updated_at, upload_pending)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+                                    source_type, source_meta, created_at, updated_at, upload_pending, created_by, updated_by)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
         )
         .bind(id.to_string())
         .bind(vault.to_string())
@@ -1677,6 +1673,8 @@ impl SqliteDocumentRepository {
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .bind(defer_event)
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -1710,6 +1708,8 @@ impl SqliteDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: params.uploaded_by,
+            created_by: folio_core::mutation::current_actor(),
+            updated_by: folio_core::mutation::current_actor(),
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,

@@ -86,6 +86,16 @@ pub struct Document {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub uploaded_by: Option<UserId>,
 
+    /// Server-derived creator; unknown legacy and system actors remain null.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub created_by: Option<UserId>,
+
+    /// Server-derived actor of the latest meaningful change.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub updated_by: Option<UserId>,
+
     /// Document title
     pub title: String,
 
@@ -143,6 +153,8 @@ impl Document {
             id: Id::new_v4(),
             vault_id,
             uploaded_by: None,
+            created_by: crate::mutation::current_actor(),
+            updated_by: crate::mutation::current_actor(),
             title: title.into(),
             content: None,
             original_filename: None,

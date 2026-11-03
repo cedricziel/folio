@@ -23,6 +23,7 @@ public final class DocumentDetailViewModel {
     public let document: Document
     public private(set) var preview = Preview.loading
     public let metadata: [MetadataField]
+    public let history: [MetadataField]
     /// The document as Spotlight and Shortcuts know it.
     public let summary: DocumentSummary
 
@@ -47,6 +48,16 @@ public final class DocumentDetailViewModel {
             fields.append(MetadataField(label: "File", value: filename, isRecord: true))
         }
         metadata = fields
+        var history = [
+            MetadataField(label: "Created", value: document.createdAt.formatted(), isRecord: true),
+            MetadataField(label: "Created by", value: document.createdBy ?? "System or unknown", isRecord: false),
+            MetadataField(label: "Updated", value: document.updatedAt.formatted(), isRecord: true),
+            MetadataField(label: "Updated by", value: document.updatedBy ?? "System or unknown", isRecord: false),
+        ]
+        if let deletedAt = document.deletedAt {
+            history.append(MetadataField(label: "Deleted", value: deletedAt.formatted(), isRecord: true))
+        }
+        self.history = history
     }
 
     public func loadPreview() async {

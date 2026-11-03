@@ -53,6 +53,20 @@ async fn require_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Re
     found.map(|_| ()).ok_or_else(|| not_found("Document", id))
 }
 
+async fn stamp_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Result<()> {
+    sqlx::query(
+        "UPDATE documents SET updated_at = $1, updated_by = $2 WHERE id = $3 AND vault_id = $4",
+    )
+    .bind(Utc::now())
+    .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+    .bind(id)
+    .bind(vault.0)
+    .execute(conn)
+    .await
+    .map_err(repo_err)?;
+    Ok(())
+}
+
 /// A vocabulary entry must exist in `vault`; `table` is one of ours, never user input
 async fn require_entry(
     conn: &mut PgConnection,
@@ -110,7 +124,7 @@ async fn remap_by_name(
 macro_rules! select_documents {
     ($tail:literal) => {
         concat!(
-            "SELECT id, vault_id, uploaded_by, title, content, original_filename, file_path, ",
+            "SELECT id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path, ",
             "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
             "ocr_status, embed_status, deleted_at, purge_requested_at, ",
@@ -126,6 +140,8 @@ struct DocumentRow {
     id: Uuid,
     vault_id: Uuid,
     uploaded_by: Option<String>,
+    created_by: Option<String>,
+    updated_by: Option<String>,
     title: String,
     content: Option<String>,
     original_filename: Option<String>,
@@ -152,6 +168,8 @@ impl TryFrom<DocumentRow> for Document {
             id: row.id,
             vault_id: VaultId(row.vault_id),
             uploaded_by: row.uploaded_by.map(UserId),
+            created_by: row.created_by.map(UserId),
+            updated_by: row.updated_by.map(UserId),
             title: row.title,
             content: row.content,
             original_filename: row.original_filename,
@@ -280,18 +298,6 @@ impl PostgresDocumentRepository {
         self.wake.notify_one();
         Ok(())
     }
-
-    async fn touch_one(
-        &self,
-        id: Id,
-        query: sqlx::query::Query<'_, sqlx::Postgres, sqlx::postgres::PgArguments>,
-    ) -> Result<()> {
-        let result = query.execute(&self.pool).await.map_err(repo_err)?;
-        if result.rows_affected() == 0 {
-            return Err(not_found("Document", id));
-        }
-        Ok(())
-    }
 }
 
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
@@ -417,13 +423,14 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET vault_id = $1, correspondent_id = $2, document_type_id = $3,
-                                  updated_at = now()
+                                  updated_at = now(), updated_by = $5
              WHERE id = $4",
         )
         .bind(to.0)
         .bind(correspondent)
         .bind(document_type)
         .bind(id)
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -629,7 +636,7 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
-                                  document_type_id = $4, updated_at = $5
+                                  document_type_id = $4, updated_at = $5, updated_by = $8
              WHERE id = $6 AND vault_id = $7 AND deleted_at IS NULL",
         )
         .bind(&title)
@@ -639,6 +646,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(now)
         .bind(id)
         .bind(vault.0)
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -650,6 +658,8 @@ impl DocumentRepository for PostgresDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: existing.uploaded_by,
+            created_by: existing.created_by,
+            updated_by: folio_core::mutation::current_actor(),
             title,
             content,
             original_filename: existing.original_filename,
@@ -683,8 +693,9 @@ impl DocumentRepository for PostgresDocumentRepository {
             return Ok(());
         }
         let now = Utc::now();
-        sqlx::query("UPDATE documents SET deleted_at = $3, updated_at = $3 WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL")
-            .bind(id).bind(vault.0).bind(now).execute(&mut *tx).await.map_err(repo_err)?;
+        sqlx::query("UPDATE documents SET deleted_at = $3, updated_at = $3, updated_by = $4 WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL")
+            .bind(id).bind(vault.0).bind(now).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .execute(&mut *tx).await.map_err(repo_err)?;
         self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
             .await?;
         self.commit(tx).await
@@ -761,8 +772,9 @@ impl DocumentRepository for PostgresDocumentRepository {
         sqlx::query("UPDATE documents SET deleted_at = NULL,
                  ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
                  embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
-                 updated_at = $3 WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NULL")
-            .bind(id).bind(vault.0).bind(Utc::now()).execute(&mut *tx).await.map_err(repo_err)?;
+                 updated_at = $3, updated_by = $4 WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NULL")
+            .bind(id).bind(vault.0).bind(Utc::now()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .execute(&mut *tx).await.map_err(repo_err)?;
         if document.file_path.is_some() {
             crate::queue::insert_job_postgres(
                 &mut *tx,
@@ -800,8 +812,9 @@ impl DocumentRepository for PostgresDocumentRepository {
             return Ok(());
         }
         let now = Utc::now();
-        sqlx::query("UPDATE documents SET purge_requested_at = $3, updated_at = $3 WHERE id = $1 AND vault_id = $2")
-            .bind(id).bind(vault.0).bind(now).execute(&mut *tx).await.map_err(repo_err)?;
+        sqlx::query("UPDATE documents SET purge_requested_at = $3, updated_at = $3, updated_by = $4 WHERE id = $1 AND vault_id = $2")
+            .bind(id).bind(vault.0).bind(now).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .execute(&mut *tx).await.map_err(repo_err)?;
         crate::queue::insert_job_postgres(
             &mut *tx,
             crate::queue::JobType::PurgeDocument { document_id: id },
@@ -869,11 +882,15 @@ impl DocumentRepository for PostgresDocumentRepository {
 
     async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
-        let pending: bool = sqlx::query_scalar("SELECT upload_pending FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE")
+        let (pending, existing_path): (bool, Option<String>) = sqlx::query_as("SELECT upload_pending, file_path FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE")
             .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?
             .ok_or_else(|| not_found("Document", id))?;
-        sqlx::query("UPDATE documents SET file_path = $1, upload_pending = FALSE, updated_at = $2 WHERE id = $3 AND vault_id = $4")
-            .bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).execute(&mut *tx).await.map_err(repo_err)?;
+        if !pending && existing_path.as_deref() == Some(file_path) {
+            return Ok(());
+        }
+        sqlx::query("UPDATE documents SET file_path = $1, upload_pending = FALSE, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4")
+            .bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .execute(&mut *tx).await.map_err(repo_err)?;
         if pending {
             self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
                 .await?;
@@ -882,31 +899,19 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
-        self.touch_one(
-            id,
-            sqlx::query(
-                "UPDATE documents SET file_path = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
-            )
-            .bind(file_path.to_string())
-            .bind(Utc::now())
-            .bind(id)
-            .bind(vault.0),
-        )
-        .await
+        let result = sqlx::query("UPDATE documents SET file_path = $1, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL AND file_path IS DISTINCT FROM $1").bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).execute(&self.pool).await.map_err(repo_err)?;
+        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
+            return Err(not_found("Document", id));
+        }
+        Ok(())
     }
 
     async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()> {
-        self.touch_one(
-            id,
-            sqlx::query(
-                "UPDATE documents SET page_count = $1, updated_at = $2 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
-            )
-            .bind(page_count as i32)
-            .bind(Utc::now())
-            .bind(id)
-            .bind(vault.0),
-        )
-        .await
+        let result = sqlx::query("UPDATE documents SET page_count = $1, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL AND page_count IS DISTINCT FROM $1").bind(page_count as i32).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).execute(&self.pool).await.map_err(repo_err)?;
+        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
+            return Err(not_found("Document", id));
+        }
+        Ok(())
     }
 
     async fn set_stage_status(
@@ -918,16 +923,18 @@ impl DocumentRepository for PostgresDocumentRepository {
     ) -> Result<()> {
         let sql = match stage {
             ProcessingStage::Ocr => {
-                "UPDATE documents SET ocr_status = $1 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL"
+                "UPDATE documents SET ocr_status = $1, updated_at = $4, updated_by = $5 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL AND ocr_status != $1"
             }
             ProcessingStage::Embed => {
-                "UPDATE documents SET embed_status = $1 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL"
+                "UPDATE documents SET embed_status = $1, updated_at = $4, updated_by = $5 WHERE id = $2 AND vault_id = $3 AND deleted_at IS NULL AND embed_status != $1"
             }
         };
         sqlx::query(sql)
             .bind(status.as_str())
             .bind(id)
             .bind(vault.0)
+            .bind(Utc::now())
+            .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
             .execute(&self.pool)
             .await
             .map_err(repo_err)?;
@@ -935,18 +942,11 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
-        self.touch_one(
-            id,
-            sqlx::query(
-                "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
-                 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
-            )
-            .bind(content.to_string())
-            .bind(Utc::now())
-            .bind(id)
-            .bind(vault.0),
-        )
-        .await
+        let result = sqlx::query("UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL AND (content IS DISTINCT FROM $1 OR ocr_status != 'done')").bind(content).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).execute(&self.pool).await.map_err(repo_err)?;
+        if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
+            return Err(not_found("Document", id));
+        }
+        Ok(())
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {
@@ -981,10 +981,11 @@ impl DocumentRepository for PostgresDocumentRepository {
 
     async fn reset_embedding_status(&self) -> Result<Vec<Id>> {
         sqlx::query_scalar(
-            "UPDATE documents SET embed_status = 'pending'
+            "UPDATE documents SET updated_at = CASE WHEN embed_status != 'pending' THEN $1 ELSE updated_at END, updated_by = CASE WHEN embed_status != 'pending' THEN $2 ELSE updated_by END, embed_status = 'pending'
              WHERE deleted_at IS NULL AND content IS NOT NULL AND content != ''
              RETURNING id",
         )
+        .bind(Utc::now()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)
@@ -1065,6 +1066,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         let result = sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(document_id).bind(tag_id).execute(&mut *tx).await.map_err(repo_err)?;
         if result.rows_affected() > 0 {
+            stamp_document(&mut tx, vault, document_id).await?;
             self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
                 .await?;
         }
@@ -1082,6 +1084,7 @@ impl DocumentRepository for PostgresDocumentRepository {
                 .await
                 .map_err(repo_err)?;
         if result.rows_affected() > 0 {
+            stamp_document(&mut tx, vault, document_id).await?;
             self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
                 .await?;
         }
@@ -1518,8 +1521,8 @@ impl PostgresDocumentRepository {
         let inserted = sqlx::query(
             "INSERT INTO documents (id, vault_id, uploaded_by, title, content, original_filename,
                                     mime_type, correspondent_id, document_type_id, ocr_status,
-                                    source_type, source_meta, created_at, updated_at, upload_pending)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $14) ON CONFLICT(id) DO NOTHING",
+                                    source_type, source_meta, created_at, updated_at, upload_pending, created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $14, $15, $16) ON CONFLICT(id) DO NOTHING",
         )
         .bind(id)
         .bind(vault.0)
@@ -1535,6 +1538,8 @@ impl PostgresDocumentRepository {
         .bind(params.source.metadata_json())
         .bind(now)
         .bind(defer_event)
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        .bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -1568,6 +1573,8 @@ impl PostgresDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: params.uploaded_by,
+            created_by: folio_core::mutation::current_actor(),
+            updated_by: folio_core::mutation::current_actor(),
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,
