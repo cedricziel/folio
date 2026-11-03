@@ -203,8 +203,7 @@ async fn review_contract(db: Database) {
     let system_unreview = events
         .iter()
         .filter_map(|row| row.envelope.as_ref())
-        .filter(|event| event.event_type() == "document.unreviewed")
-        .next_back()
+        .rfind(|event| event.event_type() == "document.unreviewed")
         .unwrap();
     assert_eq!(system_unreview.actor_id(), None);
     assert_eq!(system_unreview.data()["reason"], "system");
