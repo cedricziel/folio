@@ -13,6 +13,8 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var embedStatus: ProcessingStatus
     /// Only the list and get endpoints report tags; search results and uploads come back without them.
     public var tags: [Tag]
+    public var documentDate: DocumentDate?
+    public var canEditDocumentDate: Bool
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -28,6 +30,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         ocrStatus: ProcessingStatus = .pending,
         embedStatus: ProcessingStatus = .pending,
         tags: [Tag] = [],
+        documentDate: DocumentDate? = nil,
+        canEditDocumentDate: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -42,6 +46,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.ocrStatus = ocrStatus
         self.embedStatus = embedStatus
         self.tags = tags
+        self.documentDate = documentDate
+        self.canEditDocumentDate = canEditDocumentDate
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
