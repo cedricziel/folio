@@ -797,11 +797,11 @@ impl DocumentRepository for SqliteDocumentRepository {
         let mut review = folio_core::models::DocumentReview::default();
         review.set_reviewed_from_context(reviewed);
         let decision = review.decision();
-        sqlx::query("UPDATE documents SET reviewed_at = ?, reviewed_by = ?, review_origin = ?, updated_at = ? WHERE id = ? AND vault_id = ?")
+        sqlx::query("UPDATE documents SET reviewed_at = ?, reviewed_by = ?, review_origin = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
             .bind(decision.map(|d| d.reviewed_at.to_rfc3339()))
             .bind(decision.and_then(|d| d.reviewed_by.as_ref()).map(|id| id.0.as_str()))
             .bind(decision.map(|d| d.origin.as_str()))
-            .bind(Utc::now().to_rfc3339()).bind(id.to_string()).bind(vault.to_string())
+            .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string())
             .execute(&mut *tx).await.map_err(map_sqlx_error)?;
         self.emit_metadata_in(&mut tx, &before).await?;
         let row: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(

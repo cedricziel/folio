@@ -748,11 +748,11 @@ impl DocumentRepository for PostgresDocumentRepository {
         let mut review = folio_core::models::DocumentReview::default();
         review.set_reviewed_from_context(reviewed);
         let decision = review.decision();
-        sqlx::query("UPDATE documents SET reviewed_at = $1, reviewed_by = $2, review_origin = $3, updated_at = $4 WHERE id = $5 AND vault_id = $6")
+        sqlx::query("UPDATE documents SET reviewed_at = $1, reviewed_by = $2, review_origin = $3, updated_at = $4, updated_by = $7 WHERE id = $5 AND vault_id = $6")
             .bind(decision.map(|d| d.reviewed_at))
             .bind(decision.and_then(|d| d.reviewed_by.as_ref()).map(|id| id.0.as_str()))
             .bind(decision.map(|d| d.origin.as_str()))
-            .bind(Utc::now()).bind(id).bind(vault.0)
+            .bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
             .execute(&mut *tx).await.map_err(repo_err)?;
         self.emit_metadata_in(&mut tx, &before).await?;
         let row: DocumentRow = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))

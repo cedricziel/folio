@@ -331,6 +331,15 @@ async fn attribution_contract(db: Database) {
     assert_eq!(same_restore.updated_at, restored.updated_at);
     assert_eq!(same_restore.updated_by, restored.updated_by);
 
+    let reviewed = with_actor(
+        Some(editor.clone()),
+        r.documents.set_reviewed(vault, document.id, true),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reviewed.updated_by, Some(editor.clone()));
+    assert_eq!(reviewed.created_by, Some(creator.clone()));
+
     let target = r.vaults.create("Move target", None).await.unwrap().id;
     let moved = r
         .documents
