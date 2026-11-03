@@ -32,3 +32,6 @@ mod classifications;
 mod tags;
 #[path = "document_transitions/title.rs"]
 mod title;
+
+#[path = "document_transitions/moves.rs"]
+mod moves;

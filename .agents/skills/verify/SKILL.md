@@ -463,3 +463,47 @@ The core suite also covers trusted event lineage: nested clearing and restoratio
 cancellation, concurrent scopes, detached tasks, actor independence, and envelope
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
+
+## Verify document metadata transitions
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_transitions --test repository_contract --test workflows`
+with a task-owned temporary target directory. These suites use temporary SQLite
+databases, disposable PostgreSQL containers, and loopback webhook fixtures.
+They cover exact title, classification, and tag deltas, no-ops, rollback,
+server-derived actors, shared mutation identities, and compatibility updates.
+Move contracts check source/destination snapshot isolation, rejected vault moves,
+and same-vault no-ops on both databases.
+Domain-only outbox rows have no legacy document projection; assertions about
+compatibility updates must select that projection explicitly.
+
+Run `cargo test -p folio-api --test routes classification_form` for the HTML
+and API form entry points and malformed-ID preservation. Run
+`cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
+metadata edits and the persisted title delta. Both use isolated fixtures.
+
+## Verify saved-view web controls
+
+Run `cargo test -p folio-api --test saved_views` for form CSRF protection,
+unavailable references, and exact date-boundary preservation through the editor.
+Build `folio-app`, then run
+`npx playwright test vaults.spec.ts --grep 'saved views restore|submillisecond'`
+from `e2e/`. Set `FOLIO_BIN` to the built binary and leave `E2E_BASE_URL` unset
+so setup owns the disposable instance. Desktop and mobile checks save, reopen,
+rename, share, and delete views. Inspect screenshots and confirm that a single
+grid card keeps a bounded width. The precision regression renames a view without
+rounding its stored submillisecond boundaries to the date input's display value.
+
+Shared navigation changes also require the Linux `visual.spec.ts` suite.
+Inspect its image diffs and update affected baselines before merging.
+
+## Verify typed metadata fields
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields`
+with task-owned build storage, at most two jobs, incremental compilation disabled,
+and zero debug symbols when capacity is constrained. The shared contract uses a
+temporary SQLite database and a disposable PostgreSQL container. It covers scoped
+field reads, server-derived attribution, canonical name uniqueness, concurrent
+claims, pagination, retirement, restore conflicts, no-op suppression, and rollback
+when transactional outbox publication fails. It also checks that field events are
+vault-visible non-document events. A Docker access failure requires rerunning the
+PostgreSQL case with socket access; a skipped backend is not verified parity.

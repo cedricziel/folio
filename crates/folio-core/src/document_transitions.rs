@@ -172,3 +172,44 @@ pub fn metadata_envelopes(
     events.push(generic);
     Ok(events)
 }
+
+/// Capture each side of a move without exposing the other vault's identifiers.
+pub fn move_envelopes(
+    before: &EventSnapshot,
+    after: &EventSnapshot,
+    mutation_id: Id,
+) -> Result<[DomainEventEnvelope; 2]> {
+    if before.document_id != after.document_id || before.vault_id == after.vault_id {
+        return Err(Error::Validation(
+            "Move snapshots require one document in distinct vaults".into(),
+        ));
+    }
+    let build = |snapshot: &EventSnapshot, event_type: &str| -> Result<DomainEventEnvelope> {
+        let generic = document_event_envelope(
+            &DocumentEvent::Updated {
+                document_id: snapshot.document_id,
+            },
+            Some(snapshot),
+        )?
+        .ok_or_else(|| Error::Validation("Move has no occurrence snapshot".into()))?;
+        let mut data = generic.data().clone();
+        data["source"] = serde_json::to_value(&snapshot.source)
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        DomainEventEnvelope::new(
+            event_type,
+            snapshot.vault_id,
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: snapshot.document_id,
+            },
+            Some(snapshot.document_id),
+            EventAudience::Vault,
+            data,
+        )?
+        .with_mutation(mutation_id)
+    };
+    let outgoing = build(before, "document.moved_out")?;
+    let incoming = build(after, "document.moved_in")?
+        .with_correlation(outgoing.correlation_id(), outgoing.causation_id())?;
+    Ok([outgoing, incoming])
+}
