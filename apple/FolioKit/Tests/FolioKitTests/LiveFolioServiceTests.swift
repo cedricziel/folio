@@ -436,6 +436,21 @@ private let documentJSON = """
         #expect(await model.error == "Restore failed. An active entry already uses this name.")
     }
 
+    @Test func taxonomySaveTrimsTheName() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, body in
+            if request.httpMethod == "POST" {
+                let sent = try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any]
+                #expect(sent?["name"] as? String == "Insurance")
+                return .init(body: Data("{}".utf8))
+            }
+            return .init(body: Data("[]".utf8))
+        }
+        let model = await TaxonomyViewModel(service: makeService().scoped(to: vault), kind: .tags)
+        await model.save(name: "  Insurance \n")
+        #expect(await model.error == nil)
+    }
+
     @Test func listsDocumentsAndMapsFields() async throws {
         StubURLProtocol.handler = { request, _ in
             #expect(request.url?.path == "/api/documents")

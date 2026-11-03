@@ -63,7 +63,7 @@ private struct TaxonomyList: View {
                 }
                 if model.entries.isEmpty { Text("No classifications yet").foregroundStyle(Color.inkMuted) }
                 if canManage {
-                    Button("Add \(model.kind.title)") {
+                    Button("Add \(model.kind.singular)") {
                         editing = nil; name = ""; showEditor = true
                     }
                 }

@@ -57,7 +57,7 @@ import XCTest
         let app = launch(arguments: ["--read-only"])
         XCTAssertTrue(app.staticTexts["Insurance"].firstMatch.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.staticTexts["Deleted"].firstMatch.exists)
-        XCTAssertFalse(app.buttons["Add Tags"].exists)
+        XCTAssertFalse(app.buttons["Add tag"].exists)
         XCTAssertFalse(app.buttons["Rename Insurance"].exists)
         XCTAssertFalse(app.buttons["Move Insurance to Trash"].exists)
         XCTAssertFalse(app.buttons["Restore"].firstMatch.exists)

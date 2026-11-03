@@ -20,18 +20,21 @@ public final class TaxonomyViewModel {
         isBusy = true
         defer { isBusy = false }
         do {
-            let entries = try await service.taxonomy(kind, deleted: false)
-            let trash = try await service.taxonomy(kind, deleted: true)
+            async let entries = service.taxonomy(kind, deleted: false)
+            async let trash = service.taxonomy(kind, deleted: true)
+            let (active, deleted) = try await (entries, trash)
             guard !Task.isCancelled else { return }
-            self.entries = entries
-            self.trash = trash
+            self.entries = active
+            self.trash = deleted
             error = nil
         } catch {
+            guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
     }
 
     public func save(name: String, id: UUID? = nil) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         await mutate { try await self.service.saveTaxonomy(self.kind, id: id, name: name) }
     }
 

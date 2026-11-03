@@ -11,6 +11,14 @@ public enum TaxonomyKind: String, CaseIterable, Identifiable, Sendable {
         case .documentTypes: "Types"
         }
     }
+    /// Names one entry, as in "Add tag".
+    public var singular: String {
+        switch self {
+        case .tags: "tag"
+        case .correspondents: "correspondent"
+        case .documentTypes: "document type"
+        }
+    }
 }
 
 public struct TaxonomyEntry: Decodable, Identifiable, Hashable, Sendable {
