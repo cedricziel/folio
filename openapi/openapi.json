@@ -1864,6 +1864,7 @@
         ],
         "responses": {
           "200": {
+            "description": "Scoped notes or comments",
             "content": {
               "application/json": {
                 "schema": {
@@ -1965,6 +1966,7 @@
         },
         "responses": {
           "201": {
+            "description": "Created entry or matching creation replay",
             "content": {
               "application/json": {
                 "schema": {
@@ -2154,6 +2156,7 @@
         },
         "responses": {
           "200": {
+            "description": "Updated entry",
             "content": {
               "application/json": {
                 "schema": {
