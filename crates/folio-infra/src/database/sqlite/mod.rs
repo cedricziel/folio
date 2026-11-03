@@ -1,4 +1,6 @@
 //! SQLite adapters
+mod metadata_option_repo;
+pub use metadata_option_repo::SqliteMetadataOptionRepository;
 
 mod metadata_repo;
 pub use metadata_repo::SqliteMetadataFieldRepository;
