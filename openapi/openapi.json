@@ -5542,6 +5542,25 @@
             ],
             "format": "date-time"
           },
+          "review_origin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "source": {
             "$ref": "#/components/schemas/DocumentSource",
             "description": "How the document entered Folio"

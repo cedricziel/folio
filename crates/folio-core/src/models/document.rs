@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentDate, DocumentSource, Id, UserId, VaultId};
+use super::{DocumentDate, DocumentSource, Id, ReviewOrigin, UserId, VaultId};
 
 /// A stage of the document processing pipeline that is tracked per document
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +89,14 @@ pub struct Document {
     #[serde(default)]
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
     pub document_date: Option<DocumentDate>,
+    #[serde(default)]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub reviewed_by: Option<UserId>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub review_origin: Option<ReviewOrigin>,
 
     /// Document title
     pub title: String,
@@ -148,6 +156,9 @@ impl Document {
             vault_id,
             uploaded_by: None,
             document_date: None,
+            reviewed_at: None,
+            reviewed_by: None,
+            review_origin: None,
             title: title.into(),
             content: None,
             original_filename: None,
