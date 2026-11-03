@@ -47,7 +47,7 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
 /// The document must exist in `vault`
 async fn require_document(conn: &mut PgConnection, vault: VaultId, id: Id) -> Result<()> {
     let found: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        "SELECT 1 FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL) FOR UPDATE",
     )
     .bind(id)
     .bind(vault.0)
@@ -435,7 +435,7 @@ fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Resul
 impl DocumentRepository for PostgresDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
         let row: Option<(Uuid,)> =
-            sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1 AND deleted_at IS NULL")
+            sqlx::query_as("SELECT vault_id FROM documents WHERE id = $1 AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)")
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await

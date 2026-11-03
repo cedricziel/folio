@@ -153,7 +153,7 @@ fn not_found(entity_type: &'static str, id: Id) -> Error {
 /// The document must exist in `vault`
 async fn require_document(conn: &mut SqliteConnection, vault: VaultId, id: Id) -> Result<()> {
     let found: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+        "SELECT 1 FROM documents WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)",
     )
     .bind(id.to_string())
     .bind(vault.to_string())
@@ -459,7 +459,7 @@ fn push_filter(qb: &mut QueryBuilder<Sqlite>, filter: DocumentFilter) -> Result<
 impl DocumentRepository for SqliteDocumentRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
         let row: Option<(String,)> =
-            sqlx::query_as("SELECT vault_id FROM documents WHERE id = ? AND deleted_at IS NULL")
+            sqlx::query_as("SELECT vault_id FROM documents WHERE id = ? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)")
                 .bind(id.to_string())
                 .fetch_optional(&self.pool)
                 .await

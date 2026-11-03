@@ -50,6 +50,7 @@ async fn load(
                 j.correlation_id::text, j.causation_id::text
          FROM documents d JOIN jobs j ON j.id = $1
          JOIN processing_stage_runs r ON r.document_id = d.id AND r.job_id = j.id
+         JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
          WHERE d.id = $2 AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
            AND d.vault_id = j.origin_vault_id
            AND r.vault_id = j.origin_vault_id AND r.group_id = j.processing_group_id
@@ -60,7 +61,7 @@ async fn load(
            AND j.job_type = $5 AND j.payload->>'type' = CASE j.job_type
                WHEN 'process_document' THEN 'ProcessDocument' WHEN 'extract_text' THEN 'ExtractText' END
            AND j.payload->'data'->>'document_id' = d.id::text
-         FOR UPDATE OF r",
+         FOR UPDATE OF r FOR SHARE OF v",
     )
     .bind(job_id)
     .bind(document_id)

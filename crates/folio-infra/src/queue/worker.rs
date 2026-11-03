@@ -1335,6 +1335,41 @@ mod tests {
         assert_eq!(events, 0);
     }
 
+    #[tokio::test]
+    async fn queued_processing_does_not_write_into_a_deleted_vault() {
+        let f = fixture("OCR").await;
+        f.queue
+            .enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        sqlx::query(
+            "UPDATE vaults SET deleted_at = '2026-11-03T00:00:00Z'
+             WHERE id = (SELECT vault_id FROM documents WHERE id = ?)",
+        )
+        .bind(f.doc_id.to_string())
+        .execute(&f.pool)
+        .await
+        .unwrap();
+        f.worker.process_claim(&job).await.unwrap();
+        let content: Option<String> =
+            sqlx::query_scalar("SELECT content FROM documents WHERE id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(content, None);
+        let chunks: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM document_chunks WHERE document_id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(chunks, 0);
+    }
+
     async fn drain(f: &Fixture) {
         while let Some(job) = f.queue.dequeue().await.unwrap() {
             f.worker.process_job(&job.job_type).await.unwrap();
