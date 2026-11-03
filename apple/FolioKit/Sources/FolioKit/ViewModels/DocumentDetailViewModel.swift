@@ -24,6 +24,8 @@ public final class DocumentDetailViewModel {
     public private(set) var preview = Preview.loading
     public private(set) var metadata: [MetadataField]
     public private(set) var metadataFailure: String?
+    public private(set) var savingReview = false
+    public private(set) var reviewFailure: String?
     /// The document as Spotlight and Shortcuts know it.
     public let summary: DocumentSummary
 
@@ -49,6 +51,31 @@ public final class DocumentDetailViewModel {
             fields.append(MetadataField(label: "File", value: filename, isRecord: true))
         }
         metadata = fields
+    }
+
+    public var reviewDescription: String? {
+        guard let reviewed = document.reviewed else { return nil }
+        guard reviewed else { return "Not reviewed" }
+        if document.reviewOrigin == "legacy_classification" { return "Filed before review tracking" }
+        if document.reviewOrigin == "system" { return "Reviewed by system" }
+        if let reviewer = document.reviewedBy { return "Reviewed by \(reviewer)" }
+        return "Reviewed"
+    }
+
+    public func saveReview(_ reviewed: Bool) async throws {
+        guard document.canReviewDocument else {
+            throw FolioError.server(status: 403, message: "Review is unavailable for this document.")
+        }
+        guard !savingReview else { return }
+        savingReview = true
+        reviewFailure = nil
+        defer { savingReview = false }
+        do {
+            applyMetadata(try await service.setDocumentReview(reviewed, for: document.id))
+        } catch {
+            reviewFailure = error.localizedDescription
+            throw error
+        }
     }
 
     public func saveDocumentDate(_ date: DocumentDate?) async throws {

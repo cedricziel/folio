@@ -25,6 +25,7 @@ struct InboxView: View {
     @State private var trashHistory: DocumentTrashHistory
     @State private var uploads: UploadViewModel
     @State private var showFileImporter = false
+    @State private var showReviewFilters = false
     @State private var isDropTargeted = false
     @State private var isImporting = false
     @State private var showPhotosPicker = false
@@ -266,6 +267,9 @@ struct InboxView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: uploads.state != .idle)
         .toolbar { toolbar }
+        .sheet(isPresented: $showReviewFilters) {
+            DocumentReviewFilters(filter: list.filter) { list.filter = $0 }
+        }
         #if os(iOS)
             .safeAreaInset(edge: .bottom) { scanButton }
             .fullScreenCover(isPresented: $showScanner) {
@@ -468,6 +472,12 @@ struct InboxView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            if list.supportsReviewFilters || list.filter.requiresReviewSupport {
+                Button(
+                    list.filter.requiresReviewSupport ? "Filters applied" : "Filters",
+                    systemImage: "line.3.horizontal.decrease"
+                ) { showReviewFilters = true }
+            }
             Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                 .help("Upload files (\u{2318}O)")
                 .disabled(!canAcceptImport)
