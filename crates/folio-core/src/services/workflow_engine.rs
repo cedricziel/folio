@@ -128,7 +128,11 @@ impl WorkflowEngine {
         let mut runs = Vec::new();
         let mut first_error: Option<Error> = None;
         for workflow in candidates {
-            if !workflow.conditions.matches_snapshot(&ctx) {
+            let matches = match &outbox_event.envelope {
+                Some(event) => workflow.conditions.matches_occurrence(Some(&ctx), event),
+                None => workflow.conditions.matches_snapshot(&ctx),
+            };
+            if !matches {
                 continue;
             }
             let outcome = async {

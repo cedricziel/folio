@@ -216,6 +216,10 @@ recursive schema references, and preserving API-created groups through HTML edit
 The core suite also verifies trigger registration, duplicate and unknown selections,
 condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
+The same core and API suites cover subject and actor conditions, explicit system
+attribution, mixed event/document branches, unavailable entry body filters, and
+preserving event filters through HTML edits. The workflow suite verifies that
+captured actors override ambient dispatcher context without granting private access.
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run
