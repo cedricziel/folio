@@ -121,6 +121,14 @@ fn url_rejects_embedded_credentials() {
 }
 
 #[test]
+fn url_limit_applies_to_the_normalized_form() {
+    let url = format!("https://example.com/{}", "\u{e4}".repeat(3_000));
+    assert!(MetadataValue::Url(url)
+        .validate(MetadataKind::Url, false)
+        .is_err());
+}
+
+#[test]
 fn value_cannot_be_reinterpreted_as_another_type() {
     assert!(MetadataValue::Text("true".into())
         .validate(MetadataKind::Boolean, false)

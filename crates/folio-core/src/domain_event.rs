@@ -6,6 +6,23 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::models::{UserId, VaultId};
 
+pub const DOCUMENT_METADATA_CHANGED: &str = "document.metadata.changed";
+const MAX_EVENT_DATA_BYTES: usize = 65_536;
+const MAX_METADATA_SNAPSHOT_BYTES: usize = 1_048_576;
+
+#[derive(Default)]
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DomainEventSubject {
@@ -65,7 +82,8 @@ impl DomainEventEnvelope {
     /// Capture a committed transition from server context and an allowlisted producer payload.
     ///
     /// Producers must select the data fields permitted for the audience. Invalid
-    /// identifiers, mismatched document targets, and payloads above 64 KiB fail validation.
+    /// identifiers and mismatched document targets fail validation. Data is capped at 64 KiB,
+    /// or 1 MiB for vault-visible document metadata transitions with complete value snapshots.
     pub fn new(
         event_type: impl Into<String>,
         vault_id: VaultId,
@@ -75,6 +93,7 @@ impl DomainEventEnvelope {
         data: Value,
     ) -> Result<Self> {
         let event_id = Uuid::new_v4();
+        let lineage = crate::mutation::current_lineage();
         let envelope = Self {
             schema_version: 1,
             event_id,
@@ -84,8 +103,8 @@ impl DomainEventEnvelope {
             vault_id,
             subject,
             actor_id: crate::mutation::current_actor(),
-            correlation_id: event_id,
-            causation_id: None,
+            correlation_id: lineage.map_or(event_id, |lineage| lineage.correlation_id),
+            causation_id: lineage.and_then(|lineage| lineage.causation_id),
             document_id,
             audience,
             data,
@@ -164,15 +183,19 @@ impl DomainEventEnvelope {
                 return Err(invalid("Domain event audience requires a user"));
             }
         }
-        if !self.data.is_object()
-            || serde_json::to_vec(&self.data)
-                .map_err(|e| invalid(&e.to_string()))?
-                .len()
-                > 65536
+        let max_data_bytes = if self.event_type == DOCUMENT_METADATA_CHANGED
+            && self.audience == EventAudience::Vault
         {
-            return Err(invalid(
-                "Domain event data must be an object of at most 64 KiB",
-            ));
+            MAX_METADATA_SNAPSHOT_BYTES
+        } else {
+            MAX_EVENT_DATA_BYTES
+        };
+        let mut size = ByteCount::default();
+        serde_json::to_writer(&mut size, &self.data).map_err(|e| invalid(&e.to_string()))?;
+        if !self.data.is_object() || size.0 > max_data_bytes {
+            return Err(invalid(&format!(
+                "Domain event data must be an object of at most {max_data_bytes} bytes"
+            )));
         }
         Ok(())
     }
@@ -245,9 +268,14 @@ impl TryFrom<EnvelopeFields> for DomainEventEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutation::{with_lineage, MutationLineage};
     use serde_json::json;
 
     fn envelope() -> DomainEventEnvelope {
+        try_envelope().unwrap()
+    }
+
+    fn try_envelope() -> crate::Result<DomainEventEnvelope> {
         DomainEventEnvelope::new(
             "tag.created",
             VaultId::new(),
@@ -259,7 +287,51 @@ mod tests {
             EventAudience::Vault,
             json!({"name": "receipts"}),
         )
-        .unwrap()
+    }
+
+    #[test]
+    fn constructor_defaults_to_a_new_causal_chain_without_lineage() {
+        let event = envelope();
+        assert_eq!(event.correlation_id(), event.event_id());
+        assert_eq!(event.causation_id(), None);
+    }
+
+    #[tokio::test]
+    async fn constructor_captures_trusted_server_lineage() {
+        let lineage = MutationLineage {
+            correlation_id: Uuid::from_u128(1),
+            causation_id: Some(Uuid::from_u128(2)),
+        };
+        with_lineage(Some(lineage), async {
+            let event = envelope();
+            assert_eq!(event.correlation_id(), lineage.correlation_id);
+            assert_eq!(event.causation_id(), lineage.causation_id);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn constructor_rejects_nil_correlation_from_scoped_lineage() {
+        let lineage = MutationLineage {
+            correlation_id: Uuid::nil(),
+            causation_id: None,
+        };
+        with_lineage(Some(lineage), async {
+            assert!(matches!(try_envelope(), Err(Error::Validation(_))));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn constructor_rejects_nil_causation_from_scoped_lineage() {
+        let lineage = MutationLineage {
+            correlation_id: Uuid::from_u128(1),
+            causation_id: Some(Uuid::nil()),
+        };
+        with_lineage(Some(lineage), async {
+            assert!(matches!(try_envelope(), Err(Error::Validation(_))));
+        })
+        .await;
     }
 
     #[test]
@@ -350,6 +422,90 @@ mod tests {
         let mut data = serde_json::to_value(envelope()).unwrap();
         data["data"] = json!({"name": "x".repeat(65537)});
         assert!(serde_json::from_value::<DomainEventEnvelope>(data).is_err());
+    }
+
+    #[test]
+    fn metadata_changes_retain_maximum_long_text_before_and_after() {
+        let document = Uuid::new_v4();
+        let before = "\u{0001}".repeat(65_536);
+        let after = "\u{0002}".repeat(65_536);
+        let event = DomainEventEnvelope::new(
+            DOCUMENT_METADATA_CHANGED,
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            json!({"changes": [{"field_id": Uuid::new_v4(), "kind": "long_text",
+                "before": {"kind": "long_text", "value": before},
+                "after": {"kind": "long_text", "value": after}}]}),
+        )
+        .expect("valid long text must fit an immutable transition event");
+        let bytes = serde_json::to_vec(&event).unwrap();
+        let decoded: DomainEventEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded.data()["changes"][0]["before"]["value"], before);
+        assert_eq!(decoded.data()["changes"][0]["after"]["value"], after);
+    }
+
+    #[test]
+    fn metadata_snapshot_budget_is_bounded_on_construction_and_decode() {
+        let document = Uuid::new_v4();
+        let overhead = serde_json::to_vec(&json!({"text": ""})).unwrap().len();
+        let payload = json!({"text": "x".repeat(1_048_576 - overhead)});
+        assert_eq!(serde_json::to_vec(&payload).unwrap().len(), 1_048_576);
+        let event = DomainEventEnvelope::new(
+            DOCUMENT_METADATA_CHANGED,
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            payload.clone(),
+        )
+        .unwrap();
+        let encoded = serde_json::to_value(&event).unwrap();
+        assert!(serde_json::from_value::<DomainEventEnvelope>(encoded.clone()).is_ok());
+        let mut oversized = payload;
+        oversized["text"] = json!("x".repeat(1_048_577 - overhead));
+        assert!(DomainEventEnvelope::new(
+            DOCUMENT_METADATA_CHANGED,
+            event.vault_id(),
+            event.subject().clone(),
+            Some(document),
+            EventAudience::Vault,
+            oversized.clone(),
+        )
+        .is_err());
+        let mut oversized_envelope = encoded;
+        oversized_envelope["data"] = oversized;
+        assert!(serde_json::from_value::<DomainEventEnvelope>(oversized_envelope).is_err());
+    }
+
+    #[test]
+    fn extended_snapshot_budget_requires_exact_event_type_and_vault_audience() {
+        let document = Uuid::new_v4();
+        let event = DomainEventEnvelope::new(
+            DOCUMENT_METADATA_CHANGED,
+            VaultId::new(),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            json!({"text": "x".repeat(65_537)}),
+        )
+        .unwrap();
+        let mut wrong_event = serde_json::to_value(&event).unwrap();
+        wrong_event["event_type"] = json!("document.metadata.changed_extra");
+        assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_event).is_err());
+        let mut wrong_audience = serde_json::to_value(&event).unwrap();
+        wrong_audience["audience"] = serde_json::to_value(EventAudience::Owners).unwrap();
+        assert!(serde_json::from_value::<DomainEventEnvelope>(wrong_audience).is_err());
     }
 
     #[tokio::test]

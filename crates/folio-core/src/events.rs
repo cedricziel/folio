@@ -8,7 +8,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
-use crate::models::{Document, DocumentSource, Id, NamedRef, Tag, VaultId};
+use crate::models::{Document, DocumentDate, DocumentSource, Id, NamedRef, Tag, VaultId};
 
 /// What a document looked like just before it was deleted
 ///
@@ -68,6 +68,8 @@ pub enum DocumentEvent {
     OcrComplete { document_id: Uuid },
     /// Document moved to trash.
     Trashed { document_id: Uuid },
+    /// Permanent deletion was requested.
+    PurgeRequested { document_id: Uuid },
     /// Document returned from trash.
     Restored { document_id: Uuid },
     /// Document was permanently deleted
@@ -90,6 +92,7 @@ impl DocumentEvent {
             | Self::ThumbnailReady { document_id }
             | Self::OcrComplete { document_id }
             | Self::Trashed { document_id }
+            | Self::PurgeRequested { document_id }
             | Self::Restored { document_id }
             | Self::Deleted { document_id, .. }
             | Self::Processed { document_id } => *document_id,
@@ -104,6 +107,7 @@ impl DocumentEvent {
             Self::ThumbnailReady { .. } => "thumbnail_ready",
             Self::OcrComplete { .. } => "ocr_complete",
             Self::Trashed { .. } => "trashed",
+            Self::PurgeRequested { .. } => "purge_requested",
             Self::Restored { .. } => "restored",
             Self::Deleted { .. } => "deleted",
             Self::Processed { .. } => "processed",
@@ -125,6 +129,8 @@ pub enum EventOrigin {
 /// Immutable metadata captured in the transaction that produced an event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<DocumentDate>,
     pub document_id: Id,
     pub vault_id: VaultId,
     pub title: String,
@@ -144,6 +150,7 @@ impl From<&DeletedDocument> for EventSnapshot {
     fn from(snapshot: &DeletedDocument) -> Self {
         let doc = &snapshot.document;
         Self {
+            document_date: doc.document_date,
             document_id: doc.id,
             vault_id: doc.vault_id,
             title: doc.title.clone(),
@@ -388,6 +395,7 @@ pub fn document_event_envelope(
             };
             let document = &snapshot.document;
             captured = EventSnapshot {
+                document_date: document.document_date,
                 document_id: document.id,
                 vault_id: document.vault_id,
                 title: document.title.clone(),
@@ -418,7 +426,7 @@ pub fn document_event_envelope(
         Some(event.document_id()), EventAudience::Vault,
         serde_json::json!({
             "title": context.title, "original_filename": context.original_filename,
-            "mime_type": context.mime_type, "created_at": context.created_at,
+            "mime_type": context.mime_type, "created_at": context.created_at, "document_date": context.document_date,
             "correspondent_id": context.correspondent_id, "correspondent_name": context.correspondent_name,
             "document_type_id": context.document_type_id, "document_type_name": context.document_type_name,
             "tags": context.tags,
@@ -432,7 +440,7 @@ pub fn document_event_envelope(
 /// Durable consumers read the outbox, and reconnecting clients replay from it.
 #[derive(Clone)]
 pub struct EventBroadcaster {
-    sender: broadcast::Sender<OutboxEvent>,
+    sender: broadcast::Sender<Arc<OutboxEvent>>,
 }
 
 impl EventBroadcaster {
@@ -445,11 +453,11 @@ impl EventBroadcaster {
     /// Send an event to all subscribers
     pub fn send(&self, event: OutboxEvent) {
         // Ignore send errors (no subscribers)
-        let _ = self.sender.send(event);
+        let _ = self.sender.send(Arc::new(event));
     }
 
     /// Subscribe to events
-    pub fn subscribe(&self) -> broadcast::Receiver<OutboxEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<OutboxEvent>> {
         self.sender.subscribe()
     }
 }
@@ -466,6 +474,7 @@ mod tests {
 
     fn context() -> EventSnapshot {
         EventSnapshot {
+            document_date: None,
             document_id: Id::new_v4(),
             vault_id: VaultId::new(),
             title: "at occurrence".into(),

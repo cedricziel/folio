@@ -99,6 +99,21 @@ async fn update_document_changes_fields() {
     )
     .await;
 
+    let events = fx
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100)
+        .await
+        .unwrap();
+    let title_event = events
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .find(|event| event.event_type() == "document.title_changed")
+        .unwrap();
+    assert_eq!(title_event.document_id(), Some(doc.id));
+    assert_eq!(title_event.vault_id(), fx.vault);
+    assert_eq!(title_event.data()["before"], "Scan 001");
+    assert_eq!(title_event.data()["after"], "Rent contract");
+
     let out = call_ok(&client, "get_document", json!({"id": id})).await;
     assert_eq!(out["title"], "Rent contract");
     assert_eq!(out["correspondent"], "ACME Housing");
@@ -434,6 +449,26 @@ async fn remove_tags_ignores_unknown_names() {
     .await;
 
     assert_eq!(out["tags"], json!(["keep"]));
+}
+
+#[tokio::test]
+async fn remove_tags_detaches_a_retained_deleted_tag() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Doc", "x").await;
+    let client = fx.in_process_client().await;
+    let id = doc.id.to_string();
+    call_ok(&client, "add_tags", json!({"id": id, "tags": ["retired"]})).await;
+    let retired = fx.documents.get_tags(fx.vault, doc.id).await.unwrap()[0].id;
+    fx.tags.delete(fx.vault, retired).await.unwrap();
+
+    let out = call_ok(
+        &client,
+        "remove_tags",
+        json!({"id": id, "tags": ["Retired"]}),
+    )
+    .await;
+
+    assert_eq!(out["tags"], json!([]));
 }
 
 #[tokio::test]

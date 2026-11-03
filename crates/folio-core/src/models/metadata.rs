@@ -41,6 +41,21 @@ pub enum MetadataValue {
 }
 
 impl MetadataKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::LongText => "long_text",
+            Self::Boolean => "boolean",
+            Self::Integer => "integer",
+            Self::Decimal => "decimal",
+            Self::Date => "date",
+            Self::Money => "money",
+            Self::Select => "select",
+            Self::Url => "url",
+            Self::DocumentLink => "document_link",
+        }
+    }
+
     /// Validate an explicit replacement or clear; callers omit unchanged fields entirely.
     pub fn validate_value(
         self,
@@ -131,7 +146,9 @@ impl MetadataValue {
                         "URL must be absolute HTTP or HTTPS without credentials or whitespace",
                     );
                 }
-                Ok(Self::Url(parsed.into()))
+                let normalized: String = parsed.into();
+                validate_text(&normalized, 8_192, true)?;
+                Ok(Self::Url(normalized))
             }
             value => Ok(value),
         }

@@ -6,6 +6,9 @@ struct WorkspaceView: View {
     let service: any FolioService
     let onSignOut: () -> Void
     @State private var showTaxonomy = false
+    @State private var showSavedViewEditor = false
+    @State private var editingSavedView: SavedView?
+    @State private var pendingViewDelete: SavedView?
     @State private var workspace: WorkspaceViewModel
 
     init(
@@ -43,6 +46,30 @@ struct WorkspaceView: View {
                     }
                 }
                 if workspace.isReady {
+                    Section("Saved views") {
+                        ForEach(workspace.savedViews) { view in
+                            Button {
+                                Task { await workspace.openSavedView(view.id) }
+                            } label: {
+                                Label(view.name, systemImage: view.visibility == .private ? "bookmark" : "person.2")
+                            }
+                            .contextMenu {
+                                Button("Edit saved view") {
+                                    editingSavedView = view
+                                    showSavedViewEditor = true
+                                }
+                                Button("Delete saved view", role: .destructive) { pendingViewDelete = view }
+                            }
+                        }
+                        if let message = workspace.savedViewsError {
+                            Text(message).font(FolioTheme.Typography.bodySm).foregroundStyle(Color.danger)
+                            Button("Try again") { Task { await workspace.loadSavedViews() } }
+                        }
+                        if workspace.isLoadingSavedViews { ProgressView() }
+                        if workspace.hasMoreSavedViews {
+                            Button("More saved views") { Task { await workspace.loadSavedViews(more: true) } }
+                        }
+                    }
                     Section("Manage") {
                         Button {
                             showTaxonomy = true
@@ -66,8 +93,29 @@ struct WorkspaceView: View {
                     onNavigate: { workspace.destination = $0 },
                     onOpenDocument: { workspace.open($0, vaultID: $1) }
                 )
-                .id("\(vaultID.uuidString)-\(workspace.destination.rawValue)")
                 .environment(\.thumbnailCache, workspace.thumbnails)
+
+                .id(workspace.session.id)
+                .toolbar {
+                    if let selected = workspace.savedViews.first(where: { $0.id == workspace.selectedSavedViewID }) {
+                        ToolbarItem(placement: .primaryAction) {
+                            Menu("Saved view", systemImage: "ellipsis.circle") {
+                                Button("Edit saved view") {
+                                    editingSavedView = selected
+                                    showSavedViewEditor = true
+                                }
+                                Button("Delete saved view", role: .destructive) { pendingViewDelete = selected }
+                            }
+                        }
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Save current view", systemImage: "bookmark.badge.plus") {
+                            editingSavedView = nil
+                            showSavedViewEditor = true
+                        }
+                        .disabled(workspace.destination == .inbox)
+                    }
+                }
             } else if let error = workspace.discoveryError {
                 ContentUnavailableView {
                     Label("Couldn't load vaults", systemImage: "exclamationmark.triangle")
@@ -89,6 +137,27 @@ struct WorkspaceView: View {
         }
         .onChange(of: workspace.selectedVaultID) { showTaxonomy = false }
         .task { await workspace.loadVaults() }
+        .task(id: workspace.selectedVaultID) { await workspace.loadSavedViews() }
+        .sheet(isPresented: $showSavedViewEditor) {
+            SavedViewEditor(workspace: workspace, existing: editingSavedView)
+        }
+        .onChange(of: workspace.selectedVaultID) { _, _ in
+            showSavedViewEditor = false
+            editingSavedView = nil
+            pendingViewDelete = nil
+        }
+        .confirmationDialog(
+            "Delete saved view?",
+            isPresented: Binding(
+                get: { pendingViewDelete != nil }, set: { if !$0 { pendingViewDelete = nil } }
+            ), presenting: pendingViewDelete
+        ) { view in
+            Button("Delete saved view", role: .destructive) {
+                Task { await workspace.deleteSavedView(view.id) }
+            }
+        } message: { _ in
+            Text("Your documents will remain in the library.")
+        }
         .alert(
             "Document unavailable",
             isPresented: Binding(

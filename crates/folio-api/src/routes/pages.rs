@@ -47,6 +47,7 @@ pub fn router() -> Router<AppState> {
             post(set_document_correspondent),
         )
         .route("/documents/{id}/document_type", post(set_document_type))
+        .route("/documents/{id}/date", post(set_document_date))
         .route("/documents/{id}/tags", post(add_document_tag))
         .route("/documents/{id}/tags/{tag_id}", post(remove_document_tag))
         .route("/documents/{id}/reprocess", post(reprocess_document))
@@ -56,6 +57,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
+    save_view_url: String,
     sidebar: Sidebar,
     heading: &'static str,
     lede: &'static str,
@@ -150,7 +152,21 @@ async fn index_page(
         )
     };
 
+    let save_view_url = {
+        let mut saved_query = url::form_urlencoded::Serializer::new(String::new());
+        if let Some(id) = correspondent_id {
+            saved_query.append_pair("correspondent_id", &id.to_string());
+        }
+        if let Some(id) = document_type_id {
+            saved_query.append_pair("document_type_id", &id.to_string());
+        }
+        if let Some(id) = tag_id {
+            saved_query.append_pair("tag_id", &id.to_string());
+        }
+        format!("/saved-views/new?{}", saved_query.finish())
+    };
     let template = IndexTemplate {
+        save_view_url,
         sidebar,
         heading,
         lede,
@@ -755,4 +771,43 @@ async fn remove_document_tag(
         .await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocumentDateForm {
+    document_date: Option<String>,
+    clear: Option<bool>,
+}
+
+async fn set_document_date(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    axum::extract::Form(form): axum::extract::Form<DocumentDateForm>,
+) -> ApiResult<Response> {
+    let value = if form.clear == Some(true) {
+        None
+    } else {
+        let raw = form
+            .document_date
+            .ok_or_else(|| crate::error::ApiError::bad_request("Missing document_date"))?;
+        if raw.is_empty() {
+            None
+        } else {
+            Some(raw.parse().map_err(crate::error::ApiError::bad_request)?)
+        }
+    };
+    state
+        .document_repo
+        .update(
+            vault,
+            id,
+            UpdateDocument {
+                document_date: Some(value),
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Redirect::to(&crate::vault::url(&format!("/documents/{id}"))).into_response())
 }

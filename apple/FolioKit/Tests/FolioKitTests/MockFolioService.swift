@@ -3,10 +3,96 @@ import Foundation
 @testable import FolioKit
 
 actor MockFolioService: FolioService {
+    private var savedViewValues: [SavedView] = []
+    private var savedViewsGate: CheckedContinuation<Void, Never>?
+    private var savedViewsStarted: CheckedContinuation<Void, Never>?
+    private var suspendSavedViewRequests = false
+
+    func suspendSavedViews() { suspendSavedViewRequests = true }
+    func waitForSavedViewsRequest() async {
+        guard savedViewsGate == nil else { return }
+        await withCheckedContinuation { savedViewsStarted = $0 }
+    }
+    func releaseSavedViews() {
+        suspendSavedViewRequests = false
+        savedViewsGate?.resume()
+        savedViewsGate = nil
+    }
+    func setSavedViews(_ views: [SavedView]) { savedViewValues = views }
+
+    private var detailGate: CheckedContinuation<Void, Never>?
+    private var detailStarted: CheckedContinuation<Void, Never>?
+    private var suspendDetailRequests = false
+
+    func suspendDocumentReads() { suspendDetailRequests = true }
+    func waitForDocumentRead() async {
+        guard detailGate == nil else { return }
+        await withCheckedContinuation { detailStarted = $0 }
+    }
+    func releaseDocumentReads() {
+        suspendDetailRequests = false
+        detailGate?.resume()
+        detailGate = nil
+    }
+
+    func savedViews(after: UUID?) async throws -> [SavedView] {
+        if let failure { throw failure }
+        let values = Array(
+            savedViewValues.sorted { $0.id.uuidString < $1.id.uuidString }
+                .filter { view in after.map { view.id.uuidString > $0.uuidString } ?? true }.prefix(50))
+        if suspendSavedViewRequests {
+            await withCheckedContinuation { continuation in
+                savedViewsGate = continuation
+                savedViewsStarted?.resume()
+                savedViewsStarted = nil
+            }
+        }
+        return values
+    }
+
+    func savedView(id: UUID) async throws -> SavedView {
+        guard let view = savedViewValues.first(where: { $0.id == id }) else {
+            throw FolioError.server(status: 404, message: "Saved view not found")
+        }
+        return view
+    }
+
+    func saveView(_ draft: SavedViewDraft) async throws -> SavedView {
+        if let failure { throw failure }
+        let view = SavedView(
+            id: UUID(), vaultID: vaultCatalog.defaultVaultID ?? Self.defaultVault.id,
+            ownerID: "test-user", name: draft.name, visibility: draft.visibility, query: draft.query,
+            presentation: draft.presentation, createdAt: .distantPast, updatedAt: .distantPast,
+            createdBy: "test-user", updatedBy: "test-user")
+        savedViewValues.append(view)
+        return view
+    }
+
+    func updateSavedView(id: UUID, draft: SavedViewDraft) async throws -> SavedView {
+        if let failure { throw failure }
+        let original = try await savedView(id: id)
+        let view = SavedView(
+            id: id, vaultID: original.vaultID, ownerID: original.ownerID,
+            name: draft.name, visibility: draft.visibility,
+            query: draft.replacesQuery ? draft.query : original.query, presentation: draft.presentation,
+            createdAt: original.createdAt, updatedAt: original.updatedAt.addingTimeInterval(1),
+            createdBy: original.createdBy, updatedBy: "test-user")
+        savedViewValues.removeAll { $0.id == id }
+        savedViewValues.append(view)
+        return view
+    }
+
+    func deleteSavedView(id: UUID) async throws {
+        savedViewValues.removeAll { $0.id == id }
+    }
+
     static let defaultVault = Vault(
         id: UUID(uuidString: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff")!, name: "Personal", role: .owner
     )
     static let defaultCatalog = VaultCatalog(vaults: [defaultVault], defaultVaultID: defaultVault.id)
+    private var entries: [DocumentEntry] = []
+    private var entryReceipts: [UUID: DocumentEntry] = [:]
+    private var loseFirstEntryResponse: Bool
     private var vaultCatalog: VaultCatalog
     nonisolated let vaultServices: [UUID: any FolioService]
     var documentList: [Document] = []
@@ -33,13 +119,58 @@ actor MockFolioService: FolioService {
 
     init(
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
-        vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:]
+        vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:],
+        loseFirstEntryResponse: Bool = false
     ) {
+        self.loseFirstEntryResponse = loseFirstEntryResponse
         vaultCatalog = vaults
         self.vaultServices = vaultServices
         documentList = documents
         correspondentList = correspondents
         typeList = types
+    }
+
+    func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) throws -> DocumentEntryPage {
+        if let failure { throw failure }
+        return DocumentEntryPage(
+            entries: entries.filter { $0.documentID == documentID && $0.kind == kind }, nextCursor: nil, canCreate: true
+        )
+    }
+
+    func createEntry(documentID: UUID, kind: DocumentEntryKind, body: String, key: UUID) throws -> DocumentEntry {
+        if let failure { throw failure }
+        if let receipt = entryReceipts[key] { return receipt }
+        let now = Date()
+        let entry = DocumentEntry(
+            id: UUID(), documentID: documentID, vaultID: Self.defaultVault.id,
+            kind: kind, body: body, createdAt: now, updatedAt: now, createdBy: "Fixture author",
+            canEdit: true, canDelete: true)
+        entries.append(entry)
+        entryReceipts[key] = entry
+        if loseFirstEntryResponse {
+            loseFirstEntryResponse = false
+            throw FolioError.unreachable
+        }
+        return entry
+    }
+
+    func updateEntry(documentID: UUID, entryID: UUID, body: String) throws -> DocumentEntry {
+        if let failure { throw failure }
+        guard let index = entries.firstIndex(where: { $0.id == entryID && $0.documentID == documentID }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        let original = entries[index]
+        let entry = DocumentEntry(
+            id: original.id, documentID: documentID, vaultID: original.vaultID,
+            kind: original.kind, body: body, createdAt: original.createdAt, updatedAt: Date(),
+            createdBy: original.createdBy, canEdit: true, canDelete: true)
+        entries[index] = entry
+        return entry
+    }
+
+    func deleteEntry(documentID: UUID, entryID: UUID) throws {
+        if let failure { throw failure }
+        entries.removeAll { $0.id == entryID && $0.documentID == documentID }
     }
 
     func vaults() async throws -> VaultCatalog {
@@ -152,10 +283,26 @@ actor MockFolioService: FolioService {
         return try await DocumentPage(vaultID: pageVaultID, documents: documents(matching: query.text))
     }
 
+    func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
+        if let failure { throw failure }
+        guard let index = documentList.firstIndex(where: { $0.id == id }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        documentList[index].documentDate = date
+        return documentList[index]
+    }
+
     func document(id: Document.ID) async throws -> Document {
         if let failure { throw failure }
         guard let document = documentList.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: nil)
+        }
+        if suspendDetailRequests {
+            await withCheckedContinuation { continuation in
+                detailGate = continuation
+                detailStarted?.resume()
+                detailStarted = nil
+            }
         }
         return document
     }

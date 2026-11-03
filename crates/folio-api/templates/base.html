@@ -46,6 +46,40 @@ import { Application, Controller } from "@hotwired/stimulus";
 
 window.Stimulus = Application.start();
 
+document.addEventListener("turbo:submit-start", (event) => {
+  const form = event.target;
+  if (!form.closest("[data-entry-frame]") || !form.querySelector('[name="idempotency_key"]')) return;
+  const body = form.querySelector('textarea[name="body"]');
+  if (body) body.readOnly = true;
+});
+
+document.addEventListener("turbo:fetch-request-error", (event) => {
+  const frame = event.target.closest("[data-entry-frame]");
+  if (!frame) return;
+  let message = frame.querySelector("[data-entry-error]");
+  if (!message) {
+    message = document.createElement("p");
+    message.dataset.entryError = "";
+    message.setAttribute("role", "alert");
+    frame.prepend(message);
+  }
+  message.hidden = false;
+  const creation = event.target.closest("form")?.querySelector('[name="idempotency_key"]');
+  message.textContent = creation
+    ? "Could not connect. Your draft is still here. Retry to confirm it was saved, or cancel."
+    : "Could not connect. Try again to confirm the change.";
+});
+
+document.addEventListener("turbo:frame-missing", (event) => {
+  const frame = event.target;
+  if (!frame.matches("[data-entry-frame]")) return;
+  event.preventDefault();
+  const message = document.createElement("p");
+  message.setAttribute("role", "alert");
+  message.textContent = "Could not load this discussion. Check your access, then try again.";
+  frame.prepend(message);
+});
+
 document.addEventListener("turbo:before-stream-render", (event) => {
   const stream = event.target;
   if (stream.action !== "prepend" || stream.target !== "documents-rows") return;
@@ -1036,7 +1070,7 @@ Stimulus.register(
     connect() {
       this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
-      for (const name of ["trashed", "restored", "deleted"]) {
+      for (const name of ["trashed", "restored", "purge_requested", "deleted"]) {
         this.source.addEventListener(name, () => {
           if (!document.getElementById("trash-content")) return;
           if (this.refreshingTrash) {
@@ -1928,7 +1962,7 @@ Stimulus.register("integrations", class extends Controller {
           >
             {{ icons::inbox() }}
             <span class="side-label">Inbox</span>
-            {{ counts::inbox_badge(sidebar.inbox_count) }}
+            {% if sidebar.show_counts %}{{ counts::inbox_badge(sidebar.inbox_count) }}{% endif %}
           </a>
           <a
             class="side-link"
@@ -1938,7 +1972,7 @@ Stimulus.register("integrations", class extends Controller {
           >
             {{ icons::files() }}
             <span class="side-label">All documents</span>
-            {{ counts::all_badge(sidebar.total_count) }}
+            {% if sidebar.show_counts %}{{ counts::all_badge(sidebar.total_count) }}{% endif %}
           </a>
           <a
             class="side-link"
@@ -1985,6 +2019,11 @@ Stimulus.register("integrations", class extends Controller {
             </div>
           </details>
         </div>
+
+        {% if sidebar.user.is_some() %}
+        <p class="f-label side-heading">Saved views</p>
+        <a class="side-link" href="{{ "/saved-views"|vault_url }}"><span class="side-label">Browse saved views</span></a>
+        {% endif %}
 
         <div class="side-foot">
           <a

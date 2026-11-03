@@ -29,6 +29,7 @@ pub fn is_scoped_path(path: &str) -> bool {
         || [
             "/documents",
             "/trash",
+            "/saved-views",
             "/api/documents",
             "/api/tags",
             "/api/correspondents",
@@ -57,6 +58,23 @@ pub fn url(path: &str) -> String {
         }
     }
     path.to_owned()
+}
+
+pub fn can_edit_document(document: &Document) -> bool {
+    CURRENT_VAULT
+        .try_with(|ctx| {
+            ctx.user
+                .as_ref()
+                .map_or(ctx.role == VaultRole::Owner, |user| {
+                    ctx.role.permits(
+                        &VaultAction::EditDocument {
+                            uploaded_by: document.uploaded_by.clone(),
+                        },
+                        user,
+                    )
+                })
+        })
+        .unwrap_or(false)
 }
 
 pub mod filters {
@@ -93,19 +111,6 @@ pub mod filters {
 
     #[askama::filter_fn]
     pub fn can_edit_document(document: &Document, _: &dyn askama::Values) -> askama::Result<bool> {
-        Ok(CURRENT_VAULT
-            .try_with(|ctx| {
-                ctx.user
-                    .as_ref()
-                    .map_or(ctx.role == VaultRole::Owner, |user| {
-                        ctx.role.permits(
-                            &VaultAction::EditDocument {
-                                uploaded_by: document.uploaded_by.clone(),
-                            },
-                            user,
-                        )
-                    })
-            })
-            .unwrap_or(false))
+        Ok(super::can_edit_document(document))
     }
 }

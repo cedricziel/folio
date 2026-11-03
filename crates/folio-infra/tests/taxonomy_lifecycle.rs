@@ -29,6 +29,7 @@ async fn taxonomy_contract(db: Database) {
     assert_eq!(tag.created_by, Some(actor.clone()));
     assert_eq!(tag.updated_by, Some(actor));
     assert_eq!(tag.created_at, tag.updated_at);
+    let tag = r.tags.find_by_id(vault, tag.id).await.unwrap().unwrap();
     let correspondent = r
         .correspondents
         .create(
@@ -125,9 +126,36 @@ async fn taxonomy_contract(db: Database) {
         .is_err());
     assert!(r
         .documents
-        .set_tags(vault, document.id, &[tag.id])
+        .set_tags(vault, unclassified.id, &[tag.id])
         .await
         .is_err());
+    let live = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "Live".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    r.documents
+        .set_tags(vault, document.id, &[tag.id, live.id])
+        .await
+        .unwrap();
+    let mut kept: Vec<_> = r
+        .documents
+        .get_tags(vault, document.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|kept| kept.id)
+        .collect();
+    kept.sort();
+    let mut expected = vec![tag.id, live.id];
+    expected.sort();
+    assert_eq!(kept, expected);
     r.correspondents
         .delete(vault, correspondent.id)
         .await
@@ -195,6 +223,7 @@ async fn taxonomy_contract(db: Database) {
     assert!(restored.deleted_at.is_none());
     assert_eq!(restored.created_at, tag.created_at);
     assert_eq!(restored.created_by, tag.created_by);
+    let restored = r.tags.find_by_id(vault, tag.id).await.unwrap().unwrap();
     let unchanged = r.tags.restore(vault, tag.id).await.unwrap();
     assert_eq!(unchanged.updated_at, restored.updated_at);
     let updated = with_actor(

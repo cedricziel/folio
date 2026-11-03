@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Document, DocumentSource, Id, SourceConditions, VaultId};
+use super::{
+    Document, DocumentSource, Id, SourceConditions, VaultId, WorkflowEventConditions,
+    WorkflowEventIdentity, WorkflowTarget,
+};
 use crate::error::{Error, Result};
 
 /// Events a workflow can listen for
@@ -21,6 +24,14 @@ pub enum WorkflowTrigger {
     /// A document's metadata changed
     #[serde(rename = "document.updated")]
     DocumentUpdated,
+    #[serde(rename = "document.title_changed")]
+    DocumentTitleChanged,
+    #[serde(rename = "document.tags_changed")]
+    DocumentTagsChanged,
+    #[serde(rename = "document.correspondent_changed")]
+    DocumentCorrespondentChanged,
+    #[serde(rename = "document.document_type_changed")]
+    DocumentTypeChanged,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -31,10 +42,14 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 5] = [
+    pub const ALL: [WorkflowTrigger; 9] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
+        Self::DocumentTitleChanged,
+        Self::DocumentTagsChanged,
+        Self::DocumentCorrespondentChanged,
+        Self::DocumentTypeChanged,
         Self::DocumentDeleted,
         Self::IngestReceived,
     ];
@@ -45,6 +60,10 @@ impl WorkflowTrigger {
             Self::DocumentUploaded => "document.uploaded",
             Self::DocumentProcessed => "document.processed",
             Self::DocumentUpdated => "document.updated",
+            Self::DocumentTitleChanged => "document.title_changed",
+            Self::DocumentTagsChanged => "document.tags_changed",
+            Self::DocumentCorrespondentChanged => "document.correspondent_changed",
+            Self::DocumentTypeChanged => "document.document_type_changed",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
         }
@@ -56,8 +75,26 @@ impl WorkflowTrigger {
             Self::DocumentUploaded => "When a document is added",
             Self::DocumentProcessed => "When a document has been read",
             Self::DocumentUpdated => "When a document's details change",
+            Self::DocumentTitleChanged => "When a document title changes",
+            Self::DocumentTagsChanged => "When document tags change",
+            Self::DocumentCorrespondentChanged => "When a document correspondent changes",
+            Self::DocumentTypeChanged => "When a document type changes",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
+        }
+    }
+
+    pub fn target(&self) -> WorkflowTarget {
+        match self {
+            Self::DocumentUploaded
+            | Self::DocumentProcessed
+            | Self::DocumentUpdated
+            | Self::DocumentTitleChanged
+            | Self::DocumentTagsChanged
+            | Self::DocumentCorrespondentChanged
+            | Self::DocumentTypeChanged => WorkflowTarget::Document,
+            Self::DocumentDeleted => WorkflowTarget::Event,
+            Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
     }
 
@@ -105,9 +142,53 @@ pub struct WorkflowConditions {
     /// Where the document came from: folder path, email sender, subject, and so on
     #[serde(default, skip_serializing_if = "SourceConditions::is_empty")]
     pub source: SourceConditions,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<WorkflowEventConditions>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
+    pub all: Vec<WorkflowConditions>,
+
+    /// Omitted means unconstrained; an empty list never matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
+    pub any: Option<Vec<WorkflowConditions>>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "openapi", schema(no_recursion))]
+    pub none: Vec<WorkflowConditions>,
 }
 
 impl WorkflowConditions {
+    /// Reject invalid source patterns and trees exceeding eight levels or 64 nodes.
+    pub fn validate(&self) -> Result<()> {
+        let mut pending = vec![(self, 0)];
+        let mut count = 0;
+        while let Some((conditions, depth)) = pending.pop() {
+            count += 1;
+            if depth > 8 || count > 64 {
+                return Err(Error::Validation(
+                    "Workflow conditions allow at most eight nested groups and 64 condition objects"
+                        .into(),
+                ));
+            }
+            conditions.source.validate()?;
+            if let Some(event) = &conditions.event {
+                event.validate()?;
+            }
+            for child in conditions
+                .all
+                .iter()
+                .chain(conditions.any.iter().flatten())
+                .chain(&conditions.none)
+            {
+                pending.push((child, depth + 1));
+            }
+        }
+        Ok(())
+    }
+
     /// Whether the document satisfies every set condition
     pub fn matches(&self, document: &Document, tag_ids: &[Id]) -> bool {
         self.matches_metadata(
@@ -133,7 +214,85 @@ impl WorkflowConditions {
         )
     }
 
+    /// Matches one occurrence without substituting current metadata for missing snapshots.
+    pub fn matches_occurrence(
+        &self,
+        snapshot: Option<&crate::EventSnapshot>,
+        event: &crate::DomainEventEnvelope,
+    ) -> bool {
+        if snapshot.is_some_and(|snapshot| {
+            snapshot.vault_id != event.vault_id()
+                || Some(snapshot.document_id) != event.document_id()
+        }) {
+            return false;
+        }
+        let tag_ids: Vec<_> = snapshot
+            .map(|snapshot| snapshot.tags.iter().map(|tag| tag.id).collect())
+            .unwrap_or_default();
+        self.matches_occurrence_parts(snapshot, event, &tag_ids)
+    }
+
+    fn matches_occurrence_parts(
+        &self,
+        snapshot: Option<&crate::EventSnapshot>,
+        event: &crate::DomainEventEnvelope,
+        tag_ids: &[Id],
+    ) -> bool {
+        self.event
+            .as_ref()
+            .is_none_or(|condition| condition.matches(event))
+            && match snapshot {
+                Some(snapshot) => self.matches_metadata_leaf(
+                    snapshot.mime_type.as_deref(),
+                    snapshot.original_filename.as_deref(),
+                    &snapshot.source,
+                    tag_ids,
+                    snapshot.correspondent_id,
+                    snapshot.document_type_id,
+                ),
+                None => {
+                    self.mime_type.is_none()
+                        && self.filename_glob.is_none()
+                        && self.tag_id.is_none()
+                        && self.correspondent_id.is_none()
+                        && self.document_type_id.is_none()
+                        && self.source.is_empty()
+                }
+            }
+            && self.matches_groups(|child| child.matches_occurrence_parts(snapshot, event, tag_ids))
+    }
+
     fn matches_metadata(
+        &self,
+        mime: Option<&str>,
+        filename: Option<&str>,
+        source: &DocumentSource,
+        tag_ids: &[Id],
+        correspondent_id: Option<Id>,
+        document_type_id: Option<Id>,
+    ) -> bool {
+        self.event.is_none()
+            && self.matches_metadata_leaf(
+                mime,
+                filename,
+                source,
+                tag_ids,
+                correspondent_id,
+                document_type_id,
+            )
+            && self.matches_groups(|child| {
+                child.matches_metadata(
+                    mime,
+                    filename,
+                    source,
+                    tag_ids,
+                    correspondent_id,
+                    document_type_id,
+                )
+            })
+    }
+
+    fn matches_metadata_leaf(
         &self,
         mime: Option<&str>,
         filename: Option<&str>,
@@ -152,20 +311,36 @@ impl WorkflowConditions {
                 .is_none_or(|id| document_type_id == Some(id))
     }
 
+    fn requires_event_context(&self) -> bool {
+        self.event.is_some()
+            || self
+                .all
+                .iter()
+                .chain(self.any.iter().flatten())
+                .chain(&self.none)
+                .any(Self::requires_event_context)
+    }
+
+    fn matches_groups(&self, matches: impl Fn(&Self) -> bool) -> bool {
+        self.all.iter().all(&matches)
+            && self
+                .any
+                .as_ref()
+                .is_none_or(|group| group.iter().any(&matches))
+            && !self.none.iter().any(matches)
+    }
+
     /// Whether a file that is not imported yet satisfies the conditions
     ///
-    /// Conditions about stored metadata (tag, correspondent, type) cannot be
-    /// met by a file that has none, so setting one makes a match impossible.
+    /// Stored metadata predicates evaluate false because a candidate has no
+    /// tag, correspondent, or type; group operators retain their usual semantics.
     pub fn matches_candidate(
         &self,
         mime_type: &str,
         filename: &str,
         source: &DocumentSource,
     ) -> bool {
-        self.tag_id.is_none()
-            && self.correspondent_id.is_none()
-            && self.document_type_id.is_none()
-            && self.matches_file(Some(mime_type), Some(filename), source)
+        self.matches_metadata(Some(mime_type), Some(filename), source, &[], None, None)
     }
 
     fn matches_file(
@@ -328,17 +503,20 @@ impl WorkflowInput {
                 }
                 _ => {}
             }
-            if self.trigger == WorkflowTrigger::DocumentDeleted && !action.is_webhook() {
-                return invalid("Only webhook actions can run when a document is deleted");
-            }
-            let skips = matches!(action, WorkflowAction::SkipImport);
-            if skips != (self.trigger == WorkflowTrigger::IngestReceived) {
-                return invalid(
-                    "ingest.received workflows take only skip_import, and skip_import needs that trigger",
-                );
+            if !self.trigger.target().accepts(action) {
+                return invalid(if self.trigger == WorkflowTrigger::DocumentDeleted {
+                    "Only webhook actions can run when a document is deleted"
+                } else {
+                    "ingest.received workflows take only skip_import, and skip_import needs that trigger"
+                });
             }
         }
-        self.conditions.source.validate()?;
+        self.conditions.validate()?;
+        if self.trigger == WorkflowTrigger::IngestReceived
+            && self.conditions.requires_event_context()
+        {
+            return invalid("Pre-import workflows do not have a committed event actor or subject");
+        }
         Ok(())
     }
 }
@@ -449,6 +627,19 @@ pub struct WorkflowRun {
 }
 
 impl WorkflowRun {
+    pub fn source_identity(&self) -> Result<Option<WorkflowEventIdentity>> {
+        #[derive(Deserialize)]
+        struct Context {
+            #[serde(default)]
+            source_event: Option<WorkflowEventIdentity>,
+        }
+        serde_json::from_str::<Context>(&self.payload)
+            .map(|context| context.source_event)
+            .map_err(|error| {
+                Error::Repository(format!("Invalid captured workflow payload: {error}"))
+            })
+    }
+
     pub fn new(
         vault_id: VaultId,
         workflow_id: Id,
@@ -499,6 +690,162 @@ mod tests {
             .with_mime_type(mime)
     }
 
+    fn note_event(actor: Option<&str>) -> crate::DomainEventEnvelope {
+        let event = crate::DomainEventEnvelope::new(
+            "document_note.created",
+            VaultId::new(),
+            crate::DomainEventSubject {
+                subject_type: "document_note".into(),
+                id: Id::from_u128(1),
+            },
+            Some(Id::new_v4()),
+            crate::EventAudience::Vault,
+            serde_json::json!({"entry_kind": "note", "transition": "created"}),
+        )
+        .unwrap();
+        let mut encoded = serde_json::to_value(event).unwrap();
+        encoded["actor_id"] = serde_json::json!(actor);
+        serde_json::from_value(encoded).unwrap()
+    }
+
+    #[test]
+    fn event_conditions_match_only_the_selected_user_and_subject() {
+        let event = note_event(Some("editor"));
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: Some(event.subject().id),
+                actor: Some(crate::models::WorkflowActorCondition::User {
+                    user_id: "editor".into(),
+                }),
+            }),
+            ..Default::default()
+        };
+        assert!(conditions.matches_occurrence(None, &event));
+        assert!(!conditions.matches_occurrence(None, &note_event(Some("other"))));
+        assert!(!conditions.matches_occurrence(None, &note_event(None)));
+    }
+
+    #[test]
+    fn event_conditions_reject_a_different_subject() {
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: Some(Id::from_u128(2)),
+                actor: None,
+            }),
+            ..Default::default()
+        };
+        assert!(!conditions.matches_occurrence(None, &note_event(Some("editor"))));
+    }
+
+    #[test]
+    fn pre_import_conditions_reject_nested_committed_event_filters() {
+        let mut workflow = input(
+            WorkflowTrigger::IngestReceived,
+            vec![WorkflowAction::SkipImport],
+        );
+        workflow.conditions.all = vec![WorkflowConditions {
+            event: Some(WorkflowEventConditions::default()),
+            ..Default::default()
+        }];
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn system_actor_conditions_require_an_explicit_null_actor() {
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: None,
+                actor: Some(crate::models::WorkflowActorCondition::System),
+            }),
+            ..Default::default()
+        };
+        assert!(conditions.matches_occurrence(None, &note_event(None)));
+        assert!(!conditions.matches_occurrence(None, &note_event(Some("editor"))));
+    }
+
+    #[test]
+    fn event_conditions_require_the_same_any_branch_to_match() {
+        let event = note_event(Some("editor"));
+        let mut document = doc("invoice.pdf", "application/pdf");
+        document.id = event.document_id().unwrap();
+        document.vault_id = event.vault_id();
+        let snapshot = crate::EventSnapshot::from(&crate::events::DeletedDocument {
+            document,
+            tags: vec![],
+        });
+        let conditions = WorkflowConditions {
+            any: Some(vec![
+                WorkflowConditions {
+                    mime_type: Some("application/pdf".into()),
+                    event: Some(WorkflowEventConditions {
+                        subject_id: None,
+                        actor: Some(crate::models::WorkflowActorCondition::System),
+                    }),
+                    ..Default::default()
+                },
+                WorkflowConditions {
+                    mime_type: Some("image/*".into()),
+                    event: Some(WorkflowEventConditions {
+                        subject_id: Some(event.subject().id),
+                        actor: None,
+                    }),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        assert!(!conditions.matches_occurrence(Some(&snapshot), &event));
+        assert!(!conditions.matches_occurrence(None, &event));
+    }
+
+    #[test]
+    fn event_conditions_reject_unavailable_body_filters() {
+        assert!(
+            serde_json::from_value::<WorkflowEventConditions>(serde_json::json!({
+                "body": "secret"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_event_context_does_not_satisfy_event_conditions() {
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: None,
+                actor: Some(crate::models::WorkflowActorCondition::System),
+            }),
+            ..Default::default()
+        };
+        let document = Document::new(VaultId::new(), "invoice");
+        assert!(!conditions.matches(&document, &[]));
+    }
+
+    #[test]
+    fn nested_event_actor_ids_are_validated() {
+        let conditions = WorkflowConditions {
+            none: vec![WorkflowConditions {
+                event: Some(WorkflowEventConditions {
+                    subject_id: None,
+                    actor: Some(crate::models::WorkflowActorCondition::User {
+                        user_id: "  ".into(),
+                    }),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(conditions.validate().is_err());
+    }
+
+    #[test]
+    fn metadata_transition_triggers_are_selectable() {
+        assert!(WorkflowTrigger::parse("document.title_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.tags_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.correspondent_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.document_type_changed").is_some());
+    }
+
     #[test]
     fn glob_matches_wildcards_case_insensitively() {
         assert!(glob_match("*.pdf", "Invoice.PDF"));
@@ -517,6 +864,147 @@ mod tests {
     }
 
     #[test]
+    fn any_group_requires_one_matching_branch() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "any": [{"mime_type": "image/*"}, {"filename_glob": "invoice-*"}]
+        }))
+        .unwrap();
+        assert!(conditions.matches(&doc("scan.png", "image/png"), &[]));
+        assert!(conditions.matches(&doc("invoice-42.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("letter.pdf", "application/pdf"), &[]));
+    }
+
+    #[test]
+    fn none_group_excludes_matching_documents() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "mime_type": "application/pdf",
+            "none": [{"filename_glob": "draft-*"}]
+        }))
+        .unwrap();
+        assert!(conditions.matches(&doc("invoice.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("draft-invoice.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("invoice.png", "image/png"), &[]));
+    }
+
+    #[test]
+    fn nested_all_group_requires_every_branch() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "all": [{"mime_type": "application/pdf"}, {
+                "any": [{"filename_glob": "invoice-*"}, {"filename_glob": "receipt-*"}]
+            }]
+        }))
+        .unwrap();
+        assert!(conditions.matches(&doc("receipt-42.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("letter.pdf", "application/pdf"), &[]));
+        assert!(!conditions.matches(&doc("invoice-42.png", "image/png"), &[]));
+    }
+
+    #[test]
+    fn empty_any_group_never_matches() {
+        let conditions: WorkflowConditions =
+            serde_json::from_value(serde_json::json!({"any": []})).unwrap();
+        assert!(!conditions.matches(&doc("invoice.pdf", "application/pdf"), &[]));
+    }
+
+    #[test]
+    fn condition_groups_apply_before_import() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "all": [{"mime_type": "application/pdf"}],
+            "none": [{"filename_glob": "keep-*"}]
+        }))
+        .unwrap();
+        let source = DocumentSource::default();
+        assert!(conditions.matches_candidate("application/pdf", "discard.pdf", &source));
+        assert!(!conditions.matches_candidate("application/pdf", "keep-invoice.pdf", &source));
+        assert!(!conditions.matches_candidate("image/png", "discard.png", &source));
+    }
+
+    #[test]
+    fn validation_rejects_excessive_condition_nesting() {
+        let mut nested = serde_json::json!({"mime_type": "application/pdf"});
+        for _ in 0..9 {
+            nested = serde_json::json!({"all": [nested]});
+        }
+        let mut workflow = input(
+            WorkflowTrigger::DocumentUploaded,
+            vec![webhook("https://example.com")],
+        );
+        workflow.conditions = serde_json::from_value(nested).unwrap();
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_oversized_condition_groups() {
+        let mut workflow = input(
+            WorkflowTrigger::DocumentUploaded,
+            vec![webhook("https://example.com")],
+        );
+        workflow.conditions = serde_json::from_value(serde_json::json!({
+            "any": vec![serde_json::json!({"mime_type": "image/*"}); 65]
+        }))
+        .unwrap();
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn validation_checks_source_patterns_inside_groups() {
+        let mut workflow = input(
+            WorkflowTrigger::DocumentUploaded,
+            vec![webhook("https://example.com")],
+        );
+        workflow.conditions = serde_json::from_value(serde_json::json!({
+            "none": [{"source": {"email_from": {"regex": "["}}}]
+        }))
+        .unwrap();
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn groups_match_historical_snapshot_metadata() {
+        let conditions: WorkflowConditions = serde_json::from_value(serde_json::json!({
+            "any": [{"filename_glob": "invoice-*"}],
+            "none": [{"mime_type": "image/*"}]
+        }))
+        .unwrap();
+        let mut document = doc("invoice-42.pdf", "application/pdf");
+        let snapshot = crate::EventSnapshot::from(&crate::events::DeletedDocument {
+            document: document.clone(),
+            tags: vec![],
+        });
+        document.original_filename = Some("letter.pdf".into());
+        assert!(conditions.matches_snapshot(&snapshot));
+        assert!(!conditions.matches(&document, &[]));
+    }
+
+    #[test]
+    fn legacy_conditions_round_trip_without_group_fields() {
+        let legacy = serde_json::json!({"mime_type": "application/pdf"});
+        let conditions: WorkflowConditions = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(conditions).unwrap(), legacy);
+    }
+
+    #[cfg(feature = "openapi")]
+    #[test]
+    fn condition_group_schema_uses_recursive_references() {
+        use utoipa::OpenApi;
+
+        #[derive(OpenApi)]
+        #[openapi(components(schemas(WorkflowConditions)))]
+        struct Api;
+
+        let schema = serde_json::to_value(Api::openapi()).unwrap();
+        let conditions = &schema["components"]["schemas"]["WorkflowConditions"];
+        assert_eq!(
+            conditions["properties"]["all"]["items"]["$ref"],
+            "#/components/schemas/WorkflowConditions"
+        );
+        assert_eq!(
+            conditions["properties"]["none"]["items"]["$ref"],
+            "#/components/schemas/WorkflowConditions"
+        );
+    }
+
+    #[test]
     fn every_set_condition_must_match() {
         let tag = Id::new_v4();
         let sender = Id::new_v4();
@@ -529,6 +1017,7 @@ mod tests {
             document_type_id: None,
             filename_glob: Some("*.pdf".into()),
             source: Default::default(),
+            ..Default::default()
         };
         assert!(all.matches(&document, &[tag]));
         assert!(!all.matches(&document, &[]), "missing tag");

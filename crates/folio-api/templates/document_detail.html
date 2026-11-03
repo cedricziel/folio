@@ -2,7 +2,9 @@
     <div class="panel">
         <h2 class="heading">{{ document.title }}</h2>
         <dl class="f-meta-list">
-            <dt>Added</dt>
+            <dt>Document date</dt>
+            <dd><span class="f-meta">{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}Not set{% endmatch %}</span></dd>
+            <dt>Imported</dt>
             <dd><span class="f-meta">{{ document.created_at }}</span></dd>
             {% match document.original_filename %}
             {% when Some with (filename) %}
@@ -26,5 +28,6 @@
             <button type="submit" class="f-btn f-btn-quiet f-btn-danger">Move to Trash</button>
         </form>
         {% endif %}
+        <a class="f-btn" href="{{ "/documents"|vault_url }}/{{ document.id }}" data-turbo-frame="_top">Open notes and comments</a>
     </div>
 </turbo-frame>

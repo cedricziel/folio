@@ -20,7 +20,11 @@ use folio_core::ports::{
 use folio_core::{DeletedDocument, DocumentEvent, EventOrigin};
 
 use super::map_write_error;
-use super::outbox::{capture_document, insert_event};
+use super::outbox::{
+    capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
+};
+use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
+use folio_core::EventSnapshot;
 
 fn repo_err(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
@@ -122,7 +126,7 @@ macro_rules! select_documents {
             "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
             "ocr_status, embed_status, deleted_at, purge_requested_at, ",
-            "created_at, updated_at ",
+            "created_at, updated_at, document_date::text AS document_date ",
             "FROM documents ",
             $tail
         )
@@ -135,6 +139,7 @@ struct DocumentRow {
     vault_id: Uuid,
     uploaded_by: Option<String>,
     title: String,
+    document_date: Option<String>,
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
@@ -161,6 +166,10 @@ impl TryFrom<DocumentRow> for Document {
             vault_id: VaultId(row.vault_id),
             uploaded_by: row.uploaded_by.map(UserId),
             title: row.title,
+            document_date: row
+                .document_date
+                .map(|value| value.parse().map_err(|e: &str| Error::Repository(e.into())))
+                .transpose()?,
             content: row.content,
             original_filename: row.original_filename,
             file_path: row.file_path,
@@ -303,6 +312,33 @@ impl PostgresDocumentRepository {
             .map(|_| ())
     }
 
+    async fn emit_metadata_in(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        before: &EventSnapshot,
+    ) -> Result<()> {
+        let after = capture_document(tx, before.document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", before.document_id))?;
+        for envelope in metadata_envelopes(before, &after)? {
+            if envelope.event_type() == "document.updated" {
+                insert_event_with_envelope(
+                    tx,
+                    &DocumentEvent::Updated {
+                        document_id: after.document_id,
+                    },
+                    self.origin,
+                    Some(&after),
+                    &envelope,
+                )
+                .await?;
+            } else {
+                insert_domain_event_with_origin(tx, &envelope, self.origin).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn commit(&self, tx: Transaction<'_, Postgres>) -> Result<()> {
         tx.commit().await.map_err(repo_err)?;
         self.wake.notify_one();
@@ -401,8 +437,13 @@ impl DocumentRepository for PostgresDocumentRepository {
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
+        super::prepare_move(&mut tx, from, id).await?;
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let mutation_id = Id::new_v4();
+
         let tags: Vec<(String,)> = sqlx::query_as(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
              WHERE dt.document_id = $1 AND t.deleted_at IS NULL FOR SHARE OF t",
@@ -477,6 +518,15 @@ impl DocumentRepository for PostgresDocumentRepository {
         .await
         .map_err(repo_err)?;
 
+        sqlx::query("UPDATE document_entries SET updated_at = $1, updated_by = $2 WHERE document_id = $3 AND vault_id = $4")
+            .bind(Utc::now())
+            .bind(actor.map(UserId::as_str))
+            .bind(id)
+            .bind(to.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+
         for vault in [from, to] {
             sqlx::query(
                 "INSERT INTO audit_events
@@ -492,7 +542,13 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
         }
-        tx.commit().await.map_err(repo_err)?;
+        let after = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        for envelope in move_envelopes(&before, &after, mutation_id)? {
+            insert_domain_event_with_origin(&mut tx, &envelope, self.origin).await?;
+        }
+        self.commit(tx).await?;
 
         self.find_by_id(to, id)
             .await?
@@ -648,10 +704,14 @@ impl DocumentRepository for PostgresDocumentRepository {
             .transpose()?
             .ok_or_else(|| not_found("Document", id))?;
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let title = params.title.unwrap_or_else(|| existing.title.clone());
         let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
         let document_type_id = params.document_type_id.unwrap_or(existing.document_type_id);
+        let document_date = params.document_date.unwrap_or(existing.document_date);
         let now = Utc::now();
 
         let tags_changed = if let Some(tags) = params.tag_ids {
@@ -663,6 +723,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             && content == existing.content
             && correspondent_id == existing.correspondent_id
             && document_type_id == existing.document_type_id
+            && document_date == existing.document_date
             && !tags_changed
         {
             return Ok(existing);
@@ -677,27 +738,28 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET title = $1, content = $2, correspondent_id = $3,
-                                  document_type_id = $4, updated_at = $5
-             WHERE id = $6 AND vault_id = $7 AND deleted_at IS NULL",
+                                  document_type_id = $4, updated_at = $5, document_date = $6::text::date
+             WHERE id = $7 AND vault_id = $8 AND deleted_at IS NULL",
         )
         .bind(&title)
         .bind(&content)
         .bind(correspondent_id)
         .bind(document_type_id)
         .bind(now)
+        .bind(document_date.map(|value| value.to_string()))
         .bind(id)
         .bind(vault.0)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        self.emit_in(&mut tx, DocumentEvent::Updated { document_id: id })
-            .await?;
+        self.emit_metadata_in(&mut tx, &before).await?;
         self.commit(tx).await?;
 
         Ok(Document {
             id,
             vault_id: vault,
             uploaded_by: existing.uploaded_by,
+            document_date,
             title,
             content,
             original_filename: existing.original_filename,
@@ -850,15 +912,24 @@ impl DocumentRepository for PostgresDocumentRepository {
         let now = Utc::now();
         sqlx::query("UPDATE documents SET purge_requested_at = $3, updated_at = $3 WHERE id = $1 AND vault_id = $2")
             .bind(id).bind(vault.0).bind(now).execute(&mut *tx).await.map_err(repo_err)?;
+        let context = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let event = DocumentEvent::PurgeRequested { document_id: id };
+        let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
+            .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_postgres(
             &mut *tx,
-            crate::queue::JobType::PurgeDocument { document_id: id },
+            crate::queue::JobType::PurgeDocument {
+                document_id: id,
+                correlation_id: Some(envelope.correlation_id()),
+                causation_id: Some(envelope.event_id()),
+            },
             now,
             crate::queue::DEFAULT_MAX_ATTEMPTS,
         )
         .await?;
-        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
-            .await?;
+        insert_event_with_envelope(&mut tx, &event, self.origin, Some(&context), &envelope).await?;
         self.commit(tx).await
     }
 
@@ -893,6 +964,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             .execute(&mut *tx)
             .await
             .map_err(repo_err)?;
+        super::clear_incoming_links(&mut tx, vault, id).await?;
         sqlx::query(
             "DELETE FROM documents
              WHERE id = $1 AND vault_id = $2 AND purge_requested_at IS NOT NULL",
@@ -902,7 +974,24 @@ impl DocumentRepository for PostgresDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
-        insert_event(
+        let envelope = folio_core::domain_event::DomainEventEnvelope::new(
+            "document.purged",
+            vault,
+            folio_core::domain_event::DomainEventSubject {
+                subject_type: "document".into(),
+                id,
+            },
+            Some(id),
+            folio_core::domain_event::EventAudience::Vault,
+            folio_core::events::document_event_envelope(
+                &DocumentEvent::Updated { document_id: id },
+                Some(&context),
+            )?
+            .ok_or_else(|| not_found("Document", id))?
+            .data()
+            .clone(),
+        )?;
+        insert_event_with_envelope(
             &mut tx,
             &DocumentEvent::Deleted {
                 document_id: id,
@@ -910,6 +999,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             },
             self.origin,
             Some(&context),
+            &envelope,
         )
         .await?;
         self.commit(tx).await
@@ -983,18 +1073,25 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
-        self.touch_one(
-            id,
-            sqlx::query(
-                "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
-                 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL",
-            )
-            .bind(content.to_string())
-            .bind(Utc::now())
-            .bind(id)
-            .bind(vault.0),
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        require_document(&mut tx, vault, id).await?;
+        let result = sqlx::query(
+            "UPDATE documents SET content = $1, ocr_status = 'done', updated_at = $2
+             WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL
+             AND (ocr_status != 'done' OR content IS DISTINCT FROM $1)",
         )
+        .bind(content)
+        .bind(Utc::now())
+        .bind(id)
+        .bind(vault.0)
+        .execute(&mut *tx)
         .await
+        .map_err(repo_err)?;
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::OcrComplete { document_id: id })
+                .await?;
+        }
+        self.commit(tx).await
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {
@@ -1109,12 +1206,14 @@ impl DocumentRepository for PostgresDocumentRepository {
     async fn add_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         require_document(&mut tx, vault, document_id).await?;
+        let before = capture_document(&mut tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
         require_entry(&mut tx, "tags", "Tag", vault, tag_id).await?;
         let result = sqlx::query("INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(document_id).bind(tag_id).execute(&mut *tx).await.map_err(repo_err)?;
         if result.rows_affected() > 0 {
-            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-                .await?;
+            self.emit_metadata_in(&mut tx, &before).await?;
         }
         self.commit(tx).await
     }
@@ -1122,6 +1221,9 @@ impl DocumentRepository for PostgresDocumentRepository {
     async fn remove_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         require_document(&mut tx, vault, document_id).await?;
+        let before = capture_document(&mut tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
         let result =
             sqlx::query("DELETE FROM document_tags WHERE document_id = $1 AND tag_id = $2")
                 .bind(document_id)
@@ -1130,8 +1232,7 @@ impl DocumentRepository for PostgresDocumentRepository {
                 .await
                 .map_err(repo_err)?;
         if result.rows_affected() > 0 {
-            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-                .await?;
+            self.emit_metadata_in(&mut tx, &before).await?;
         }
         self.commit(tx).await
     }
@@ -1562,7 +1663,10 @@ impl PostgresDocumentRepository {
                 .map_err(repo_err)?;
         let mut current = current;
         current.sort();
-        for tag in &wanted {
+        for tag in wanted
+            .iter()
+            .filter(|tag| current.binary_search(tag).is_err())
+        {
             require_entry(tx, "tags", "Tag", vault, *tag).await?;
         }
         if current == wanted {
@@ -1676,6 +1780,7 @@ impl PostgresDocumentRepository {
             id,
             vault_id: vault,
             uploaded_by: params.uploaded_by,
+            document_date: None,
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,

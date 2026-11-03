@@ -418,6 +418,7 @@ async fn documents_contract(r: &Repositories) {
             vault,
             second.id,
             UpdateDocument {
+                document_date: None,
                 title: Some("renamed".into()),
                 content: Some("extracted text".into()),
                 correspondent_id: Some(None),
@@ -1908,7 +1909,7 @@ async fn auth_contract(r: &Repositories) {
 
 async fn mfa_contract(r: &Repositories) {
     use folio_auth::{
-        AccessToken, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
+        AccessToken, AuthCode, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
     };
     let auth = &r.auth;
     let make = |name: &str| User {
@@ -2120,12 +2121,36 @@ async fn mfa_contract(r: &Repositories) {
         (clients[0].client_id.as_str(), clients[0].expires_at),
         ("mfa-c1", 900)
     );
+    let code = |hash: &str, client: &str, user: &User| AuthCode {
+        code_hash: hash.into(),
+        client_id: client.into(),
+        user_id: user.id.clone(),
+        redirect_uri: "app:/cb".into(),
+        code_challenge: "challenge".into(),
+        scopes: vec![],
+        audience: "a".into(),
+        expires_at: i64::MAX,
+        grant_id: "mfa-g".into(),
+    };
+    for (hash, client, user) in [
+        ("mc1", "mfa-c1", &ada),
+        ("mc2", "mfa-c2", &ada),
+        ("mc3", "mfa-c1", &bob),
+    ] {
+        auth.insert_code(code(hash, client, user)).await.unwrap();
+    }
     auth.revoke_client_tokens(&ada.id, "mfa-c1").await.unwrap();
     assert!(auth
         .list_connected_clients(&ada.id, 100)
         .await
         .unwrap()
         .is_empty());
+    assert!(
+        auth.take_code("mc1").await.unwrap().is_none(),
+        "disconnecting revokes the client's pending codes"
+    );
+    assert!(auth.take_code("mc2").await.unwrap().is_some());
+    assert!(auth.take_code("mc3").await.unwrap().is_some());
     assert_eq!(
         auth.list_connected_clients(&bob.id, 100)
             .await
@@ -2159,7 +2184,7 @@ fn lease() -> Duration {
 }
 
 /// Take every event that is due and mark it dispatched
-async fn flush_document_outbox(r: &Repositories) -> Vec<OutboxEvent> {
+async fn flush_outbox(r: &Repositories) -> Vec<OutboxEvent> {
     let mut all = Vec::new();
     loop {
         let batch = r.outbox.claim(100, lease(), 10).await.unwrap();
@@ -2168,11 +2193,17 @@ async fn flush_document_outbox(r: &Repositories) -> Vec<OutboxEvent> {
         }
         for event in batch {
             r.outbox.mark_dispatched(event.id).await.unwrap();
-            if event.event.is_some() {
-                all.push(event);
-            }
+            all.push(event);
         }
     }
+}
+
+async fn flush_document_outbox(r: &Repositories) -> Vec<OutboxEvent> {
+    flush_outbox(r)
+        .await
+        .into_iter()
+        .filter(|event| event.event.is_some())
+        .collect()
 }
 
 fn dispatcher(r: &Repositories, consumer: Arc<Recorder>, batch_size: u32) -> OutboxDispatcher {
@@ -2615,6 +2646,103 @@ async fn upload_finalization_contract(db: &Database) {
     );
 }
 
+async fn ocr_completion_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    flush_outbox(&r).await;
+    let doc = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                content: None,
+                ..new_document("OCR transition")
+            },
+        )
+        .await
+        .unwrap();
+    flush_outbox(&r).await;
+
+    let (first, duplicate) = tokio::join!(
+        r.documents.complete_ocr(vault, doc.id, ""),
+        r.documents.complete_ocr(vault, doc.id, ""),
+    );
+    first.unwrap();
+    duplicate.unwrap();
+    let completed = flush_outbox(&r).await;
+    assert_eq!(completed.len(), 1);
+    assert!(
+        matches!(completed[0].event, Some(DocumentEvent::OcrComplete { document_id }) if document_id == doc.id)
+    );
+    assert_eq!(completed[0].envelope.as_ref().unwrap().vault_id(), vault);
+    let empty = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(empty.content.as_deref(), Some(""));
+    assert_eq!(empty.ocr_status, folio_core::models::ProcessingStatus::Done);
+
+    r.documents.complete_ocr(vault, doc.id, "").await.unwrap();
+    assert!(flush_outbox(&r).await.is_empty());
+    assert_eq!(
+        r.documents
+            .find_by_id(vault, doc.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at,
+        empty.updated_at
+    );
+
+    exec(db,
+        &["CREATE TRIGGER refuse_ocr_outbox BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT, 'refused'); END"],
+        &["CREATE FUNCTION refuse_ocr_outbox() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
+          "CREATE TRIGGER refuse_ocr_outbox BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION refuse_ocr_outbox()"],
+    ).await;
+    assert!(r
+        .documents
+        .complete_ocr(vault, doc.id, "must roll back")
+        .await
+        .is_err());
+    exec(
+        db,
+        &["DROP TRIGGER refuse_ocr_outbox"],
+        &[
+            "DROP TRIGGER refuse_ocr_outbox ON outbox_events",
+            "DROP FUNCTION refuse_ocr_outbox()",
+        ],
+    )
+    .await;
+    let retained = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retained.content.as_deref(), Some(""));
+    assert_eq!(retained.updated_at, empty.updated_at);
+    assert!(flush_outbox(&r).await.is_empty());
+
+    r.documents
+        .complete_ocr(vault, doc.id, "recognized text")
+        .await
+        .unwrap();
+    assert_eq!(flush_outbox(&r).await.len(), 1);
+    assert!(is_not_found(
+        r.documents
+            .complete_ocr(VaultId::new(), doc.id, "wrong vault")
+            .await
+    ));
+    r.documents.delete(vault, doc.id).await.unwrap();
+    flush_outbox(&r).await;
+    assert!(is_not_found(
+        r.documents.complete_ocr(vault, doc.id, "trashed").await
+    ));
+    assert!(flush_outbox(&r).await.is_empty());
+}
+
 async fn outbox_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
@@ -2644,6 +2772,7 @@ async fn outbox_contract(db: &Database) {
             vault,
             doc.id,
             UpdateDocument {
+                document_date: None,
                 title: Some("renamed".into()),
                 ..Default::default()
             },
@@ -2676,7 +2805,7 @@ async fn outbox_contract(db: &Database) {
     let events = flush_document_outbox(&r).await;
     let seen: Vec<_> = events
         .iter()
-        .map(|e| (e.event.as_ref().unwrap().event_type(), e.origin))
+        .filter_map(|e| e.event.as_ref().map(|event| (event.event_type(), e.origin)))
         .collect();
     assert_eq!(
         seen,
@@ -2693,7 +2822,7 @@ async fn outbox_contract(db: &Database) {
     assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
     assert!(events
         .iter()
-        .all(|e| e.event.as_ref().unwrap().document_id() == doc.id));
+        .all(|e| e.envelope.as_ref().and_then(|event| event.document_id()) == Some(doc.id)));
     assert!(matches!(
         events.last().unwrap().event,
         Some(DocumentEvent::Trashed { .. })
@@ -2706,7 +2835,7 @@ async fn outbox_contract(db: &Database) {
             .iter()
             .map(|event| event.event.as_ref().unwrap().event_type())
             .collect::<Vec<_>>(),
-        ["trashed", "deleted"]
+        ["purge_requested", "deleted"]
     );
     let DocumentEvent::Deleted { snapshot, .. } = deleted[1].event.as_ref().unwrap() else {
         panic!("permanent deletion emits a deleted event");
@@ -2735,7 +2864,7 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(
         flush_document_outbox(&r).await.len(),
         1,
-        "one metadata save emits one event"
+        "one metadata save emits one compatibility projection"
     );
     r.documents
         .set_tags(vault, atomic.id, &[tag.id])
@@ -3016,6 +3145,74 @@ async fn outbox_contract(db: &Database) {
     );
 }
 
+async fn metadata_workflow_dispatch_contract(db: &Database) {
+    use folio_core::services::WorkflowEngine;
+    use folio_infra::{ObjectStoreDocumentStore, StorageFileMetadata};
+
+    let r = db.repositories().await;
+    let vault = r.vaults.create("Metadata workflow", None).await.unwrap().id;
+    let document = r
+        .documents
+        .create(vault, new_document("before"))
+        .await
+        .unwrap();
+    let workflow = r
+        .workflows
+        .create(
+            vault,
+            workflow_input("title event", WorkflowTrigger::DocumentTitleChanged),
+        )
+        .await
+        .unwrap();
+    r.documents
+        .update(
+            vault,
+            document.id,
+            UpdateDocument {
+                title: Some("after".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let event = r
+        .outbox
+        .replay(0, Utc::now() - Duration::days(1), 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.envelope.as_ref().is_some_and(|envelope| {
+                envelope.event_type() == "document.title_changed"
+                    && envelope.document_id() == Some(document.id)
+            })
+        })
+        .unwrap();
+    assert!(event.event.is_none());
+    let engine = WorkflowEngine::new(
+        r.workflows.clone(),
+        r.documents.clone(),
+        r.correspondents.clone(),
+        r.document_types.clone(),
+        Arc::new(StorageFileMetadata::new(Arc::new(
+            ObjectStoreDocumentStore::in_memory(),
+        ))),
+        "http://folio.test",
+    );
+    let runs = engine.handle(&event).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, workflow.id);
+    assert!(engine.handle(&event).await.unwrap().is_empty());
+    let stored = r.workflows.find_run(runs[0].id).await.unwrap().unwrap();
+    assert_eq!(stored.event, WorkflowTrigger::DocumentTitleChanged);
+    let body: serde_json::Value = serde_json::from_str(&stored.payload).unwrap();
+    assert_eq!(body["document"]["title"], "after");
+    assert_eq!(
+        body["source_event"]["event_id"],
+        event.envelope.as_ref().unwrap().event_id().to_string()
+    );
+}
+
 async fn run_atomicity_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
@@ -3081,6 +3278,60 @@ async fn run_atomicity_contract(db: &Database) {
     assert!(r.workflows.find_run(doomed.id).await.unwrap().is_none());
     assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 2);
     assert!(r.workflows.create_run(&run_for(44)).await.unwrap());
+}
+
+async fn workflow_mutation_dedup_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.instance_default().await.unwrap();
+    let input = || workflow_input("mutation dedup", WorkflowTrigger::DocumentUpdated);
+    let first = r.workflows.create(vault, input()).await.unwrap();
+    let second = r.workflows.create(vault, input()).await.unwrap();
+    let mutation = Id::new_v4();
+    let correlation = Id::new_v4();
+    let run_for = |workflow_id, mutation_id, source_event_id| {
+        WorkflowRun::new(
+            vault,
+            workflow_id,
+            WorkflowTrigger::DocumentUpdated,
+            None,
+            serde_json::json!({"source_event": {
+                "event_id": Id::new_v4(), "mutation_id": mutation_id,
+                "correlation_id": correlation
+            }})
+            .to_string(),
+        )
+        .with_source_event(source_event_id)
+    };
+    let queued = r.jobs.pending_count().await.unwrap();
+    let left = run_for(first.id, mutation, 7001);
+    let right = run_for(first.id, mutation, 7002);
+    let (left, right) = tokio::join!(
+        r.workflows.create_run(&left),
+        r.workflows.create_run(&right)
+    );
+    assert_eq!(usize::from(left.unwrap()) + usize::from(right.unwrap()), 1);
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 1);
+    assert!(!r
+        .workflows
+        .create_run(&run_for(first.id, mutation, 7003))
+        .await
+        .unwrap());
+    assert!(r
+        .workflows
+        .create_run(&run_for(second.id, mutation, 7004))
+        .await
+        .unwrap());
+    assert!(r
+        .workflows
+        .create_run(&run_for(first.id, Id::new_v4(), 7005))
+        .await
+        .unwrap());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 3);
+    let mut invalid = run_for(first.id, Id::new_v4(), 7006);
+    invalid.payload = serde_json::json!({"source_event": {"mutation_id": "invalid"}}).to_string();
+    assert!(r.workflows.create_run(&invalid).await.is_err());
+    assert!(r.workflows.find_run(invalid.id).await.unwrap().is_none());
+    assert_eq!(r.jobs.pending_count().await.unwrap(), queued + 3);
 }
 
 async fn fresh_database_uses_config_and_preserves_saved_overrides(db: &Database) {
@@ -3668,10 +3919,13 @@ async fn run_contract(db: &Database) {
     event_context_contract(db).await;
     upload_finalization_contract(db).await;
     outbox_contract(db).await;
+    ocr_completion_contract(db).await;
     run_atomicity_contract(db).await;
     auth_contract(&repos).await;
     mfa_contract(&repos).await;
     trash_contract(db, &repos).await;
+    metadata_workflow_dispatch_contract(db).await;
+    workflow_mutation_dedup_contract(db).await;
 }
 
 #[tokio::test]
