@@ -1908,7 +1908,7 @@ async fn auth_contract(r: &Repositories) {
 
 async fn mfa_contract(r: &Repositories) {
     use folio_auth::{
-        AccessToken, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
+        AccessToken, AuthCode, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
     };
     let auth = &r.auth;
     let make = |name: &str| User {
@@ -2120,12 +2120,36 @@ async fn mfa_contract(r: &Repositories) {
         (clients[0].client_id.as_str(), clients[0].expires_at),
         ("mfa-c1", 900)
     );
+    let code = |hash: &str, client: &str, user: &User| AuthCode {
+        code_hash: hash.into(),
+        client_id: client.into(),
+        user_id: user.id.clone(),
+        redirect_uri: "app:/cb".into(),
+        code_challenge: "challenge".into(),
+        scopes: vec![],
+        audience: "a".into(),
+        expires_at: i64::MAX,
+        grant_id: "mfa-g".into(),
+    };
+    for (hash, client, user) in [
+        ("mc1", "mfa-c1", &ada),
+        ("mc2", "mfa-c2", &ada),
+        ("mc3", "mfa-c1", &bob),
+    ] {
+        auth.insert_code(code(hash, client, user)).await.unwrap();
+    }
     auth.revoke_client_tokens(&ada.id, "mfa-c1").await.unwrap();
     assert!(auth
         .list_connected_clients(&ada.id, 100)
         .await
         .unwrap()
         .is_empty());
+    assert!(
+        auth.take_code("mc1").await.unwrap().is_none(),
+        "disconnecting revokes the client's pending codes"
+    );
+    assert!(auth.take_code("mc2").await.unwrap().is_some());
+    assert!(auth.take_code("mc3").await.unwrap().is_some());
     assert_eq!(
         auth.list_connected_clients(&bob.id, 100)
             .await
