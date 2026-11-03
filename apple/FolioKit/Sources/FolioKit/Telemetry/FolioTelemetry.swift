@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenAPIRuntime
 import OpenTelemetryApi
 import OpenTelemetryConcurrency
 import OpenTelemetryProtocolExporterCommon
@@ -150,8 +151,18 @@ public final class FolioTelemetry: @unchecked Sendable {
                 runtime.completed(name, outcome: "success", duration: start.duration(to: .now), span: span)
                 return result
             } catch {
-                span.status = .error(description: "operation failed")
-                runtime.completed(name, outcome: "error", duration: start.duration(to: .now), span: span)
+                let failure = OperationFailure(error, cancelled: Task.isCancelled)
+                if let status = failure.status {
+                    span.setAttribute(key: "http.response.status_code", value: status)
+                }
+                if failure.isCancellation {
+                    span.setAttribute(key: "folio.outcome", value: "cancelled")
+                    runtime.completed(name, outcome: "cancelled", duration: start.duration(to: .now), span: span)
+                } else {
+                    span.setAttribute(key: "error.type", value: failure.type)
+                    span.status = .error(description: failure.type)
+                    runtime.completed(name, outcome: "error", duration: start.duration(to: .now), span: span)
+                }
                 throw error
             }
         }
@@ -209,6 +220,61 @@ public final class FolioTelemetry: @unchecked Sendable {
                 "device.manufacturer": .string("Apple"), "device.model.identifier": .string(model),
                 "host.arch": .string(architecture),
             ]))
+    }
+}
+
+/// Names why an operation failed, without exporting messages that may carry document details.
+struct OperationFailure: Equatable {
+    static let cancelled = "cancelled"
+
+    let type: String
+    let status: Int?
+
+    var isCancellation: Bool { type == Self.cancelled }
+
+    init(type: String, status: Int? = nil) {
+        self.type = type
+        self.status = status
+    }
+
+    init(_ error: any Error, cancelled: Bool = false) {
+        if cancelled {
+            self.init(type: Self.cancelled)
+            return
+        }
+        switch error {
+        case is CancellationError:
+            self.init(type: Self.cancelled)
+        case let error as ClientError:
+            let inner = OperationFailure(error.underlyingError)
+            self.init(type: inner.type, status: inner.status ?? error.response.map { $0.status.code })
+        case let error as URLError:
+            self.init(type: Self.name(error.code))
+        case FolioError.server(let status, _):
+            self.init(type: String(status), status: status)
+        case FolioError.signInRequired:
+            self.init(type: "401", status: 401)
+        case FolioError.unreachable:
+            self.init(type: "unreachable")
+        case FolioError.unreadableResponse:
+            self.init(type: "unreadable_response")
+        default:
+            self.init(type: "_OTHER")
+        }
+    }
+
+    private static func name(_ code: URLError.Code) -> String {
+        switch code {
+        case .cancelled: cancelled
+        case .timedOut: "timeout"
+        case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost, .cannotFindHost,
+            .dnsLookupFailed:
+            "unreachable"
+        case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,
+            .serverCertificateNotYetValid, .serverCertificateHasUnknownRoot:
+            "tls"
+        default: "url_error_\(code.rawValue)"
+        }
     }
 }
 
