@@ -308,7 +308,11 @@ impl Harness {
             .unwrap();
         let mut documents = Vec::new();
         for event in batch {
-            if event.event.is_some() {
+            let vault_lifecycle = event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type().starts_with("vault"));
+            if !vault_lifecycle {
                 documents.push(event);
             } else {
                 self.outbox.mark_dispatched(event.id).await.unwrap();

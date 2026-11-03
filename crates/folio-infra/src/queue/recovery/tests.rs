@@ -198,6 +198,7 @@ impl<'a> Fixture<'a> {
                     .envelope
                     .unwrap()
             })
+            .filter(|envelope| !envelope.event_type().starts_with("vault"))
             .collect()
     }
 

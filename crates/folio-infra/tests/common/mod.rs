@@ -84,3 +84,32 @@ pub async fn create_bucket(endpoint: &str, bucket: &str) {
         response.text().await.unwrap_or_default()
     );
 }
+
+/// Seed a vault with SQL that predates vault lifecycle columns, for upgrade tests
+/// that stop migrations before the current schema.
+pub async fn legacy_vault(db: &folio_infra::Database) -> folio_core::models::VaultId {
+    let id = uuid::Uuid::new_v4();
+    let now = chrono::Utc::now();
+    match db {
+        folio_infra::Database::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO vaults (id, name, created_at, updated_at) VALUES (?, 'Legacy', ?, ?)",
+            )
+            .bind(id.to_string())
+            .bind(now.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        folio_infra::Database::Postgres(pool) => {
+            sqlx::query("INSERT INTO vaults (id, name, created_at, updated_at) VALUES ($1, 'Legacy', $2, $2)")
+                .bind(id)
+                .bind(now)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    folio_core::models::VaultId(id)
+}

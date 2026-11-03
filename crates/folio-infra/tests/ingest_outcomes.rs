@@ -1,3 +1,5 @@
+mod common;
+
 use folio_infra::Database;
 use sqlx::SqlitePool;
 
@@ -334,7 +336,7 @@ async fn durable_outcome_contract(database: Database) {
         }
     }
     let repos = database.repositories().await;
-    let vault = repos.vaults.instance_default().await.unwrap();
+    let vault = common::legacy_vault(&database).await;
     let legacy = folio_core::models::LedgerEntry {
         vault_id: vault,
         key: "legacy-content".into(),

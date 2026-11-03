@@ -185,12 +185,7 @@ async fn snapshot_upgrade_contract(db: &Database, with_live_document: bool) {
     };
     apply_vault_schema(db).await;
     let repositories = db.repositories().await;
-    let current_vault = repositories
-        .vaults
-        .create("Current vault", None)
-        .await
-        .unwrap()
-        .id;
+    let current_vault = common::legacy_vault(db).await;
     let mut current = deletion_snapshot();
     current["snapshot"]["document"]["vault_id"] = json!(current_vault);
     current["snapshot"]["document"]["uploaded_by"] = json!("known-uploader");

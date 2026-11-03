@@ -145,6 +145,12 @@ impl<'a> Fixture<'a> {
         payloads
             .iter()
             .map(|payload| decode_stored_outbox_payload(payload).unwrap())
+            .filter(|decoded| {
+                !decoded
+                    .envelope
+                    .as_ref()
+                    .is_some_and(|envelope| envelope.event_type().starts_with("vault"))
+            })
             .collect()
     }
 
