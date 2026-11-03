@@ -540,3 +540,9 @@ claims, pagination, retirement, restore conflicts, no-op suppression, and rollba
 when outbox publication fails, option identity, and select-field integrity. Events are
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
+
+## Verify SQLite trash contention
+
+Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
+The temporary database fixture holds a competing writer, verifies trash waits,
+and checks that the committed trash snapshot includes the writer's change.
