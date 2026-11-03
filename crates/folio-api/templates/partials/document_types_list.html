@@ -6,7 +6,8 @@
         {% else %}
         {% for doc_type in document_types %}
         <li class="manage-list-item" id="document-type-{{ doc_type.id }}">
-            <span class="manage-item-name">{{ doc_type.name }}</span>
+            <div class="manage-item-name">{{ doc_type.name }}
+            <details class="f-meta"><summary>History</summary>Created {{ doc_type.created_at }}{% if let Some(actor) = doc_type.created_by %} by {{ actor }}{% endif %}<br>Updated {{ doc_type.updated_at }}{% if let Some(actor) = doc_type.updated_by %} by {{ actor }}{% endif %}</details></div>
             {% if true|can_manage %}
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename document-type {{ doc_type.name }}"
@@ -36,4 +37,19 @@
         {% endfor %}
         {% endif %}
     </ul>
+    <details class="manage-trash">
+        <summary class="hint">Trash ({{ trashed_document_types.len() }})</summary>
+        <ul class="manage-list">
+        {% for entry in trashed_document_types %}
+            <li class="manage-list-item">
+                <span class="manage-item-name">{{ entry.name }} <span class="f-meta">{% if let Some(at) = entry.deleted_at %}Deleted {{ at }}{% endif %}</span><br><span class="f-meta">Created {{ entry.created_at }}{% if let Some(actor) = entry.created_by %} by {{ actor }}{% endif %}<br>Updated {{ entry.updated_at }}{% if let Some(actor) = entry.updated_by %} by {{ actor }}{% endif %}</span></span>
+                {% if true|can_manage %}
+                <form action="{{ "/manage/document_types"|vault_url }}/{{ entry.id }}/restore" method="post" data-turbo-frame="document-types-list">
+                    <button type="submit" class="f-btn f-btn-quiet">Restore</button>
+                </form>
+                {% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </details>
 </turbo-frame>
