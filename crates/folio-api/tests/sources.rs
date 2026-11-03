@@ -394,4 +394,14 @@ async fn source_outcomes_page_retains_history_without_linking_missing_documents(
     assert!(html.contains("Import failed"));
     assert!(html.contains("The document was saved"));
     assert!(!html.contains(&format!("/documents/{missing_document}")));
+    let (status, html) = send(
+        &app,
+        "GET",
+        &format!("/settings/sources/{id}/outcomes?limit=1"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains(&format!("/outcomes?before={latest}&amp;limit=1")));
+    assert!(html.contains("/outcomes?limit=1\""));
 }

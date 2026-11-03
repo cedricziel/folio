@@ -9,7 +9,7 @@
         <a href="{{ "/settings/sources"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Sources</a>
         <div class="page-head-row">
             <h1 class="title">{{ source_name }}</h1>
-            <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes" class="f-btn">Refresh</a>
+            <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes?limit={{ limit }}" class="f-btn">Refresh</a>
         </div>
         <p class="lede">Recent item outcomes. Import rules run before an item is saved.</p>
         {% if !enabled %}<p class="f-meta">This source is off. Earlier outcomes remain available.</p>{% endif %}
@@ -49,7 +49,7 @@
     </div>
     {% match next_before %}
     {% when Some with (cursor) %}
-    <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes?before={{ cursor }}" class="f-btn">Earlier outcomes</a>
+    <a href="{{ "/settings/sources"|vault_url }}/{{ source_id }}/outcomes?before={{ cursor }}&limit={{ limit }}" class="f-btn">Earlier outcomes</a>
     {% when None %}
     {% endmatch %}
     {% endif %}

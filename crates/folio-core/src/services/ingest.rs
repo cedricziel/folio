@@ -196,8 +196,8 @@ impl IngestPipeline {
     ) -> bool {
         match outcomes.complete(attempt, result, document, claim).await {
             Ok(record) => record.is_some(),
-            Err(_) => {
-                warn!("Could not commit ingestion outcome");
+            Err(error) => {
+                warn!(source = %attempt.source_id, %error, "Could not commit ingestion outcome");
                 false
             }
         }

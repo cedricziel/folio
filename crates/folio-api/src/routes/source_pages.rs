@@ -558,6 +558,7 @@ struct OutcomesTemplate {
     last_run: Option<String>,
     load_failed: bool,
     retry_path: String,
+    limit: u32,
     rows: Vec<OutcomeRow>,
     next_before: Option<i64>,
 }
@@ -580,6 +581,7 @@ async fn outcomes_page(
         ),
         None => format!("/settings/sources/{id}/outcomes?limit={}", query.limit),
     };
+    let limit = query.limit;
     let (rows, next_before, load_failed) =
         match super::sources::outcome_page(&state, vault, id, query).await {
             Ok(page) => (
@@ -587,7 +589,10 @@ async fn outcomes_page(
                 page.next_before,
                 false,
             ),
-            Err(_) => (Vec::new(), None, true),
+            Err(error) => {
+                tracing::warn!(source = %id, %error, "Could not load source outcomes");
+                (Vec::new(), None, true)
+            }
         };
     let response_status = if load_failed {
         axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -608,6 +613,7 @@ async fn outcomes_page(
             .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string()),
         load_failed,
         retry_path,
+        limit,
         rows,
         next_before,
     })?;
