@@ -220,6 +220,9 @@ The same core and API suites cover subject and actor conditions, explicit system
 attribution, mixed event/document branches, unavailable entry body filters, and
 preserving event filters through HTML edits. The workflow suite verifies that
 captured actors override ambient dispatcher context without granting private access.
+The shared repository contract also verifies concurrent mutation deduplication,
+separate workflows, distinct mutations sharing a correlation, invalid captured
+identity rejection, and legacy source-event deduplication on both databases.
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run

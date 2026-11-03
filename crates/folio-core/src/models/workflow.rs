@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Document, DocumentSource, Id, SourceConditions, VaultId, WorkflowEventConditions,
-    WorkflowTarget,
+    WorkflowEventIdentity, WorkflowTarget,
 };
 use crate::error::{Error, Result};
 
@@ -627,6 +627,19 @@ pub struct WorkflowRun {
 }
 
 impl WorkflowRun {
+    pub fn source_identity(&self) -> Result<Option<WorkflowEventIdentity>> {
+        #[derive(Deserialize)]
+        struct Context {
+            #[serde(default)]
+            source_event: Option<WorkflowEventIdentity>,
+        }
+        serde_json::from_str::<Context>(&self.payload)
+            .map(|context| context.source_event)
+            .map_err(|error| {
+                Error::Repository(format!("Invalid captured workflow payload: {error}"))
+            })
+    }
+
     pub fn new(
         vault_id: VaultId,
         workflow_id: Id,
