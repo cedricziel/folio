@@ -355,3 +355,37 @@ async fn owners_can_recover_without_an_active_default_after_losing_shared_access
         personal
     );
 }
+
+#[tokio::test]
+async fn only_owners_can_list_vault_members() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "members-owner", false).await;
+    let viewer = sign_in(&h, "members-viewer", false).await;
+    let created = create(&h, &owner).await;
+    let vault = created["id"].as_str().unwrap();
+    h.members
+        .grant(
+            vault.parse().unwrap(),
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let path = format!("/api/vaults/{vault}/members");
+
+    let listed = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &owner, json!({})))
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
+    let hidden = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &viewer, json!({})))
+        .await
+        .unwrap();
+    assert_eq!(hidden.status(), StatusCode::NOT_FOUND);
+}

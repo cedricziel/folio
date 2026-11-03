@@ -176,20 +176,9 @@ impl VaultService {
         self.vaults.set_default(user, id).await
     }
 
-    /// List grants while the user can read the active vault.
+    /// List grants only while the user currently owns the active vault.
     pub async fn members(&self, user: &UserId, id: VaultId) -> Result<Vec<VaultMember>> {
-        if !self
-            .vaults
-            .list_for_user(user)
-            .await?
-            .iter()
-            .any(|(vault, _)| vault.id == id)
-        {
-            return Err(crate::Error::NotFound {
-                entity_type: "Vault",
-                id: id.to_string(),
-            });
-        }
+        self.require_owner(user, id, false).await?;
         self.members.list(id).await
     }
 
