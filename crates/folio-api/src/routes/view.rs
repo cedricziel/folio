@@ -113,6 +113,7 @@ impl Sidebar {
     /// Empty navigation for account recovery, without establishing a request vault.
     pub fn without_vault(nav: Nav) -> Self {
         Self {
+            show_counts: false,
             vault_id: VaultId(uuid::Uuid::nil()),
             vault_name: "No active vault".into(),
             vault_role: "No access",

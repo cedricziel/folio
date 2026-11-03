@@ -74,6 +74,18 @@ fn vault(row: VaultRow) -> Result<Vault> {
 }
 
 /// SQLite implementation of the vault, membership, audit and access ports
+/// A vault row with the user's highest role rank
+type RankedVaultRow = (
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    i64,
+);
+
 pub struct SqliteVaultRepository {
     pool: SqlitePool,
 }
@@ -157,7 +169,7 @@ impl SqliteVaultRepository {
         } else {
             String::new()
         };
-        let rows: Vec<(String, String, Option<String>, String, String, Option<String>, Option<String>, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        let rows: Vec<RankedVaultRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.name, v.created_by, v.created_at, v.updated_at, v.updated_by, v.deleted_at, MAX({ROLE_RANK}) FROM vaults v JOIN vault_members m ON m.vault_id = v.id WHERE {APPLIES_TO_USER} AND {state} GROUP BY v.id {ownership} ORDER BY v.name, v.id"
         ))).bind(user.as_str()).fetch_all(&self.pool).await.map_err(db)?;
         rows.into_iter()
@@ -337,7 +349,7 @@ impl VaultRepository for SqliteVaultRepository {
         let owners: Option<(String,)> = sqlx::query_as("SELECT v.id FROM users u JOIN vaults v ON v.id = u.default_vault_id WHERE u.is_owner = 1 AND v.deleted_at IS NULL AND EXISTS (SELECT 1 FROM vault_members dm WHERE dm.vault_id = v.id AND (dm.user_id = u.id OR dm.group_id IN (SELECT group_id FROM auth_group_members WHERE user_id = u.id))) ORDER BY u.created_at, u.id LIMIT 1")
             .fetch_optional(&self.pool).await.map_err(db)?;
         if let Some((id,)) = owners {
-            return Ok(vault_id(&id)?);
+            return vault_id(&id);
         }
         let oldest: Option<(String,)> = sqlx::query_as(
             "SELECT id FROM vaults WHERE deleted_at IS NULL ORDER BY created_at, id LIMIT 1",
@@ -346,7 +358,7 @@ impl VaultRepository for SqliteVaultRepository {
         .await
         .map_err(db)?;
         if let Some((id,)) = oldest {
-            return Ok(vault_id(&id)?);
+            return vault_id(&id);
         }
         Ok(self.insert_vault("Archive", None).await?.id)
     }

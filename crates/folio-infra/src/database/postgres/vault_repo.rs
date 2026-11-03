@@ -69,6 +69,18 @@ fn vault(row: VaultRow) -> Vault {
 }
 
 /// PostgreSQL implementation of the vault, membership, audit and access ports
+/// A vault row with the user's highest role rank
+type RankedVaultRow = (
+    Uuid,
+    String,
+    Option<String>,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    Option<String>,
+    Option<DateTime<Utc>>,
+    i32,
+);
+
 pub struct PostgresVaultRepository {
     pool: PgPool,
 }
@@ -152,7 +164,7 @@ impl PostgresVaultRepository {
         } else {
             String::new()
         };
-        let rows: Vec<(Uuid, String, Option<String>, DateTime<Utc>, DateTime<Utc>, Option<String>, Option<DateTime<Utc>>, i32)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        let rows: Vec<RankedVaultRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT v.id, v.name, v.created_by, v.created_at, v.updated_at, v.updated_by, v.deleted_at, MAX({ROLE_RANK}) FROM vaults v JOIN vault_members m ON m.vault_id = v.id WHERE {APPLIES_TO_USER} AND {state} GROUP BY v.id {ownership} ORDER BY v.name, v.id"
         ))).bind(user.as_str()).fetch_all(&self.pool).await.map_err(db)?;
         Ok(rows
