@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
+use crate::events::{document_event_envelope, DocumentEvent, EventSnapshot};
 use crate::models::{Document, Id};
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type")]
@@ -36,11 +39,39 @@ pub fn document_changes(
     after: &Document,
     after_tags: &[Id],
 ) -> Vec<DocumentChange> {
+    compare_metadata(
+        Metadata {
+            title: &before.title,
+            correspondent_id: before.correspondent_id,
+            document_type_id: before.document_type_id,
+        },
+        before_tags,
+        Metadata {
+            title: &after.title,
+            correspondent_id: after.correspondent_id,
+            document_type_id: after.document_type_id,
+        },
+        after_tags,
+    )
+}
+
+struct Metadata<'a> {
+    title: &'a str,
+    correspondent_id: Option<Id>,
+    document_type_id: Option<Id>,
+}
+
+fn compare_metadata(
+    before: Metadata<'_>,
+    before_tags: &[Id],
+    after: Metadata<'_>,
+    after_tags: &[Id],
+) -> Vec<DocumentChange> {
     let mut changes = Vec::new();
     if before.title != after.title {
         changes.push(DocumentChange::TitleChanged {
-            before: before.title.clone(),
-            after: after.title.clone(),
+            before: before.title.to_owned(),
+            after: after.title.to_owned(),
         });
     }
     if before.correspondent_id != after.correspondent_id {
@@ -66,4 +97,119 @@ pub fn document_changes(
         });
     }
     changes
+}
+
+/// Build specific deltas and one compatibility update for an actual committed metadata/content edit.
+/// Call inside the mutation transaction after suppressing no-ops. Snapshots must describe the same
+/// document and vault; all returned events share mutation and causal identities.
+pub fn metadata_envelopes(
+    before: &EventSnapshot,
+    after: &EventSnapshot,
+) -> Result<Vec<DomainEventEnvelope>> {
+    if before.document_id != after.document_id || before.vault_id != after.vault_id {
+        return Err(Error::Validation(
+            "Metadata transitions require the same document and vault".into(),
+        ));
+    }
+    let generic = document_event_envelope(
+        &DocumentEvent::Updated {
+            document_id: after.document_id,
+        },
+        Some(after),
+    )?
+    .ok_or_else(|| Error::Validation("Metadata transition has no occurrence snapshot".into()))?;
+    let before_tags: Vec<Id> = before.tags.iter().map(|tag| tag.id).collect();
+    let after_tags: Vec<Id> = after.tags.iter().map(|tag| tag.id).collect();
+    let changes = compare_metadata(
+        Metadata {
+            title: &before.title,
+            correspondent_id: before.correspondent_id,
+            document_type_id: before.document_type_id,
+        },
+        &before_tags,
+        Metadata {
+            title: &after.title,
+            correspondent_id: after.correspondent_id,
+            document_type_id: after.document_type_id,
+        },
+        &after_tags,
+    );
+    let mut events = Vec::new();
+    for change in changes {
+        let mut delta =
+            serde_json::to_value(change).map_err(|error| Error::Repository(error.to_string()))?;
+        let event_type = delta
+            .as_object_mut()
+            .and_then(|fields| fields.remove("event_type"))
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or_else(|| Error::Validation("Document delta has no event type".into()))?;
+        let mut data = generic.data().clone();
+        data.as_object_mut()
+            .ok_or_else(|| Error::Validation("Document snapshot must be an object".into()))?
+            .extend(
+                delta
+                    .as_object()
+                    .ok_or_else(|| Error::Validation("Document delta must be an object".into()))?
+                    .clone(),
+            );
+        data["source"] = serde_json::to_value(&after.source)
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        let event = DomainEventEnvelope::new(
+            event_type,
+            after.vault_id,
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: after.document_id,
+            },
+            Some(after.document_id),
+            EventAudience::Vault,
+            data,
+        )?
+        .with_mutation(generic.mutation_id())?
+        .with_correlation(generic.correlation_id(), generic.causation_id())?;
+        events.push(event);
+    }
+    events.push(generic);
+    Ok(events)
+}
+
+/// Capture each side of a move without exposing the other vault's identifiers.
+pub fn move_envelopes(
+    before: &EventSnapshot,
+    after: &EventSnapshot,
+    mutation_id: Id,
+) -> Result<[DomainEventEnvelope; 2]> {
+    if before.document_id != after.document_id || before.vault_id == after.vault_id {
+        return Err(Error::Validation(
+            "Move snapshots require one document in distinct vaults".into(),
+        ));
+    }
+    let build = |snapshot: &EventSnapshot, event_type: &str| -> Result<DomainEventEnvelope> {
+        let generic = document_event_envelope(
+            &DocumentEvent::Updated {
+                document_id: snapshot.document_id,
+            },
+            Some(snapshot),
+        )?
+        .ok_or_else(|| Error::Validation("Move has no occurrence snapshot".into()))?;
+        let mut data = generic.data().clone();
+        data["source"] = serde_json::to_value(&snapshot.source)
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        DomainEventEnvelope::new(
+            event_type,
+            snapshot.vault_id,
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: snapshot.document_id,
+            },
+            Some(snapshot.document_id),
+            EventAudience::Vault,
+            data,
+        )?
+        .with_mutation(mutation_id)
+    };
+    let outgoing = build(before, "document.moved_out")?;
+    let incoming = build(after, "document.moved_in")?
+        .with_correlation(outgoing.correlation_id(), outgoing.causation_id())?;
+    Ok([outgoing, incoming])
 }

@@ -4,8 +4,8 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::models::{
-    Document, Id, IngestItem, IngestOutcome, IngestionSourceDef, IngestionSourceInput, LedgerEntry,
-    PollReport, SourceStatus, VaultId,
+    Document, Id, IngestItem, IngestItemKey, IngestOutcome, IngestionSourceDef,
+    IngestionSourceInput, LedgerEntry, PollReport, SourceStatus, VaultId,
 };
 use crate::services::NewUpload;
 
@@ -13,6 +13,15 @@ use crate::services::NewUpload;
 #[async_trait]
 pub trait IngestSink: Send + Sync {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome>;
+
+    async fn ingest_observed(
+        &self,
+        source_id: Id,
+        _key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        self.ingest(source_id, item).await
+    }
 }
 
 /// Receives items for a known vault; the scheduler binds each source to its
@@ -25,6 +34,16 @@ pub trait VaultIngest: Send + Sync {
         source_id: Id,
         item: IngestItem,
     ) -> Result<IngestOutcome>;
+
+    async fn ingest_observed(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        _key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        self.ingest(vault, source_id, item).await
+    }
 }
 
 /// A place documents arrive from, such as a folder or a mailbox
@@ -116,4 +135,53 @@ pub trait IngestLedger: Send + Sync {
     /// Delete only the unchanged entry; returns false when it changed or disappeared.
     async fn delete_if_matches(&self, vault: VaultId, expected: &LedgerEntry) -> Result<bool>;
     async fn delete(&self, vault: VaultId, key: &str) -> Result<()>;
+}
+
+/// Item observations are distinct from vault-wide content deduplication.
+#[async_trait]
+pub trait IngestOutcomeRepository: IngestOutcomeReader {
+    async fn record_source_status(
+        &self,
+        vault: VaultId,
+        source: Id,
+        origin: crate::models::SourceOrigin,
+        kind: crate::models::SourceKind,
+        status: &SourceStatus,
+    ) -> Result<()>;
+
+    /// Repeated completed observations and live leases do not create attempts.
+    async fn claim(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        source_kind: crate::models::SourceKind,
+        source_origin: crate::models::SourceOrigin,
+        key: &IngestItemKey,
+        decision_fingerprint: &str,
+    ) -> Result<crate::models::IngestClaim>;
+
+    /// Fence by attempt identity and atomically persist the outcome and domain outbox event.
+    /// Content claims transition in the same transaction; replays return the existing
+    /// record and superseded observation or content claims return None.
+    async fn complete(
+        &self,
+        attempt: &crate::models::IngestAttempt,
+        outcome: crate::models::IngestResult,
+        document_id: Option<Id>,
+        content_claim: Option<&LedgerEntry>,
+    ) -> Result<Option<crate::models::IngestOutcomeRecord>>;
+
+    /// Relinquish a live observation when content ownership prevented an import attempt.
+    async fn release(&self, attempt: &crate::models::IngestAttempt) -> Result<bool>;
+}
+
+#[async_trait]
+pub trait IngestOutcomeReader: Send + Sync {
+    async fn page(
+        &self,
+        vault: VaultId,
+        source_id: Id,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<crate::models::IngestOutcomePage>;
 }

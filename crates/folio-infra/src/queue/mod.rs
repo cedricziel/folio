@@ -66,7 +66,13 @@ pub enum JobType {
     /// Process a newly uploaded document (all steps)
     ProcessDocument { document_id: Uuid },
     /// Remove objects and metadata after an explicit permanent-deletion request.
-    PurgeDocument { document_id: Uuid },
+    PurgeDocument {
+        document_id: Uuid,
+        #[serde(default)]
+        correlation_id: Option<Uuid>,
+        #[serde(default)]
+        causation_id: Option<Uuid>,
+    },
     /// Execute the actions of a workflow run
     ExecuteWorkflowRun { run_id: Uuid },
 }
@@ -78,7 +84,7 @@ impl JobType {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id }
             | JobType::GenerateEmbedding { document_id }
-            | JobType::PurgeDocument { document_id }
+            | JobType::PurgeDocument { document_id, .. }
             | JobType::ProcessDocument { document_id } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
         }
@@ -127,6 +133,12 @@ pub enum FailOutcome {
     GaveUp,
     /// The claim expired or another worker owns the job.
     LostLease,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobContext {
+    pub vault_id: Option<folio_core::models::VaultId>,
+    pub lineage: folio_core::mutation::MutationLineage,
 }
 
 /// A job in the queue
@@ -229,6 +241,11 @@ impl JobQueue {
         dispatch!(self, renew(job))
     }
 
+    /// Returns the enqueue-time scope, or None for jobs created before context persistence.
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<JobContext>> {
+        dispatch!(self, context(job_id))
+    }
+
     /// Get count of pending jobs
     pub async fn pending_count(&self) -> Result<i64> {
         dispatch!(self, pending_count())
@@ -247,6 +264,10 @@ impl JobQueue {
     /// Find active jobs (pending or processing) for a specific document
     pub async fn find_active_jobs_for_document(&self, document_id: Uuid) -> Result<Vec<Job>> {
         dispatch!(self, find_active_jobs_for_document(document_id))
+    }
+
+    pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
+        dispatch!(self, latest_purge_job(document_id))
     }
 
     /// Whether the latest finished job for any processing stage failed

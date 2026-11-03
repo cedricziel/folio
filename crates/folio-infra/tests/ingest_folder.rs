@@ -7,7 +7,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    Document, FolderAfterImport, FolderConfig, Id, IngestItem, IngestOutcome, PollReport, VaultId,
+    Document, FolderAfterImport, FolderConfig, Id, IngestItem, IngestItemKey, IngestOutcome,
+    PollReport, VaultId,
 };
 use folio_core::ports::{IngestSink, IngestionSource};
 use folio_infra::FolderSource;
@@ -15,12 +16,23 @@ use folio_infra::FolderSource;
 #[derive(Default)]
 struct RecordingSink {
     items: Mutex<Vec<IngestItem>>,
+    observations: Mutex<Vec<IngestItemKey>>,
     fail_with: Option<String>,
     busy_once: Mutex<bool>,
 }
 
 #[async_trait]
 impl IngestSink for RecordingSink {
+    async fn ingest_observed(
+        &self,
+        source: Id,
+        key: IngestItemKey,
+        item: IngestItem,
+    ) -> Result<IngestOutcome> {
+        self.observations.lock().unwrap().push(key);
+        self.ingest(source, item).await
+    }
+
     async fn ingest(&self, _source: Id, item: IngestItem) -> Result<IngestOutcome> {
         if let Some(message) = &self.fail_with {
             return Err(Error::Storage(message.clone()));
@@ -638,4 +650,29 @@ async fn a_symlink_staging_root_leaves_input_and_external_files_untouched() {
     assert_eq!(std::fs::read(input).unwrap(), b"source input");
     assert_eq!(std::fs::read(external).unwrap(), b"external input");
     assert_eq!(std::fs::read_dir(&outside.root).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn folder_item_identity_survives_restart_and_distinguishes_replacement() {
+    let fx = Fixture::new();
+    fx.write("same.pdf", b"same bytes");
+    let source = fx.source(FolderAfterImport::Delete);
+    let sink = RecordingSink {
+        busy_once: Mutex::new(true),
+        ..Default::default()
+    };
+    source.poll(&sink).await.unwrap();
+    source.poll(&sink).await.unwrap();
+    drop(source);
+    fx.write("same.pdf", b"same bytes");
+    let restarted = fx.source(FolderAfterImport::Delete);
+
+    restarted.poll(&sink).await.unwrap();
+    restarted.poll(&sink).await.unwrap();
+    restarted.poll(&sink).await.unwrap();
+
+    let observations = sink.observations.lock().unwrap();
+    assert_eq!(observations.len(), 3);
+    assert_eq!(observations[0], observations[1]);
+    assert_ne!(observations[1], observations[2]);
 }

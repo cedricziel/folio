@@ -7,7 +7,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "paths": {
     "/api/auth/tokens": {
@@ -1809,6 +1809,409 @@
         ]
       }
     },
+    "/api/documents/{id}/entries": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "listDocumentEntries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/EntryKind"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 to 100; defaults to 50.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scoped notes or comments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryPageView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "createDocumentEntry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required nonnil UUID retained across retries",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created entry or matching creation replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The original entry was deleted"
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{id}/entries/{entry_id}": {
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "deleteDocumentEntry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Entry deleted"
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "updateDocumentEntry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entry_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEntryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/documents/{id}/purge": {
       "delete": {
         "tags": [
@@ -3192,6 +3595,447 @@
         ]
       }
     },
+    "/api/vaults/{vault_id}/saved-views": {
+      "get": {
+        "tags": [
+          "saved-views"
+        ],
+        "operationId": "listSavedViews",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible views ordered by ID; pass the last ID as after for the next page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "saved-views"
+        ],
+        "operationId": "createSavedView",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created saved view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "Sharing requires Editor access"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/saved-views/{id}": {
+      "get": {
+        "tags": [
+          "saved-views"
+        ],
+        "operationId": "getSavedView",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved view with validated references",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "saved-views"
+        ],
+        "operationId": "deleteSavedView",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted saved view"
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "Deletion is not allowed"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "saved-views"
+        ],
+        "operationId": "updateSavedView",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSavedView"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated saved view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required"
+          },
+          "403": {
+            "description": "Editing is not allowed"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/workflows": {
       "get": {
         "tags": [
@@ -3944,6 +4788,23 @@
           }
         }
       },
+      "CreateEntryRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Nonblank plain text, at most 16384 UTF-8 bytes."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntryKind"
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatePersonalTokenRequest": {
         "type": "object",
         "required": [
@@ -4150,6 +5011,65 @@
           }
         }
       },
+      "DocumentEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "document_id",
+          "vault_id",
+          "kind",
+          "body",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntryKind"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "DocumentEvent": {
         "oneOf": [
           {
@@ -4254,6 +5174,26 @@
           },
           {
             "type": "object",
+            "description": "Permanent deletion was requested.",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "purge_requested"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Document returned from trash.",
             "required": [
               "document_id",
@@ -4315,6 +5255,59 @@
         ],
         "description": "Event types that can be broadcast to clients"
       },
+      "DocumentFilter": {
+        "type": "object",
+        "description": "Filter criteria for listing documents",
+        "properties": {
+          "correspondent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Only documents created at or after this instant"
+          },
+          "created_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Only documents created strictly before this instant"
+          },
+          "document_type_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "search_query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tag_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "DocumentListResponse": {
         "type": "object",
         "description": "Response for document list",
@@ -4335,6 +5328,15 @@
             }
           }
         }
+      },
+      "DocumentSort": {
+        "type": "string",
+        "description": "Stable ordering for a document browse query.",
+        "enum": [
+          "newest",
+          "oldest",
+          "title"
+        ]
       },
       "DocumentSource": {
         "type": "object",
@@ -4602,6 +5604,62 @@
           }
         }
       },
+      "EntryKind": {
+        "type": "string",
+        "enum": [
+          "note",
+          "comment"
+        ]
+      },
+      "EntryPageView": {
+        "type": "object",
+        "required": [
+          "entries",
+          "can_create"
+        ],
+        "properties": {
+          "can_create": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntryView"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "EntryPermissions": {
+        "type": "object",
+        "required": [
+          "can_edit",
+          "can_delete"
+        ],
+        "properties": {
+          "can_delete": {
+            "type": "boolean"
+          },
+          "can_edit": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EntryView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DocumentEntry"
+          },
+          {
+            "$ref": "#/components/schemas/EntryPermissions"
+          }
+        ]
+      },
       "ErrorResponse": {
         "type": "object",
         "description": "API error response",
@@ -4813,6 +5871,114 @@
           "succeeded",
           "failed"
         ]
+      },
+      "SavedView": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault_id",
+          "owner_id",
+          "name",
+          "visibility",
+          "query",
+          "presentation",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/ViewPresentation"
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ViewVisibility"
+          }
+        }
+      },
+      "SavedViewInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "query"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/ViewPresentation"
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ViewVisibility"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SavedViewQuery": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "filters": {
+            "$ref": "#/components/schemas/DocumentFilter"
+          },
+          "sort": {
+            "$ref": "#/components/schemas/DocumentSort"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "SearchRequest": {
         "type": "object",
@@ -5268,6 +6434,37 @@
           }
         }
       },
+      "UpdateEntryRequest": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Nonblank plain text, at most 16384 UTF-8 bytes."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateSavedView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/ViewPresentation"
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ViewVisibility"
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateTagRequest": {
         "type": "object",
         "description": "Request body for updating a tag",
@@ -5347,6 +6544,20 @@
             "example": "owner"
           }
         }
+      },
+      "ViewPresentation": {
+        "type": "string",
+        "enum": [
+          "list",
+          "grid"
+        ]
+      },
+      "ViewVisibility": {
+        "type": "string",
+        "enum": [
+          "private",
+          "shared"
+        ]
       },
       "WebhookDocument": {
         "type": "object",
@@ -5463,6 +6674,16 @@
           "occurred_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "source_event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEventIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "version": {
             "type": "integer",
@@ -5671,10 +6892,62 @@
         ],
         "description": "A step a workflow performs, in order"
       },
+      "WorkflowActorCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "WorkflowConditions": {
         "type": "object",
         "description": "Conditions a document must meet; every set condition has to match",
         "properties": {
+          "all": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditions"
+            }
+          },
+          "any": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditions"
+            },
+            "description": "Omitted means unconstrained; an empty list never matches."
+          },
           "correspondent_id": {
             "type": [
               "string",
@@ -5691,6 +6964,16 @@
             "format": "uuid",
             "description": "The document has this document type"
           },
+          "event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEventConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "filename_glob": {
             "type": [
               "string",
@@ -5705,6 +6988,12 @@
             ],
             "description": "MIME type, exact or with a wildcard subtype such as `image/*`"
           },
+          "none": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditions"
+            }
+          },
           "source": {
             "$ref": "#/components/schemas/SourceConditions",
             "description": "Where the document came from: folder path, email sender, subject, and so on"
@@ -5716,6 +7005,51 @@
             ],
             "format": "uuid",
             "description": "The document carries this tag"
+          }
+        }
+      },
+      "WorkflowEventConditions": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActorCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowEventIdentity": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "mutation_id",
+          "correlation_id"
+        ],
+        "properties": {
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mutation_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5835,6 +7169,10 @@
           "document.uploaded",
           "document.processed",
           "document.updated",
+          "document.title_changed",
+          "document.tags_changed",
+          "document.correspondent_changed",
+          "document.document_type_changed",
           "document.deleted",
           "ingest.received"
         ]

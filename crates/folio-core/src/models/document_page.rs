@@ -7,6 +7,7 @@ use crate::error::{Error, Result};
 
 /// Stable ordering for a document browse query.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentSort {
     #[default]

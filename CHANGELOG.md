@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.8.0](https://github.com/cedricziel/folio/compare/v0.7.0...v0.8.0) (2026-11-02)
+
+
+### Features
+
+* **api:** manage and enforce personal token permissions ([bc487d1](https://github.com/cedricziel/folio/commit/bc487d135f3d436b818729dde01f88362328fd69))
+* **api:** serve authenticated document thumbnails ([e7702c2](https://github.com/cedricziel/folio/commit/e7702c253818724b16d6d3b0c15ccea4e462b22f))
+* **api:** serve authenticated document thumbnails ([#247](https://github.com/cedricziel/folio/issues/247)) ([56bdb1b](https://github.com/cedricziel/folio/commit/56bdb1b1e99e9a821222b139e9bc69a4cc468f5f))
+* **apple:** cache and display document row thumbnails ([44d407d](https://github.com/cedricziel/folio/commit/44d407d2c91135c3128d6f17ffa703f61a2372c0))
+* **apple:** cache and display document row thumbnails ([#255](https://github.com/cedricziel/folio/issues/255)) ([bf05971](https://github.com/cedricziel/folio/commit/bf059719ea8184418296e8d6459de178330468ab))
+* **apple:** provide authenticated File Provider thumbnails ([b40d510](https://github.com/cedricziel/folio/commit/b40d510def63ea4cbc6887e02b48deec3caf79de))
+* **apple:** provide authenticated File Provider thumbnails ([#253](https://github.com/cedricziel/folio/issues/253)) ([2da7bff](https://github.com/cedricziel/folio/commit/2da7bff5829fdcff2466924298705094e37edf03))
+* **apple:** retain document lists beside wide previews ([895a693](https://github.com/cedricziel/folio/commit/895a69306099a05f8e73f0f719bfd036a2fbf9b8))
+* **apple:** retain document lists beside wide previews ([#228](https://github.com/cedricziel/folio/issues/228)) ([08e4af9](https://github.com/cedricziel/folio/commit/08e4af92fd45978c947eae4236d2dd3b78d892e6))
+* **auth:** add scoped personal access tokens ([072251f](https://github.com/cedricziel/folio/commit/072251f22802d82aa3ad1e90c93bc07f2819ef85))
+* **core:** define file identity and revision storage keys ([3a6a96d](https://github.com/cedricziel/folio/commit/3a6a96dbfa8e797f3e4e0405499f3f7393b4bed1))
+* **core:** define file identity and revision storage keys ([#263](https://github.com/cedricziel/folio/issues/263)) ([e8958ea](https://github.com/cedricziel/folio/commit/e8958ea78c25caf59b6a3a0a968bf00be9bbae57))
+* **core:** define versioned saved-view contracts ([1bd34fa](https://github.com/cedricziel/folio/commit/1bd34fa65647f04cd3041e50aacf76467a16d501))
+* **core:** define versioned saved-view contracts ([#264](https://github.com/cedricziel/folio/issues/264)) ([48a49a6](https://github.com/cedricziel/folio/commit/48a49a628551ee8e41a0a3d04520abfc72de7fec))
+* **core:** derive precise document metadata transitions ([17e025a](https://github.com/cedricziel/folio/commit/17e025a5246342ad13b72a5e8076974a12fcd272))
+* **core:** derive precise document metadata transitions ([#261](https://github.com/cedricziel/folio/issues/261)) ([3355716](https://github.com/cedricziel/folio/commit/3355716bf4a5fb7f3e676e73785994b8c0aaf7d2))
+* **core:** model document dates and explicit review decisions ([777b949](https://github.com/cedricziel/folio/commit/777b9492ae4626be426088cc591e1990536f1ff5))
+* **core:** model document dates and explicit review decisions ([#262](https://github.com/cedricziel/folio/issues/262)) ([b650ecc](https://github.com/cedricziel/folio/commit/b650ecc51db5cf2b62dd321a528da3d0c4378b3e))
+* **core:** require explicit vault ownership on domain models ([7e7e010](https://github.com/cedricziel/folio/commit/7e7e0107e4d83ac9d3653598968a2b4bf62781a8))
+* **core:** require explicit vault ownership on domain models ([#260](https://github.com/cedricziel/folio/issues/260)) ([e635500](https://github.com/cedricziel/folio/commit/e635500b50001842992f2259d1d5f702fc257d04))
+* **core:** scope mutation actors to authenticated requests ([c801b46](https://github.com/cedricziel/folio/commit/c801b46b2a7426562d40bdc2be895e9ac00bc9b7))
+* **core:** scope mutation actors to authenticated requests ([#258](https://github.com/cedricziel/folio/issues/258)) ([3358bb3](https://github.com/cedricziel/folio/commit/3358bb39208e4970eb78eaa71fa457cdd486391a))
+* **core:** validate typed metadata values exactly ([8f5cd47](https://github.com/cedricziel/folio/commit/8f5cd47e9275bdea673802db60147fbfe6a686e8))
+* **core:** validate typed metadata values exactly ([#259](https://github.com/cedricziel/folio/issues/259)) ([d356183](https://github.com/cedricziel/folio/commit/d35618363509284c41bed910aca362d07c7f158b))
+* **events:** add versioned transactional domain envelopes ([f2072e0](https://github.com/cedricziel/folio/commit/f2072e0ca23c5b98596885e98627e60e70b4bb82))
+* **events:** add versioned transactional domain envelopes ([#265](https://github.com/cedricziel/folio/issues/265)) ([154c484](https://github.com/cedricziel/folio/commit/154c484d943dd50cd9d6086f84122678646435e8))
+* **integrations:** add shortcuts and scoped personal tokens ([#251](https://github.com/cedricziel/folio/issues/251)) ([2ff04be](https://github.com/cedricziel/folio/commit/2ff04be693d61cabf40d95c56c210812ddc6119c))
+* **web:** add integration shortcuts and token controls ([f7d6dc4](https://github.com/cedricziel/folio/commit/f7d6dc43e88a77660dd41d8f2eab83d2f3baf97a))
+
+
+### Bug Fixes
+
+* **apple:** expose Mac settings and account commands ([#227](https://github.com/cedricziel/folio/issues/227)) ([080e948](https://github.com/cedricziel/folio/commit/080e94878a1f968df67def9e8a77befd505a74c3))
+* **apple:** preserve the filename in shared document titles ([de6a73e](https://github.com/cedricziel/folio/commit/de6a73ecc8761a1809271b17474e3549e2abbbd0))
+* **apple:** preserve the filename in shared document titles ([#248](https://github.com/cedricziel/folio/issues/248)) ([29ca4f6](https://github.com/cedricziel/folio/commit/29ca4f6672adecd4e72652f43882ee2c97c97b76))
+* **auth:** preserve browser session authentication ([816482a](https://github.com/cedricziel/folio/commit/816482a5bc4f3344154b2e243caed982598192fa))
+* **events:** preserve origin and metadata through delayed delivery ([d1703f4](https://github.com/cedricziel/folio/commit/d1703f48472c52c6a6212dceff44e7dc79e63572))
+* **events:** preserve origin and metadata through delayed delivery ([#252](https://github.com/cedricziel/folio/issues/252)) ([a0671ba](https://github.com/cedricziel/folio/commit/a0671ba0429f9f027013cb79b8cb6355ac779d53))
+* **ingest:** bound IMAP operations and discard timed-out sessions ([110fb6d](https://github.com/cedricziel/folio/commit/110fb6d470f7e4b29610defe0fca3dc8385ab0b6))
+* **ingest:** bound IMAP operations and discard timed-out sessions ([#243](https://github.com/cedricziel/folio/issues/243)) ([ef53979](https://github.com/cedricziel/folio/commit/ef539790daf75128b8e73b41b5d3b0cd7583fabf))
+* **ingest:** claim watched files before reading and cleanup ([f149e3c](https://github.com/cedricziel/folio/commit/f149e3c3291f52e1ddea669fd1cde4269393b044))
+* **ingest:** claim watched files before reading and cleanup ([#240](https://github.com/cedricziel/folio/issues/240)) ([6739c4b](https://github.com/cedricziel/folio/commit/6739c4b5c8e8da6c5ff0e108abe7c07fbcdb5f1c)), closes [#145](https://github.com/cedricziel/folio/issues/145)
+* **ingest:** preserve inputs while matching imports are pending ([#231](https://github.com/cedricziel/folio/issues/231)) ([67652ef](https://github.com/cedricziel/folio/commit/67652ef977bc054853d536f5cd5b6f46f12e5a8a)), closes [#147](https://github.com/cedricziel/folio/issues/147)
+* **ingest:** publish creation only after original finalization ([f6d6ea5](https://github.com/cedricziel/folio/commit/f6d6ea53fae5f7c3d771d36290b026087d2f76ae))
+* **ingest:** publish creation only after original finalization ([#244](https://github.com/cedricziel/folio/issues/244)) ([8fc9626](https://github.com/cedricziel/folio/commit/8fc9626ed4131eddfe51269454a1809598e42677))
+* **ingest:** recover interrupted imports with fenced document identity ([58edf93](https://github.com/cedricziel/folio/commit/58edf93d12dcaf9beddc0b451b627ee9d11a1cf7))
+* **ingest:** recover interrupted imports with fenced document identity ([#242](https://github.com/cedricziel/folio/issues/242)) ([c52756f](https://github.com/cedricziel/folio/commit/c52756f2c2de25e1969969eb6eb87176aa1fa31f))
+* **ingest:** scope fallback mail identity to mailbox validity ([#234](https://github.com/cedricziel/folio/issues/234)) ([941ea7f](https://github.com/cedricziel/folio/commit/941ea7fa686872217938522d7ec30e4a6431bc54)), closes [#146](https://github.com/cedricziel/folio/issues/146)
+* **integrations:** align tokens with current API and migrations ([cb8f925](https://github.com/cedricziel/folio/commit/cb8f92514fe697f818937177e10ff2f979032252))
+* **mcp:** authorize vocabulary creation at the write boundary ([96f69c0](https://github.com/cedricziel/folio/commit/96f69c061300168b9a2dc5158cd02138daaa99fb))
+* **mcp:** enforce vault permissions and session ownership ([a2970c9](https://github.com/cedricziel/folio/commit/a2970c9ddc4c6cee167b704753fd6eed52ec0653))
+* **outbox:** persist immutable document context with each event ([e237564](https://github.com/cedricziel/folio/commit/e2375649d5082cca0aa6eeef01ba903308a7ff0f))
+* **outbox:** persist immutable document context with each event ([#246](https://github.com/cedricziel/folio/issues/246)) ([00ec34d](https://github.com/cedricziel/folio/commit/00ec34d04c874bf025219834ee81b85aa6fde817))
+* **queue:** protect active jobs with renewable leases ([#237](https://github.com/cedricziel/folio/issues/237)) ([c6a49af](https://github.com/cedricziel/folio/commit/c6a49aff511849303ab33e817ee523e9ae4e1e9a)), closes [#138](https://github.com/cedricziel/folio/issues/138)
+* **ui:** complete scoped interface transitions ([#223](https://github.com/cedricziel/folio/issues/223)) ([d066e20](https://github.com/cedricziel/folio/commit/d066e201a1fba57bfb2d4aaedafa8017bb43fdb3))
+* **ui:** identify upload retry buttons by filename ([8acfb22](https://github.com/cedricziel/folio/commit/8acfb22c4257879066ffa3eee488b2979b6abd02))
+* **ui:** separate upload dismissal from cancellation ([#241](https://github.com/cedricziel/folio/issues/241)) ([43c6484](https://github.com/cedricziel/folio/commit/43c6484c8470166818e4d1b7b918e25198da82b6))
+* **web:** unify input styling across forms ([dea2e08](https://github.com/cedricziel/folio/commit/dea2e080d973cd54f40d6f928711144c25500559))
+* **web:** unify input styling across forms ([#249](https://github.com/cedricziel/folio/issues/249)) ([cc1ef63](https://github.com/cedricziel/folio/commit/cc1ef63731ce5d55f5e40ed502748baab3eec766))
+
 ## [0.7.0](https://github.com/cedricziel/folio/compare/v0.6.0...v0.7.0) (2026-11-02)
 
 
