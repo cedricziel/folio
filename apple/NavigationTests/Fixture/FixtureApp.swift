@@ -18,6 +18,8 @@ typealias Document = FolioKit.Document
                 OnboardingLayoutFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--share-layout") {
                 ShareLayoutFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--saved-views") {
+                SavedViewsFixture(service: service)
             } else {
                 WorkspaceView(
                     serverURL: URL(string: "https://unused.invalid")!,
@@ -49,5 +51,25 @@ private struct ScanReviewFixture: View {
                     onFinished: { _ in presented = false }
                 )
             }
+    }
+}
+
+private struct SavedViewsFixture: View {
+    let service: any FolioService
+    @State private var workspace: WorkspaceViewModel
+
+    init(service: any FolioService) {
+        self.service = service
+        _workspace = State(initialValue: WorkspaceViewModel(service: service))
+    }
+
+    var body: some View {
+        WorkspaceView(
+            serverURL: URL(string: "https://unused.invalid")!, service: service, onSignOut: {}, workspace: workspace
+        )
+        .task {
+            await workspace.loadVaults()
+            workspace.destination = .all
+        }
     }
 }

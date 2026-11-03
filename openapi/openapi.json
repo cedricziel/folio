@@ -5256,6 +5256,26 @@
           },
           {
             "type": "object",
+            "description": "Permanent deletion was requested.",
+            "required": [
+              "document_id",
+              "type"
+            ],
+            "properties": {
+              "document_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "purge_requested"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Document returned from trash.",
             "required": [
               "document_id",
@@ -6830,6 +6850,16 @@
             "type": "string",
             "format": "date-time"
           },
+          "source_event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEventIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
             "type": "integer",
             "format": "int32",
@@ -7037,6 +7067,42 @@
         ],
         "description": "A step a workflow performs, in order"
       },
+      "WorkflowActorCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "WorkflowConditions": {
         "type": "object",
         "description": "Conditions a document must meet; every set condition has to match",
@@ -7073,6 +7139,16 @@
             "format": "uuid",
             "description": "The document has this document type"
           },
+          "event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEventConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "filename_glob": {
             "type": [
               "string",
@@ -7104,6 +7180,51 @@
             ],
             "format": "uuid",
             "description": "The document carries this tag"
+          }
+        }
+      },
+      "WorkflowEventConditions": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActorCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowEventIdentity": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "mutation_id",
+          "correlation_id"
+        ],
+        "properties": {
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mutation_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -7223,6 +7344,10 @@
           "document.uploaded",
           "document.processed",
           "document.updated",
+          "document.title_changed",
+          "document.tags_changed",
+          "document.correspondent_changed",
+          "document.document_type_changed",
           "document.deleted",
           "ingest.received"
         ]

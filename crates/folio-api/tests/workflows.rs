@@ -439,6 +439,21 @@ async fn pages_render_and_the_form_creates_a_workflow() {
 }
 
 #[tokio::test]
+async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["trigger"] = json!("document.tags_changed");
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["trigger"], "document.tags_changed");
+    let id = created["id"].as_str().unwrap();
+    let (status, html) = send(&app, "GET", &format!("/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("value=\"document.tags_changed\" selected"));
+    assert!(html.contains("When document tags change"));
+}
+
+#[tokio::test]
 async fn the_form_explains_rejected_input() {
     let app = test_app().await;
     let form = "name=Bad&trigger=document.uploaded&webhook_url=ftp%3A%2F%2Fexample.com";
@@ -622,4 +637,28 @@ async fn the_form_shows_and_edits_every_action() {
     assert!(
         matches!(&stored.actions[0], WorkflowAction::AddTags { tag_ids } if tag_ids.len() == 1)
     );
+}
+
+#[tokio::test]
+async fn typed_event_conditions_survive_api_storage_and_html_edits() {
+    let app = test_app().await;
+    let conditions = json!({"event": {
+        "subject_id": Uuid::new_v4(), "actor": {"type": "user", "user_id": "editor"}
+    }});
+    let mut body = workflow_body("https://example.com/hook");
+    body["conditions"] = conditions.clone();
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["conditions"], conditions);
+    let id = created["id"].as_str().unwrap();
+    let response = app.router.clone().oneshot(
+        Request::post(format!("/workflows/{id}"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("name=Event+filter&trigger=document.uploaded&enabled=on&webhook_url=https%3A%2F%2Fexample.com%2Fhook"))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["conditions"], conditions);
 }

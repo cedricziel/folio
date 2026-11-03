@@ -216,6 +216,19 @@ recursive schema references, and preserving API-created groups through HTML edit
 The core suite also verifies trigger registration, duplicate and unknown selections,
 condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
+The same core and API suites cover subject and actor conditions, explicit system
+attribution, mixed event/document branches, unavailable entry body filters, and
+preserving event filters through HTML edits. The workflow suite verifies that
+captured actors override ambient dispatcher context without granting private access.
+The shared repository contract also verifies concurrent mutation deduplication,
+separate workflows, distinct mutations sharing a correlation, invalid captured
+identity rejection, and legacy source-event deduplication on both databases.
+For precise metadata transitions, `cargo test -p folio-infra --test workflows`
+checks actual producer dispatch, delayed snapshots, replay deduplication, and
+system-actor lineage after source-outbox deletion. Run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract satisfies_the_contract`
+for SQLite/PostgreSQL producer-to-run persistence, and the workflow API suite
+for trigger selection and web-editor roundtrip.
 
 Run `cargo test -p folio-infra --test workflows` and
 `cargo test -p folio-api --test vaults --test live` for immutable event delivery.
@@ -534,3 +547,29 @@ claims, pagination, retirement, restore conflicts, no-op suppression, and rollba
 when outbox publication fails, option identity, and select-field integrity. Events are
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
+
+## Verify SQLite trash contention
+
+Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
+The temporary database fixture holds a competing writer, verifies trash waits,
+and checks that the committed trash snapshot includes the writer's change.
+
+## Verify permanent deletion events
+
+For permanent deletion, `cargo test -p folio-infra --lib permanent_deletion`
+checks failed object removal, repair of exhausted jobs, preserved causal lineage,
+and system-actor completion. The document transition suite checks distinct purge
+request/completion snapshots, repeat suppression, legacy job payloads, and both
+databases' persisted request lineage. Regenerate OpenAPI after projection changes.
+
+## Verify Apple saved views
+
+Run the isolated Swift package suite above for saved-view query mapping, ownership
+fields, unchanged-query omission on rename, unsupported versions, paging resets,
+cross-vault rejection, and late responses after switching vaults. Run the macOS
+build/authentication/provider checks for the production views.
+The navigation fixture's `testSavedViewCanBeSavedEditedAndDeleted` saves the
+current view, reopens its editor, persists a rename, and deletes it. It retains a
+saved-view screenshot for inspection. Use a fresh simulator and the bounded
+procedure above; compilation or an accessibility timeout before the first tap
+does not verify the controls.

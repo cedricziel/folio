@@ -21,6 +21,7 @@ mod tag;
 mod vault;
 mod webhook;
 mod workflow;
+mod workflow_event_conditions;
 mod workflow_trigger;
 
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
@@ -61,12 +62,15 @@ pub use vault::{
     Access, AuditEvent, GroupId, NewAuditEvent, Principal, UserId, Vault, VaultAction, VaultId,
     VaultMember, VaultRole,
 };
-pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOAD_VERSION};
+pub use webhook::{
+    NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
+};
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
+pub use workflow_event_conditions::{WorkflowActorCondition, WorkflowEventConditions};
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
     WorkflowTriggerRegistry,

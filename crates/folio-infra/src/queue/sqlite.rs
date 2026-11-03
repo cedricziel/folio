@@ -335,6 +335,17 @@ impl SqliteJobQueue {
     }
 
     /// Whether the latest finished job for any processing stage failed
+    pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
+        let payload: Option<String> = sqlx::query_scalar("SELECT payload FROM jobs WHERE job_type = 'purge_document' AND json_extract(payload, '$.data.document_id') = ? ORDER BY created_at DESC, id DESC LIMIT 1")
+            .bind(document_id.to_string()).fetch_optional(&self.pool).await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        payload
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|error| Error::Repository(error.to_string()))
+            })
+            .transpose()
+    }
+
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         let search_pattern = format!("%\"document_id\":\"{}\"%", document_id);
 
