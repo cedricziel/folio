@@ -6878,6 +6878,42 @@
         ],
         "description": "A step a workflow performs, in order"
       },
+      "WorkflowActorCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "user_id",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user"
+                ]
+              },
+              "user_id": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "WorkflowConditions": {
         "type": "object",
         "description": "Conditions a document must meet; every set condition has to match",
@@ -6914,6 +6950,16 @@
             "format": "uuid",
             "description": "The document has this document type"
           },
+          "event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEventConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "filename_glob": {
             "type": [
               "string",
@@ -6947,6 +6993,29 @@
             "description": "The document carries this tag"
           }
         }
+      },
+      "WorkflowEventConditions": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowActorCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "subject_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
       },
       "WorkflowEventIdentity": {
         "type": "object",
