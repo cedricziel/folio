@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DocumentDetailView: View {
     @State var model: DocumentDetailViewModel
+    @State private var showingDiscussion = false
     @State private var editingDate = false
     let vaultID: UUID
 
@@ -23,6 +24,7 @@ struct DocumentDetailView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+        .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
         .sheet(isPresented: $editingDate) {
             DocumentDateEditor(documentDate: model.document.documentDate) { date in
                 try await model.saveDocumentDate(date)
@@ -76,6 +78,7 @@ struct DocumentDetailView: View {
                         }
                     }
                 }
+                Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
                 if let failure = model.metadataFailure {
                     Text(failure).foregroundStyle(Color.danger)
                     Button("Retry details") { Task { await model.refreshMetadata() } }

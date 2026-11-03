@@ -102,6 +102,73 @@ import XCTest
         XCTAssertFalse(app.navigationBars["Review a scan"].exists)
     }
 
+    func testDocumentNotesSupportAddEditDeleteAndReturnToPreview() {
+        let app = openDiscussion()
+        app.buttons["Add note"].tap()
+        let editor = app.textViews["Note text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), app.debugDescription)
+        editor.tap()
+        editor.typeText("Fixture note")
+        XCTAssertTrue(app.buttons["Save"].isEnabled)
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["Fixture note"].waitForExistence(timeout: 5), app.debugDescription)
+
+        app.buttons["document-entry-edit"].tap()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText(" revised")
+        app.buttons["Save"].tap()
+        let revised = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "revised")).firstMatch
+        XCTAssertTrue(revised.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Updated"].exists)
+
+        app.buttons["document-entry-delete"].tap()
+        let confirm = app.sheets["Delete this note?"].buttons["confirm-entry-delete"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.tap()
+        XCTAssertTrue(revised.waitForNonExistence(timeout: 5), app.debugDescription)
+        app.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    func testLostCommentResponseRetainsDraftAndRetryCreatesOneEntry() {
+        let app = openDiscussion(arguments: ["--discussion-save-failure"])
+        app.segmentedControls.buttons["Comments"].tap()
+        app.buttons["Add comment"].tap()
+        let editor = app.textViews["Comment text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), app.debugDescription)
+        editor.tap()
+        editor.typeText("Keep this comment")
+        app.buttons["Save"].tap()
+        let retry = app.buttons["Retry save"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Couldn't reach the server."].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(retry.isEnabled)
+        XCTAssertEqual(editor.value as? String, "Keep this comment")
+        XCTAssertFalse(editor.isEnabled)
+        XCTAssertTrue(app.buttons["Cancel"].isEnabled)
+        XCTAssertFalse(app.buttons["Done"].isEnabled)
+        retry.tap()
+        XCTAssertTrue(app.staticTexts["Keep this comment"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Keep this comment").count, 1)
+    }
+
+    private func openDiscussion(arguments: [String] = []) -> XCUIApplication {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = arguments
+        app.launch()
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "First fixture")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
+        first.tap()
+        let discussion = app.buttons["Notes and comments"]
+        XCTAssertTrue(discussion.waitForExistence(timeout: 5), app.debugDescription)
+        discussion.tap()
+        XCTAssertTrue(app.navigationBars["Notes and comments"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["Add note"].waitForExistence(timeout: 5), app.debugDescription)
+        return app
+    }
+
     private func openScanReview() -> XCUIApplication {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

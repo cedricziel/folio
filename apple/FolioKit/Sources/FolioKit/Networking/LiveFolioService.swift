@@ -161,6 +161,49 @@ public struct LiveFolioService: FolioService {
         )
     }
 
+    public func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) async throws -> DocumentEntryPage
+    {
+        try await call("document_entries.list") {
+            let page = try await client.listDocumentEntries(
+                path: .init(id: documentID.uuidString.lowercased()),
+                query: .init(kind: kind.apiValue, limit: 50, cursor: cursor)
+            ).ok.body.json
+            return try DocumentEntryPage(
+                entries: page.entries.map(DocumentEntry.init), nextCursor: page.nextCursor, canCreate: page.canCreate)
+        }
+    }
+
+    public func createEntry(documentID: UUID, kind: DocumentEntryKind, body: String, key: UUID) async throws
+        -> DocumentEntry
+    {
+        try await call("document_entries.create") {
+            try await DocumentEntry(
+                client.createDocumentEntry(
+                    path: .init(id: documentID.uuidString.lowercased()),
+                    headers: .init(idempotencyKey: key.uuidString.lowercased()),
+                    body: .json(.init(body: body, kind: kind.apiValue))
+                ).created.body.json)
+        }
+    }
+
+    public func updateEntry(documentID: UUID, entryID: UUID, body: String) async throws -> DocumentEntry {
+        try await call("document_entries.update") {
+            try await DocumentEntry(
+                client.updateDocumentEntry(
+                    path: .init(id: documentID.uuidString.lowercased(), entryId: entryID.uuidString.lowercased()),
+                    body: .json(.init(body: body))
+                ).ok.body.json)
+        }
+    }
+
+    public func deleteEntry(documentID: UUID, entryID: UUID) async throws {
+        try await call("document_entries.delete") {
+            _ = try await client.deleteDocumentEntry(
+                path: .init(id: documentID.uuidString.lowercased(), entryId: entryID.uuidString.lowercased())
+            ).noContent
+        }
+    }
+
     public func ping() async throws {
         _ = try await tags()
     }
@@ -510,5 +553,26 @@ extension Document {
         tags = try raw.value2.tags.map {
             try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color)
         }
+    }
+}
+
+private extension DocumentEntryKind {
+    var apiValue: Components.Schemas.EntryKind {
+        switch self {
+        case .note: .note
+        case .comment: .comment
+        }
+    }
+}
+
+private extension DocumentEntry {
+    init(_ raw: Components.Schemas.EntryView) throws {
+        let entry = raw.value1
+        self.init(
+            id: try LiveFolioService.uuid(entry.id), documentID: try LiveFolioService.uuid(entry.documentId),
+            vaultID: try LiveFolioService.uuid(entry.vaultId), kind: entry.kind == .note ? .note : .comment,
+            body: entry.body, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+            createdBy: entry.createdBy, canEdit: raw.value2.canEdit, canDelete: raw.value2.canDelete
+        )
     }
 }
