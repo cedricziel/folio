@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 
 use crate::models::{
-    Id, MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput, VaultId,
+    DocumentMetadata, Id, MetadataChange, MetadataField, MetadataFieldInput, MetadataOption,
+    MetadataOptionInput, VaultId,
 };
 use crate::Result;
 
@@ -68,4 +69,24 @@ pub trait MetadataOptionRepository: Send + Sync {
         id: Id,
         deleted: bool,
     ) -> Result<MetadataOption>;
+}
+
+/// Callers authorize document access; references never resolve outside the supplied vault.
+#[async_trait]
+pub trait MetadataValueRepository: Send + Sync {
+    /// Read retained values, including cleared ones, of a document in the vault.
+    async fn get(&self, vault: VaultId, document: Id) -> Result<DocumentMetadata>;
+    /// Apply all changes atomically when `revision` still matches, or fail as a whole.
+    ///
+    /// Stale revisions and uniqueness or lifecycle collisions are conflicts. Unchanged
+    /// values are skipped, and a patch that changes nothing keeps the revision and emits
+    /// no event. Otherwise one `document.metadata.changed` event is published in the
+    /// same transaction.
+    async fn patch(
+        &self,
+        vault: VaultId,
+        document: Id,
+        revision: Option<Id>,
+        changes: Vec<MetadataChange>,
+    ) -> Result<DocumentMetadata>;
 }

@@ -6,7 +6,8 @@
         {% else %}
         {% for correspondent in correspondents %}
         <li class="manage-list-item" id="correspondent-{{ correspondent.id }}">
-            <span class="manage-item-name">{{ correspondent.name }}</span>
+            <div class="manage-item-name">{{ correspondent.name }}
+            <details class="f-meta"><summary>History</summary>Created {{ correspondent.created_at }}{% if let Some(actor) = correspondent.created_by %} by {{ actor }}{% endif %}<br>Updated {{ correspondent.updated_at }}{% if let Some(actor) = correspondent.updated_by %} by {{ actor }}{% endif %}</details></div>
             {% if true|can_manage %}
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename correspondent {{ correspondent.name }}"
@@ -36,4 +37,19 @@
         {% endfor %}
         {% endif %}
     </ul>
+    <details class="manage-trash">
+        <summary class="hint">Trash ({{ trashed_correspondents.len() }})</summary>
+        <ul class="manage-list">
+        {% for entry in trashed_correspondents %}
+            <li class="manage-list-item">
+                <span class="manage-item-name">{{ entry.name }} <span class="f-meta">{% if let Some(at) = entry.deleted_at %}Deleted {{ at }}{% endif %}</span><br><span class="f-meta">Created {{ entry.created_at }}{% if let Some(actor) = entry.created_by %} by {{ actor }}{% endif %}<br>Updated {{ entry.updated_at }}{% if let Some(actor) = entry.updated_by %} by {{ actor }}{% endif %}</span></span>
+                {% if true|can_manage %}
+                <form action="{{ "/manage/correspondents"|vault_url }}/{{ entry.id }}/restore" method="post" data-turbo-frame="correspondents-list">
+                    <button type="submit" class="f-btn f-btn-quiet">Restore</button>
+                </form>
+                {% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </details>
 </turbo-frame>

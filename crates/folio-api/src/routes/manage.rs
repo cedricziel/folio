@@ -25,6 +25,15 @@ use super::view::{Nav, Sidebar};
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/manage/tags/{id}/restore", post(restore_tag_form))
+        .route(
+            "/manage/correspondents/{id}/restore",
+            post(restore_correspondent_form),
+        )
+        .route(
+            "/manage/document_types/{id}/restore",
+            post(restore_document_type_form),
+        )
         // Main management page
         .route("/manage", get(manage_page))
         // Correspondents
@@ -81,8 +90,11 @@ struct ManageTemplate {
     sidebar: Sidebar,
     title: String,
     correspondents: Vec<Correspondent>,
+    trashed_correspondents: Vec<Correspondent>,
     document_types: Vec<DocumentType>,
+    trashed_document_types: Vec<DocumentType>,
     tags: Vec<Tag>,
+    trashed_tags: Vec<Tag>,
 }
 
 async fn manage_page(
@@ -90,15 +102,21 @@ async fn manage_page(
     State(state): State<AppState>,
 ) -> ApiResult<Html<String>> {
     let correspondents = state.correspondent_repo.list(vault).await?;
+    let trashed_correspondents = state.correspondent_repo.list_trash(vault).await?;
     let document_types = state.document_type_repo.list(vault).await?;
+    let trashed_document_types = state.document_type_repo.list_trash(vault).await?;
     let tags = state.tag_repo.list(vault).await?;
+    let trashed_tags = state.tag_repo.list_trash(vault).await?;
 
     let template = ManageTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::Manage).await?,
         title: "Manage - Folio".to_string(),
         correspondents,
+        trashed_correspondents,
         document_types,
+        trashed_document_types,
         tags,
+        trashed_tags,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -114,6 +132,7 @@ async fn manage_page(
 #[template(path = "partials/correspondents_list.html")]
 struct CorrespondentsListTemplate {
     correspondents: Vec<Correspondent>,
+    trashed_correspondents: Vec<Correspondent>,
 }
 
 async fn correspondents_list(
@@ -121,7 +140,11 @@ async fn correspondents_list(
     State(state): State<AppState>,
 ) -> ApiResult<Html<String>> {
     let correspondents = state.correspondent_repo.list(vault).await?;
-    let template = CorrespondentsListTemplate { correspondents };
+    let trashed_correspondents = state.correspondent_repo.list_trash(vault).await?;
+    let template = CorrespondentsListTemplate {
+        correspondents,
+        trashed_correspondents,
+    };
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
     })))
@@ -143,7 +166,11 @@ async fn create_correspondent_form(
         .await?;
 
     let correspondents = state.correspondent_repo.list(vault).await?;
-    let template = CorrespondentsListTemplate { correspondents };
+    let trashed_correspondents = state.correspondent_repo.list_trash(vault).await?;
+    let template = CorrespondentsListTemplate {
+        correspondents,
+        trashed_correspondents,
+    };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -197,7 +224,11 @@ async fn update_correspondent_form(
         .await?;
 
     let correspondents = state.correspondent_repo.list(vault).await?;
-    let template = CorrespondentsListTemplate { correspondents };
+    let trashed_correspondents = state.correspondent_repo.list_trash(vault).await?;
+    let template = CorrespondentsListTemplate {
+        correspondents,
+        trashed_correspondents,
+    };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -213,7 +244,11 @@ async fn delete_correspondent_form(
     state.correspondent_repo.delete(vault, id).await?;
 
     let correspondents = state.correspondent_repo.list(vault).await?;
-    let template = CorrespondentsListTemplate { correspondents };
+    let trashed_correspondents = state.correspondent_repo.list_trash(vault).await?;
+    let template = CorrespondentsListTemplate {
+        correspondents,
+        trashed_correspondents,
+    };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -229,6 +264,7 @@ async fn delete_correspondent_form(
 #[template(path = "partials/document_types_list.html")]
 struct DocumentTypesListTemplate {
     document_types: Vec<DocumentType>,
+    trashed_document_types: Vec<DocumentType>,
 }
 
 async fn document_types_list(
@@ -236,7 +272,11 @@ async fn document_types_list(
     State(state): State<AppState>,
 ) -> ApiResult<Html<String>> {
     let document_types = state.document_type_repo.list(vault).await?;
-    let template = DocumentTypesListTemplate { document_types };
+    let trashed_document_types = state.document_type_repo.list_trash(vault).await?;
+    let template = DocumentTypesListTemplate {
+        document_types,
+        trashed_document_types,
+    };
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
     })))
@@ -258,7 +298,11 @@ async fn create_document_type_form(
         .await?;
 
     let document_types = state.document_type_repo.list(vault).await?;
-    let template = DocumentTypesListTemplate { document_types };
+    let trashed_document_types = state.document_type_repo.list_trash(vault).await?;
+    let template = DocumentTypesListTemplate {
+        document_types,
+        trashed_document_types,
+    };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -312,7 +356,11 @@ async fn update_document_type_form(
         .await?;
 
     let document_types = state.document_type_repo.list(vault).await?;
-    let template = DocumentTypesListTemplate { document_types };
+    let trashed_document_types = state.document_type_repo.list_trash(vault).await?;
+    let template = DocumentTypesListTemplate {
+        document_types,
+        trashed_document_types,
+    };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -328,7 +376,11 @@ async fn delete_document_type_form(
     state.document_type_repo.delete(vault, id).await?;
 
     let document_types = state.document_type_repo.list(vault).await?;
-    let template = DocumentTypesListTemplate { document_types };
+    let trashed_document_types = state.document_type_repo.list_trash(vault).await?;
+    let template = DocumentTypesListTemplate {
+        document_types,
+        trashed_document_types,
+    };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -344,6 +396,7 @@ async fn delete_document_type_form(
 #[template(path = "partials/tags_list.html")]
 struct TagsListTemplate {
     tags: Vec<Tag>,
+    trashed_tags: Vec<Tag>,
 }
 
 async fn tags_list(
@@ -351,7 +404,8 @@ async fn tags_list(
     State(state): State<AppState>,
 ) -> ApiResult<Html<String>> {
     let tags = state.tag_repo.list(vault).await?;
-    let template = TagsListTemplate { tags };
+    let trashed_tags = state.tag_repo.list_trash(vault).await?;
+    let template = TagsListTemplate { tags, trashed_tags };
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering list: {}", e)
     })))
@@ -381,7 +435,8 @@ async fn create_tag_form(
         .await?;
 
     let tags = state.tag_repo.list(vault).await?;
-    let template = TagsListTemplate { tags };
+    let trashed_tags = state.tag_repo.list_trash(vault).await?;
+    let template = TagsListTemplate { tags, trashed_tags };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -443,7 +498,8 @@ async fn update_tag_form(
         .await?;
 
     let tags = state.tag_repo.list(vault).await?;
-    let template = TagsListTemplate { tags };
+    let trashed_tags = state.tag_repo.list_trash(vault).await?;
+    let template = TagsListTemplate { tags, trashed_tags };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
@@ -459,10 +515,80 @@ async fn delete_tag_form(
     state.tag_repo.delete(vault, id).await?;
 
     let tags = state.tag_repo.list(vault).await?;
-    let template = TagsListTemplate { tags };
+    let trashed_tags = state.tag_repo.list_trash(vault).await?;
+    let template = TagsListTemplate { tags, trashed_tags };
     let html = template
         .render()
         .unwrap_or_else(|e| format!("Error: {}", e));
 
     Ok(([(header::CONTENT_TYPE, "text/html")], html).into_response())
+}
+
+async fn restore_tag_form(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let conflict = match state.tag_repo.restore(vault, id).await {
+        Ok(_) => false,
+        Err(folio_core::Error::Duplicate { .. } | folio_core::Error::Conflict(_)) => true,
+        Err(error) => return Err(error.into()),
+    };
+    let tags = state.tag_repo.list(vault).await?;
+    let trashed_tags = state.tag_repo.list_trash(vault).await?;
+    let mut html = TagsListTemplate { tags, trashed_tags }
+        .render()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    if conflict {
+        html = html.replacen("<ul", r#"<p role="alert" class="hint">Restore failed. An active entry already uses this name.</p><ul"#, 1);
+    }
+    Ok(Html(html))
+}
+
+async fn restore_correspondent_form(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let conflict = match state.correspondent_repo.restore(vault, id).await {
+        Ok(_) => false,
+        Err(folio_core::Error::Duplicate { .. } | folio_core::Error::Conflict(_)) => true,
+        Err(error) => return Err(error.into()),
+    };
+    let correspondents = state.correspondent_repo.list(vault).await?;
+    let trashed_correspondents = state.correspondent_repo.list_trash(vault).await?;
+    let mut html = CorrespondentsListTemplate {
+        correspondents,
+        trashed_correspondents,
+    }
+    .render()
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+    if conflict {
+        html = html.replacen("<ul", r#"<p role="alert" class="hint">Restore failed. An active entry already uses this name.</p><ul"#, 1);
+    }
+    Ok(Html(html))
+}
+
+async fn restore_document_type_form(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Html<String>> {
+    let conflict = match state.document_type_repo.restore(vault, id).await {
+        Ok(_) => false,
+        Err(folio_core::Error::Duplicate { .. } | folio_core::Error::Conflict(_)) => true,
+        Err(error) => return Err(error.into()),
+    };
+    let document_types = state.document_type_repo.list(vault).await?;
+    let trashed_document_types = state.document_type_repo.list_trash(vault).await?;
+    let mut html = DocumentTypesListTemplate {
+        document_types,
+        trashed_document_types,
+    }
+    .render()
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+    if conflict {
+        html = html.replacen("<ul", r#"<p role="alert" class="hint">Restore failed. An active entry already uses this name.</p><ul"#, 1);
+    }
+    Ok(Html(html))
 }

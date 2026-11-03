@@ -10,7 +10,7 @@
 - [x] Write failing shared repository regressions for scoped CRUD, pagination, soft deletion, document moves, and purge; implement both adapters and additive migrations in the reserved 20261102163000–20261102163999 range. Check main for collisions and test upgrades across dependency merge orders.
 - [x] Write failing router tests for author editing, moderation, spoofed actors, viewer denial, revoked membership, malformed cursors, and cross-vault IDs; implement JSON routes.
 - [x] Generate OpenAPI from the four entry operations; five schema tests pass.
-- [ ] In progress: verify generated Swift client compilation in the queued isolated native build.
+- [x] Verify generated Swift client compilation: isolated FolioKit build and 42 focused tests pass.
 
 - [ ] Write failing request regressions for lost responses, concurrent matching keys, conflicting payloads, revoked access, and deleted-entry retries; persist creation receipts atomically and retain draft keys in both clients.
 
@@ -24,8 +24,8 @@
 ## 4. Usable clients
 - [x] Write failing web regressions for CRUD, failed drafts, pagination, and viewer controls; implement HTML routes and separate note/comment sections.
 - [x] Verify lost-response creation retries, CRUD, and accessibility at desktop/mobile widths in the disposable browser fixture.
-- [ ] Write failing native state/service tests for CRUD, permission capabilities, failed drafts, and pagination; implement Apple discussion UI.
-- [ ] Verify web and native accessibility, empty states, and error recovery in isolated fixtures.
+- [x] Write failing native state/service tests for CRUD, permission capabilities, failed drafts, and pagination; implement Apple discussion UI.
+- [ ] In progress: verify native app and navigation CI, including discussion CRUD and lost-response recovery; web accessibility passes.
 
 ## 5. Delivery
 - [ ] Run make format, make lint, make test, isolated Apple checks, and the project verify skill; update verification guidance.

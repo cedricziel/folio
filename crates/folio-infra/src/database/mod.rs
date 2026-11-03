@@ -11,6 +11,7 @@
 
 mod health;
 mod ingest_outcomes;
+mod metadata_value;
 pub mod postgres;
 mod saved_view;
 mod source_lifecycle;
