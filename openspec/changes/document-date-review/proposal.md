@@ -18,6 +18,6 @@ Document dates currently share the import timestamp, and Inbox derives review fr
 
 ## Impact
 
-Touches folio-core models and repository ports, SQLite and PostgreSQL adapters, folio-api JSON and HTML routes/templates, MCP metadata, OpenAPI, and the generated Swift client. Add `20261102161000_document_date_review.sql` to both migration directories after the lifecycle foundation is merged. Existing dates remain null. Eligible legacy Filed records receive migration provenance, without inventing a human actor. No settings change.
+Touches folio-core models and repository ports, SQLite and PostgreSQL adapters, folio-api JSON and HTML routes/templates, MCP metadata, OpenAPI, and the generated Swift client. Add `20261102161000_document_date.sql` to both migration directories after the lifecycle foundation is merged. Date storage lands first; review storage follows in 20261102161030_document_review.sql. Existing dates remain null. Eligible legacy Filed records receive migration provenance, without inventing a human actor. No settings change.
 
 Depends on lifecycle foundation chat `01a19e17-80c0-7302-85f5-4eff22bc5608`. Integrate shared schema/API changes only after its PRs merge. This change implements the explicit review milestone already approved in `document-workspace`.

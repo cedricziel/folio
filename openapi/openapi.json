@@ -1731,6 +1731,109 @@
             "bearerAuth": []
           }
         ]
+      },
+      "patch": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "updateDocumentDate",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentDatePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated document; omitted date is unchanged and null clears it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid date or unsupported field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/documents/{id}/download": {
@@ -4912,6 +5015,13 @@
             ],
             "format": "date-time"
           },
+          "document_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
           "document_type_id": {
             "type": [
               "string",
@@ -4996,6 +5106,19 @@
             "description": "The vault the document belongs to"
           }
         }
+      },
+      "DocumentDatePatch": {
+        "type": "object",
+        "properties": {
+          "document_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          }
+        },
+        "additionalProperties": false
       },
       "DocumentEntry": {
         "type": "object",
@@ -5433,6 +5556,9 @@
               "tags"
             ],
             "properties": {
+              "can_edit_document_date": {
+                "type": "boolean"
+              },
               "correspondent": {
                 "type": [
                   "string",
