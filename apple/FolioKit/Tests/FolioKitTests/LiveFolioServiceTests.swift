@@ -63,6 +63,7 @@ private struct FixedToken: BearerTokenProvider {
 private let documentJSON = """
     {"id": "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f", "title": "Jahresabrechnung 2025",
      "vault_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "uploaded_by": "fixture-user",
+     "created_by": "archive-creator", "updated_by": "archive-editor",
      "content": "Rechnungsnummer 2025-00318", "original_filename": "bill.pdf",
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
@@ -490,6 +491,19 @@ private let documentJSON = """
         #expect(document.createdAt.timeIntervalSince1970 > 1_741_000_000)
         #expect(document.tags.map(\.name) == ["Taxes"])
         #expect(document.tags.first?.color == "#ff5733")
+        #expect(document.createdBy == "archive-creator")
+        #expect(document.updatedBy == "archive-editor")
+    }
+
+    @Test func legacyDocumentWithoutActorMetadataKeepsUnknownAttribution() async throws {
+        var payload = try #require(try JSONSerialization.jsonObject(with: Data(documentJSON.utf8)) as? [String: Any])
+        payload.removeValue(forKey: "created_by")
+        payload.removeValue(forKey: "updated_by")
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        StubURLProtocol.handler = { _, _ in .init(body: body) }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.createdBy == nil)
+        #expect(document.updatedBy == nil)
     }
 
     @Test func completedOcrWithoutTextDoesNotKeepReading() async throws {

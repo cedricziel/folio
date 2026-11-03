@@ -554,3 +554,64 @@ async fn failed_outbox_insert_rolls_back_upload_path_and_can_be_retried_once() {
         .unwrap();
     assert_eq!(created_events(&r).await.len(), 1);
 }
+
+#[tokio::test]
+async fn awaited_upload_preserves_authenticated_actor_without_reusing_uploader_identity() {
+    use folio_core::models::UserId;
+    use folio_core::mutation::with_actor;
+
+    let (_db, r, vault) = fixture().await;
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let importer = Importer::new(r.documents.clone(), store, Arc::new(r.jobs.clone()));
+    for id in ["authenticated-importer", "contributor-owner"] {
+        r.auth
+            .create_user(folio_auth::User {
+                id: id.into(),
+                username: id.into(),
+                password_hash: "!".into(),
+                created_at: 1,
+                email: None,
+                display_name: None,
+                is_admin: false,
+                is_owner: false,
+                auth_source: "local".into(),
+                external_id: None,
+            })
+            .await
+            .unwrap();
+    }
+    let actor = UserId::from("authenticated-importer");
+    let mut input = upload();
+    input.uploaded_by = Some(UserId::from("contributor-owner"));
+    let document = with_actor(Some(actor.clone()), importer.import(vault, input))
+        .await
+        .unwrap();
+    assert_eq!(document.created_by, Some(actor.clone()));
+    assert_eq!(document.updated_by, Some(actor.clone()));
+    assert_eq!(
+        document.uploaded_by,
+        Some(UserId::from("contributor-owner"))
+    );
+    let events = created_events(&r).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].envelope.as_ref().unwrap().actor_id(),
+        Some(&actor)
+    );
+    with_actor(
+        Some(UserId::from("retrying-user")),
+        r.documents
+            .finalize_upload(vault, document.id, document.file_path.as_deref().unwrap()),
+    )
+    .await
+    .unwrap();
+    let retried = r
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(retried.updated_by, document.updated_by);
+    assert_eq!(retried.updated_at, document.updated_at);
+    assert_eq!(created_events(&r).await.len(), 1);
+}

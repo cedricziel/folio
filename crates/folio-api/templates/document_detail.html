@@ -15,6 +15,7 @@
             <dt>Source</dt>
             <dd><span class="f-meta">{{ document.source.describe() }}</span></dd>
         </dl>
+        {% include "partials/document_history.html" %}
         {% match document.content %}
         {% when Some with (content) %}
         <pre class="ocr">{{ content }}</pre>

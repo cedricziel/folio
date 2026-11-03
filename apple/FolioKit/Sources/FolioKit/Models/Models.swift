@@ -23,6 +23,9 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var canReviewDocument: Bool
     public var createdAt: Date
     public var updatedAt: Date
+    public var createdBy: String?
+    public var updatedBy: String?
+    public var deletedAt: Date?
 
     public init(
         id: UUID = UUID(),
@@ -44,7 +47,10 @@ public struct Document: Identifiable, Hashable, Sendable {
         reviewOrigin: String? = nil,
         canReviewDocument: Bool = false,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        createdBy: String? = nil,
+        updatedBy: String? = nil,
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -66,6 +72,9 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.canReviewDocument = canReviewDocument
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.createdBy = createdBy
+        self.updatedBy = updatedBy
+        self.deletedAt = deletedAt
     }
 }
 

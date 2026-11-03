@@ -628,7 +628,8 @@ extension Document {
             ocrStatus: .init(raw.ocrStatus), embedStatus: .init(raw.embedStatus),
             documentDate: LiveFolioService.documentDate(raw.documentDate),
             reviewedAt: raw.reviewedAt, reviewedBy: raw.reviewedBy, reviewOrigin: raw.reviewOrigin,
-            createdAt: raw.createdAt, updatedAt: raw.updatedAt
+            createdAt: raw.createdAt, updatedAt: raw.updatedAt,
+            createdBy: raw.createdBy, updatedBy: raw.updatedBy, deletedAt: raw.deletedAt
         )
     }
 }
