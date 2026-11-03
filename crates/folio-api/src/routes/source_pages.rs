@@ -590,7 +590,7 @@ async fn outcomes_page(
                 false,
             ),
             Err(error) => {
-                tracing::warn!(source = %id, %error, "Could not load source outcomes");
+                tracing::warn!(source = %id, ?error, "Could not load source outcomes");
                 (Vec::new(), None, true)
             }
         };

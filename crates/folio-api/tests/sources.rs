@@ -402,6 +402,6 @@ async fn source_outcomes_page_retains_history_without_linking_missing_documents(
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(html.contains(&format!("/outcomes?before={latest}&amp;limit=1")));
+    assert!(html.contains(&format!("/outcomes?before={latest}&limit=1")));
     assert!(html.contains("/outcomes?limit=1\""));
 }

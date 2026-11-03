@@ -365,8 +365,8 @@ pub(crate) async fn outcome_page(
     tag = "sources",
     params(
         ("id" = Uuid, Path, description = "Source ID"),
-        ("before" = Option<i64>, Query, description = "Return outcomes older than this positive outcome ID"),
-        ("limit" = Option<u32>, Query, description = "Page size, from 1 to 100; defaults to 50"),
+        ("before" = Option<i64>, Query, minimum = 1, description = "Return outcomes older than this positive outcome ID"),
+        ("limit" = Option<u32>, Query, minimum = 1, maximum = 100, description = "Page size, from 1 to 100; defaults to 50"),
     ),
     responses(
         (status = 200, description = "Recent source outcomes", body = folio_core::models::IngestOutcomePage),
