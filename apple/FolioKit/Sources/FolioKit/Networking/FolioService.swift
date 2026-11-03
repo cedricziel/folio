@@ -12,6 +12,7 @@ public protocol FolioService: DocumentEntryService {
     func scoped(to vaultID: UUID) -> any FolioService
     func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage
     func document(id: Document.ID) async throws -> Document
+    func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document
     func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document
     func ping() async throws
     func documents(matching query: String) async throws -> [Document]
@@ -81,6 +82,10 @@ public struct NoToken: BearerTokenProvider {
 }
 
 public extension FolioService {
+    func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document {
+        throw FolioError.server(status: 501, message: "This server does not support document review.")
+    }
+
     func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
         throw FolioError.server(status: 501, message: "This server does not support document date editing.")
     }

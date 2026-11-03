@@ -374,7 +374,15 @@ impl PostgresDocumentRepository {
 }
 
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
-fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) {
+fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Result<()> {
+    filter.validate()?;
+    if let Some(reviewed) = filter.reviewed {
+        qb.push(if reviewed {
+            " AND reviewed_at IS NOT NULL"
+        } else {
+            " AND reviewed_at IS NULL"
+        });
+    }
     if let Some(id) = filter.correspondent_id {
         qb.push(" AND correspondent_id = ").push_bind(id);
     }
@@ -410,6 +418,17 @@ fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) {
     if let Some(before) = filter.created_before {
         qb.push(" AND created_at < ").push_bind(before);
     }
+    if let Some(date) = filter.document_date_from {
+        qb.push(" AND document_date >= ")
+            .push_bind(date.to_string())
+            .push("::text::date");
+    }
+    if let Some(date) = filter.document_date_to {
+        qb.push(" AND document_date <= ")
+            .push_bind(date.to_string())
+            .push("::text::date");
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -591,7 +610,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         qb.push_bind(vault.0);
 
         if let Some(filter) = filter {
-            push_filter(&mut qb, filter);
+            push_filter(&mut qb, filter)?;
         }
 
         qb.push(" ORDER BY created_at DESC");
@@ -616,7 +635,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             "WHERE deleted_at IS NULL AND vault_id = "
         ));
         qb.push_bind(vault.0);
-        push_filter(&mut qb, query.filter.clone());
+        push_filter(&mut qb, query.filter.clone())?;
         let (column, direction, comparison) = match query.sort {
             DocumentSort::Newest => ("created_at", "DESC", " < "),
             DocumentSort::Oldest => ("created_at", "ASC", " > "),
@@ -664,7 +683,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         );
         qb.push_bind(vault.0);
         if let Some(filter) = filter {
-            push_filter(&mut qb, filter);
+            push_filter(&mut qb, filter)?;
         }
         qb.push(" ORDER BY created_at DESC");
 
@@ -941,7 +960,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         .execute(&mut *tx).await.map_err(repo_err)?;
         if document.file_path.is_some() {
             crate::queue::insert_job_postgres(
-                &mut *tx,
+                &mut tx,
                 crate::queue::JobType::ProcessDocument { document_id: id },
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
@@ -985,7 +1004,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
             .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_postgres(
-            &mut *tx,
+            &mut tx,
             crate::queue::JobType::PurgeDocument {
                 document_id: id,
                 correlation_id: Some(envelope.correlation_id()),

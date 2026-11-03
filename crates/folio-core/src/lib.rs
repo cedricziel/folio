@@ -13,6 +13,7 @@ pub mod events;
 pub mod models;
 pub mod mutation;
 pub mod ports;
+pub mod processing_events;
 pub mod redact;
 pub mod services;
 

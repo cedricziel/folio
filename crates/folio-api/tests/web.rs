@@ -58,7 +58,8 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
         )
         .await
         .unwrap();
-    h.state
+    let filed = h
+        .state
         .document_repo
         .create(
             h.vault,
@@ -71,6 +72,23 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
                 ..Default::default()
             },
         )
+        .await
+        .unwrap();
+    for id in [waiting.id, filed.id] {
+        h.state
+            .document_repo
+            .set_stage_status(
+                h.vault,
+                id,
+                folio_core::models::ProcessingStage::Embed,
+                folio_core::models::ProcessingStatus::Done,
+            )
+            .await
+            .unwrap();
+    }
+    h.state
+        .document_repo
+        .set_reviewed(h.vault, filed.id, true)
         .await
         .unwrap();
 
@@ -287,7 +305,7 @@ async fn unreadable_files_say_so_instead_of_waiting_for_review() {
         .unwrap();
 
     let inbox = text(h.app.clone().oneshot(get("/")).await.unwrap()).await;
-    assert!(inbox.contains("Couldn't read this file"));
+    assert!(inbox.contains("Couldn't process this file"));
     assert!(inbox.contains("1 file couldn't be read"));
     assert!(!inbox.contains("Needs a look"));
     assert!(!inbox.contains("needs a look"));
