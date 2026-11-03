@@ -493,6 +493,9 @@ rename, share, and delete views. Inspect screenshots and confirm that a single
 grid card keeps a bounded width. The precision regression renames a view without
 rounding its stored submillisecond boundaries to the date input's display value.
 
+Shared navigation changes also require the Linux `visual.spec.ts` suite.
+Inspect its image diffs and update affected baselines before merging.
+
 ## Verify typed metadata fields
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields`
