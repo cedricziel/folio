@@ -37,7 +37,8 @@
 - [x] Pass the generated native outcome adapter regression. The first full native run had ten attachment-title expectation failures already fixed on main; that fix is now integrated.
 - [x] Verify post-merge identity deduplication, trusted lineage, content-ledger fencing, observed pipeline integration, and folder/email recovery after outcome commit failure.
 - [x] Add explicit managed/configured source context and verify managed ownership and enabled state in claim/completion transactions on both databases. Recheck soft-deletion once the foundation source lifecycle lands.
-- [x] Implement and verify atomic source status/failure/recovery publication, then finish connected UI and workflow integration.
+- [x] Implement and verify atomic source status/failure/recovery publication.
+- [ ] Finish connected native UI and workflow integration (tracked below).
 
 Completed task-owned build outputs were removed after host disk pressure. No build remains active. Coordinate the next bounded Rust verification and full Apple build with the orchestrator; retain jobs <= 2 and disable debug symbols/incremental compilation for fresh Rust targets.
 
