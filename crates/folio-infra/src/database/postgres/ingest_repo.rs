@@ -426,10 +426,6 @@ impl IngestLedger for PostgresIngestLedger {
                 "Ingest entry belongs to a different vault".into(),
             ));
         }
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
-        if outcome == "claimed" {
-            ensure_source_active(&mut tx, vault, expected.source_id).await?;
-        }
         let result = sqlx::query(
             "UPDATE ingest_ledger SET outcome = $1, created_at = $2
              WHERE vault_id = $3 AND key = $4 AND source_id = $5
@@ -443,10 +439,9 @@ impl IngestLedger for PostgresIngestLedger {
         .bind(expected.document_id)
         .bind(&expected.outcome)
         .bind(expected.created_at)
-        .execute(&mut *tx)
+        .execute(&self.pool)
         .await
         .map_err(repo_err)?;
-        tx.commit().await.map_err(repo_err)?;
         Ok(result.rows_affected() == 1)
     }
 

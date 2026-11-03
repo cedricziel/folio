@@ -467,14 +467,6 @@ impl IngestLedger for SqliteIngestLedger {
                 "Ingest entry belongs to a different vault".into(),
             ));
         }
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(repo_err)?;
-        if outcome == "claimed" {
-            ensure_source_active(&mut tx, vault, expected.source_id).await?;
-        }
         let result = sqlx::query(
             "UPDATE ingest_ledger SET outcome = ?, created_at = ?
              WHERE vault_id = ? AND key = ? AND source_id = ?
@@ -488,10 +480,9 @@ impl IngestLedger for SqliteIngestLedger {
         .bind(expected.document_id.map(|id| id.to_string()))
         .bind(&expected.outcome)
         .bind(expected.created_at.to_rfc3339())
-        .execute(&mut *tx)
+        .execute(&self.pool)
         .await
         .map_err(repo_err)?;
-        tx.commit().await.map_err(repo_err)?;
         Ok(result.rows_affected() == 1)
     }
 

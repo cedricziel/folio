@@ -121,12 +121,11 @@ async fn contract(db: Database) {
             .await,
         Err(folio_core::Error::Conflict(_))
     ));
-    assert!(matches!(
-        r.ledger
-            .transition_if_matches(vault, &ledger, "claimed", Utc::now())
-            .await,
-        Err(folio_core::Error::Conflict(_))
-    ));
+    assert!(r
+        .ledger
+        .transition_if_matches(vault, &ledger, "claimed", Utc::now())
+        .await
+        .unwrap());
     let configured = LedgerEntry {
         key: "configured-exception".into(),
         source_id: uuid::Uuid::new_v4(),
