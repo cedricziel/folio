@@ -491,6 +491,7 @@ forged input, optional authentication, concurrent requests, cancellation, and
 system task isolation. HTTP/MCP fixtures use temporary databases, test identities,
 and local transports; they do not access user sessions or credentials.
 
+
 The core suite also covers trusted event lineage: nested clearing and restoration,
 cancellation, concurrent scopes, detached tasks, actor independence, and envelope
 validation. Workflow actions must scope server-owned correlation and causation
@@ -527,14 +528,17 @@ Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test taxo
 for SQLite/PostgreSQL soft deletion, stable identity, retained document references,
 name reuse, restore conflicts, actor metadata, and transactional lifecycle events.
 Run `cargo test -p folio-api --test routes --test web --test openapi` for scoped
-JSON and management routes. Regenerate OpenAPI and run the isolated Apple package
-suite above after schema changes. The MCP OAuth suite also checks that explicit
-tag replacement rejects vocabulary deleted after its initial lookup.
+JSON and management routes, then regenerate OpenAPI and run the isolated Apple
+package suite above. Native tests cover scoped taxonomy requests and restore
+conflicts that preserve the displayed trash entry.
 
 Build `folio-app`, then run `npx playwright test classification-lifecycle.spec.ts`
 from `e2e/` against its disposable setup instance. The suite covers all three
 classification types, retained labels, restore conflicts, vault isolation, and
-viewer restrictions. Inspect its active/trash screenshot attachments.
+viewer restrictions. Inspect its active/trash screenshot attachments. Use the
+isolated Classifications fixture to check large text, loading errors, and Retry.
+The fixture shows the screen in a window, so check macOS sheet sizing by opening
+Classifications from the WorkspaceView sidebar; package tests do not verify layout.
 
 ## Verify document notes and comments
 

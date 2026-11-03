@@ -477,6 +477,20 @@ actor MockFolioService: FolioService {
         return correspondentList
     }
 
+    var trashedTaxonomy: [TaxonomyKind: [TaxonomyEntry]] = [:]
+
+    func setTrashedTaxonomy(_ entries: [TaxonomyEntry], kind: TaxonomyKind) {
+        trashedTaxonomy[kind] = entries
+    }
+
+    func setCorrespondents(_ correspondents: [Correspondent]) {
+        correspondentList = correspondents
+    }
+
+    func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry] {
+        deleted ? trashedTaxonomy[kind, default: []] : []
+    }
+
     func documentTypes() async throws -> [DocumentType] {
         if failLookups {
             throw FolioError.unreachable

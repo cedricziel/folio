@@ -5,6 +5,7 @@ struct WorkspaceView: View {
     let serverURL: URL
     let service: any FolioService
     let onSignOut: () -> Void
+    @State private var showTaxonomy = false
     @State private var showSavedViewEditor = false
     @State private var editingSavedView: SavedView?
     @State private var pendingViewDelete: SavedView?
@@ -79,6 +80,7 @@ struct WorkspaceView: View {
                             Button("More saved views") { Task { await workspace.loadSavedViews(more: true) } }
                         }
                     }
+                    manageSection
                 }
             }
             .navigationTitle("Folio")
@@ -131,6 +133,13 @@ struct WorkspaceView: View {
                 ProgressView("Loading vaults…")
             }
         }
+        .sheet(isPresented: $showTaxonomy, onDismiss: { Task { await workspace.session.list.reloadLookups() } }) {
+            NavigationStack {
+                TaxonomyView(service: workspace.service, canManage: workspace.canEdit)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTaxonomy = false } } }
+            }
+        }
+        .onChange(of: workspace.selectedVaultID) { showTaxonomy = false }
         .sheet(item: $activityVault) { vault in
             if let activityService = service as? any SourceActivityService {
                 SourceActivityView(vaultID: vault.id, service: activityService) { documentID in
@@ -175,6 +184,16 @@ struct WorkspaceView: View {
             Button("OK") { workspace.dismissNavigationError() }
         } message: {
             Text(workspace.navigationError ?? "")
+        }
+    }
+
+    private var manageSection: some View {
+        Section("Manage") {
+            Button {
+                showTaxonomy = true
+            } label: {
+                Label("Classifications", systemImage: "tag")
+            }
         }
     }
 
