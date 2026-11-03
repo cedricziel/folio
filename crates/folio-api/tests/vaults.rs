@@ -273,6 +273,7 @@ async fn another_users_default_vault_documents_are_hidden_from_document_and_file
 async fn configured_ingestion_sources_are_visible_only_in_their_import_vault() {
     let source_id = uuid::Uuid::new_v4();
     let source = folio_core::models::IngestionSourceDef {
+        lifecycle: None,
         id: source_id,
         vault_id: None,
         name: "Instance consume folder".into(),
@@ -1872,4 +1873,98 @@ async fn viewer_cannot_change_document_date_or_receive_edit_capability() {
             .document_date,
         None
     );
+}
+
+#[tokio::test]
+async fn viewer_cannot_change_document_review_or_receive_review_capability() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "review-owner").await;
+    let viewer = sign_in(&h, "review-viewer").await;
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Dated letter".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(viewer.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let path = format!("/vaults/{}/api/documents/{}", owner.vault, doc.id);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &viewer, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(json["can_review_document"], false);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            &format!("{path}/review"),
+            &viewer,
+            Body::from(r#"{"reviewed":true}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        h.state
+            .document_repo
+            .find_by_id(owner.vault, doc.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .reviewed_at,
+        None
+    );
+}
+
+#[tokio::test]
+async fn review_actor_is_the_authenticated_editor() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "review-attribution-owner").await;
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Review attribution".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            &format!("/vaults/{}/api/documents/{}/review", owner.vault, doc.id),
+            &owner,
+            Body::from(r#"{"reviewed":true}"#),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(json["reviewed_by"], owner.user.as_str());
+    assert_eq!(json["review_origin"], "human");
+    assert_eq!(json["reviewed"], true);
 }

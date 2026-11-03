@@ -49,6 +49,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(super::document_entries::update)
                 .delete(super::document_entries::delete),
         )
+        .route("/{id}/review", axum::routing::put(set_document_review))
         .route("/{id}/download", get(download_document))
         .route("/{id}/thumbnail", get(document_thumbnail))
         .route("/{id}/correspondent", post(set_correspondent))
@@ -66,6 +67,11 @@ pub fn router() -> Router<AppState> {
 #[into_params(parameter_in = Query)]
 #[allow(dead_code)]
 pub struct ListDocumentsQuery {
+    reviewed: Option<bool>,
+    #[param(value_type = Option<String>, format = Date)]
+    document_date_from: Option<folio_core::models::DocumentDate>,
+    #[param(value_type = Option<String>, format = Date)]
+    document_date_to: Option<folio_core::models::DocumentDate>,
     /// Only return documents from this correspondent
     correspondent_id: Option<Uuid>,
     /// Only return documents of this type
@@ -97,12 +103,16 @@ impl ListDocumentsQuery {
                     .tag_ids
                     .get_or_insert_with(Vec::new)
                     .push(parse(&key, &value)?),
+                "reviewed" => filter.reviewed = Some(parse(&key, &value)?),
+                "document_date_from" => filter.document_date_from = Some(parse(&key, &value)?),
+                "document_date_to" => filter.document_date_to = Some(parse(&key, &value)?),
                 "created_after" => filter.created_after = Some(parse(&key, &value)?),
                 "created_before" => filter.created_before = Some(parse(&key, &value)?),
                 _ => continue,
             }
             any = true;
         }
+        filter.validate()?;
         Ok(any.then_some(filter))
     }
 }
@@ -131,11 +141,17 @@ pub struct DocumentView {
     tags: Vec<DocumentTag>,
     #[schema(required = false)]
     can_edit_document_date: bool,
+    #[schema(required = false)]
+    can_review_document: bool,
+    #[schema(required = false)]
+    reviewed: bool,
 }
 
 /// Response for document list
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DocumentListResponse {
+    #[schema(required = false)]
+    supports_document_review_filters: bool,
     documents: Vec<DocumentView>,
     /// Number of documents returned
     count: usize,
@@ -172,6 +188,7 @@ pub(super) async fn present(
     Ok(documents
         .into_iter()
         .map(|document| {
+            let editable = crate::vault_context::can_edit_document(&document);
             let tags = tags
                 .remove(&document.id)
                 .unwrap_or_default()
@@ -185,7 +202,9 @@ pub(super) async fn present(
                 })
                 .collect();
             DocumentView {
-                can_edit_document_date: crate::vault_context::can_edit_document(&document),
+                can_edit_document_date: editable,
+                can_review_document: editable,
+                reviewed: document.reviewed_at.is_some(),
                 correspondent: document
                     .correspondent_id
                     .and_then(|id| correspondents.get(&id).cloned()),
@@ -226,7 +245,11 @@ pub(crate) async fn list_documents(
     .await?;
     let count = documents.len();
 
-    Ok(Json(DocumentListResponse { documents, count }))
+    Ok(Json(DocumentListResponse {
+        documents,
+        count,
+        supports_document_review_filters: true,
+    }))
 }
 
 /// Get a single document by ID
@@ -788,6 +811,30 @@ pub(crate) async fn update_document_date(
                 ..Default::default()
             },
         )
+        .await?;
+    Ok(Json(
+        present(vault, &state, vec![document]).await?.remove(0),
+    ))
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentReviewRequest {
+    reviewed: bool,
+}
+
+#[utoipa::path(put, path = "/api/documents/{id}/review", operation_id = "setDocumentReview", tag = "documents",
+    params(("id" = Uuid, Path, description = "Document ID")), request_body = DocumentReviewRequest,
+    responses((status = 200, description = "Document with its explicit review decision", body = DocumentView), (status = 422, description = "Missing boolean review state or unsupported field", body = crate::error::ErrorResponse), BadRequest, NotFound, InternalError))]
+pub(crate) async fn set_document_review(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(request): ApiJson<DocumentReviewRequest>,
+) -> ApiResult<Json<DocumentView>> {
+    let document = state
+        .document_repo
+        .set_reviewed(vault, id, request.reviewed)
         .await?;
     Ok(Json(
         present(vault, &state, vec![document]).await?.remove(0),
