@@ -156,25 +156,30 @@ async fn main() -> Result<()> {
 
     let source_factory = Arc::new(SourceFactory::new(ledger.clone()));
     let configured_sources = config.ingest.definitions();
-    let ingest_pipeline = Arc::new(IngestPipeline::new(
-        document_repo.clone(),
-        store.clone(),
-        tag_repo.clone(),
-        workflow_repo.clone(),
-        ledger.clone(),
-        Arc::new(Importer::new(
+    let ingest_pipeline = Arc::new(
+        IngestPipeline::new(
             document_repo.clone(),
             store.clone(),
-            Arc::new(job_queue.clone()),
-        )),
-    ));
+            tag_repo.clone(),
+            workflow_repo.clone(),
+            ledger.clone(),
+            Arc::new(Importer::new(
+                document_repo.clone(),
+                store.clone(),
+                Arc::new(job_queue.clone()),
+            )),
+        )
+        .with_outcomes(repos.ingest_outcomes.clone())
+        .with_configured_sources(configured_sources.iter().map(|source| source.id)),
+    );
     let ingest_scheduler = IngestScheduler::new(
         source_repo.clone(),
         configured_sources.clone(),
         source_factory.clone(),
         ingest_pipeline,
         repos.vaults,
-    );
+    )
+    .with_outcomes(repos.ingest_outcomes.clone());
 
     info!("Services initialized");
 
@@ -268,7 +273,12 @@ async fn main() -> Result<()> {
         workflow_repo,
         webhook_client,
         public_url,
-        IngestionState::new(source_repo, ledger, configured_sources),
+        IngestionState::new(
+            source_repo,
+            ledger,
+            repos.ingest_outcomes,
+            configured_sources,
+        ),
         vault_service.clone(),
         repos.access,
     )

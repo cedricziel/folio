@@ -22,6 +22,10 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 ```
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
+`ProcessingSummaryTests` checks distinct text-extraction and search-indexing states,
+empty OCR completion, skipped work, and last-attempt failure labels. The API
+`routes` suite checks the corresponding rendered detail, and the document lifecycle
+E2E test checks both stage labels in the Processing section.
 `DocumentImportTests` covers mixed PDF and image imports, unsupported files, directories, missing files, and remote URL rejection using temporary files. File-type resolution requires access to macOS type services. For a manual drop check, use an isolated account or simulator and a throwaway server, then drop multiple PDFs and images into the document list, including when it is empty. Check the hover indicator, upload progress, and refreshed list.
 `e2e/tests/documents.spec.ts` covers dropping two files onto the web page, the hover indicator, and completion of both uploads. Run it only against the disposable instance started by the E2E setup.
 `WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
@@ -492,6 +496,18 @@ The core suite also covers trusted event lineage: nested clearing and restoratio
 cancellation, concurrent scopes, detached tasks, actor independence, and envelope
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
+
+## Verify workflow configuration lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_lifecycle --test workflows --test repository_contract`
+with disposable SQLite and PostgreSQL fixtures. The lifecycle contract covers
+server actors, no-op timestamps, retained configuration and run history, deletion
+rollback, terminal-state fencing, inactive queue admission, and legacy upgrades.
+Restore must preserve failed pending runs rather than replay their queued jobs.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test workflows --test vaults` for
+management controls, deleted-workflow history, secret masking, and vault access.
+Regenerate OpenAPI after response or route changes. Never verify workflow delivery
+against an existing webhook receiver or user archive.
 
 ## Verify managed source lifecycle
 

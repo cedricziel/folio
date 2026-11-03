@@ -10,6 +10,7 @@ struct WorkspaceView: View {
     @State private var editingSavedView: SavedView?
     @State private var pendingViewDelete: SavedView?
     @State private var workspace: WorkspaceViewModel
+    @State private var activityVault: Vault?
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
@@ -36,6 +37,15 @@ struct WorkspaceView: View {
                 if workspace.isReady {
                     Section {
                         vaultPicker
+                    }
+                }
+                if workspace.selectedVault?.role == .owner, service is any SourceActivityService {
+                    Section("Sources") {
+                        Button {
+                            activityVault = workspace.selectedVault
+                        } label: {
+                            Label("Ingestion activity", systemImage: "tray.and.arrow.down")
+                        }
                     }
                 }
                 Section("Library") {
@@ -130,6 +140,14 @@ struct WorkspaceView: View {
             }
         }
         .onChange(of: workspace.selectedVaultID) { showTaxonomy = false }
+        .sheet(item: $activityVault) { vault in
+            if let activityService = service as? any SourceActivityService {
+                SourceActivityView(vaultID: vault.id, service: activityService) { documentID in
+                    activityVault = nil
+                    workspace.open(documentID, vaultID: vault.id)
+                }
+            }
+        }
         .task { await workspace.loadVaults() }
         .task(id: workspace.selectedVaultID) { await workspace.loadSavedViews() }
         .sheet(isPresented: $showSavedViewEditor) {
