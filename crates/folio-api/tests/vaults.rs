@@ -1813,3 +1813,38 @@ async fn event_stream_rejects_moved_and_unknown_origins_without_exposing_context
     assert!(!delivered.contains("internal-context-only"));
     assert!(!delivered.contains("\"context\""));
 }
+
+#[tokio::test]
+async fn source_outcomes_require_owner_permission_even_for_editors() {
+    let h = harness_requiring_login().await;
+    let owner = sign_in(&h, "source-outcomes-owner").await;
+    let editor = sign_in(&h, "source-outcomes-editor").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(editor.user.clone()),
+            VaultRole::Editor,
+            None,
+        )
+        .await
+        .unwrap();
+    let source = h.state.ingestion.managed.create(owner.vault, serde_json::from_value(serde_json::json!({
+        "name": "Private source", "config": {"type": "folder", "path": "/isolated/nonexistent-source"}
+    })).unwrap()).await.unwrap();
+    let path = format!("/api/sources/{}/outcomes", source.id);
+    let mut denied = request("GET", &path, &editor, Body::empty());
+    denied
+        .headers_mut()
+        .insert("X-Folio-Vault", owner.vault.to_string().parse().unwrap());
+
+    let response = h.app.clone().oneshot(denied).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let allowed = h
+        .app
+        .clone()
+        .oneshot(request("GET", &path, &owner, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::OK);
+}

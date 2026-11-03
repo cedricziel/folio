@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
             get(get_source).put(update_source).delete(delete_source),
         )
         .route("/{id}/test", post(test_source))
+        .route("/{id}/outcomes", get(list_source_outcomes))
 }
 
 /// A source with its latest run
@@ -316,4 +317,70 @@ pub(crate) async fn test_source(
 ) -> ApiResult<Json<SourceTestResult>> {
     let def = find(vault, &state, id).await?;
     Ok(Json(run_test(&state, &def).await))
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OutcomeQuery {
+    pub before: Option<i64>,
+    #[serde(default = "default_outcome_limit")]
+    pub limit: u32,
+}
+
+fn default_outcome_limit() -> u32 {
+    50
+}
+
+pub(crate) async fn outcome_page(
+    state: &AppState,
+    vault: VaultId,
+    source_id: Id,
+    query: OutcomeQuery,
+) -> ApiResult<folio_core::models::IngestOutcomePage> {
+    let mut page = state
+        .ingestion
+        .outcomes
+        .page(vault, source_id, query.before, query.limit)
+        .await?;
+    for outcome in &mut page.outcomes {
+        if let Some(document_id) = outcome.document_id {
+            if state
+                .document_repo
+                .find_by_id(vault, document_id)
+                .await?
+                .is_none()
+            {
+                outcome.document_id = None;
+            }
+        }
+    }
+    Ok(page)
+}
+
+/// Read committed item outcomes for an ingestion source.
+#[utoipa::path(
+    get,
+    path = "/api/sources/{id}/outcomes",
+    operation_id = "listSourceOutcomes",
+    tag = "sources",
+    params(
+        ("id" = Uuid, Path, description = "Source ID"),
+        ("before" = Option<i64>, Query, description = "Return outcomes older than this positive outcome ID"),
+        ("limit" = Option<u32>, Query, description = "Page size, from 1 to 100; defaults to 50"),
+    ),
+    responses(
+        (status = 200, description = "Recent source outcomes", body = folio_core::models::IngestOutcomePage),
+        BadRequest,
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn list_source_outcomes(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    crate::extract::ApiQuery(query): crate::extract::ApiQuery<OutcomeQuery>,
+) -> ApiResult<Json<folio_core::models::IngestOutcomePage>> {
+    find(vault, &state, id).await?;
+    Ok(Json(outcome_page(&state, vault, id, query).await?))
 }

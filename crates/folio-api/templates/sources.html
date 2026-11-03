@@ -59,6 +59,7 @@
                 {% endmatch %}
             </div>
             <div class="form-actions">
+                <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>
                 <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/test" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-quiet">Test</button>
                 </form>

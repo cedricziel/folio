@@ -229,3 +229,169 @@ async fn the_sources_pages_render_and_save() {
     assert_eq!(listed.as_array().unwrap().len(), 2);
     assert_eq!(listed[1]["config"]["password"], "********");
 }
+
+#[tokio::test]
+async fn source_outcomes_are_scoped_and_empty_before_first_attempt() {
+    let source = configured_folder("/isolated/nonexistent-source");
+    let id = source.id;
+    let app = test_app(vec![source]).await;
+
+    let (status, body) =
+        json_request(&app, "GET", &format!("/api/sources/{id}/outcomes"), None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["vault_id"], app.vault.to_string());
+    assert_eq!(body["source_id"], id.to_string());
+    assert_eq!(body["outcomes"], json!([]));
+    assert!(body["next_before"].is_null());
+    let (missing, _) = json_request(
+        &app,
+        "GET",
+        &format!("/api/sources/{}/outcomes", Uuid::new_v4()),
+        None,
+    )
+    .await;
+    assert_eq!(missing, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn source_outcomes_reject_invalid_continuations() {
+    let source = configured_folder("/isolated/nonexistent-source");
+    let id = source.id;
+    let app = test_app(vec![source]).await;
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        &format!("/api/sources/{id}/outcomes?before=0"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = json_request(
+        &app,
+        "GET",
+        &format!("/api/sources/{id}/outcomes?limit=101"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn source_outcomes_page_shows_empty_history_and_sanitized_health() {
+    let source = configured_folder("/isolated/nonexistent-source");
+    let id = source.id;
+    let app = test_app(vec![source]).await;
+    app.state
+        .ingestion
+        .managed
+        .save_status(
+            id,
+            &folio_core::models::SourceStatus {
+                last_error: Some("password=secret raw email body".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let (status, body) = send(
+        &app,
+        "GET",
+        &format!("/settings/sources/{id}/outcomes"),
+        None,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("No item outcomes yet"));
+    assert!(body.contains("Source unavailable"));
+    assert!(!body.contains("password=secret"));
+    assert!(!body.contains("raw email body"));
+}
+
+#[tokio::test]
+async fn source_outcomes_do_not_resolve_a_source_from_another_vault() {
+    let source = configured_folder("/isolated/nonexistent-source");
+    let id = source.id;
+    let app = test_app(vec![source]).await;
+    let other = app
+        .vault_repository
+        .create("Other vault", None)
+        .await
+        .unwrap();
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/sources/{id}/outcomes"))
+                .header("X-Folio-Vault", other.id.to_string())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+async fn seed_outcome(app: &Harness, source: Uuid, result: &str, document: Option<Uuid>) -> i64 {
+    let folio_infra::Database::Sqlite(pool) = &app.database else {
+        unreachable!()
+    };
+    let item = Uuid::new_v4();
+    let attempt = Uuid::new_v4();
+    sqlx::query("INSERT INTO ingest_items (id,vault_id,source_id,source_kind,source_managed,locator_key,attempt_id,started_at,lease_expires_at,decision_fingerprint,state) VALUES (?,?,?,'folder',1,?,?,'2026-11-02T00:00:00Z','2026-11-02T00:10:00Z',?,?)")
+        .bind(item.to_string()).bind(app.vault.to_string()).bind(source.to_string())
+        .bind(format!("{}{}", item.simple(), attempt.simple())).bind(attempt.to_string()).bind("a".repeat(64)).bind(result)
+        .execute(pool).await.unwrap();
+    sqlx::query_scalar("INSERT INTO ingest_outcomes (vault_id,source_id,item_id,attempt_id,event_id,occurred_at,outcome,document_id) VALUES (?,?,?,?,?,'2026-11-02T00:00:00Z',?,?) RETURNING id")
+        .bind(app.vault.to_string()).bind(source.to_string()).bind(item.to_string()).bind(attempt.to_string())
+        .bind(Uuid::new_v4().to_string()).bind(result).bind(document.map(|id| id.to_string()))
+        .fetch_one(pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn source_outcomes_page_retains_history_without_linking_missing_documents() {
+    let source = configured_folder("/isolated/nonexistent-source");
+    let id = source.id;
+    let app = test_app(vec![source]).await;
+    let missing_document = Uuid::new_v4();
+    let older = seed_outcome(&app, id, "imported", Some(missing_document)).await;
+    let latest = seed_outcome(&app, id, "failed", None).await;
+
+    let (status, page) = json_request(
+        &app,
+        "GET",
+        &format!("/api/sources/{id}/outcomes?limit=1"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["outcomes"][0]["id"], latest);
+    assert_eq!(page["next_before"], latest);
+    let (status, page) = json_request(
+        &app,
+        "GET",
+        &format!("/api/sources/{id}/outcomes?before={latest}&limit=1"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["outcomes"][0]["id"], older);
+    assert_eq!(page["outcomes"][0]["outcome"], "imported");
+    assert!(page["outcomes"][0]["document_id"].is_null());
+    assert!(page["outcomes"][0].get("locator_key").is_none());
+    assert!(page["next_before"].is_null());
+    let (status, html) = send(
+        &app,
+        "GET",
+        &format!("/settings/sources/{id}/outcomes"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Import failed"));
+    assert!(html.contains("The document was saved"));
+    assert!(!html.contains(&format!("/documents/{missing_document}")));
+}
