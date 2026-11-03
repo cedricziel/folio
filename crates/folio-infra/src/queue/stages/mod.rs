@@ -179,6 +179,7 @@ async fn embedding_skip_envelope(
     snapshot: &EventSnapshot,
     run_id: Uuid,
     lineage: MutationLineage,
+    reason: ProcessingReason,
 ) -> Result<DomainEventEnvelope> {
     occurrence_envelope(
         snapshot,
@@ -188,9 +189,7 @@ async fn embedding_skip_envelope(
             revision_id: None,
             stage: ProcessingEventStage::Embedding,
             attempt: 1,
-            outcome: ProcessingEventOutcome::Skipped {
-                reason: ProcessingReason::NoText,
-            },
+            outcome: ProcessingEventOutcome::Skipped { reason },
         },
     )
     .await
@@ -208,6 +207,14 @@ async fn occurrence_envelope(
         }),
     )
     .await
+}
+
+fn reason_code(reason: ProcessingReason) -> Result<String> {
+    serde_json::to_value(reason)
+        .map_err(repo_err)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| repo_err("Invalid processing reason"))
 }
 
 fn repo_err(error: impl std::fmt::Display) -> Error {

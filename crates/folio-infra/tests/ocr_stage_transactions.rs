@@ -101,16 +101,29 @@ impl<'a> Fixture<'a> {
     }
 
     async fn complete(&self, fence: &OcrStageFence, content: &str) -> Result<bool> {
+        self.complete_with(fence, content, true).await
+    }
+
+    async fn complete_with(
+        &self,
+        fence: &OcrStageFence,
+        content: &str,
+        embed: bool,
+    ) -> Result<bool> {
         match self.db {
-            Database::Sqlite(pool) => stages::sqlite::complete_ocr(pool, fence, content).await,
-            Database::Postgres(pool) => stages::postgres::complete_ocr(pool, fence, content).await,
+            Database::Sqlite(pool) => {
+                stages::sqlite::complete_ocr(pool, fence, content, embed).await
+            }
+            Database::Postgres(pool) => {
+                stages::postgres::complete_ocr(pool, fence, content, embed).await
+            }
         }
     }
 
     async fn skip(&self, fence: &OcrStageFence) -> Result<bool> {
         match self.db {
-            Database::Sqlite(pool) => stages::sqlite::skip_ocr(pool, fence).await,
-            Database::Postgres(pool) => stages::postgres::skip_ocr(pool, fence).await,
+            Database::Sqlite(pool) => stages::sqlite::skip_ocr(pool, fence, true).await,
+            Database::Postgres(pool) => stages::postgres::skip_ocr(pool, fence, true).await,
         }
     }
 
@@ -747,6 +760,36 @@ async fn changed_job_group_and_missing_lineage_reject_existing_fences(db: &Datab
     fixture.finish().await;
 }
 
+async fn disabled_embedding_skips_text_without_queueing(db: &Database) {
+    let fixture = Fixture::new(db).await;
+    let fence = fixture.start().await.unwrap().unwrap();
+    assert!(fixture
+        .complete_with(&fence, "text with embedding off", false)
+        .await
+        .unwrap());
+    assert!(fixture.embedding_jobs().await.is_empty());
+    assert_eq!(fixture.has_text().await, Some(true));
+    assert_eq!(
+        fixture.embedding_state().await,
+        (
+            "skipped".into(),
+            1,
+            fixture.job.attempts,
+            Some(fixture.job.id.to_string()),
+            Some("provider_disabled".into()),
+            "skipped".into()
+        )
+    );
+    let events = fixture.events().await;
+    let skipped = events.last().unwrap().envelope.as_ref().unwrap();
+    assert_eq!(
+        skipped.event_type(),
+        "document.processing.embedding.skipped"
+    );
+    assert_eq!(skipped.data()["reason_code"], "provider_disabled");
+    fixture.finish().await;
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
     duplicate_empty_completion_is_one_combined_event(db).await;
@@ -755,6 +798,7 @@ async fn contract(db: &Database) {
     disabled_ocr_skips_empty_embedding_without_ocr_complete(db).await;
     embedding_skip_outbox_failure_rolls_back_ocr_completion(db).await;
     disabled_ocr_preserves_content_and_assigns_embedding(db).await;
+    disabled_embedding_skips_text_without_queueing(db).await;
     expired_and_replaced_claims_cannot_publish(db).await;
     moved_and_trashed_documents_cannot_publish(db).await;
     noncurrent_and_revision_backed_runs_cannot_execute(db).await;

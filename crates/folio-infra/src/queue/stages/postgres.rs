@@ -13,8 +13,8 @@ use crate::queue::processing_scope::with_scope;
 use crate::queue::{insert_job_postgres, Job, JobType, DEFAULT_MAX_ATTEMPTS};
 
 use super::{
-    claimed_ocr_document, embedding_skip_envelope, envelope, repo_err, LoadedStage, OcrStageFence,
-    StageRow,
+    claimed_ocr_document, embedding_skip_envelope, envelope, reason_code, repo_err, LoadedStage,
+    OcrStageFence, StageRow,
 };
 
 async fn load(
@@ -143,16 +143,26 @@ pub async fn start_ocr(pool: &PgPool, job: &Job) -> Result<Option<OcrStageFence>
 
 /// Commit OCR content, its compatibility/domain event, and planned embedding work atomically.
 /// Duplicate, expired, moved, trashed, or superseded work returns `false`.
-pub async fn complete_ocr(pool: &PgPool, fence: &OcrStageFence, content: &str) -> Result<bool> {
-    finish_ocr(pool, fence, Some(content)).await
+pub async fn complete_ocr(
+    pool: &PgPool,
+    fence: &OcrStageFence,
+    content: &str,
+    embed: bool,
+) -> Result<bool> {
+    finish_ocr(pool, fence, Some(content), embed).await
 }
 
 /// Skip disabled OCR while preserving content and atomically resolving its embedding plan.
-pub async fn skip_ocr(pool: &PgPool, fence: &OcrStageFence) -> Result<bool> {
-    finish_ocr(pool, fence, None).await
+pub async fn skip_ocr(pool: &PgPool, fence: &OcrStageFence, embed: bool) -> Result<bool> {
+    finish_ocr(pool, fence, None, embed).await
 }
 
-async fn finish_ocr(pool: &PgPool, fence: &OcrStageFence, content: Option<&str>) -> Result<bool> {
+async fn finish_ocr(
+    pool: &PgPool,
+    fence: &OcrStageFence,
+    content: Option<&str>,
+    embed: bool,
+) -> Result<bool> {
     let mut tx = pool.begin().await.map_err(repo_err)?;
     let Some(stage) = load(
         &mut tx,
@@ -185,6 +195,7 @@ async fn finish_ocr(pool: &PgPool, fence: &OcrStageFence, content: Option<&str>)
             .map_err(repo_err)?,
     };
     let has_text = content.as_deref().is_some_and(|text| !text.is_empty());
+    let embed = has_text && embed;
     let changed = sqlx::query(
         "UPDATE processing_stage_runs SET state = $7, claim_id = NULL,
              has_text = $1, reason_code = $8, updated_at = $2 WHERE id = $3
@@ -212,7 +223,7 @@ async fn finish_ocr(pool: &PgPool, fence: &OcrStageFence, content: Option<&str>)
     .bind(&content)
     .bind(now)
     .bind(fence.document_id)
-    .bind(if has_text { "pending" } else { "skipped" })
+    .bind(if embed { "pending" } else { "skipped" })
     .bind(if completed { "done" } else { "skipped" })
     .execute(&mut *tx)
     .await
@@ -249,7 +260,14 @@ async fn finish_ocr(pool: &PgPool, fence: &OcrStageFence, content: Option<&str>)
     } else {
         insert_domain_event(&mut tx, &event).await?;
     }
-    complete_embedding_plan(&mut tx, fence, &snapshot, stage.lineage, has_text).await?;
+    let plan = if embed {
+        None
+    } else if has_text {
+        Some(ProcessingReason::ProviderDisabled)
+    } else {
+        Some(ProcessingReason::NoText)
+    };
+    complete_embedding_plan(&mut tx, fence, &snapshot, stage.lineage, plan).await?;
     tx.commit().await.map_err(repo_err)?;
     Ok(true)
 }
@@ -259,9 +277,9 @@ async fn complete_embedding_plan(
     fence: &OcrStageFence,
     snapshot: &EventSnapshot,
     lineage: MutationLineage,
-    has_text: bool,
+    skip: Option<ProcessingReason>,
 ) -> Result<()> {
-    if has_text {
+    let Some(reason) = skip else {
         with_actor(
             None,
             with_lineage(
@@ -281,10 +299,10 @@ async fn complete_embedding_plan(
         )
         .await?;
         return Ok(());
-    }
+    };
     let run_id: Option<Uuid> = sqlx::query_scalar(
         "UPDATE processing_stage_runs SET state = 'skipped', attempt = 1, queue_attempt = $1,
-             job_id = COALESCE(job_id, $2), claim_id = NULL, reason_code = 'no_text',
+             job_id = COALESCE(job_id, $2), claim_id = NULL, reason_code = $8,
              retry_at = NULL, updated_at = $3
          WHERE group_id = $4 AND document_id = $5 AND vault_id = $6 AND stage = 'embedding'
            AND state = 'pending' AND attempt = 0 AND is_current AND revision_id IS NULL
@@ -299,12 +317,13 @@ async fn complete_embedding_plan(
     .bind(fence.document_id)
     .bind(fence.vault_id.0)
     .bind(fence.claim_id)
+    .bind(reason_code(reason)?)
     .fetch_optional(&mut *conn)
     .await
     .map_err(repo_err)?;
     let run_id = run_id
         .ok_or_else(|| Error::Conflict("Pending embedding run or OCR lease changed".into()))?;
-    let event = embedding_skip_envelope(snapshot, run_id, lineage).await?;
+    let event = embedding_skip_envelope(snapshot, run_id, lineage, reason).await?;
     insert_event_with_envelope(
         conn,
         &DocumentEvent::Processed {

@@ -595,7 +595,7 @@ async fn terminal_stage_is_untouched_by_late_failure(db: &Database) {
                 .await
                 .unwrap()
                 .unwrap();
-            stages::sqlite::complete_ocr(pool, &fence, "")
+            stages::sqlite::complete_ocr(pool, &fence, "", true)
                 .await
                 .unwrap()
         }
@@ -604,7 +604,7 @@ async fn terminal_stage_is_untouched_by_late_failure(db: &Database) {
                 .await
                 .unwrap()
                 .unwrap();
-            stages::postgres::complete_ocr(pool, &fence, "")
+            stages::postgres::complete_ocr(pool, &fence, "", true)
                 .await
                 .unwrap()
         }

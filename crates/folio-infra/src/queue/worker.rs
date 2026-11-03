@@ -694,6 +694,8 @@ impl Worker {
         let Some(fence) = self.queue.start_ocr(job).await? else {
             return Ok(());
         };
+        let settings = self.pipeline.settings().await;
+        let embed = settings.processing.auto_embed && settings.embeddings.provider != "none";
         let document = self
             .document_repo
             .find_by_id(fence.vault_id(), fence.document_id())
@@ -705,14 +707,14 @@ impl Worker {
             .filter(|content| !content.is_empty())
         {
             self.queue
-                .complete_ocr(&fence, content)
+                .complete_ocr(&fence, content, embed)
                 .await
                 .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
             return Ok(());
         }
-        if self.pipeline.settings().await.ocr.provider == "none" {
+        if settings.ocr.provider == "none" {
             self.queue
-                .skip_ocr(&fence)
+                .skip_ocr(&fence, embed)
                 .await
                 .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
             return Ok(());
@@ -736,7 +738,7 @@ impl Worker {
             .await
             .map_err(|error| processing_failure(ProcessingReason::ProviderFailed, error))?;
         self.queue
-            .complete_ocr(&fence, &output.text)
+            .complete_ocr(&fence, &output.text, embed)
             .await
             .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
         Ok(())
