@@ -283,6 +283,50 @@ private let documentJSON = """
         )
     }
 
+    @Test func taxonomyTrashUsesVaultScopeAndDecodesAuditMetadata() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/tags/trash")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(
+                body: Data(
+                    """
+                    [{"id":"99999999-8888-4777-8666-555555555555","vault_id":"\(vault)",
+                    "name":"Retained","created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-15T10:15:30.123Z",
+                    "deleted_at":"2025-03-15T10:15:30.123Z","created_by":"alice","updated_by":"bob"}]
+                    """.utf8))
+        }
+        let entries = try await makeService().scoped(to: vault).taxonomy(.tags, deleted: true)
+        #expect(entries.count == 1)
+        #expect(entries[0].vaultID == vault)
+        #expect(entries[0].deletedAt != nil)
+        #expect(entries[0].createdBy == "alice")
+        #expect(entries[0].updatedBy == "bob")
+    }
+
+    @Test func taxonomyRestoreConflictKeepsTheRetainedEntryVisible() async throws {
+        let vault = UUID(), entryID = UUID()
+        let body = Data(
+            """
+            [{"id":"\(entryID)","vault_id":"\(vault)","name":"Retained",
+            "created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-15T10:15:30Z",
+            "deleted_at":"2025-03-15T10:15:30Z"}]
+            """.utf8)
+        StubURLProtocol.handler = { request, _ in
+            if request.httpMethod == "POST" {
+                #expect(request.url?.path == "/api/tags/\(entryID.uuidString.lowercased())/restore")
+                return .init(status: 409)
+            }
+            return .init(body: request.url?.path.hasSuffix("trash") == true ? body : Data("[]".utf8))
+        }
+        let model = await TaxonomyViewModel(service: makeService().scoped(to: vault), kind: .tags)
+        await model.load()
+        let entry = try #require(await model.trash.first)
+        await model.restore(entry)
+        #expect(await model.trash.first?.id == entryID)
+        #expect(await model.error == "Restore failed. An active entry already uses this name.")
+    }
+
     @Test func listsDocumentsAndMapsFields() async throws {
         StubURLProtocol.handler = { request, _ in
             #expect(request.url?.path == "/api/documents")

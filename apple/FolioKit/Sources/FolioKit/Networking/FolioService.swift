@@ -19,6 +19,10 @@ public protocol FolioService: Sendable {
     /// Returns a bounded JPEG preview, or nil when the document or thumbnail is unavailable.
     func thumbnail(id: Document.ID) async throws -> Data?
     func upload(_ file: UploadFile) async throws -> Document
+    func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry]
+    func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws
+    func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws
+    func restoreTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws
     func tags() async throws -> [Tag]
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws
     func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws
@@ -71,5 +75,20 @@ public struct NoToken: BearerTokenProvider {
     public init() {}
     public func token() async throws -> String? {
         nil
+    }
+}
+
+public extension FolioService {
+    func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry] {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func restoreTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
     }
 }

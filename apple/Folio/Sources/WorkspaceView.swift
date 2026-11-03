@@ -5,6 +5,7 @@ struct WorkspaceView: View {
     let serverURL: URL
     let service: any FolioService
     let onSignOut: () -> Void
+    @State private var showTaxonomy = false
     @State private var workspace: WorkspaceViewModel
 
     init(
@@ -41,6 +42,15 @@ struct WorkspaceView: View {
                         }
                     }
                 }
+                if workspace.isReady {
+                    Section("Manage") {
+                        Button {
+                            showTaxonomy = true
+                        } label: {
+                            Label("Classifications", systemImage: "tag")
+                        }
+                    }
+                }
             }
             .navigationTitle("Folio")
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
@@ -71,6 +81,13 @@ struct WorkspaceView: View {
                 ProgressView("Loading vaults…")
             }
         }
+        .sheet(isPresented: $showTaxonomy) {
+            NavigationStack {
+                TaxonomyView(service: workspace.service, canManage: workspace.canEdit)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTaxonomy = false } } }
+            }
+        }
+        .onChange(of: workspace.selectedVaultID) { showTaxonomy = false }
         .task { await workspace.loadVaults() }
         .alert(
             "Document unavailable",
