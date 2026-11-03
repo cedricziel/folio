@@ -464,13 +464,31 @@ cancellation, concurrent scopes, detached tasks, actor independence, and envelop
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
 
-## Verify document dates
+## Verify document dates and metadata
 
-Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_dates`
-with the isolated build settings above. The SQLite and PostgreSQL contracts
-cover historical calendar dates, unchanged import time, omission and clearing,
-actor attribution, no-op suppression, and rollback when outbox insertion fails.
-They verify one generic update shares the date event's mutation and correlation.
-Run `cargo test -p folio-api --test document_dates --test openapi --test vaults`
-for JSON validation, scoped web redirects, and viewer permission enforcement.
-These fixtures use disposable databases and in-process requests.
+For date edits, metadata events, moves, and their API/MCP entry points, run the
+[document metadata checks](references/document-metadata.md).
+
+## Verify saved-view web controls
+
+Run `cargo test -p folio-api --test saved_views` for form CSRF protection,
+unavailable references, and exact date-boundary preservation through the editor.
+Build `folio-app`, then run
+`npx playwright test vaults.spec.ts --grep 'saved views restore|submillisecond'`
+from `e2e/`. Set `FOLIO_BIN` to the built binary and leave `E2E_BASE_URL` unset
+so setup owns the disposable instance. Desktop and mobile checks save, reopen,
+rename, share, and delete views. Inspect screenshots and confirm that a single
+grid card keeps a bounded width. The precision regression renames a view without
+rounding its stored submillisecond boundaries to the date input's display value.
+
+## Verify typed metadata fields
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields`
+with task-owned build storage, at most two jobs, incremental compilation disabled,
+and zero debug symbols when capacity is constrained. The shared contract uses a
+temporary SQLite database and a disposable PostgreSQL container. It covers scoped
+field reads, server-derived attribution, canonical name uniqueness, concurrent
+claims, pagination, retirement, restore conflicts, no-op suppression, and rollback
+when transactional outbox publication fails. It also checks that field events are
+vault-visible non-document events. A Docker access failure requires rerunning the
+PostgreSQL case with socket access; a skipped backend is not verified parity.

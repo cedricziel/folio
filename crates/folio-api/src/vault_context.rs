@@ -29,6 +29,7 @@ pub fn is_scoped_path(path: &str) -> bool {
         || [
             "/documents",
             "/trash",
+            "/saved-views",
             "/api/documents",
             "/api/tags",
             "/api/correspondents",

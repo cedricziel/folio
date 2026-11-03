@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Saved views - Folio{% endblock %}
+{% block content %}
+<section class="page">
+  <header class="page-head"><h1 class="title">Saved views</h1><p class="lede">Return to the documents you work with regularly.</p></header>
+  <p><a class="f-btn" href="{{ "/saved-views/new"|vault_url }}">New saved view</a></p>
+  {% if views.is_empty() %}<p class="lede">No saved views yet. Save a search and its filters to use them on any device.</p>{% endif %}
+  <div class="f-list">
+    {% for view in views %}
+    <a class="f-row" href="{{ "/saved-views"|vault_url }}/{{ view.id }}">
+      <div class="row-main"><h2 class="f-row-title">{{ view.name }}</h2><p class="f-row-sub">{% if view.visibility == ViewVisibility::Shared %}Shared with this vault{% else %}Only you{% endif %}</p></div>
+    </a>
+    {% endfor %}
+  </div>
+  {% if !next.is_empty() %}<p><a class="f-btn" href="{{ "/saved-views"|vault_url }}?after={{ next }}">More saved views</a></p>{% endif %}
+</section>
+{% endblock %}

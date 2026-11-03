@@ -1,5 +1,8 @@
 //! PostgreSQL adapters
 
+mod metadata_repo;
+pub use metadata_repo::PostgresMetadataFieldRepository;
+
 mod auth_repo;
 mod document_entries;
 mod document_repo;

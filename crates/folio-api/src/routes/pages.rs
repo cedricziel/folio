@@ -57,6 +57,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
+    save_view_url: String,
     sidebar: Sidebar,
     heading: &'static str,
     lede: &'static str,
@@ -151,7 +152,21 @@ async fn index_page(
         )
     };
 
+    let save_view_url = {
+        let mut saved_query = url::form_urlencoded::Serializer::new(String::new());
+        if let Some(id) = correspondent_id {
+            saved_query.append_pair("correspondent_id", &id.to_string());
+        }
+        if let Some(id) = document_type_id {
+            saved_query.append_pair("document_type_id", &id.to_string());
+        }
+        if let Some(id) = tag_id {
+            saved_query.append_pair("tag_id", &id.to_string());
+        }
+        format!("/saved-views/new?{}", saved_query.finish())
+    };
     let template = IndexTemplate {
+        save_view_url,
         sidebar,
         heading,
         lede,

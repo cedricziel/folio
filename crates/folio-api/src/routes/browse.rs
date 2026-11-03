@@ -37,7 +37,7 @@ pub struct BrowseResponse {
     next_cursor: Option<String>,
 }
 
-fn query(raw: Option<&str>) -> ApiResult<DocumentPageQuery> {
+pub(super) fn query(raw: Option<&str>) -> ApiResult<DocumentPageQuery> {
     let mut query = DocumentPageQuery {
         filter: ListDocumentsQuery::filter(raw)?.unwrap_or_default(),
         ..Default::default()

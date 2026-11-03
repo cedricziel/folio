@@ -19,6 +19,8 @@
     {% when None %}
     {% endmatch %}
 
+    {% if view_all && sidebar.user.is_some() %}<p><a class="f-btn f-btn-quiet" href="{{ save_view_url|vault_url }}">Save current view</a></p>{% endif %}
+
     {{ counts::review_notice(counts) }}
 
     {% include "partials/documents_frame.html" %}

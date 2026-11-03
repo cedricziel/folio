@@ -23,7 +23,7 @@ use super::map_write_error;
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
 };
-use folio_core::document_transitions::metadata_envelopes;
+use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
 use folio_core::EventSnapshot;
 
 fn repo_err(e: sqlx::Error) -> Error {
@@ -410,6 +410,11 @@ impl DocumentRepository for PostgresDocumentRepository {
             return Err(not_found("Vault", to.0));
         }
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let mutation_id = Id::new_v4();
+
         let tags: Vec<(String,)> = sqlx::query_as(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
              WHERE dt.document_id = $1",
@@ -488,7 +493,13 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
             .map_err(repo_err)?;
         }
-        tx.commit().await.map_err(repo_err)?;
+        let after = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        for envelope in move_envelopes(&before, &after, mutation_id)? {
+            insert_domain_event_with_origin(&mut tx, &envelope, self.origin).await?;
+        }
+        self.commit(tx).await?;
 
         self.find_by_id(to, id)
             .await?
