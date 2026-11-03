@@ -520,10 +520,9 @@ Build `folio-app`, then run `npx playwright test classification-lifecycle.spec.t
 from `e2e/` against its disposable setup instance. The suite covers all three
 classification types, retained labels, restore conflicts, vault isolation, and
 viewer restrictions. Inspect its active/trash screenshot attachments. Use the
-native Classifications screen in an isolated fixture to check large text,
-macOS sheet sizing, loading errors, and Retry; package tests do not verify layout.
-
-viewer restrictions. Inspect its active/trash screenshot attachments.
+isolated Classifications fixture to check large text, loading errors, and Retry.
+The fixture shows the screen in a window, so check macOS sheet sizing by opening
+Classifications from the WorkspaceView sidebar; package tests do not verify layout.
 
 ## Verify document notes and comments
 

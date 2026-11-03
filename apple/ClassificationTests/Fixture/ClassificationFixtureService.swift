@@ -121,7 +121,6 @@ import Observation
     }
     nonisolated func scoped(to vaultID: UUID) -> any FolioService { self }
     func ping() async throws {}
-    nonisolated func scoped(to vaultID: UUID) -> any FolioService { self }
     func savedViews(after: UUID?) async throws -> [SavedView] { [] }
     func savedView(id: UUID) async throws -> SavedView { throw FolioError.unreadableResponse }
     func saveView(_ draft: SavedViewDraft) async throws -> SavedView { throw FolioError.unreadableResponse }
