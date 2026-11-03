@@ -47,6 +47,27 @@ public actor OAuthSession: BearerTokenProvider {
         return generation == signOuts ? refreshed : nil
     }
 
+    /// Like `token()`, but nil unless the credentials were issued by `server`.
+    public func token(for server: URL) async throws -> String? {
+        try await bound(to: server) { try await token() }
+    }
+
+    /// Like `refresh(rejecting:)`, but nil unless the credentials were issued by `server`.
+    public func refresh(rejecting token: String?, for server: URL) async throws -> String? {
+        try await bound(to: server) { try await refresh(rejecting: token) }
+    }
+
+    /// Checks before, so another server can't trigger a refresh, and after, in case a sign-in replaced the credentials.
+    private func bound(to server: URL, _ body: () async throws -> String?) async throws -> String? {
+        guard try isBound(to: server) else { return nil }
+        let token = try await body()
+        return try isBound(to: server) ? token : nil
+    }
+
+    private func isBound(to server: URL) throws -> Bool {
+        try (pendingSave ?? store.load())?.serverURL == server
+    }
+
     private func sharedRefresh(rejecting token: String?) async throws -> String? {
         if let inFlight { return try await inFlight.value }
         let task = Task {
@@ -186,5 +207,24 @@ public actor OAuthSession: BearerTokenProvider {
 
     private func changed() {
         NotificationCenter.default.post(name: Notification.Name("FolioSessionChanged"), object: nil)
+    }
+}
+
+/// Hands out an `OAuthSession`'s tokens only to the server that issued them.
+public struct ServerBoundTokenProvider: BearerTokenProvider {
+    private let session: OAuthSession
+    private let server: URL
+
+    public init(session: OAuthSession, server: URL) {
+        self.session = session
+        self.server = server
+    }
+
+    public func token() async throws -> String? {
+        try await session.token(for: server)
+    }
+
+    public func refresh(rejecting token: String?) async throws -> String? {
+        try await session.refresh(rejecting: token, for: server)
     }
 }
