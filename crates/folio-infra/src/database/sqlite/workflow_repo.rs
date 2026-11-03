@@ -227,10 +227,11 @@ impl WorkflowRepository for SqliteWorkflowRepository {
                 "Workflow run belongs to an inactive or different vault".into(),
             ));
         }
+        let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
-             last_error, response_status, payload, actions, source_event_id, created_at, finished_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+             last_error, response_status, payload, actions, source_event_id, created_at, finished_at, mutation_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
         )
         .bind(run.id.to_string())
         .bind(run.workflow_id.to_string())
@@ -246,6 +247,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(run.source_event_id)
         .bind(run.created_at.to_rfc3339())
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
+        .bind(mutation_id.map(|id| id.to_string()))
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;

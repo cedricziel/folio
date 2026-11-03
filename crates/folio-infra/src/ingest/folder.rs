@@ -13,8 +13,8 @@ use tracing::{debug, warn};
 
 use folio_core::error::{Error, Result};
 use folio_core::models::{
-    DocumentSource, FolderAfterImport, FolderConfig, FolderOrigin, Id, IngestItem, IngestOutcome,
-    PollReport,
+    DocumentSource, FolderAfterImport, FolderConfig, FolderOrigin, Id, IngestItem, IngestItemKey,
+    IngestOutcome, PollReport,
 };
 use folio_core::ports::{IngestSink, IngestionSource};
 
@@ -250,8 +250,14 @@ impl FolderSource {
             Vec::new()
         };
 
-        sink.ingest(
+        let key = IngestItemKey::folder(
+            relative.as_os_str().as_encoded_bytes(),
+            file.directory.file_name().unwrap().as_encoded_bytes(),
+            &data,
+        );
+        sink.ingest_observed(
             self.id,
+            key,
             IngestItem {
                 mime_type: guess_mime(&original).to_string(),
                 source: DocumentSource::folder(

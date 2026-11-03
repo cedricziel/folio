@@ -4,8 +4,10 @@ mod assets;
 pub mod auth;
 pub(crate) mod browse;
 pub(crate) mod correspondents;
+pub(crate) mod document_entries;
 pub(crate) mod document_types;
 pub(crate) mod documents;
+mod entry_pages;
 mod error_pages;
 pub(crate) mod events;
 mod file_response;
@@ -17,6 +19,8 @@ mod oidc;
 mod pages;
 mod pending;
 mod pwa;
+mod saved_view_pages;
+pub(crate) mod saved_views;
 mod security;
 mod settings;
 mod source_pages;
@@ -81,6 +85,8 @@ pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
         .merge(crate::openapi::router())
         // Page routes (HTMX)
         .merge(pages::router())
+        .merge(entry_pages::router())
+        .merge(saved_view_pages::router())
         .merge(trash::router())
         // Manifest, service worker and share target
         .merge(pwa::router())
@@ -159,6 +165,7 @@ fn api_router() -> Router<AppState> {
             axum::routing::delete(vaults::revoke_member),
         )
         .route("/vaults/{vault_id}/history", get(vaults::list_history))
+        .merge(saved_views::router())
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
         .route("/documents/browse", get(browse::browse_default))

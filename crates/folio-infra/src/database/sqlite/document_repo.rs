@@ -8,7 +8,10 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool, Transaction};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
-use super::outbox::{capture_document, insert_event};
+use super::outbox::{
+    capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
+};
+use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
@@ -18,6 +21,7 @@ use folio_core::models::{
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
 };
+use folio_core::EventSnapshot;
 use folio_core::{DeletedDocument, DocumentEvent, EventOrigin};
 
 /// SQLite implementation of DocumentRepository
@@ -60,6 +64,33 @@ impl SqliteDocumentRepository {
         insert_event(tx, &event, self.origin, Some(&context))
             .await
             .map(|_| ())
+    }
+
+    async fn emit_metadata_in(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        before: &EventSnapshot,
+    ) -> Result<()> {
+        let after = capture_document(tx, before.document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", before.document_id))?;
+        for envelope in metadata_envelopes(before, &after)? {
+            if envelope.event_type() == "document.updated" {
+                insert_event_with_envelope(
+                    tx,
+                    &DocumentEvent::Updated {
+                        document_id: after.document_id,
+                    },
+                    self.origin,
+                    Some(&after),
+                    &envelope,
+                )
+                .await?;
+            } else {
+                insert_domain_event_with_origin(tx, &envelope, self.origin).await?;
+            }
+        }
+        Ok(())
     }
 
     async fn commit(&self, tx: Transaction<'_, Sqlite>) -> Result<()> {
@@ -375,6 +406,11 @@ impl DocumentRepository for SqliteDocumentRepository {
             return Err(not_found("Vault", to.0));
         }
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let mutation_id = Id::new_v4();
+
         let tags: Vec<(String,)> = sqlx::query_as(
             "SELECT t.name FROM tags t JOIN document_tags dt ON dt.tag_id = t.id
              WHERE dt.document_id = ?",
@@ -456,6 +492,15 @@ impl DocumentRepository for SqliteDocumentRepository {
         .await
         .map_err(map_sqlx_error)?;
 
+        sqlx::query("UPDATE document_entries SET updated_at = ?, updated_by = ? WHERE document_id = ? AND vault_id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(actor.map(UserId::as_str))
+            .bind(id.to_string())
+            .bind(to.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+
         for vault in [from, to] {
             sqlx::query(
                 "INSERT INTO audit_events
@@ -472,7 +517,13 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         }
-        tx.commit().await.map_err(map_sqlx_error)?;
+        let after = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        for envelope in move_envelopes(&before, &after, mutation_id)? {
+            insert_domain_event_with_origin(&mut tx, &envelope, self.origin).await?;
+        }
+        self.commit(tx).await?;
 
         self.find_by_id(to, id)
             .await?
@@ -634,6 +685,9 @@ impl DocumentRepository for SqliteDocumentRepository {
             .transpose()?
             .ok_or_else(|| not_found("Document", id))?;
 
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
         let title = params.title.unwrap_or_else(|| existing.title.clone());
         let content = params.content.or_else(|| existing.content.clone());
         let correspondent_id = params.correspondent_id.unwrap_or(existing.correspondent_id);
@@ -677,8 +731,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        self.emit_in(&mut tx, DocumentEvent::Updated { document_id: id })
-            .await?;
+        self.emit_metadata_in(&mut tx, &before).await?;
         self.commit(tx).await?;
 
         Ok(Document {
@@ -704,7 +757,11 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents
              WHERE id = ? AND vault_id = ?"
@@ -820,7 +877,11 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn request_purge(&self, vault: VaultId, id: Id) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents
              WHERE id = ? AND vault_id = ?"
@@ -842,15 +903,24 @@ impl DocumentRepository for SqliteDocumentRepository {
         let now = Utc::now();
         sqlx::query("UPDATE documents SET purge_requested_at = ?, updated_at = ? WHERE id = ? AND vault_id = ?")
             .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        let context = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let event = DocumentEvent::PurgeRequested { document_id: id };
+        let envelope = folio_core::events::document_event_envelope(&event, Some(&context))?
+            .ok_or_else(|| not_found("Document", id))?;
         crate::queue::insert_job_sqlite(
             &mut *tx,
-            crate::queue::JobType::PurgeDocument { document_id: id },
+            crate::queue::JobType::PurgeDocument {
+                document_id: id,
+                correlation_id: Some(envelope.correlation_id()),
+                causation_id: Some(envelope.event_id()),
+            },
             now,
             crate::queue::DEFAULT_MAX_ATTEMPTS,
         )
         .await?;
-        self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
-            .await?;
+        insert_event_with_envelope(&mut tx, &event, self.origin, Some(&context), &envelope).await?;
         self.commit(tx).await
     }
 
@@ -898,7 +968,24 @@ impl DocumentRepository for SqliteDocumentRepository {
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-        insert_event(
+        let envelope = folio_core::domain_event::DomainEventEnvelope::new(
+            "document.purged",
+            vault,
+            folio_core::domain_event::DomainEventSubject {
+                subject_type: "document".into(),
+                id,
+            },
+            Some(id),
+            folio_core::domain_event::EventAudience::Vault,
+            folio_core::events::document_event_envelope(
+                &DocumentEvent::Updated { document_id: id },
+                Some(&context),
+            )?
+            .ok_or_else(|| not_found("Document", id))?
+            .data()
+            .clone(),
+        )?;
+        insert_event_with_envelope(
             &mut tx,
             &DocumentEvent::Deleted {
                 document_id: id,
@@ -906,6 +993,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             },
             self.origin,
             Some(&context),
+            &envelope,
         )
         .await?;
         self.commit(tx).await
@@ -995,22 +1083,30 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        require_document(&mut tx, vault, id).await?;
         let result = sqlx::query(
             "UPDATE documents SET content = ?, ocr_status = 'done', updated_at = ?
-             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL",
+             WHERE id = ? AND vault_id = ? AND deleted_at IS NULL
+             AND (ocr_status != 'done' OR content IS NOT ?)",
         )
         .bind(content)
         .bind(Utc::now().to_rfc3339())
         .bind(id.to_string())
         .bind(vault.to_string())
-        .execute(&self.pool)
+        .bind(content)
+        .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
-
-        if result.rows_affected() == 0 {
-            return Err(not_found("Document", id));
+        if result.rows_affected() > 0 {
+            self.emit_in(&mut tx, DocumentEvent::OcrComplete { document_id: id })
+                .await?;
         }
-        Ok(())
+        self.commit(tx).await
     }
 
     async fn list_all(&self) -> Result<Vec<Document>> {
@@ -1124,8 +1220,15 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn add_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         require_document(&mut tx, vault, document_id).await?;
+        let before = capture_document(&mut tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
         require_entry(&mut tx, "tags", "Tag", vault, tag_id).await?;
         let result = sqlx::query(
             "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -1136,15 +1239,21 @@ impl DocumentRepository for SqliteDocumentRepository {
         .await
         .map_err(map_sqlx_error)?;
         if result.rows_affected() > 0 {
-            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-                .await?;
+            self.emit_metadata_in(&mut tx, &before).await?;
         }
         self.commit(tx).await
     }
 
     async fn remove_tag(&self, vault: VaultId, document_id: Id, tag_id: Id) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         require_document(&mut tx, vault, document_id).await?;
+        let before = capture_document(&mut tx, document_id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", document_id))?;
         let result = sqlx::query("DELETE FROM document_tags WHERE document_id = ? AND tag_id = ?")
             .bind(document_id.to_string())
             .bind(tag_id.to_string())
@@ -1152,8 +1261,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
             .map_err(map_sqlx_error)?;
         if result.rows_affected() > 0 {
-            self.emit_in(&mut tx, DocumentEvent::Updated { document_id })
-                .await?;
+            self.emit_metadata_in(&mut tx, &before).await?;
         }
         self.commit(tx).await
     }

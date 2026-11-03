@@ -666,6 +666,22 @@ a:not([class]):hover,
   overflow-wrap: anywhere;
 }
 
+.entry-body {
+  margin: var(--space-2) 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.entry + .entry {
+  border-top: 1px solid var(--rule);
+  padding-top: var(--space-3);
+}
+[data-entry-frame] textarea {
+  display: block;
+  min-height: 8rem;
+  margin-block: var(--space-2);
+}
+
 /* Forms */
 .field {
   display: flex;
@@ -1297,4 +1313,24 @@ dialog.palette {
 .inline-form .input {
   width: auto;
   flex: 1 1 140px;
+}
+
+.saved-view-form {
+  display: grid;
+  gap: var(--space-4);
+  margin-block: var(--space-4);
+}
+.saved-view-form label { display: grid; gap: var(--space-2); }
+.saved-view-form fieldset label { display: block; }
+.saved-view-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr));
+  gap: var(--space-4);
+}
+.saved-view-grid .f-row { display: flex; flex-direction: column; align-items: stretch; }
+.saved-view-preview {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: contain;
+  background: var(--paper-sunken);
 }

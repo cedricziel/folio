@@ -253,11 +253,12 @@ impl WorkflowRepository for PostgresWorkflowRepository {
                 "Workflow run belongs to an inactive or different vault".into(),
             ));
         }
+        let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
                                         completed_actions, last_error, response_status, payload,
-                                        actions, source_event_id, created_at, finished_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                        actions, source_event_id, created_at, finished_at, mutation_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
              ON CONFLICT DO NOTHING",
         )
         .bind(run.id)
@@ -274,6 +275,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .bind(run.source_event_id)
         .bind(run.created_at)
         .bind(run.finished_at)
+        .bind(mutation_id)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;

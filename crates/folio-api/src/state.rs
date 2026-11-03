@@ -6,10 +6,10 @@ use folio_core::error::Result;
 use folio_core::models::IngestionSourceDef;
 use folio_core::models::VaultId;
 use folio_core::ports::{
-    CorrespondentRepository, DocumentImporter, DocumentRepository, DocumentStore,
-    DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger, IngestionSourceFactory,
-    OcrService, OutboxStore, SearchResult, SearchService, SettingsRepository, SourceRepository,
-    TagRepository, WorkflowRepository,
+    CorrespondentRepository, DocumentEntryRepository, DocumentImporter, DocumentRepository,
+    DocumentStore, DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger,
+    IngestionSourceFactory, OcrService, OutboxStore, SearchResult, SearchService,
+    SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
 };
 use folio_core::services::{Importer, SearchServiceFacade, VaultService};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
@@ -31,7 +31,9 @@ pub struct IngestionState {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
+    pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     pub document_repo: Arc<dyn DocumentRepository>,
+    pub entry_repo: Arc<dyn DocumentEntryRepository>,
     pub tag_repo: Arc<dyn TagRepository>,
     pub correspondent_repo: Arc<dyn CorrespondentRepository>,
     pub document_type_repo: Arc<dyn DocumentTypeRepository>,
@@ -78,7 +80,9 @@ impl IngestionState {
 impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
         document_repo: Arc<dyn DocumentRepository>,
+        entry_repo: Arc<dyn DocumentEntryRepository>,
         tag_repo: Arc<dyn TagRepository>,
         correspondent_repo: Arc<dyn CorrespondentRepository>,
         document_type_repo: Arc<dyn DocumentTypeRepository>,
@@ -105,7 +109,9 @@ impl AppState {
             Arc::new(job_queue.clone()),
         ));
         Self {
+            saved_views,
             document_repo,
+            entry_repo,
             tag_repo,
             correspondent_repo,
             document_type_repo,

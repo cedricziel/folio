@@ -10,6 +10,7 @@ use folio_core::models::{
     validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
     WorkflowTrigger,
 };
+use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
 
 use super::webhook::{WebhookClient, WebhookRequest};
@@ -89,6 +90,10 @@ impl WorkflowRunner {
             return Ok(RunOutcome::Failed);
         };
 
+        let lineage = run.source_identity()?.map(|source| MutationLineage {
+            correlation_id: source.correlation_id,
+            causation_id: Some(source.event_id),
+        });
         run.attempts += 1;
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();
@@ -125,7 +130,12 @@ impl WorkflowRunner {
                     }
                 }
             }
-            match self.perform(vault, index, action, &run).await {
+            match with_actor(
+                None,
+                with_lineage(lineage, self.perform(vault, index, action, &run)),
+            )
+            .await
+            {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);

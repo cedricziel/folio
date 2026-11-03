@@ -73,6 +73,27 @@ pub struct EmbeddingBatch {
     pub dimensions: usize,
 }
 
+impl EmbeddingBatch {
+    /// Rejects missing, surplus, malformed, or nonfinite vectors before results are stored.
+    pub fn validate(&self, expected_count: usize) -> Result<()> {
+        if self.vectors.len() != expected_count {
+            return Err(crate::Error::AiService(
+                "Embedding response has an unexpected vector count".into(),
+            ));
+        }
+        if self.dimensions == 0
+            || self.vectors.iter().any(|vector| {
+                vector.len() != self.dimensions || vector.iter().any(|value| !value.is_finite())
+            })
+        {
+            return Err(crate::Error::AiService(
+                "Embedding response contains invalid vectors".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Service for generating vector embeddings
 #[async_trait]
 pub trait EmbeddingService: Send + Sync {

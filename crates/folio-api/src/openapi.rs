@@ -14,7 +14,8 @@ use folio_core::models::WebhookPayload;
 use crate::client_telemetry;
 use crate::error::ErrorResponse;
 use crate::routes::{
-    correspondents, document_types, documents, events, sources, tags, tokens, vaults, workflows,
+    correspondents, document_entries, document_types, documents, events, sources, tags, tokens,
+    vaults, workflows,
 };
 
 #[derive(OpenApi)]
@@ -41,10 +42,19 @@ use crate::routes::{
         vaults::grant_member,
         vaults::revoke_member,
         vaults::list_history,
+        crate::routes::saved_views::list,
+        crate::routes::saved_views::find,
+        crate::routes::saved_views::create,
+        crate::routes::saved_views::update,
+        crate::routes::saved_views::delete,
         documents::list_documents,
         crate::routes::browse::browse_default,
         crate::routes::browse::browse_vault,
         documents::get_document,
+        document_entries::list,
+        document_entries::create,
+        document_entries::update,
+        document_entries::delete,
         documents::create_document,
         documents::delete_document,
         crate::routes::trash::list,
