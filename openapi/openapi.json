@@ -2899,8 +2899,11 @@
               }
             }
           },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
           "403": {
-            "description": "The vault role does not allow this action"
+            "description": "The token scope or vault role does not allow this action"
           },
           "404": {
             "description": "The resource does not exist",
@@ -2922,7 +2925,15 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/sources/{id}/test": {
