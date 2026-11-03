@@ -7,6 +7,9 @@ actor MockFolioService: FolioService {
         id: UUID(uuidString: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff")!, name: "Personal", role: .owner
     )
     static let defaultCatalog = VaultCatalog(vaults: [defaultVault], defaultVaultID: defaultVault.id)
+    private var entries: [DocumentEntry] = []
+    private var entryReceipts: [UUID: DocumentEntry] = [:]
+    private var loseFirstEntryResponse: Bool
     private var vaultCatalog: VaultCatalog
     nonisolated let vaultServices: [UUID: any FolioService]
     var documentList: [Document] = []
@@ -33,13 +36,58 @@ actor MockFolioService: FolioService {
 
     init(
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
-        vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:]
+        vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:],
+        loseFirstEntryResponse: Bool = false
     ) {
+        self.loseFirstEntryResponse = loseFirstEntryResponse
         vaultCatalog = vaults
         self.vaultServices = vaultServices
         documentList = documents
         correspondentList = correspondents
         typeList = types
+    }
+
+    func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) throws -> DocumentEntryPage {
+        if let failure { throw failure }
+        return DocumentEntryPage(
+            entries: entries.filter { $0.documentID == documentID && $0.kind == kind }, nextCursor: nil, canCreate: true
+        )
+    }
+
+    func createEntry(documentID: UUID, kind: DocumentEntryKind, body: String, key: UUID) throws -> DocumentEntry {
+        if let failure { throw failure }
+        if let receipt = entryReceipts[key] { return receipt }
+        let now = Date()
+        let entry = DocumentEntry(
+            id: UUID(), documentID: documentID, vaultID: Self.defaultVault.id,
+            kind: kind, body: body, createdAt: now, updatedAt: now, createdBy: "Fixture author",
+            canEdit: true, canDelete: true)
+        entries.append(entry)
+        entryReceipts[key] = entry
+        if loseFirstEntryResponse {
+            loseFirstEntryResponse = false
+            throw FolioError.unreachable
+        }
+        return entry
+    }
+
+    func updateEntry(documentID: UUID, entryID: UUID, body: String) throws -> DocumentEntry {
+        if let failure { throw failure }
+        guard let index = entries.firstIndex(where: { $0.id == entryID && $0.documentID == documentID }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        let original = entries[index]
+        let entry = DocumentEntry(
+            id: original.id, documentID: documentID, vaultID: original.vaultID,
+            kind: original.kind, body: body, createdAt: original.createdAt, updatedAt: Date(),
+            createdBy: original.createdBy, canEdit: true, canDelete: true)
+        entries[index] = entry
+        return entry
+    }
+
+    func deleteEntry(documentID: UUID, entryID: UUID) throws {
+        if let failure { throw failure }
+        entries.removeAll { $0.id == entryID && $0.documentID == documentID }
     }
 
     func vaults() async throws -> VaultCatalog {

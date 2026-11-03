@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DocumentDetailView: View {
     @State var model: DocumentDetailViewModel
+    @State private var showingDiscussion = false
     let vaultID: UUID
 
     init(model: DocumentDetailViewModel, vaultID: UUID) {
@@ -22,6 +23,7 @@ struct DocumentDetailView: View {
         #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
         #endif
+        .sheet(isPresented: $showingDiscussion) { DocumentDiscussionView(model: model.discussion) }
         .task { await model.loadPreview() }
         .task { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
     }
@@ -69,6 +71,7 @@ struct DocumentDetailView: View {
                         }
                     }
                 }
+                Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
                 if !model.document.tags.isEmpty {
                     HStack(spacing: FolioTheme.Spacing.space2) {
                         ForEach(model.document.tags) { TagCapsule(tag: $0) }

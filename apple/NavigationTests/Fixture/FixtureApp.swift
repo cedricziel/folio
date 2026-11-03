@@ -5,10 +5,11 @@ import UIKit
 typealias Document = FolioKit.Document
 
 @main struct FixtureApp: App {
-    let service = MockFolioService(documents: [
-        Document(title: "First fixture", originalFilename: "first.pdf"),
-        Document(title: "Second fixture", originalFilename: "second.pdf"),
-    ])
+    let service = MockFolioService(
+        documents: [
+            Document(title: "First fixture", originalFilename: "first.pdf"),
+            Document(title: "Second fixture", originalFilename: "second.pdf"),
+        ], loseFirstEntryResponse: ProcessInfo.processInfo.arguments.contains("--discussion-save-failure"))
 
     var body: some Scene {
         WindowGroup {

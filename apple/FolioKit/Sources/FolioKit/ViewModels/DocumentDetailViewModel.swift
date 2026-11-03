@@ -20,6 +20,7 @@ public final class DocumentDetailViewModel {
         case failed(String)
     }
 
+    public let discussion: DocumentDiscussionViewModel
     public let document: Document
     public private(set) var preview = Preview.loading
     public let metadata: [MetadataField]
@@ -32,6 +33,7 @@ public final class DocumentDetailViewModel {
     public init(
         document: Document, correspondent: String?, type: String?, service: any FolioService
     ) {
+        discussion = DocumentDiscussionViewModel(documentID: document.id, service: service)
         self.document = document
         self.service = service
         summary = DocumentSummary(document, correspondent: correspondent, documentType: type)

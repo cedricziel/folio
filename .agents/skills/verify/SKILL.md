@@ -483,3 +483,9 @@ with the disposable setup and teardown. Both viewport cases commit a creation
 while dropping its response, retry the retained key/body, then edit and delete.
 They also verify separate sections and run scoped accessibility checks. Never
 set `E2E_BASE_URL` to an existing archive.
+
+For Apple discussion changes, run the isolated package command above with
+`--filter 'DocumentDiscussionTests|LiveFolioServiceTests'`. These cover retained
+creation keys, scoped generated requests, revoked access, and saved entries across
+chronological pages. The navigation fixture includes discussion CRUD and a lost
+creation response; run its tests on a disposable simulator, never the user app.
