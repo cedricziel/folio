@@ -109,7 +109,12 @@ fn compare_metadata(
             previous_reviewed_at,
             previous_reviewed_by: before.reviewed_by.cloned(),
             previous_review_origin: before.review_origin,
-            reason: "user".into(),
+            reason: if crate::mutation::current_actor().is_some() {
+                "user"
+            } else {
+                "system"
+            }
+            .into(),
         }),
         _ => {}
     }

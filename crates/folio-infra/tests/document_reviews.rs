@@ -190,6 +190,24 @@ async fn review_contract(db: Database) {
     .unwrap();
     assert_eq!(retained.review_origin, Some(ReviewOrigin::System));
     assert_eq!(retained.reviewed_at, system_review.reviewed_at);
+
+    r.documents
+        .set_reviewed(vault, imported.id, false)
+        .await
+        .unwrap();
+    let events = r
+        .outbox
+        .replay(0, Utc::now() - Duration::minutes(5), 100)
+        .await
+        .unwrap();
+    let system_unreview = events
+        .iter()
+        .filter_map(|row| row.envelope.as_ref())
+        .filter(|event| event.event_type() == "document.unreviewed")
+        .last()
+        .unwrap();
+    assert_eq!(system_unreview.actor_id(), None);
+    assert_eq!(system_unreview.data()["reason"], "system");
 }
 
 #[tokio::test]
