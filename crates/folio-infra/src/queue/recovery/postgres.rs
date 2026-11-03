@@ -134,12 +134,18 @@ pub(in crate::queue) async fn reset_stuck(pool: &PgPool) -> Result<i64> {
         .fetch_all(pool).await.map_err(repo_err)?;
     let mut recovered = 0;
     for id in ids {
-        if settle(pool, id.parse().map_err(repo_err)?, Failure::Expired)
-            .await?
-            .is_some()
-        {
-            recovered += 1;
+        let settled = match id.parse() {
+            Ok(id) => settle(pool, id, Failure::Expired).await,
+            Err(error) => Err(repo_err(error)),
+        };
+        match settled {
+            Ok(Some(_)) => recovered += 1,
+            Ok(None) => {}
+            Err(error) => tracing::error!(job.id = %id, %error, "Failed to recover expired job"),
         }
+    }
+    if recovered > 0 {
+        tracing::info!("Recovered {recovered} expired jobs");
     }
     Ok(recovered)
 }
