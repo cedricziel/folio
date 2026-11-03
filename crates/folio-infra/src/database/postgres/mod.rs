@@ -1,4 +1,6 @@
 //! PostgreSQL adapters
+mod metadata_option_repo;
+pub use metadata_option_repo::PostgresMetadataOptionRepository;
 
 mod metadata_repo;
 pub use metadata_repo::PostgresMetadataFieldRepository;

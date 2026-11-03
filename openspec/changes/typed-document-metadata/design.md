@@ -14,7 +14,7 @@ Use typed columns with a discriminator and database CHECK constraints, not an ar
 
 Live field names are unique within a vault after trimming and case normalization. Retiring a definition prevents new assignments and edits but retains existing values for display. Editors may explicitly clear retained assignments, including assignments to retired fields. Restore returns a conflict if the name has been reused. A field kind cannot change while any retained value exists, including a cleared value. Create a replacement definition to migrate kinds explicitly. Enabling required marks missing values incomplete and applies validation to subsequent complete metadata edits. Enabling unique is rejected when retained values collide. Required applies to a complete metadata edit, not upload ingestion, so new documents may start incomplete. The UI marks incomplete required fields.
 
-Retired options retain IDs and existing values. They cannot be newly assigned. Rename changes labels without changing assignments. Select options belong to exactly one field. Restoring an option checks live label uniqueness within that field.
+Retired options retain IDs and existing values. They cannot be newly assigned. Rename changes labels without changing assignments. Select options belong to exactly one field. A select field with retained options cannot change kind; the database enforces that relationship. Restoring an option checks live label uniqueness within that field.
 
 ## Values and validation
 
