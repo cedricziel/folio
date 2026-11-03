@@ -202,47 +202,53 @@ struct InboxView: View {
 
     private func sidebar(showsPreview: Bool) -> some View {
         @Bindable var list = session.list
-        return List(selection: documentSelection) {
-            ForEach(list.rows) { row in
-                documentLink(row, showsPreview: showsPreview)
-                    .transition(.opacity)
-                    .tag(row.id)
-                    .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
-                    .listRowSeparatorTint(.rule)
-                    .swipeActions {
-                        if canEdit {
-                            Button("Move to Trash", systemImage: "trash", role: .destructive) {
-                                pendingDelete = row.document
+        return Group {
+            if session.presentation == .grid {
+                documentGrid
+            } else {
+                List(selection: documentSelection) {
+                    ForEach(list.rows) { row in
+                        documentLink(row, showsPreview: showsPreview)
+                            .transition(.opacity)
+                            .tag(row.id)
+                            .listRowBackground(row.id == session.selection ? Color.archiveTint : Color.paper)
+                            .listRowSeparatorTint(.rule)
+                            .swipeActions {
+                                if canEdit {
+                                    Button("Move to Trash", systemImage: "trash", role: .destructive) {
+                                        pendingDelete = row.document
+                                    }
+                                }
+                            }
+                    }
+                    if list.phase == .loading && !list.rows.isEmpty {
+                        ProgressView("Loading documents…")
+                    } else if list.canLoadMore {
+                        VStack(spacing: 8) {
+                            if let message = list.pageError {
+                                Text(message).foregroundStyle(Color.danger)
+                            }
+                            if list.isLoadingMore {
+                                ProgressView("Loading documents…")
+                            } else {
+                                Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
+                                    pageTask?.cancel()
+                                    pageTask = Task { await list.loadNextPage() }
+                                }
+                                .buttonStyle(.borderless)
                             }
                         }
-                    }
-            }
-            if list.phase == .loading && !list.rows.isEmpty {
-                ProgressView("Loading documents…")
-            } else if list.canLoadMore {
-                VStack(spacing: 8) {
-                    if let message = list.pageError {
-                        Text(message).foregroundStyle(Color.danger)
-                    }
-                    if list.isLoadingMore {
-                        ProgressView("Loading documents…")
-                    } else {
-                        Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
-                            pageTask?.cancel()
-                            pageTask = Task { await list.loadNextPage() }
-                        }
-                        .buttonStyle(.borderless)
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.paper)
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .listRowBackground(Color.paper)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: list.rowChangeRevision)
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(Color.paper)
-        .navigationTitle(list.scope == .inbox ? "Inbox" : "All documents")
+        .navigationTitle(session.savedViewName ?? (list.scope == .inbox ? "Inbox" : "All documents"))
         .searchable(text: $list.searchText, prompt: "Search documents")
         .searchFocused($searchFocused)
         .refreshable { await list.load() }
@@ -376,6 +382,60 @@ struct InboxView: View {
         #else
             nil
         #endif
+    }
+
+    private var documentGrid: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [
+                    GridItem(.adaptive(minimum: FolioTheme.Spacing.space12 * 4), spacing: FolioTheme.Spacing.space4)
+                ],
+                spacing: FolioTheme.Spacing.space4
+            ) {
+                ForEach(list.rows) { row in
+                    Button {
+                        session.selection = row.id
+                        session.path = [row.id]
+                    } label: {
+                        VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
+                            DocumentThumbnailView(document: row.document)
+                                .frame(height: FolioTheme.Spacing.space12 * 3)
+                            Text(row.title)
+                                .font(FolioTheme.Typography.heading)
+                                .foregroundStyle(Color.ink)
+                                .lineLimit(2)
+                            Text(row.subtitle ?? row.dateText)
+                                .font(FolioTheme.Typography.bodySm)
+                                .foregroundStyle(Color.inkMuted)
+                                .lineLimit(1)
+                        }
+                        .padding(FolioTheme.Spacing.space3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(row.id == session.selection ? Color.archiveTint : Color.paperRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: FolioTheme.Radius.radiusSm))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("document-\(row.id)")
+                    .contextMenu {
+                        if canEdit {
+                            Button("Move to Trash", systemImage: "trash", role: .destructive) {
+                                pendingDelete = row.document
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(FolioTheme.Spacing.space4)
+            if let message = list.pageError { Text(message).foregroundStyle(Color.danger) }
+            if list.canLoadMore {
+                Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
+                    pageTask?.cancel()
+                    pageTask = Task { await list.loadNextPage() }
+                }
+                .disabled(list.isLoadingMore)
+                .padding(FolioTheme.Spacing.space4)
+            }
+        }
     }
 
     private func documentLink(_ row: DocumentRow, showsPreview: Bool) -> some View {
