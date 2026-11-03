@@ -1652,7 +1652,10 @@ impl PostgresDocumentRepository {
                 .map_err(repo_err)?;
         let mut current = current;
         current.sort();
-        for tag in &wanted {
+        for tag in wanted
+            .iter()
+            .filter(|tag| current.binary_search(tag).is_err())
+        {
             require_entry(tx, "tags", "Tag", vault, *tag).await?;
         }
         if current == wanted {

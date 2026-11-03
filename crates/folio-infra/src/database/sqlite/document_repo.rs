@@ -1860,7 +1860,10 @@ impl SqliteDocumentRepository {
             .map(|id| parse_uuid(&id))
             .collect::<Result<_>>()?;
         current.sort();
-        for tag in &wanted {
+        for tag in wanted
+            .iter()
+            .filter(|tag| current.binary_search(tag).is_err())
+        {
             require_entry(tx, "tags", "Tag", vault, *tag).await?;
         }
         if current == wanted {

@@ -126,9 +126,36 @@ async fn taxonomy_contract(db: Database) {
         .is_err());
     assert!(r
         .documents
-        .set_tags(vault, document.id, &[tag.id])
+        .set_tags(vault, unclassified.id, &[tag.id])
         .await
         .is_err());
+    let live = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: "Live".into(),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    r.documents
+        .set_tags(vault, document.id, &[tag.id, live.id])
+        .await
+        .unwrap();
+    let mut kept: Vec<_> = r
+        .documents
+        .get_tags(vault, document.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|kept| kept.id)
+        .collect();
+    kept.sort();
+    let mut expected = vec![tag.id, live.id];
+    expected.sort();
+    assert_eq!(kept, expected);
     r.correspondents
         .delete(vault, correspondent.id)
         .await
