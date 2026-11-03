@@ -66,6 +66,7 @@
                     <dd>
                         <form action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">
                             <select name="correspondent_id" class="select" aria-label="From" {% if !(document|can_edit_document) %}disabled{% endif %} data-hotkey="edit" onchange="this.form.requestSubmit()">
+                                {% match correspondent %}{% when Some with (corr) %}{% if corr.deleted_at.is_some() %}<option value="{{ corr.id }}" selected disabled>{{ corr.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
                                 {% for c in all_correspondents %}
                                 <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
@@ -78,6 +79,7 @@
                     <dd>
                         <form action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">
                             <select name="document_type_id" class="select" aria-label="Type" {% if !(document|can_edit_document) %}disabled{% endif %} onchange="this.form.requestSubmit()">
+                                {% match document_type %}{% when Some with (dtype) %}{% if dtype.deleted_at.is_some() %}<option value="{{ dtype.id }}" selected disabled>{{ dtype.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
                                 {% for dt in all_document_types %}
                                 <option value="{{ dt.id }}" {% match document_type %}{% when Some with (dtype) %}{% if dt.id == dtype.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ dt.name }}</option>
@@ -86,7 +88,19 @@
                         </form>
                     </dd>
 
-                    <dt>Added</dt>
+                    <dt>Document date</dt>
+                    <dd>
+                        {% if document|can_edit_document %}
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">
+                            <input type="date" name="document_date" class="input" aria-label="Document date" min="0001-01-01" max="9999-12-31" value="{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}{% endmatch %}">
+                            <button type="submit" class="f-btn f-btn-quiet">Save date</button>
+                            <button type="submit" class="f-btn f-btn-quiet" name="clear" value="true">Clear date</button>
+                        </form>
+                        {% else %}
+                        <span class="f-meta">{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}Not set{% endmatch %}</span>
+                        {% endif %}
+                    </dd>
+                    <dt>Imported</dt>
                     <dd><span class="f-meta">{{ document.created_at.format("%Y-%m-%d") }}</span></dd>
 
                     {% match document.original_filename %}

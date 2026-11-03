@@ -9,7 +9,7 @@
 - [x] Merge field/option model PR #267 as c5d9a72621709a4be87e243f9953b5fd67d56144. Eight test-first `metadata_fields` regressions, all 76 core tests, core clippy, and workspace make lint pass.
 
 - [x] Write failing `metadata_validation` tests for exact decimals, false/null, date validity, currency, URL, and type mismatches; implement domain types and validation. All 22 regressions and 46 existing core tests pass with the openapi feature. Workspace make lint and make format also pass.
-- [ ] Write failing shared `metadata_repository_contract` tests for audit actors, live uniqueness, option identity, atomic patches, concurrent edits, vault isolation, trash/purge, and move rejection; implement new SQLite/PostgreSQL migrations and adapters.
+- [x] Write failing shared `metadata_repository_contract` tests for audit actors, live uniqueness, option identity, atomic patches, concurrent edits, vault isolation, trash/purge, and move rejection; implement new SQLite/PostgreSQL migrations and adapters.
 - [ ] Run relevant checks and commit the independently usable persistence unit.
 
 ## 3. API and web
@@ -43,6 +43,6 @@
 
 ## Current verification checkpoint
 
-- In progress: stable select-option persistence on `codex/metadata-options`. The shared contract failed on missing port/adapters before implementation. SQLite and required disposable PostgreSQL contracts now pass for stable identity, audit actors, max position, field/vault isolation, retirement/restore, no-ops, concurrency, pagination, parent-kind integrity, and transactional outbox rollback. Scoped core/infra clippy passes.
-- Field storage PR #285 merged as f48a63820e05fde0ce247a513900591d10a76e19. Required local SQLite/PostgreSQL tests, trusted lineage checks, scoped lint, workspace CI, and fastembed pass. The pre-existing desktop screenshot fix PR #286 is merged as 020f4cbd3408f2a6ae41dee88789041b37289e8b with successful CI and E2E.
-- The orchestrator assigned the bounded Rust slot after ingestion released it. Both field and option contracts pass after rebasing current main; evidence: `/private/tmp/folio-metadata-options-integrated.log`. Build settings were two jobs, incremental disabled, zero debug symbols. No build remains active. The completed `/private/tmp/folio-metadata-options-target` is being reclaimed to release capacity; dates/review-state is next. No Apple build slot is assigned.
+- Envelope budget PR #296 merged as d4cdcaecc4d034df020af7fbc22308e020767b1a after its foundation review.
+- Value persistence on `codex/metadata-value-storage`: paired `20261103090000_metadata_values.sql` migrations, `MetadataValueRepository` with SQLite and PostgreSQL adapters, purge clearing of incoming links with system attribution, and the move guard inside both `move_to` implementations. The `metadata_values` contract covers typed round trips, false versus missing, exact amounts, audit actors, case-sensitive uniqueness, uniqueness and kind changes on fields, retired fields and options, vault isolation, trash and purge, moves, concurrent edits, and outbox rollback. Verification runs in CI because local build capacity was exhausted.
+- Before metadata patches are exposed through routes, SSE replay must be scoped to the subscriber's vault or bounded by bytes, because value-change events can reach 1 MiB.

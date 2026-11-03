@@ -13,6 +13,8 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var embedStatus: ProcessingStatus
     /// Only the list and get endpoints report tags; search results and uploads come back without them.
     public var tags: [Tag]
+    public var documentDate: DocumentDate?
+    public var canEditDocumentDate: Bool
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -28,6 +30,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         ocrStatus: ProcessingStatus = .pending,
         embedStatus: ProcessingStatus = .pending,
         tags: [Tag] = [],
+        documentDate: DocumentDate? = nil,
+        canEditDocumentDate: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -42,6 +46,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.ocrStatus = ocrStatus
         self.embedStatus = embedStatus
         self.tags = tags
+        self.documentDate = documentDate
+        self.canEditDocumentDate = canEditDocumentDate
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -89,11 +95,15 @@ public struct Tag: Identifiable, Hashable, Sendable {
     public let id: UUID
     public var name: String
     public var color: String?
+    public var deletedAt: Date?
 
-    public init(id: UUID = UUID(), name: String, color: String? = nil) {
+    public var displayName: String { deletedAt == nil ? name : "\(name) (deleted)" }
+
+    public init(id: UUID = UUID(), name: String, color: String? = nil, deletedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.color = color
+        self.deletedAt = deletedAt
     }
 }
 

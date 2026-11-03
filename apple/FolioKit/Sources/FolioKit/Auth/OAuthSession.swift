@@ -10,6 +10,7 @@ public actor OAuthSession: BearerTokenProvider {
     private var pendingSave: OAuthCredentials?
     private var pendingBaseline: OAuthCredentials?
     private var signingOut = false
+    private var signOuts = 0
     private let leeway: TimeInterval = 30
 
     public init(
@@ -34,15 +35,19 @@ public actor OAuthSession: BearerTokenProvider {
             changed()
             return nil
         }
-        if credentials.refreshPending == true { return try await refresh(rejecting: credentials.tokens.accessToken) }
-        if credentials.tokens.expiresAt.timeIntervalSince(now()) > leeway {
-            return credentials.tokens.accessToken
-        }
+        if let token = usableToken(credentials) { return token }
         return try await refresh(rejecting: credentials.tokens.accessToken)
     }
 
     public func refresh(rejecting token: String?) async throws -> String? {
         guard !signingOut else { return nil }
+        let generation = signOuts
+        let refreshed = try await sharedRefresh(rejecting: token)
+        // A sign-out that began while the refresh ran must not hand its token to the caller.
+        return generation == signOuts ? refreshed : nil
+    }
+
+    private func sharedRefresh(rejecting token: String?) async throws -> String? {
         if let inFlight { return try await inFlight.value }
         let task = Task {
             if let refreshLock {
@@ -76,9 +81,12 @@ public actor OAuthSession: BearerTokenProvider {
         _ = try await task.value
     }
 
+    var isSigningOut: Bool { signingOut }
+
     public func signOut() async throws {
         guard !signingOut else { return }
         signingOut = true
+        signOuts += 1
         defer { signingOut = false }
         if let inFlight { _ = try? await inFlight.value }
         if let refreshLock {
@@ -104,31 +112,20 @@ public actor OAuthSession: BearerTokenProvider {
 
     private func performRefresh(rejecting token: String?, retryOnly: Bool = false) async throws -> String? {
         if let pendingSave {
-            let current = try store.load()
-            if current == pendingBaseline {
-                try store.save(pendingSave)
-                self.pendingSave = nil
-                pendingBaseline = nil
+            switch try persist(pendingSave, replacing: pendingBaseline) {
+            case .saved:
                 changed()
                 return pendingSave.isSignedIn ? pendingSave.tokens.accessToken : nil
-            }
-            self.pendingSave = nil
-            pendingBaseline = nil
-            if let current, current.isSignedIn,
-                current.refreshPending != true,
-                current.tokens.expiresAt.timeIntervalSince(now()) > leeway
-            {
-                return current.tokens.accessToken
+            case let .superseded(current):
+                if let token = usableToken(current) { return token }
             }
         }
         if retryOnly { return nil }
         guard let credentials = try store.load(), credentials.isSignedIn else { return nil }
         guard credentials.refreshPending != true else { throw FolioError.signInRequired }
         // Re-read after acquiring the process lock: an extension may have rotated the token.
-        if let token, credentials.tokens.accessToken != token,
-            credentials.tokens.expiresAt.timeIntervalSince(now()) > leeway
-        {
-            return credentials.tokens.accessToken
+        if let token, credentials.tokens.accessToken != token, let rotated = usableToken(credentials) {
+            return rotated
         }
         guard let refreshToken = credentials.tokens.refreshToken else {
             var signedOut = credentials
@@ -157,16 +154,34 @@ public actor OAuthSession: BearerTokenProvider {
             return nil
         }
         updated.refreshPending = nil
-        try persist(updated, replacing: baseline)
+        if case let .superseded(current) = try persist(updated, replacing: baseline) { return usableToken(current) }
         return updated.tokens.accessToken
     }
 
-    private func persist(_ updated: OAuthCredentials, replacing baseline: OAuthCredentials) throws {
+    private enum Write {
+        case saved
+        case superseded(by: OAuthCredentials?)
+    }
+
+    /// Saves `updated` unless another writer, such as a newer sign-in, replaced `baseline` meanwhile.
+    /// A failed save keeps it pending, so `retryPendingSave()` can write it later.
+    @discardableResult
+    private func persist(_ updated: OAuthCredentials, replacing baseline: OAuthCredentials?) throws -> Write {
         pendingSave = updated
         pendingBaseline = baseline
-        try store.save(updated)
+        let current = try store.load()
+        let unchanged = current == baseline
+        if unchanged { try store.save(updated) }
         pendingSave = nil
         pendingBaseline = nil
+        return unchanged ? .saved : .superseded(by: current)
+    }
+
+    private func usableToken(_ credentials: OAuthCredentials?) -> String? {
+        guard let credentials, credentials.isSignedIn, credentials.refreshPending != true,
+            credentials.tokens.expiresAt.timeIntervalSince(now()) > leeway
+        else { return nil }
+        return credentials.tokens.accessToken
     }
 
     private func changed() {

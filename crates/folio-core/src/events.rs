@@ -8,7 +8,9 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
-use crate::models::{Document, DocumentSource, Id, NamedRef, Tag, VaultId};
+use crate::models::{
+    Document, DocumentDate, DocumentSource, Id, NamedRef, ReviewOrigin, Tag, UserId, VaultId,
+};
 
 /// What a document looked like just before it was deleted
 ///
@@ -32,11 +34,16 @@ impl<'de> Deserialize<'de> for DeletedDocument {
             .tags
             .into_iter()
             .map(|mut tag| {
-                // Older stored snapshots omitted tag ownership; the captured document supplies it.
+                // Legacy snapshots predate tag ownership and update metadata.
                 if let Some(fields) = tag.as_object_mut() {
                     fields.entry("vault_id").or_insert_with(|| {
                         serde_json::Value::String(snapshot.document.vault_id.to_string())
                     });
+                    if !fields.contains_key("updated_at") {
+                        if let Some(created_at) = fields.get("created_at").cloned() {
+                            fields.insert("updated_at".into(), created_at);
+                        }
+                    }
                 }
                 serde_json::from_value(tag).map_err(serde::de::Error::custom)
             })
@@ -124,6 +131,15 @@ pub enum EventOrigin {
 /// Immutable metadata captured in the transaction that produced an event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_date: Option<DocumentDate>,
+    #[serde(default)]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub reviewed_by: Option<UserId>,
+    #[serde(default)]
+    pub review_origin: Option<ReviewOrigin>,
+
     pub document_id: Id,
     pub vault_id: VaultId,
     pub title: String,
@@ -143,6 +159,10 @@ impl From<&DeletedDocument> for EventSnapshot {
     fn from(snapshot: &DeletedDocument) -> Self {
         let doc = &snapshot.document;
         Self {
+            document_date: doc.document_date,
+            reviewed_at: doc.reviewed_at,
+            reviewed_by: doc.reviewed_by.clone(),
+            review_origin: doc.review_origin,
             document_id: doc.id,
             vault_id: doc.vault_id,
             title: doc.title.clone(),
@@ -387,6 +407,10 @@ pub fn document_event_envelope(
             };
             let document = &snapshot.document;
             captured = EventSnapshot {
+                document_date: document.document_date,
+                reviewed_at: document.reviewed_at,
+                reviewed_by: document.reviewed_by.clone(),
+                review_origin: document.review_origin,
                 document_id: document.id,
                 vault_id: document.vault_id,
                 title: document.title.clone(),
@@ -417,7 +441,8 @@ pub fn document_event_envelope(
         Some(event.document_id()), EventAudience::Vault,
         serde_json::json!({
             "title": context.title, "original_filename": context.original_filename,
-            "mime_type": context.mime_type, "created_at": context.created_at,
+            "mime_type": context.mime_type, "created_at": context.created_at, "document_date": context.document_date,
+            "reviewed_at": context.reviewed_at, "reviewed_by": context.reviewed_by, "review_origin": context.review_origin,
             "correspondent_id": context.correspondent_id, "correspondent_name": context.correspondent_name,
             "document_type_id": context.document_type_id, "document_type_name": context.document_type_name,
             "tags": context.tags,
@@ -431,7 +456,7 @@ pub fn document_event_envelope(
 /// Durable consumers read the outbox, and reconnecting clients replay from it.
 #[derive(Clone)]
 pub struct EventBroadcaster {
-    sender: broadcast::Sender<OutboxEvent>,
+    sender: broadcast::Sender<Arc<OutboxEvent>>,
 }
 
 impl EventBroadcaster {
@@ -444,11 +469,11 @@ impl EventBroadcaster {
     /// Send an event to all subscribers
     pub fn send(&self, event: OutboxEvent) {
         // Ignore send errors (no subscribers)
-        let _ = self.sender.send(event);
+        let _ = self.sender.send(Arc::new(event));
     }
 
     /// Subscribe to events
-    pub fn subscribe(&self) -> broadcast::Receiver<OutboxEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<OutboxEvent>> {
         self.sender.subscribe()
     }
 }
@@ -465,6 +490,10 @@ mod tests {
 
     fn context() -> EventSnapshot {
         EventSnapshot {
+            document_date: None,
+            reviewed_at: None,
+            reviewed_by: None,
+            review_origin: None,
             document_id: Id::new_v4(),
             vault_id: VaultId::new(),
             title: "at occurrence".into(),
@@ -606,20 +635,26 @@ mod tests {
     }
 
     #[test]
-    fn legacy_deleted_snapshot_inherits_tag_vault_from_document() {
+    fn legacy_deleted_snapshot_infers_tag_update_time_from_captured_creation() {
         let document = Document::new(VaultId::new(), "retained history");
         let tag = Tag::new(document.vault_id, "archive");
         let mut payload = serde_json::json!({
             "document": document,
             "tags": [tag]
         });
-        payload["tags"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("vault_id");
+        let fields = payload["tags"][0].as_object_mut().unwrap();
+        fields.remove("vault_id");
+        fields.remove("updated_at");
+        fields.remove("deleted_at");
+        fields.remove("created_by");
+        fields.remove("updated_by");
         let snapshot: DeletedDocument = serde_json::from_value(payload).unwrap();
         assert_eq!(snapshot.tags[0].vault_id, document.vault_id);
         assert_eq!(snapshot.tags[0].id, tag.id);
+        assert_eq!(snapshot.tags[0].updated_at, tag.created_at);
+        assert_eq!(snapshot.tags[0].deleted_at, None);
+        assert_eq!(snapshot.tags[0].created_by, None);
+        assert_eq!(snapshot.tags[0].updated_by, None);
     }
 
     #[test]

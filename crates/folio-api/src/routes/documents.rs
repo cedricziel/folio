@@ -34,7 +34,12 @@ pub fn router() -> Router<AppState> {
         .route("/trash", get(super::trash::list))
         .route("/{id}/restore", post(super::trash::restore))
         .route("/{id}/purge", axum::routing::delete(super::trash::purge))
-        .route("/{id}", get(get_document).delete(delete_document))
+        .route(
+            "/{id}",
+            get(get_document)
+                .patch(update_document_date)
+                .delete(delete_document),
+        )
         .route(
             "/{id}/entries",
             get(super::document_entries::list).post(super::document_entries::create),
@@ -110,6 +115,7 @@ pub struct DocumentTag {
     name: String,
     /// Hex color such as "#ff5733", when the tag has one
     color: Option<String>,
+    deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A document together with the names behind its ids
@@ -123,6 +129,8 @@ pub struct DocumentView {
     /// Name of the document type, when one is set
     document_type: Option<String>,
     tags: Vec<DocumentTag>,
+    #[schema(required = false)]
+    can_edit_document_date: bool,
 }
 
 /// Response for document list
@@ -138,14 +146,14 @@ pub(super) async fn present(
     state: &AppState,
     documents: Vec<Document>,
 ) -> ApiResult<Vec<DocumentView>> {
-    let correspondents: HashMap<_, _> = state
+    let mut correspondents: HashMap<_, _> = state
         .correspondent_repo
         .list(vault)
         .await?
         .into_iter()
         .map(|c| (c.id, c.name))
         .collect();
-    let types: HashMap<_, _> = state
+    let mut types: HashMap<_, _> = state
         .document_type_repo
         .list(vault)
         .await?
@@ -153,6 +161,12 @@ pub(super) async fn present(
         .map(|t| (t.id, t.name))
         .collect();
 
+    for entry in state.correspondent_repo.list_trash(vault).await? {
+        correspondents.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
+    for entry in state.document_type_repo.list_trash(vault).await? {
+        types.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
     let ids: Vec<_> = documents.iter().map(|document| document.id).collect();
     let mut tags = state.document_repo.tags_for_documents(vault, &ids).await?;
     Ok(documents
@@ -167,9 +181,11 @@ pub(super) async fn present(
                     vault_id: tag.vault_id.0,
                     name: tag.name,
                     color: tag.color,
+                    deleted_at: tag.deleted_at,
                 })
                 .collect();
             DocumentView {
+                can_edit_document_date: crate::vault_context::can_edit_document(&document),
                 correspondent: document
                     .correspondent_id
                     .and_then(|id| correspondents.get(&id).cloned()),
@@ -737,4 +753,43 @@ async fn remove_tag(
         .await?;
 
     Ok(Redirect::to(&format!("/documents/{}", path.id)).into_response())
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentDatePatch {
+    #[serde(default, deserialize_with = "date_patch_value")]
+    #[schema(value_type = Option<String>, format = Date)]
+    document_date: Option<Option<folio_core::models::DocumentDate>>,
+}
+
+fn date_patch_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<folio_core::models::DocumentDate>>, D::Error> {
+    Option::<folio_core::models::DocumentDate>::deserialize(deserializer).map(Some)
+}
+
+#[utoipa::path(patch, path = "/api/documents/{id}", operation_id = "updateDocumentDate", tag = "documents",
+    params(("id" = Uuid, Path, description = "Document ID")), request_body = DocumentDatePatch,
+    responses((status = 200, description = "Updated document; omitted date is unchanged and null clears it", body = DocumentView), (status = 422, description = "Invalid date or unsupported field", body = crate::error::ErrorResponse), BadRequest, NotFound, InternalError))]
+pub(crate) async fn update_document_date(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    ApiJson(patch): ApiJson<DocumentDatePatch>,
+) -> ApiResult<Json<DocumentView>> {
+    let document = state
+        .document_repo
+        .update(
+            vault,
+            id,
+            UpdateDocument {
+                document_date: patch.document_date,
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Json(
+        present(vault, &state, vec![document]).await?.remove(0),
+    ))
 }

@@ -729,18 +729,20 @@ impl AuthStore for PostgresAuthStore {
     }
 
     async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError> {
+        let mut tx = self.pool.begin().await.map_err(err)?;
         for sql in [
+            "DELETE FROM oauth_codes WHERE user_id = $1 AND client_id = $2",
             "DELETE FROM oauth_access_tokens WHERE user_id = $1 AND client_id = $2",
             "DELETE FROM oauth_refresh_tokens WHERE user_id = $1 AND client_id = $2",
         ] {
             sqlx::query(sql)
                 .bind(user_id)
                 .bind(client_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(err)?;
         }
-        Ok(())
+        tx.commit().await.map_err(err)
     }
 
     async fn get_totp(&self, user_id: &str) -> Result<Option<TotpRecord>, AuthError> {

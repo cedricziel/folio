@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentSource, Id, UserId, VaultId};
+use super::{DocumentDate, DocumentSource, Id, ReviewOrigin, UserId, VaultId};
 
 /// A stage of the document processing pipeline that is tracked per document
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +86,18 @@ pub struct Document {
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub uploaded_by: Option<UserId>,
 
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
+    pub document_date: Option<DocumentDate>,
+    #[serde(default)]
+    pub reviewed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub reviewed_by: Option<UserId>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub review_origin: Option<ReviewOrigin>,
+
     /// Document title
     pub title: String,
 
@@ -143,6 +155,10 @@ impl Document {
             id: Id::new_v4(),
             vault_id,
             uploaded_by: None,
+            document_date: None,
+            reviewed_at: None,
+            reviewed_by: None,
+            review_origin: None,
             title: title.into(),
             content: None,
             original_filename: None,
@@ -247,6 +263,12 @@ pub struct CreateDocument {
 /// Parameters for updating a document
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateDocument {
+    #[serde(
+        default,
+        deserialize_with = "nullable_date",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub document_date: Option<Option<DocumentDate>>,
     pub title: Option<String>,
     pub content: Option<String>,
     pub correspondent_id: Option<Option<Id>>,
@@ -270,6 +292,12 @@ pub struct DocumentFilter {
     pub created_after: Option<DateTime<Utc>>,
     /// Only documents created strictly before this instant
     pub created_before: Option<DateTime<Utc>>,
+}
+
+fn nullable_date<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<DocumentDate>>, D::Error> {
+    Option::<DocumentDate>::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]

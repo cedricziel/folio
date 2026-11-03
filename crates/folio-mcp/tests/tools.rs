@@ -452,6 +452,26 @@ async fn remove_tags_ignores_unknown_names() {
 }
 
 #[tokio::test]
+async fn remove_tags_detaches_a_retained_deleted_tag() {
+    let fx = Fixture::new().await;
+    let doc = fx.insert("Doc", "x").await;
+    let client = fx.in_process_client().await;
+    let id = doc.id.to_string();
+    call_ok(&client, "add_tags", json!({"id": id, "tags": ["retired"]})).await;
+    let retired = fx.documents.get_tags(fx.vault, doc.id).await.unwrap()[0].id;
+    fx.tags.delete(fx.vault, retired).await.unwrap();
+
+    let out = call_ok(
+        &client,
+        "remove_tags",
+        json!({"id": id, "tags": ["Retired"]}),
+    )
+    .await;
+
+    assert_eq!(out["tags"], json!([]));
+}
+
+#[tokio::test]
 async fn server_identifies_as_folio() {
     let fx = Fixture::new().await;
     let client = fx.in_process_client().await;
