@@ -63,7 +63,7 @@ async fn contract(db: Database) {
         workflow.id,
         workflow.trigger,
         Some(uuid::Uuid::new_v4()),
-        "retained event facts".into(),
+        r#"{"note":"retained event facts"}"#.into(),
     )
     .with_actions(workflow.actions.clone());
     assert!(r.workflows.create_run(&run).await.unwrap());
@@ -72,7 +72,7 @@ async fn contract(db: Database) {
         workflow.id,
         workflow.trigger,
         Some(uuid::Uuid::new_v4()),
-        "successful event".into(),
+        r#"{"note":"successful event"}"#.into(),
     )
     .with_actions(workflow.actions.clone());
     r.workflows.create_run(&succeeded).await.unwrap();
@@ -139,7 +139,7 @@ async fn contract(db: Database) {
         workflow.id,
         workflow.trigger,
         None,
-        "stale event".into(),
+        r#"{"note":"stale event"}"#.into(),
     );
     assert!(r.workflows.create_run(&rejected).await.is_err());
     r.workflows.delete(vault, workflow.id).await.unwrap();
@@ -205,7 +205,7 @@ async fn contract(db: Database) {
         workflow.id,
         workflow.trigger,
         Some(uuid::Uuid::new_v4()),
-        "future event".into(),
+        r#"{"note":"future event"}"#.into(),
     )
     .with_actions(restored.actions.clone());
     assert!(r.workflows.create_run(&future).await.unwrap());

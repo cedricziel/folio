@@ -664,7 +664,7 @@ async fn workflow_trash_restore_and_retained_history_are_usable_from_management_
         stored.id,
         stored.trigger,
         Some(Uuid::new_v4()),
-        "frozen execution context".into(),
+        r#"{"note":"frozen execution context"}"#.into(),
     )
     .with_actions(stored.actions.clone());
     app.state.workflow_repo.create_run(&run).await.unwrap();
