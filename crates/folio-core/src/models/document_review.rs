@@ -40,6 +40,11 @@ impl DocumentReview {
         }
     }
 
+    /// Applies the request's server-derived actor and current server time.
+    pub fn set_reviewed_from_context(&mut self, reviewed: bool) -> bool {
+        self.set_reviewed(reviewed, crate::mutation::current_actor(), Utc::now())
+    }
+
     /// Returns whether state changed. Actor and time must come from server context.
     pub fn set_reviewed(
         &mut self,
@@ -60,5 +65,26 @@ impl DocumentReview {
             reviewed_by: actor,
         });
         true
+    }
+}
+
+impl ReviewOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::System => "system",
+            Self::LegacyClassification => "legacy_classification",
+        }
+    }
+}
+impl std::str::FromStr for ReviewOrigin {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "human" => Ok(Self::Human),
+            "system" => Ok(Self::System),
+            "legacy_classification" => Ok(Self::LegacyClassification),
+            _ => Err(format!("Unknown review origin: {value}")),
+        }
     }
 }

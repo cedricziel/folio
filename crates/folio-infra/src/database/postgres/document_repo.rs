@@ -126,7 +126,7 @@ macro_rules! select_documents {
             "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
             "ocr_status, embed_status, deleted_at, purge_requested_at, ",
-            "created_at, updated_at, document_date::text AS document_date ",
+            "created_at, updated_at, document_date::text AS document_date, reviewed_at, reviewed_by, review_origin ",
             "FROM documents ",
             $tail
         )
@@ -140,6 +140,9 @@ struct DocumentRow {
     uploaded_by: Option<String>,
     title: String,
     document_date: Option<String>,
+    reviewed_at: Option<DateTime<Utc>>,
+    reviewed_by: Option<String>,
+    review_origin: Option<String>,
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
@@ -166,6 +169,12 @@ impl TryFrom<DocumentRow> for Document {
             vault_id: VaultId(row.vault_id),
             uploaded_by: row.uploaded_by.map(UserId),
             title: row.title,
+            reviewed_at: row.reviewed_at,
+            reviewed_by: row.reviewed_by.map(UserId),
+            review_origin: row
+                .review_origin
+                .map(|v| v.parse().map_err(Error::Repository))
+                .transpose()?,
             document_date: row
                 .document_date
                 .map(|value| value.parse().map_err(|e: &str| Error::Repository(e.into())))
@@ -689,6 +698,48 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
     }
 
+    async fn set_reviewed(&self, vault: VaultId, id: Id, reviewed: bool) -> Result<Document> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
+            "WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE"
+        ))
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let existing: Document = row
+            .map(TryInto::try_into)
+            .transpose()?
+            .ok_or_else(|| not_found("Document", id))?;
+
+        if existing.reviewed_at.is_some() == reviewed {
+            return Ok(existing);
+        }
+        let before = capture_document(&mut tx, id, None)
+            .await?
+            .ok_or_else(|| not_found("Document", id))?;
+        let mut review = folio_core::models::DocumentReview::default();
+        review.set_reviewed_from_context(reviewed);
+        let decision = review.decision();
+        sqlx::query("UPDATE documents SET reviewed_at = $1, reviewed_by = $2, review_origin = $3, updated_at = $4 WHERE id = $5 AND vault_id = $6")
+            .bind(decision.map(|d| d.reviewed_at))
+            .bind(decision.and_then(|d| d.reviewed_by.as_ref()).map(|id| id.0.as_str()))
+            .bind(decision.map(|d| d.origin.as_str()))
+            .bind(Utc::now()).bind(id).bind(vault.0)
+            .execute(&mut *tx).await.map_err(repo_err)?;
+        self.emit_metadata_in(&mut tx, &before).await?;
+        let row: DocumentRow = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))
+            .bind(id)
+            .bind(vault.0)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        let result = row.try_into()?;
+        self.commit(tx).await?;
+        Ok(result)
+    }
+
     async fn update(&self, vault: VaultId, id: Id, params: UpdateDocument) -> Result<Document> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let row: Option<DocumentRow> = sqlx::query_as(select_documents!(
@@ -760,6 +811,9 @@ impl DocumentRepository for PostgresDocumentRepository {
             vault_id: vault,
             uploaded_by: existing.uploaded_by,
             document_date,
+            reviewed_at: existing.reviewed_at,
+            reviewed_by: existing.reviewed_by,
+            review_origin: existing.review_origin,
             title,
             content,
             original_filename: existing.original_filename,
@@ -1781,6 +1835,9 @@ impl PostgresDocumentRepository {
             vault_id: vault,
             uploaded_by: params.uploaded_by,
             document_date: None,
+            reviewed_at: None,
+            reviewed_by: None,
+            review_origin: None,
             title: params.title,
             content: params.content,
             original_filename: params.original_filename,
