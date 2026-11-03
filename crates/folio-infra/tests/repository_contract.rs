@@ -2173,7 +2173,9 @@ async fn flush_outbox(r: &Repositories) -> Vec<OutboxEvent> {
         }
         for event in batch {
             r.outbox.mark_dispatched(event.id).await.unwrap();
-            all.push(event);
+            if event.event.is_some() {
+                all.push(event);
+            }
         }
     }
 }
@@ -3527,10 +3529,12 @@ async fn trash_contract(db: &Database, r: &Repositories) {
     assert!(r.documents.list_trash(vault).await.unwrap()[0]
         .deleted_at
         .is_some());
-    assert!(matches!(
-        r.vaults.delete(vault).await,
-        Err(Error::Conflict(_))
-    ));
+    r.vaults.delete(vault).await.unwrap();
+    assert_eq!(
+        r.documents.locate_retained(document.id).await.unwrap(),
+        Some(vault)
+    );
+    r.vaults.restore(vault).await.unwrap();
 
     let restored = r.documents.restore(vault, document.id).await.unwrap();
     assert_eq!(restored.id, document.id);

@@ -72,10 +72,10 @@ pub async fn harness_with(
     let auth_store = repos.auth.clone();
     let members = repos.members.clone();
     let vault_repository = repos.vaults.clone();
-    let vaults = Arc::new(folio_core::services::VaultService::new(
-        repos.vaults.clone(),
-        repos.members,
-    ));
+    let vaults = Arc::new(
+        folio_core::services::VaultService::new(repos.vaults.clone(), repos.members)
+            .with_audit(repos.audit),
+    );
     let auth = make_auth(repos.auth.clone());
 
     let ai = folio_infra::config::AiConfig {

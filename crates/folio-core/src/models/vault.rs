@@ -72,13 +72,24 @@ impl std::fmt::Display for GroupId {
 
 /// A named container for documents and their vocabularies
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Vault {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid, read_only))]
     pub id: VaultId,
     /// Not unique: two people may both want a vault called `Personal`
     pub name: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, read_only))]
     pub created_by: Option<UserId>,
+    #[cfg_attr(feature = "openapi", schema(read_only))]
     pub created_at: DateTime<Utc>,
+    #[cfg_attr(feature = "openapi", schema(read_only))]
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, read_only))]
+    pub updated_by: Option<UserId>,
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(read_only))]
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 /// What a member may do in a vault, ordered `Viewer < Contributor < Editor < Owner`

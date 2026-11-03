@@ -118,7 +118,7 @@ fn not_found(id: Id) -> Error {
 #[async_trait]
 impl WorkflowRepository for PostgresWorkflowRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
-        let row: Option<(Id,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = $1")
+        let row: Option<(Id,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = $1 AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -129,7 +129,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     #[instrument(skip(self))]
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
         let row: Option<WorkflowRow> =
-            sqlx::query_as("SELECT * FROM workflows WHERE id = $1 AND vault_id = $2")
+            sqlx::query_as("SELECT * FROM workflows WHERE id = $1 AND vault_id = $2 AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)")
                 .bind(id)
                 .bind(vault.0)
                 .fetch_optional(&self.pool)
@@ -157,7 +157,7 @@ impl WorkflowRepository for PostgresWorkflowRepository {
     ) -> Result<Vec<Workflow>> {
         let rows: Vec<WorkflowRow> = sqlx::query_as(
             "SELECT * FROM workflows WHERE vault_id = $1 AND enabled AND trigger_event = $2
-             ORDER BY created_at",
+             AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) ORDER BY created_at",
         )
         .bind(vault.0)
         .bind(trigger.as_str())
@@ -245,12 +245,14 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
-        if self.locate(run.workflow_id).await? != Some(run.vault_id) {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let parent: Option<(Id,)> = sqlx::query_as("SELECT w.vault_id FROM workflows w JOIN vaults v ON v.id = w.vault_id WHERE w.id = $1 AND v.deleted_at IS NULL FOR SHARE OF w, v")
+            .bind(run.workflow_id).fetch_optional(&mut *tx).await.map_err(repo_err)?;
+        if !parent.map(|(id,)| id == run.vault_id.0).unwrap_or(false) {
             return Err(Error::Validation(
-                "Workflow run belongs to a different vault".into(),
+                "Workflow run belongs to an inactive or different vault".into(),
             ));
         }
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts,
                                         completed_actions, last_error, response_status, payload,
@@ -304,10 +306,10 @@ impl WorkflowRepository for PostgresWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn update_run(&self, run: &WorkflowRun) -> Result<()> {
-        sqlx::query(
+        let updated = sqlx::query(
             "UPDATE workflow_runs SET status = $1, attempts = $2, completed_actions = $3,
                                       last_error = $4, response_status = $5, finished_at = $6
-             WHERE id = $7",
+             WHERE id = $7 AND (status = 'pending' OR status = $1)",
         )
         .bind(run.status.as_str())
         .bind(run.attempts as i32)
@@ -319,6 +321,11 @@ impl WorkflowRepository for PostgresWorkflowRepository {
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
+        if updated.rows_affected() == 0 {
+            return Err(Error::Conflict(
+                "Workflow run is already terminal or missing".into(),
+            ));
+        }
         Ok(())
     }
 

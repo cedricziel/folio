@@ -270,12 +270,19 @@ pub struct IngestScheduler {
 /// Feeds one pipeline from sources that do not know about vaults
 struct BoundSink {
     vault: VaultId,
+    vaults: Arc<dyn VaultRepository>,
     inner: Arc<dyn VaultIngest>,
 }
 
 #[async_trait]
 impl IngestSink for BoundSink {
     async fn ingest(&self, source_id: Id, item: IngestItem) -> Result<IngestOutcome> {
+        if self.vaults.find(self.vault).await?.is_none() {
+            return Err(Error::NotFound {
+                entity_type: "Vault",
+                id: self.vault.to_string(),
+            });
+        }
         self.inner.ingest(self.vault, source_id, item).await
     }
 }
@@ -355,9 +362,21 @@ impl IngestScheduler {
                     }
                 },
             };
+            match self.vaults.find(vault).await {
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => {
+                    if let Some((_, handle)) = running.remove(&def.id) {
+                        handle.abort();
+                    }
+                    continue;
+                }
+            }
             let fingerprint =
                 serde_json::to_string(&(&def.name, &def.config, vault)).unwrap_or_default();
-            if running.get(&def.id).is_some_and(|(f, _)| *f == fingerprint) {
+            if running
+                .get(&def.id)
+                .is_some_and(|(f, handle)| *f == fingerprint && !handle.is_finished())
+            {
                 continue;
             }
             if let Some((_, old)) = running.remove(&def.id) {
@@ -387,6 +406,7 @@ impl IngestScheduler {
                 source,
                 Arc::new(BoundSink {
                     vault,
+                    vaults: Arc::clone(&self.vaults),
                     inner: Arc::clone(&self.sink),
                 }),
                 Arc::clone(&self.managed),
@@ -409,7 +429,7 @@ async fn run_source(
     id: Id,
     name: String,
     source: Box<dyn crate::ports::IngestionSource>,
-    sink: Arc<dyn IngestSink>,
+    sink: Arc<BoundSink>,
     repo: Arc<dyn SourceRepository>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -422,6 +442,15 @@ async fn run_source(
             _ = shutdown.changed() => if *shutdown.borrow() { return },
         }
 
+        match sink.vaults.find(sink.vault).await {
+            Ok(Some(_)) => {}
+            Ok(None) => return,
+            Err(error) => {
+                warn!("Cannot check vault for source '{name}': {error}");
+                wait = interval;
+                continue;
+            }
+        }
         let (status, next) = match source.poll(sink.as_ref()).await {
             Ok(PollReport {
                 imported,

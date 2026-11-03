@@ -15,7 +15,7 @@ let householdDocument: { id: string; title: string };
 let referenceDocument: { id: string; title: string };
 
 function seedVaults(userId: string) {
-  // Vault administration has no HTTP endpoint; only the managed fixture database is seeded.
+  // Fixed fixture roles keep isolation tests independent of the management UI.
   execFileSync(
     "python3",
     [

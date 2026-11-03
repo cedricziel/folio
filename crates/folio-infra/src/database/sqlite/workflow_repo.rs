@@ -85,7 +85,7 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
 #[async_trait]
 impl WorkflowRepository for SqliteWorkflowRepository {
     async fn locate(&self, id: Id) -> Result<Option<VaultId>> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ?")
+        let row: Option<(String,)> = sqlx::query_as("SELECT vault_id FROM workflows WHERE id = ? AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)")
             .bind(id.to_string())
             .fetch_optional(&self.pool)
             .await
@@ -95,7 +95,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self))]
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>> {
-        let row = sqlx::query("SELECT * FROM workflows WHERE id = ? AND vault_id = ?")
+        let row = sqlx::query("SELECT * FROM workflows WHERE id = ? AND vault_id = ? AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL)")
             .bind(id.to_string())
             .bind(vault.to_string())
             .fetch_optional(&self.pool)
@@ -123,7 +123,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
     ) -> Result<Vec<Workflow>> {
         let rows = sqlx::query(
             "SELECT * FROM workflows WHERE vault_id = ? AND enabled = 1 AND trigger_event = ?
-             ORDER BY created_at",
+             AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = workflows.vault_id AND v.deleted_at IS NULL) ORDER BY created_at",
         )
         .bind(vault.to_string())
         .bind(trigger.as_str())
@@ -212,12 +212,21 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool> {
-        if self.locate(run.workflow_id).await? != Some(run.vault_id) {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(repo_err)?;
+        let parent: Option<(String,)> = sqlx::query_as("SELECT w.vault_id FROM workflows w JOIN vaults v ON v.id = w.vault_id WHERE w.id = ? AND v.deleted_at IS NULL")
+            .bind(run.workflow_id.to_string()).fetch_optional(&mut *tx).await.map_err(repo_err)?;
+        if !parent
+            .map(|(id,)| id == run.vault_id.to_string())
+            .unwrap_or(false)
+        {
             return Err(Error::Validation(
-                "Workflow run belongs to a different vault".into(),
+                "Workflow run belongs to an inactive or different vault".into(),
             ));
         }
-        let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
              last_error, response_status, payload, actions, source_event_id, created_at, finished_at) \
@@ -269,9 +278,9 @@ impl WorkflowRepository for SqliteWorkflowRepository {
 
     #[instrument(skip(self, run))]
     async fn update_run(&self, run: &WorkflowRun) -> Result<()> {
-        sqlx::query(
+        let updated = sqlx::query(
             "UPDATE workflow_runs SET status = ?, attempts = ?, completed_actions = ?, last_error = ?, \
-             response_status = ?, finished_at = ? WHERE id = ?",
+             response_status = ?, finished_at = ? WHERE id = ? AND (status = 'pending' OR status = ?)",
         )
         .bind(run.status.as_str())
         .bind(run.attempts)
@@ -279,10 +288,15 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(&run.last_error)
         .bind(run.response_status)
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
-        .bind(run.id.to_string())
+        .bind(run.id.to_string()).bind(run.status.as_str())
         .execute(&self.pool)
         .await
         .map_err(repo_err)?;
+        if updated.rows_affected() == 0 {
+            return Err(Error::Conflict(
+                "Workflow run is already terminal or missing".into(),
+            ));
+        }
         Ok(())
     }
 

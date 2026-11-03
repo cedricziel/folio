@@ -301,10 +301,20 @@ impl Harness {
 
     /// Everything not yet claimed, as a dispatcher would see it
     async fn pending_events(&self) -> Vec<OutboxEvent> {
-        self.outbox
+        let batch = self
+            .outbox
             .claim(1000, chrono::Duration::seconds(30), 10)
             .await
-            .unwrap()
+            .unwrap();
+        let mut documents = Vec::new();
+        for event in batch {
+            if event.event.is_some() {
+                documents.push(event);
+            } else {
+                self.outbox.mark_dispatched(event.id).await.unwrap();
+            }
+        }
+        documents
     }
 }
 
@@ -1773,4 +1783,96 @@ async fn webhook_test_run_without_a_document_still_sends() {
     );
 
     assert_eq!(server.hits("sample"), 1);
+}
+
+struct RestoreVaultAfterLookup {
+    inner: Arc<dyn WorkflowRepository>,
+    vaults: Arc<dyn VaultRepository>,
+    once: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl WorkflowRepository for RestoreVaultAfterLookup {
+    async fn locate(&self, id: Id) -> folio_core::Result<Option<folio_core::models::VaultId>> {
+        self.inner.locate(id).await
+    }
+    async fn find_by_id(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Workflow>> {
+        let found = self.inner.find_by_id(vault, id).await?;
+        if !self.once.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.vaults.delete(vault).await?;
+            self.vaults.restore(vault).await?;
+        }
+        Ok(found)
+    }
+    async fn list(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list(vault).await
+    }
+    async fn list_enabled(
+        &self,
+        vault: folio_core::models::VaultId,
+        trigger: WorkflowTrigger,
+    ) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list_enabled(vault, trigger).await
+    }
+    async fn create(
+        &self,
+        vault: folio_core::models::VaultId,
+        input: WorkflowInput,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.create(vault, input).await
+    }
+    async fn update(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        input: WorkflowInput,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.update(vault, id, input).await
+    }
+    async fn delete(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<()> {
+        self.inner.delete(vault, id).await
+    }
+    async fn create_run(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
+        self.inner.create_run(run).await
+    }
+    async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
+        self.inner.find_run(id).await
+    }
+    async fn update_run(&self, run: &WorkflowRun) -> folio_core::Result<()> {
+        self.inner.update_run(run).await
+    }
+    async fn list_runs(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        limit: u32,
+    ) -> folio_core::Result<Vec<WorkflowRun>> {
+        self.inner.list_runs(vault, id, limit).await
+    }
+}
+
+#[tokio::test]
+async fn deleting_and_restoring_after_runner_lookup_does_not_reopen_inflight_actions() {
+    let mut h = Harness::new().await;
+    h.vault = h.vaults.create("Execution fence", None).await.unwrap().id;
+    let server = TestServer::start().await;
+    let workflow = h.webhook_workflow(server.url("never"), None).await;
+    let document = h.document("retained.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, document.id).await;
+    let guarded: Arc<dyn WorkflowRepository> = Arc::new(RestoreVaultAfterLookup {
+        inner: h.workflows.clone(),
+        vaults: h.vaults.clone(),
+        once: std::sync::atomic::AtomicBool::new(false),
+    });
+    let runner = WorkflowRunner::new(guarded, h.documents.clone(), WebhookClient::new());
+
+    let outcome = runner.execute(run.id).await;
+    assert_eq!(server.hits("never"), 0);
+    assert_eq!(outcome.unwrap(), RunOutcome::Failed);
+    assert_eq!(h.run(run.id).await.status, RunStatus::Failed);
+    assert_eq!(h.run(run.id).await.completed_actions, 0);
 }

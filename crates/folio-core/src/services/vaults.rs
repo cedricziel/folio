@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::error::Result;
-use crate::models::{Principal, UserId, Vault, VaultId, VaultRole};
-use crate::ports::{MembershipRepository, VaultRepository};
+use crate::models::{AuditEvent, Principal, UserId, Vault, VaultId, VaultMember, VaultRole};
+use crate::ports::{AuditLog, MembershipRepository, VaultRepository};
 
 /// Name of the vault every user gets for their own papers
 pub const PERSONAL_NAME: &str = "Personal";
@@ -16,6 +16,7 @@ pub const PERSONAL_NAME: &str = "Personal";
 pub struct VaultService {
     vaults: Arc<dyn VaultRepository>,
     members: Arc<dyn MembershipRepository>,
+    audit: Option<Arc<dyn AuditLog>>,
     /// Serializes provisioning so two first requests cannot create two `Personal` vaults
     provisioning: Mutex<()>,
 }
@@ -25,8 +26,15 @@ impl VaultService {
         Self {
             vaults,
             members,
+            audit: None,
             provisioning: Mutex::new(()),
         }
+    }
+
+    /// Configure permanent owner-visible lifecycle history.
+    pub fn with_audit(mut self, audit: Arc<dyn AuditLog>) -> Self {
+        self.audit = Some(audit);
+        self
     }
 
     /// Make sure the user owns a `Personal` vault and has a default vault
@@ -38,13 +46,15 @@ impl VaultService {
             if let Some(vault) = self.vaults.default_for_user(user).await? {
                 return Ok(vault);
             }
-            return self
+            let fallback = self
                 .vaults
                 .list_for_user(user)
                 .await?
                 .first()
                 .map(|(vault, _)| vault.id)
-                .ok_or_else(|| crate::error::Error::Repository("no default vault".into()));
+                .ok_or_else(|| crate::error::Error::Repository("no default vault".into()))?;
+            self.vaults.set_default(user, fallback).await?;
+            return Ok(fallback);
         }
         let had_default = self.vaults.default_for_user(user).await?;
 
@@ -100,5 +110,114 @@ impl VaultService {
             Some(user) => self.provision_user(user).await,
             None => self.vaults.instance_default().await,
         }
+    }
+
+    /// Return retained vault metadata only to a current owner.
+    pub async fn deleted(&self, user: &UserId) -> Result<Vec<Vault>> {
+        self.vaults.list_deleted_for_user(user).await
+    }
+
+    /// Return a deleted vault only when the user still owns it.
+    pub async fn retained_for_owner(&self, user: &UserId, id: VaultId) -> Result<Option<Vault>> {
+        Ok(self
+            .deleted(user)
+            .await?
+            .into_iter()
+            .find(|vault| vault.id == id))
+    }
+
+    /// Create a vault and an initial owner using server mutation attribution.
+    pub async fn create(&self, user: &UserId, name: &str) -> Result<Vault> {
+        self.vaults.create(name, Some(user)).await
+    }
+
+    /// Return active vault metadata after the request's access check.
+    pub async fn find(&self, id: VaultId) -> Result<Option<Vault>> {
+        self.vaults.find(id).await
+    }
+
+    async fn require_owner(&self, user: &UserId, id: VaultId, deleted: bool) -> Result<()> {
+        if self
+            .vaults
+            .list_for_user(user)
+            .await?
+            .iter()
+            .any(|(vault, role)| vault.id == id && *role == VaultRole::Owner)
+            || (deleted && self.retained_for_owner(user, id).await?.is_some())
+        {
+            return Ok(());
+        }
+        Err(crate::Error::NotFound {
+            entity_type: "Vault",
+            id: id.to_string(),
+        })
+    }
+
+    /// Rename an active vault after rechecking current ownership.
+    pub async fn rename(&self, user: &UserId, id: VaultId, name: &str) -> Result<Vault> {
+        self.require_owner(user, id, false).await?;
+        self.vaults.rename(id, name).await
+    }
+
+    /// Retain a vault after rechecking current ownership.
+    pub async fn delete(&self, user: &UserId, id: VaultId) -> Result<()> {
+        self.require_owner(user, id, true).await?;
+        self.vaults.delete(id).await
+    }
+
+    /// Restore a vault only while its retained grants still make the user an owner.
+    pub async fn restore(&self, user: &UserId, id: VaultId) -> Result<Vault> {
+        self.require_owner(user, id, true).await?;
+        self.vaults.restore(id).await
+    }
+
+    /// Select an active vault to which the user currently has access.
+    pub async fn set_default(&self, user: &UserId, id: VaultId) -> Result<()> {
+        self.vaults.set_default(user, id).await
+    }
+
+    /// List grants while the user can read the active vault.
+    pub async fn members(&self, user: &UserId, id: VaultId) -> Result<Vec<VaultMember>> {
+        if !self
+            .vaults
+            .list_for_user(user)
+            .await?
+            .iter()
+            .any(|(vault, _)| vault.id == id)
+        {
+            return Err(crate::Error::NotFound {
+                entity_type: "Vault",
+                id: id.to_string(),
+            });
+        }
+        self.members.list(id).await
+    }
+
+    /// Change a current grant after rechecking ownership.
+    pub async fn grant(
+        &self,
+        user: &UserId,
+        id: VaultId,
+        principal: &Principal,
+        role: VaultRole,
+    ) -> Result<()> {
+        self.require_owner(user, id, false).await?;
+        self.members.grant(id, principal, role, Some(user)).await
+    }
+
+    /// Revoke a grant while retaining the last direct-owner protection.
+    pub async fn revoke(&self, user: &UserId, id: VaultId, principal: &Principal) -> Result<()> {
+        self.require_owner(user, id, false).await?;
+        self.members.revoke(id, principal).await
+    }
+
+    /// Read retained lifecycle facts only while the user is a current owner.
+    pub async fn history(&self, user: &UserId, id: VaultId) -> Result<Vec<AuditEvent>> {
+        self.require_owner(user, id, true).await?;
+        let audit = self
+            .audit
+            .as_ref()
+            .ok_or_else(|| crate::Error::Repository("Vault history is not configured".into()))?;
+        audit.list(id, 100).await
     }
 }

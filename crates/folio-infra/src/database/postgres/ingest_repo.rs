@@ -62,7 +62,7 @@ impl SourceRepository for PostgresSourceRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<IngestionSourceDef>> {
-        let rows = sqlx::query("SELECT * FROM ingestion_sources ORDER BY created_at, name")
+        let rows = sqlx::query("SELECT s.* FROM ingestion_sources s JOIN vaults v ON v.id = s.vault_id WHERE v.deleted_at IS NULL ORDER BY s.created_at, s.name")
             .fetch_all(&self.pool)
             .await
             .map_err(repo_err)?;

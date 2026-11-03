@@ -109,6 +109,25 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
+    /// Empty navigation for account recovery, without establishing a request vault.
+    pub fn without_vault(nav: Nav) -> Self {
+        Self {
+            vault_id: VaultId(uuid::Uuid::nil()),
+            vault_name: "No active vault".into(),
+            vault_role: "No access",
+            vaults: Vec::new(),
+            upload_vaults: Vec::new(),
+            can_upload: false,
+            user: CURRENT_USER.try_with(Clone::clone).ok(),
+            active: nav.as_str(),
+            inbox_count: 0,
+            total_count: 0,
+            correspondents: Vec::new(),
+            document_types: Vec::new(),
+            tags: Vec::new(),
+        }
+    }
+
     pub async fn load(state: &AppState, vault: VaultId, nav: Nav) -> ApiResult<Self> {
         let documents = state.document_repo.list(vault, None).await?;
         Self::build(state, vault, nav, &documents).await

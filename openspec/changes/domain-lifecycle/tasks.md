@@ -22,3 +22,9 @@
 - [ ] Run project-local verify in disposable environments and update covered behavior.
 - [ ] Run make format, make lint, and make test.
 - [ ] Archive completed specifications, merge reviewable PRs, and verify their merged status.
+
+## Vault increment
+- [ ] Verify both database migrations, scoped metadata, atomic owner creation, retained references, no-op/rollback suppression, and permanent vault/membership audit facts.
+- [ ] Verify protected defaults, current-owner recovery, viewer/admin isolation, workflow cancellation/fencing, and managed/configured source activity checks.
+- [ ] Verify usable web owner controls and desktop/mobile lifecycle regression coverage.
+- [ ] Regenerate API/client contracts and implement Apple metadata, owner management, recovery, and isolated native regressions before completing the full lifecycle change.

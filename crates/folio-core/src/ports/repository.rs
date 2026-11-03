@@ -256,10 +256,13 @@ pub trait SettingsRepository: Send + Sync {
 /// Repository for vaults
 #[async_trait]
 pub trait VaultRepository: Send + Sync {
-    /// Create a vault with no members
-    async fn create(&self, name: &str, created_by: Option<&UserId>) -> Result<Vault>;
+    /// Create a vault and its optional initial owner atomically, using scoped attribution.
+    async fn create(&self, name: &str, owner: Option<&UserId>) -> Result<Vault>;
 
     async fn find(&self, id: VaultId) -> Result<Option<Vault>>;
+
+    /// Deleted vaults recoverable by a current direct or group owner.
+    async fn list_deleted_for_user(&self, user: &UserId) -> Result<Vec<Vault>>;
 
     /// Vaults where the user holds a role (directly or through a group), with
     /// that role, ordered by name
@@ -267,10 +270,13 @@ pub trait VaultRepository: Send + Sync {
 
     async fn rename(&self, id: VaultId, name: &str) -> Result<Vault>;
 
-    /// Delete an empty vault with its vocabularies, workflows and grants
-    ///
-    /// Fails with [`crate::error::Error::Conflict`] while it holds documents.
+    /// Retain a vault and its references while hiding it from ordinary access.
+    /// Protected instance and account defaults must be changed before deletion.
     async fn delete(&self, id: VaultId) -> Result<()>;
+
+    /// Restore a retained vault without restarting historical work.
+    /// Callers must authorize a current owner before requesting restoration.
+    async fn restore(&self, id: VaultId) -> Result<Vault>;
 
     /// The user's stored default while they still hold a role in it, otherwise `None`.
     async fn default_for_user(&self, user: &UserId) -> Result<Option<VaultId>>;
@@ -292,6 +298,9 @@ pub trait MembershipRepository: Send + Sync {
     async fn list(&self, vault: VaultId) -> Result<Vec<VaultMember>>;
 
     /// Grant a role, replacing any earlier grant of the same principal
+    ///
+    /// `granted_by` remains for source compatibility; scoped server attribution takes precedence.
+    /// An identical role leaves the existing grant metadata and history unchanged.
     ///
     /// Fails with [`crate::error::Error::Conflict`] when it would downgrade
     /// the last owner held directly by a user.

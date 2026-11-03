@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block head %}<meta name="turbo-cache-control" content="no-cache">{% endblock %}
+{% block content %}
+<section class="page">
+    <header class="page-head">
+        <h1 class="title">Vaults</h1>
+        <p class="lede">Manage access and keep deleted vaults available for restoration. <a href="/settings">Back to settings</a></p>
+    </header>
+    <section class="panel settings-card" aria-labelledby="create-vault">
+        <h2 class="heading" id="create-vault">Create vault</h2>
+        <form action="/settings/vaults/create" method="post" class="inline-form">
+            <label class="hint" for="vault-name">Vault name</label>
+            <input class="input" id="vault-name" name="name" required maxlength="255">
+            <button class="f-btn f-btn-primary" type="submit">Create vault</button>
+        </form>
+    </section>
+    {% if vaults.is_empty() %}<p class="f-notice">Restore a deleted vault or create one to continue.</p>{% endif %}
+    {% for row in vaults %}
+    <section class="panel settings-card" aria-label="{{ row.vault.name }}">
+        <h2 class="heading">{{ row.vault.name }}</h2>
+        <p class="hint">Your role: {{ row.role }}{% if row.default %}. Account default{% endif %}.</p>
+        <p class="hint">Created {{ row.vault.created_at }} by {% match row.vault.created_by %}{% when Some with (actor) %}{{ actor }}{% when None %}system or unknown{% endmatch %}. Updated {{ row.vault.updated_at }} by {% match row.vault.updated_by %}{% when Some with (actor) %}{{ actor }}{% when None %}system or unknown{% endmatch %}.</p>
+        {% if !row.default %}
+        <form action="/settings/vaults/{{ row.vault.id }}/default" method="post"><button class="f-btn" type="submit">Use as default</button></form>
+        {% endif %}
+        {% if row.owner %}
+        <form action="/settings/vaults/{{ row.vault.id }}/rename" method="post" class="inline-form">
+            <label class="hint" for="name-{{ row.vault.id }}">Name</label>
+            <input class="input" id="name-{{ row.vault.id }}" name="name" value="{{ row.vault.name }}" required maxlength="255">
+            <button class="f-btn" type="submit">Save name</button>
+        </form>
+        <h3 class="heading">Members</h3>
+        <p class="hint">Use an existing user or group ID. At least one direct user owner must remain.</p>
+        {% for member in row.members %}
+        <div class="settings-card">
+            <p>{{ member.principal_type.as_str() }}: {{ member.principal_id }}</p>
+            <form action="/settings/vaults/{{ row.vault.id }}/members" method="post" class="inline-form">
+                <input type="hidden" name="principal_type" value="{{ member.principal_type.as_str() }}">
+                <input type="hidden" name="principal_id" value="{{ member.principal_id }}">
+                <label class="hint" for="role-{{ row.vault.id }}-{{ loop.index }}">Role</label>
+                <select class="input" id="role-{{ row.vault.id }}-{{ loop.index }}" name="role">
+                    <option value="viewer"{% if member.role == "viewer" %} selected{% endif %}>Viewer</option>
+                    <option value="contributor"{% if member.role == "contributor" %} selected{% endif %}>Contributor</option>
+                    <option value="editor"{% if member.role == "editor" %} selected{% endif %}>Editor</option>
+                    <option value="owner"{% if member.role == "owner" %} selected{% endif %}>Owner</option>
+                </select>
+                <button class="f-btn" type="submit">Save role</button>
+            </form>
+            <form action="/settings/vaults/{{ row.vault.id }}/members/revoke" method="post">
+                <input type="hidden" name="principal_type" value="{{ member.principal_type.as_str() }}">
+                <input type="hidden" name="principal_id" value="{{ member.principal_id }}">
+                <button class="f-btn f-btn-danger" type="submit">Remove member</button>
+            </form>
+        </div>
+        {% endfor %}
+        <form action="/settings/vaults/{{ row.vault.id }}/members" method="post" class="inline-form">
+            <label class="hint" for="kind-{{ row.vault.id }}">Member type</label>
+            <select class="input" id="kind-{{ row.vault.id }}" name="principal_type"><option value="user">User</option><option value="group">Group</option></select>
+            <label class="hint" for="principal-{{ row.vault.id }}">User or group ID</label>
+            <input class="input" id="principal-{{ row.vault.id }}" name="principal_id" required>
+            <label class="hint" for="grant-role-{{ row.vault.id }}">Role</label>
+            <select class="input" id="grant-role-{{ row.vault.id }}" name="role"><option value="viewer">Viewer</option><option value="contributor">Contributor</option><option value="editor">Editor</option><option value="owner">Owner</option></select>
+            <button class="f-btn" type="submit">Add member</button>
+        </form>
+        <h3 class="heading">History</h3>
+        <ul>{% for fact in row.history %}<li>{{ fact.at }}: {{ fact.description() }}. {% match fact.actor %}{% when Some with (actor) %}{{ actor }}{% when None %}System or unknown{% endmatch %}</li>{% endfor %}</ul>
+        <p class="hint">Deleting retains documents, sources, and history. Workflows stop while the vault is deleted. Choose another account default first; the instance default is also protected.</p>
+        <form action="/settings/vaults/{{ row.vault.id }}/delete" method="post"><button class="f-btn f-btn-danger" type="submit"{% if row.default %} disabled{% endif %}>Delete vault</button></form>
+        {% endif %}
+    </section>
+    {% endfor %}
+    <h2 class="heading">Deleted vaults</h2>
+    <p class="hint">Only vaults you still own appear here. Restoring does not replay completed work.</p>
+    {% for row in deleted %}
+    <section class="panel settings-card" aria-label="Deleted {{ row.vault.name }}">
+        <h3 class="heading">{{ row.vault.name }}</h3>
+        <p class="hint">Deleted {% match row.vault.deleted_at %}{% when Some with (at) %}{{ at }}{% when None %}at an unknown time{% endmatch %}.</p>
+        <form action="/settings/vaults/{{ row.vault.id }}/restore" method="post"><button class="f-btn f-btn-primary" type="submit">Restore vault</button></form>
+        <ul>{% for fact in row.history %}<li>{{ fact.at }}: {{ fact.description() }}. {% match fact.actor %}{% when Some with (actor) %}{{ actor }}{% when None %}System or unknown{% endmatch %}</li>{% endfor %}</ul>
+    </section>
+    {% endfor %}
+</section>
+{% endblock %}
