@@ -133,7 +133,7 @@ struct WorkspaceView: View {
                 ProgressView("Loading vaults…")
             }
         }
-        .sheet(isPresented: $showTaxonomy) {
+        .sheet(isPresented: $showTaxonomy, onDismiss: { Task { await workspace.session.list.reloadLookups() } }) {
             NavigationStack {
                 TaxonomyView(service: workspace.service, canManage: workspace.canEdit)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTaxonomy = false } } }

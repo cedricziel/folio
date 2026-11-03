@@ -277,17 +277,35 @@ public final class DocumentListViewModel {
         }
     }
 
+    /// Reloads correspondent and type names, for example after classifications were renamed or trashed.
+    public func reloadLookups() async {
+        await loadLookups()
+        rebuildRows()
+    }
+
     private func loadLookups() async {
         async let people = try? service.correspondents()
         async let types = try? service.documentTypes()
+        async let trashedPeople = try? service.taxonomy(.correspondents, deleted: true)
+        async let trashedTypes = try? service.taxonomy(.documentTypes, deleted: true)
         let (loadedPeople, loadedTypes) = await (people, types)
+        let (retainedPeople, retainedTypes) = await (trashedPeople, trashedTypes)
         lookupsLoaded = loadedPeople != nil && loadedTypes != nil
         if let loadedPeople {
-            correspondents = Dictionary(uniqueKeysWithValues: loadedPeople.map { ($0.id, $0.name) })
+            correspondents = Self.names(active: loadedPeople.map { ($0.id, $0.name) }, retained: retainedPeople)
         }
         if let loadedTypes {
-            documentTypes = Dictionary(uniqueKeysWithValues: loadedTypes.map { ($0.id, $0.name) })
+            documentTypes = Self.names(active: loadedTypes.map { ($0.id, $0.name) }, retained: retainedTypes)
         }
+    }
+
+    /// Documents keep trashed classifications, so their names stay readable with a deleted marker.
+    private static func names(active: [(UUID, String)], retained: [TaxonomyEntry]?) -> [UUID: String] {
+        var names = Dictionary(active, uniquingKeysWith: { first, _ in first })
+        for entry in retained ?? [] where names[entry.id] == nil {
+            names[entry.id] = "\(entry.name) (deleted)"
+        }
+        return names
     }
 
     private func showsFiled(_ filter: DocumentFilter) -> Bool {
