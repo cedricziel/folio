@@ -1,6 +1,49 @@
 import XCTest
 
 @MainActor final class NavigationTests: XCTestCase {
+    func testSavedViewCanBeSavedEditedAndDeleted() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--saved-views"]
+        app.launch()
+        let saveCurrent = app.buttons["Save current view"]
+        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
+        let before = XCTAttachment(screenshot: app.screenshot())
+        before.name = "Before saving a view"
+        before.lifetime = .keepAlways
+        add(before)
+        saveCurrent.tap()
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        name.tap()
+        name.typeText("Saved fixture")
+        let display = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Display")).firstMatch
+        XCTAssertTrue(display.waitForExistence(timeout: 5), app.debugDescription)
+        display.tap()
+        let grid = app.buttons["Grid"]
+        XCTAssertTrue(grid.waitForExistence(timeout: 5), app.debugDescription)
+        grid.tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        let savedScreenshot = XCTAttachment(screenshot: app.screenshot())
+        savedScreenshot.name = "Saved view"
+        savedScreenshot.lifetime = .keepAlways
+        add(savedScreenshot)
+        app.buttons["Saved view"].tap()
+        app.buttons["Edit saved view"].tap()
+        XCTAssertTrue(app.navigationBars["Edit saved view"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["Name"].value as? String, "Saved fixture")
+        app.textFields["Name"].tap(withNumberOfTaps: 3, numberOfTouches: 1)
+        app.textFields["Name"].typeText("Saved fixture revised")
+        XCTAssertEqual(app.textFields["Name"].value as? String, "Saved fixture revised")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Saved fixture revised"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Saved view"].tap()
+        app.buttons["Delete saved view"].tap()
+        app.buttons["Delete saved view"].tap()
+        XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
     func testInboxOpensAnotherDocumentAfterReturning() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

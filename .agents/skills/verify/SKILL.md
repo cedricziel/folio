@@ -179,6 +179,14 @@ headers, and bearer-request isolation. Do not use a live gateway or user session
 
 ## Verify ingestion claims
 
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
+with the isolated Cargo settings below. These tests use temporary SQLite databases
+and disposable PostgreSQL containers. They cover atomic outcome/ledger/outbox
+rollback, concurrent replay, stale attempts, changed skip decisions, bounded
+pagination, managed-source ownership, and source failure/recovery transitions.
+Upgrade cases preserve existing ledger rows and emit no historical outcomes.
+Do not treat an unavailable PostgreSQL fixture as a passing parity check.
+
 Folder regressions cover replacement during import, staged retry and restart,
 cancellation, concurrent source instances, and symlink-safe recovery.
 Observation regressions also cover stable keys across staging restart and mailbox
@@ -205,7 +213,22 @@ For grouped workflow conditions, run `cargo test -p folio-core --features openap
 and `cargo test -p folio-api --test workflows --test openapi`. These cover nested
 all/any/none matching, depth and size limits, historical snapshots, legacy JSON,
 recursive schema references, and preserving API-created groups through HTML edits.
+The core suite also verifies trigger registration, duplicate and unknown selections,
+condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
+The same core and API suites cover subject and actor conditions, explicit system
+attribution, mixed event/document branches, unavailable entry body filters, and
+preserving event filters through HTML edits. The workflow suite verifies that
+captured actors override ambient dispatcher context without granting private access.
+The shared repository contract also verifies concurrent mutation deduplication,
+separate workflows, distinct mutations sharing a correlation, invalid captured
+identity rejection, and legacy source-event deduplication on both databases.
+For precise metadata transitions, `cargo test -p folio-infra --test workflows`
+checks actual producer dispatch, delayed snapshots, replay deduplication, and
+system-actor lineage after source-outbox deletion. Run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract satisfies_the_contract`
+for SQLite/PostgreSQL producer-to-run persistence, and the workflow API suite
+for trigger selection and web-editor roundtrip.
 
 Run `cargo test -p folio-infra --test workflows` and
 `cargo test -p folio-api --test vaults --test live` for immutable event delivery.
@@ -361,6 +384,13 @@ packages so stale artifacts from the other checkout cannot satisfy a check.
 
 ## Verify worker leases
 
+Run `cargo test -p folio-infra --test processing_job_context` for enqueue-time vault
+and trusted lineage retention through retry and vault move in both databases.
+Worker `processing_claim` tests cover restored source lineage, system attribution,
+and rejection before work starts in a different vault. This preflight check does
+not establish transactional result fencing for moves during provider execution.
+
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test queue_leases`
 against disposable SQLite and PostgreSQL fixtures. The shared contract covers
 renewal of long-running work, expired-owner recovery, stale renewal and completion,
@@ -474,3 +504,92 @@ existing management page, deleted-source listing, restore controls, masked crede
 and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite
 above when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
+
+## Verify document notes and comments
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_entries --test document_entry_schema --test domain_events --test repository_contract`.
+These disposable SQLite and PostgreSQL 17 suites cover scoped entry persistence,
+creation receipts, concurrent retries, event rollback, no-op mutations, all six
+body-free transitions, actor/lineage attribution, moves, and receipt purge.
+
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test document_entries --test entry_pages --test mutation_actor --test personal_tokens`.
+The request fixtures cover contributor access to another member's document,
+author editing, moderation, revoked roles, personal-token scopes, scoped cursors,
+deleted creation retries, escaped HTML, and retained failed forms.
+Regenerate the linked native API schema with
+`RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`.
+
+Build `folio-app`, then run `npx playwright test discussion.spec.ts` from `e2e/`
+with the disposable setup and teardown. Both viewport cases commit a creation
+while dropping its response, retry the retained key/body, then edit and delete.
+They also verify separate sections and run scoped accessibility checks. Never
+set `E2E_BASE_URL` to an existing archive.
+## Verify document metadata transitions
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_transitions --test repository_contract --test workflows`
+with a task-owned temporary target directory. These suites use temporary SQLite
+databases, disposable PostgreSQL containers, and loopback webhook fixtures.
+They cover exact title, classification, and tag deltas, no-ops, rollback,
+server-derived actors, shared mutation identities, and compatibility updates.
+Move contracts check source/destination snapshot isolation, rejected vault moves,
+and same-vault no-ops on both databases.
+Domain-only outbox rows have no legacy document projection; assertions about
+compatibility updates must select that projection explicitly.
+
+Run `cargo test -p folio-api --test routes classification_form` for the HTML
+and API form entry points and malformed-ID preservation. Run
+`cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
+metadata edits and the persisted title delta. Both use isolated fixtures.
+
+## Verify saved-view web controls
+
+Run `cargo test -p folio-api --test saved_views` for form CSRF protection,
+unavailable references, and exact date-boundary preservation through the editor.
+Build `folio-app`, then run
+`npx playwright test vaults.spec.ts --grep 'saved views restore|submillisecond'`
+from `e2e/`. Set `FOLIO_BIN` to the built binary and leave `E2E_BASE_URL` unset
+so setup owns the disposable instance. Desktop and mobile checks save, reopen,
+rename, share, and delete views. Inspect screenshots and confirm that a single
+grid card keeps a bounded width. The precision regression renames a view without
+rounding its stored submillisecond boundaries to the date input's display value.
+
+Shared navigation changes also require the Linux `visual.spec.ts` suite.
+Inspect its image diffs and update affected baselines before merging.
+
+## Verify typed metadata fields and options
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields --test metadata_options`
+with task-owned build storage, at most two jobs, incremental compilation disabled,
+and zero debug symbols when capacity is constrained. The shared contract uses a
+temporary SQLite database and a disposable PostgreSQL container. It covers scoped
+field/option reads, server-derived attribution, canonical name uniqueness, concurrent
+claims, pagination, retirement, restore conflicts, no-op suppression, and rollback
+when outbox publication fails, option identity, and select-field integrity. Events are
+vault-visible non-document events. A Docker access failure requires rerunning the
+PostgreSQL case with socket access; a skipped backend is not verified parity.
+
+## Verify SQLite trash contention
+
+Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
+The temporary database fixture holds a competing writer, verifies trash waits,
+and checks that the committed trash snapshot includes the writer's change.
+
+## Verify permanent deletion events
+
+For permanent deletion, `cargo test -p folio-infra --lib permanent_deletion`
+checks failed object removal, repair of exhausted jobs, preserved causal lineage,
+and system-actor completion. The document transition suite checks distinct purge
+request/completion snapshots, repeat suppression, legacy job payloads, and both
+databases' persisted request lineage. Regenerate OpenAPI after projection changes.
+
+## Verify Apple saved views
+
+Run the isolated Swift package suite above for saved-view query mapping, ownership
+fields, unchanged-query omission on rename, unsupported versions, paging resets,
+cross-vault rejection, and late responses after switching vaults. Run the macOS
+build/authentication/provider checks for the production views.
+The navigation fixture's `testSavedViewCanBeSavedEditedAndDeleted` saves the
+current view, reopens its editor, persists a rename, and deletes it. It retains a
+saved-view screenshot for inspection. Use a fresh simulator and the bounded
+procedure above; compilation or an accessibility timeout before the first tap
+does not verify the controls.

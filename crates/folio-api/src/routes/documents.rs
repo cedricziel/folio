@@ -35,6 +35,15 @@ pub fn router() -> Router<AppState> {
         .route("/{id}/restore", post(super::trash::restore))
         .route("/{id}/purge", axum::routing::delete(super::trash::purge))
         .route("/{id}", get(get_document).delete(delete_document))
+        .route(
+            "/{id}/entries",
+            get(super::document_entries::list).post(super::document_entries::create),
+        )
+        .route(
+            "/{id}/entries/{entry_id}",
+            axum::routing::patch(super::document_entries::update)
+                .delete(super::document_entries::delete),
+        )
         .route("/{id}/download", get(download_document))
         .route("/{id}/thumbnail", get(document_thumbnail))
         .route("/{id}/correspondent", post(set_correspondent))
