@@ -13,6 +13,7 @@ mod ingest_identity;
 mod ingest_outcome;
 mod metadata;
 mod metadata_field;
+mod metadata_value;
 mod processing_attempt;
 mod saved_view;
 mod settings;
@@ -21,6 +22,7 @@ mod tag;
 mod vault;
 mod webhook;
 mod workflow;
+mod workflow_event_conditions;
 mod workflow_trigger;
 
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
@@ -39,7 +41,7 @@ pub use file_identity::FileIdentity;
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
-    SourceConfig, SourceOrigin, SourceStatus, REDACTED,
+    SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{
@@ -48,6 +50,7 @@ pub use ingest_outcome::{
 };
 pub use metadata::{MetadataKind, MetadataValue};
 pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
+pub use metadata_value::{DocumentMetadata, DocumentMetadataValue, MetadataChange};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
@@ -61,12 +64,15 @@ pub use vault::{
     Access, AuditEvent, GroupId, NewAuditEvent, Principal, UserId, Vault, VaultAction, VaultId,
     VaultMember, VaultRole,
 };
-pub use webhook::{NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, PAYLOAD_VERSION};
+pub use webhook::{
+    NamedRef, WebhookDocument, WebhookPayload, WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
+};
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
+pub use workflow_event_conditions::{WorkflowActorCondition, WorkflowEventConditions};
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
     WorkflowTriggerRegistry,

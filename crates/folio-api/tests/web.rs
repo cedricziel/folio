@@ -58,7 +58,8 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
         )
         .await
         .unwrap();
-    h.state
+    let filed = h
+        .state
         .document_repo
         .create(
             h.vault,
@@ -71,6 +72,23 @@ async fn inbox_lists_unfiled_documents_and_all_documents_lists_everything() {
                 ..Default::default()
             },
         )
+        .await
+        .unwrap();
+    for id in [waiting.id, filed.id] {
+        h.state
+            .document_repo
+            .set_stage_status(
+                h.vault,
+                id,
+                folio_core::models::ProcessingStage::Embed,
+                folio_core::models::ProcessingStatus::Done,
+            )
+            .await
+            .unwrap();
+    }
+    h.state
+        .document_repo
+        .set_reviewed(h.vault, filed.id, true)
         .await
         .unwrap();
 
@@ -287,7 +305,7 @@ async fn unreadable_files_say_so_instead_of_waiting_for_review() {
         .unwrap();
 
     let inbox = text(h.app.clone().oneshot(get("/")).await.unwrap()).await;
-    assert!(inbox.contains("Couldn't read this file"));
+    assert!(inbox.contains("Couldn't process this file"));
     assert!(inbox.contains("1 file couldn't be read"));
     assert!(!inbox.contains("Needs a look"));
     assert!(!inbox.contains("needs a look"));
@@ -300,7 +318,11 @@ async fn unreadable_files_say_so_instead_of_waiting_for_review() {
             .unwrap(),
     )
     .await;
-    assert!(page.contains("Folio couldn't read this file"));
+    assert!(page.contains("Text extraction did not finish"));
+    assert!(page.contains("The original file is unchanged"));
+    assert!(page.contains("Read it again, or move it to Trash"));
+    assert_eq!(page.matches("Text extraction did not finish").count(), 1);
+    assert!(!page.contains("It may be damaged"));
     assert!(!page.contains("Reading"));
 }
 
@@ -395,4 +417,65 @@ async fn settings_page_toggles_the_mcp_endpoint() {
         .unwrap();
     let stored = h.state.settings_repo.get("mcp.enabled").await.unwrap();
     assert_eq!(stored.unwrap().value, "false");
+}
+
+#[tokio::test]
+async fn manage_trash_restores_entries_and_retains_conflicting_rows() {
+    let h = harness().await;
+    let retained = h
+        .state
+        .correspondent_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateCorrespondent {
+                name: "Retained sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .correspondent_repo
+        .delete(h.vault, retained.id)
+        .await
+        .unwrap();
+    let response = h.app.clone().oneshot(get("/manage")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Trash (1)"));
+    assert!(body.contains(&format!("/manage/correspondents/{}/restore", retained.id)));
+    h.state
+        .correspondent_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateCorrespondent {
+                name: "Retained sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/manage/correspondents/{}/restore", retained.id))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = text(response).await;
+    assert!(body.contains("Restore failed. An active entry already uses this name."));
+    assert!(body.contains(&format!("/manage/correspondents/{}/restore", retained.id)));
+    assert!(h
+        .state
+        .correspondent_repo
+        .find_retained(h.vault, retained.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .deleted_at
+        .is_some());
 }

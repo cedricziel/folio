@@ -941,7 +941,7 @@ async fn client_refuses_non_http_urls() {
 }
 
 #[tokio::test]
-async fn deleting_a_workflow_removes_its_runs() {
+async fn deleting_and_restoring_a_workflow_preserves_history_without_replaying_runs() {
     let h = Harness::new().await;
     let workflow = h
         .webhook_workflow("http://127.0.0.1:1/x".into(), None)
@@ -950,8 +950,16 @@ async fn deleting_a_workflow_removes_its_runs() {
     let run = h.run_for(&workflow, doc.id).await;
 
     h.workflows.delete(h.vault, workflow.id).await.unwrap();
-    assert!(h.workflows.find_run(run.id).await.unwrap().is_none());
+    let retained = h.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(retained.status, RunStatus::Failed);
+    assert_eq!(retained.actions, run.actions);
+    assert_eq!(retained.payload, run.payload);
+    h.workflows.restore(h.vault, workflow.id).await.unwrap();
     assert_eq!(h.runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+    assert_eq!(
+        h.workflows.find_run(run.id).await.unwrap().unwrap().status,
+        RunStatus::Failed
+    );
 }
 
 #[tokio::test]
@@ -1783,4 +1791,313 @@ async fn webhook_test_run_without_a_document_still_sends() {
     );
 
     assert_eq!(server.hits("sample"), 1);
+}
+
+#[tokio::test]
+async fn precise_metadata_dispatch_preserves_snapshot_identity_and_action_lineage() {
+    use folio_core::models::UserId;
+    use folio_core::mutation::with_actor;
+
+    let h = Harness::new().await;
+    let original_tag = h.tag("original condition").await;
+    let action_tag = h.tag("workflow action").await;
+    let doc = h.document("original.pdf", "application/pdf").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentTagsChanged,
+            WorkflowConditions {
+                tag_id: Some(original_tag),
+                ..Default::default()
+            },
+            vec![WorkflowAction::AddTags {
+                tag_ids: vec![action_tag],
+            }],
+        )
+        .await;
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                tag_ids: Some(vec![original_tag]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let source = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type() == "document.tags_changed")
+        })
+        .unwrap();
+    assert!(source.event.is_none());
+    let envelope = source.envelope.as_ref().unwrap();
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("later title".into()),
+                tag_ids: Some(vec![]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let runs = h.engine.handle(&source).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, workflow.id);
+    assert!(h.engine.handle(&source).await.unwrap().is_empty());
+    let stored = h.run(runs[0].id).await;
+    let payload: serde_json::Value = serde_json::from_str(&stored.payload).unwrap();
+    assert_eq!(payload["document"]["title"], "original.pdf");
+    assert_eq!(
+        payload["document"]["tags"][0]["id"],
+        original_tag.to_string()
+    );
+    assert_eq!(
+        payload["source_event"]["event_id"],
+        envelope.event_id().to_string()
+    );
+    assert_eq!(
+        payload["source_event"]["mutation_id"],
+        envelope.mutation_id().to_string()
+    );
+    assert_eq!(
+        payload["occurred_at"],
+        serde_json::to_value(envelope.occurred_at()).unwrap()
+    );
+    sqlx::query("DELETE FROM outbox_events WHERE id = ?")
+        .bind(source.id)
+        .execute(&h.pool)
+        .await
+        .unwrap();
+
+    let outcome = with_actor(
+        Some(UserId::from("must-not-be-inherited")),
+        h.runner.execute(stored.id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, RunOutcome::Succeeded);
+    let emitted = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|event| event.causation_id() == Some(envelope.event_id()))
+        })
+        .expect("workflow action must retain source lineage after outbox cleanup");
+    assert_eq!(emitted.origin, EventOrigin::Workflow);
+    let emitted_envelope = emitted.envelope.as_ref().unwrap();
+    assert_eq!(emitted_envelope.correlation_id(), envelope.correlation_id());
+    assert_eq!(emitted_envelope.actor_id(), None);
+    h.engine.consume(&emitted).await.unwrap();
+    assert_eq!(
+        h.workflows
+            .list_runs(h.vault, workflow.id, 50)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn event_actor_filters_use_the_producer_context_without_granting_private_access() {
+    use folio_core::models::{UserId, WorkflowActorCondition, WorkflowEventConditions};
+    use folio_core::mutation::with_actor;
+
+    let h = Harness::new().await;
+    let doc = h.document("actor.pdf", "application/pdf").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            WorkflowConditions {
+                event: Some(WorkflowEventConditions {
+                    subject_id: Some(doc.id),
+                    actor: Some(WorkflowActorCondition::User {
+                        user_id: "editor".into(),
+                    }),
+                }),
+                ..Default::default()
+            },
+            unreachable_hook(),
+        )
+        .await;
+    with_actor(
+        Some(UserId::from("editor")),
+        h.documents.update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("updated".into()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    let source = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|envelope| envelope.event_type() == "document.updated")
+        })
+        .unwrap();
+    let mut private = source.clone();
+    let mut encoded = serde_json::to_value(source.envelope.as_ref().unwrap()).unwrap();
+    encoded["audience"] = serde_json::json!({"type": "user", "user_id": "editor"});
+    private.envelope = Some(serde_json::from_value(encoded).unwrap());
+    assert!(h.engine.handle(&private).await.unwrap().is_empty());
+    let runs = with_actor(Some(UserId::from("dispatcher")), h.engine.handle(&source))
+        .await
+        .unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].workflow_id, workflow.id);
+}
+
+/// Deletes the workflow just before the runner records its first completed action
+struct DeleteBeforeFirstProgress {
+    inner: Arc<dyn WorkflowRepository>,
+    deleted: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl WorkflowRepository for DeleteBeforeFirstProgress {
+    async fn locate(&self, id: Id) -> folio_core::Result<Option<folio_core::models::VaultId>> {
+        self.inner.locate(id).await
+    }
+    async fn find_by_id(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Workflow>> {
+        self.inner.find_by_id(vault, id).await
+    }
+    async fn list(&self, vault: folio_core::models::VaultId) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list(vault).await
+    }
+    async fn list_deleted(
+        &self,
+        vault: folio_core::models::VaultId,
+    ) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list_deleted(vault).await
+    }
+    async fn find_deleted(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Option<Workflow>> {
+        self.inner.find_deleted(vault, id).await
+    }
+    async fn restore(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.restore(vault, id).await
+    }
+    async fn list_enabled(
+        &self,
+        vault: folio_core::models::VaultId,
+        trigger: WorkflowTrigger,
+    ) -> folio_core::Result<Vec<Workflow>> {
+        self.inner.list_enabled(vault, trigger).await
+    }
+    async fn create(
+        &self,
+        vault: folio_core::models::VaultId,
+        input: WorkflowInput,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.create(vault, input).await
+    }
+    async fn update(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        input: WorkflowInput,
+    ) -> folio_core::Result<Workflow> {
+        self.inner.update(vault, id, input).await
+    }
+    async fn delete(&self, vault: folio_core::models::VaultId, id: Id) -> folio_core::Result<()> {
+        self.inner.delete(vault, id).await
+    }
+    async fn create_run(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
+        self.inner.create_run(run).await
+    }
+    async fn find_run(&self, id: Id) -> folio_core::Result<Option<WorkflowRun>> {
+        self.inner.find_run(id).await
+    }
+    async fn update_run(&self, run: &WorkflowRun) -> folio_core::Result<()> {
+        if !self.deleted.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            self.inner.delete(run.vault_id, run.workflow_id).await?;
+        }
+        self.inner.update_run(run).await
+    }
+    async fn list_runs(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: Id,
+        limit: u32,
+    ) -> folio_core::Result<Vec<WorkflowRun>> {
+        self.inner.list_runs(vault, id, limit).await
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_workflow_stops_its_inflight_run_after_the_current_action() {
+    let h = Harness::new().await;
+    let first = h.tag("first").await;
+    let second = h.tag("second").await;
+    let workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentUploaded,
+            WorkflowConditions::default(),
+            vec![
+                WorkflowAction::AddTags {
+                    tag_ids: vec![first],
+                },
+                WorkflowAction::AddTags {
+                    tag_ids: vec![second],
+                },
+            ],
+        )
+        .await;
+    let document = h.document("stopped.pdf", "application/pdf").await;
+    let run = h.run_for(&workflow, document.id).await;
+    let deleting: Arc<dyn WorkflowRepository> = Arc::new(DeleteBeforeFirstProgress {
+        inner: h.workflows.clone(),
+        deleted: std::sync::atomic::AtomicBool::new(false),
+    });
+    let runner = WorkflowRunner::new(deleting, h.documents.clone(), WebhookClient::new());
+
+    assert_eq!(runner.execute(run.id).await.unwrap(), RunOutcome::Failed);
+
+    let tags: Vec<Id> = h
+        .documents
+        .get_tags(h.vault, document.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|tag| tag.id)
+        .collect();
+    assert_eq!(tags, vec![first]);
+    let stopped = h.run(run.id).await;
+    assert_eq!(stopped.status, RunStatus::Failed);
+    assert_eq!(stopped.last_error.as_deref(), Some("Workflow was deleted"));
 }

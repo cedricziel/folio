@@ -446,8 +446,12 @@ a:not([class]):hover,
   margin: 0;
 }
 @media (max-width: 768px) {
-  .trash-row {
+  .trash-row,
+  .source-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .source-row .form-actions {
+    flex-wrap: wrap;
   }
 }
 .f-row .f-thumb img {

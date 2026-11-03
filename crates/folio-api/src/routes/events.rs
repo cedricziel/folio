@@ -10,7 +10,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use futures::stream::{self, Stream, StreamExt as _};
 use std::collections::{HashSet, VecDeque};
-use std::{convert::Infallible, time::Duration};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio::sync::broadcast;
 
 use crate::error::ApiResult;
@@ -32,7 +32,7 @@ pub async fn turbo_streams_for(
     event: &DocumentEvent,
 ) -> ApiResult<String> {
     let streams = match event {
-        DocumentEvent::Trashed { document_id } => {
+        DocumentEvent::Trashed { document_id } | DocumentEvent::PurgeRequested { document_id } => {
             if state
                 .document_repo
                 .find_trashed_by_id(vault, *document_id)
@@ -210,9 +210,9 @@ struct Connection {
     vault: VaultId,
     user: Option<UserId>,
     state: AppState,
-    rx: broadcast::Receiver<OutboxEvent>,
+    rx: broadcast::Receiver<Arc<OutboxEvent>>,
     /// Replayed events not yet sent
-    pending: VecDeque<OutboxEvent>,
+    pending: VecDeque<Arc<OutboxEvent>>,
     /// Newest event sent or acknowledged by the client
     last_id: Option<i64>,
     connected_at: DateTime<Utc>,
@@ -240,7 +240,7 @@ impl Connection {
             Ok(events) => {
                 for event in events {
                     if !self.seen.contains(&event.id) {
-                        self.pending.push_back(event);
+                        self.pending.push_back(Arc::new(event));
                     }
                 }
             }
@@ -249,7 +249,7 @@ impl Connection {
     }
 
     /// The next event to send, or `None` once the server shuts down
-    async fn next_event(&mut self) -> Option<OutboxEvent> {
+    async fn next_event(&mut self) -> Option<Arc<OutboxEvent>> {
         loop {
             if let Some(event) = self.pending.pop_front() {
                 if self.remember(event.id) {

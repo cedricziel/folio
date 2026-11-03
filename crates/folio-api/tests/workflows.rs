@@ -439,6 +439,21 @@ async fn pages_render_and_the_form_creates_a_workflow() {
 }
 
 #[tokio::test]
+async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
+    let app = test_app().await;
+    let mut body = workflow_body("https://example.com/hook");
+    body["trigger"] = json!("document.tags_changed");
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["trigger"], "document.tags_changed");
+    let id = created["id"].as_str().unwrap();
+    let (status, html) = send(&app, "GET", &format!("/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("value=\"document.tags_changed\" selected"));
+    assert!(html.contains("When document tags change"));
+}
+
+#[tokio::test]
 async fn the_form_explains_rejected_input() {
     let app = test_app().await;
     let form = "name=Bad&trigger=document.uploaded&webhook_url=ftp%3A%2F%2Fexample.com";
@@ -622,4 +637,96 @@ async fn the_form_shows_and_edits_every_action() {
     assert!(
         matches!(&stored.actions[0], WorkflowAction::AddTags { tag_ids } if tag_ids.len() == 1)
     );
+}
+
+#[tokio::test]
+async fn workflow_trash_restore_and_retained_history_are_usable_from_management_pages() {
+    let app = test_app().await;
+    let mut input = workflow_body("http://127.0.0.1:1/unused");
+    input["created_by"] = json!("forged");
+    input["updated_by"] = json!("forged");
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(input)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(created["created_by"].is_null());
+    assert!(created["updated_by"].is_null());
+    let id = created["id"].as_str().unwrap();
+    let mut masked = workflow_body("http://127.0.0.1:1/unused");
+    masked["actions"][0]["secret"] = json!("********");
+    masked["actions"][0]["headers"]["X-Source"] = json!("********");
+    let (status, unchanged) =
+        json_request(&app, "PUT", &format!("/api/workflows/{id}"), Some(masked)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["updated_at"], created["updated_at"]);
+    let stored = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let run = WorkflowRun::new(
+        app.vault,
+        stored.id,
+        stored.trigger,
+        Some(Uuid::new_v4()),
+        r#"{"note":"frozen execution context"}"#.into(),
+    )
+    .with_actions(stored.actions.clone());
+    app.state.workflow_repo.create_run(&run).await.unwrap();
+    let (status, _) = send(&app, "POST", &format!("/workflows/{id}/delete"), None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (status, _) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, deleted) = json_request(&app, "GET", "/api/workflows?deleted=true", None).await;
+    assert_eq!(deleted.as_array().unwrap().len(), 1);
+    assert!(deleted[0]["deleted_at"].is_string());
+    assert_eq!(deleted[0]["actions"][0]["secret"], "********");
+    let (status, page) = send(&app, "GET", "/workflows?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains(&format!("/{id}/restore")));
+    assert!(page.contains(&format!("/{id}/history")));
+    let (status, history) = send(&app, "GET", &format!("/workflows/{id}/history"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(history.contains("Workflow was deleted"));
+    assert!(!history.contains("hunter2"));
+    let (status, runs) =
+        json_request(&app, "GET", &format!("/api/workflows/{id}/runs"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(runs[0]["status"], "failed");
+    let (status, _) = send(&app, "POST", &format!("/workflows/{id}/restore"), None).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, restored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(restored["created_at"], created["created_at"]);
+    assert!(restored["deleted_at"].is_null());
+    let (status, unchanged) =
+        json_request(&app, "POST", &format!("/api/workflows/{id}/restore"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["updated_at"], restored["updated_at"]);
+    let (_, retained_runs) =
+        json_request(&app, "GET", &format!("/api/workflows/{id}/runs"), None).await;
+    assert_eq!(retained_runs[0]["status"], "failed");
+}
+
+#[tokio::test]
+async fn typed_event_conditions_survive_api_storage_and_html_edits() {
+    let app = test_app().await;
+    let conditions = json!({"event": {
+        "subject_id": Uuid::new_v4(), "actor": {"type": "user", "user_id": "editor"}
+    }});
+    let mut body = workflow_body("https://example.com/hook");
+    body["conditions"] = conditions.clone();
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["conditions"], conditions);
+    let id = created["id"].as_str().unwrap();
+    let response = app.router.clone().oneshot(
+        Request::post(format!("/workflows/{id}"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("name=Event+filter&trigger=document.uploaded&enabled=on&webhook_url=https%3A%2F%2Fexample.com%2Fhook"))
+            .unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["conditions"], conditions);
 }

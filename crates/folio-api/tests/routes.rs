@@ -854,6 +854,46 @@ async fn classification_forms_reject_invalid_or_missing_ids_without_clearing() {
     }
 }
 
+#[tokio::test]
+async fn taxonomy_trash_retains_document_classifications_and_restore_conflicts() {
+    let app = test_app().await;
+    let (status, tag) =
+        request_json(&app, "POST", "/api/tags", Some(r#"{"name":"Retained"}"#)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tag["created_at"], tag["updated_at"]);
+    assert!(tag["vault_id"].is_string());
+    let id = tag["id"].as_str().unwrap();
+    let document = tagged_document(&app, "Kept document", &[Uuid::parse_str(id).unwrap()]).await;
+    assert_eq!(
+        request(&app, "DELETE", &format!("/api/tags/{id}")).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&app, "GET", &format!("/api/tags/{id}")).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, trash) = request(&app, "GET", "/api/tags/trash").await;
+    assert_eq!(trash[0]["id"], id);
+    assert!(trash[0]["deleted_at"].is_string());
+    let (_, retained) = request(&app, "GET", &format!("/api/documents/{}", document.id)).await;
+    assert_eq!(retained["tags"][0]["name"], "Retained");
+    assert!(retained["tags"][0]["deleted_at"].is_string());
+    assert_eq!(
+        request_json(&app, "POST", "/api/tags", Some(r#"{"name":"Retained"}"#))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&app, "POST", &format!("/api/tags/{id}/restore"))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (_, trash) = request(&app, "GET", "/api/tags/trash").await;
+    assert_eq!(trash[0]["id"], id);
+}
+
 async fn classification_form_emits_a_transition(prefix: &str) {
     let app = test_app().await;
     let correspondent = app
@@ -916,4 +956,48 @@ async fn html_classification_form_publishes_the_committed_transition() {
 #[tokio::test]
 async fn api_classification_form_publishes_the_committed_transition() {
     classification_form_emits_a_transition("/api/documents").await;
+}
+
+#[tokio::test]
+async fn document_detail_distinguishes_empty_ocr_from_indexing_failure() {
+    use folio_core::models::{ProcessingStage, ProcessingStatus};
+    let app = test_app().await;
+    let doc = app
+        .state
+        .document_repo
+        .create(
+            app.vault,
+            CreateDocument {
+                title: "Processing detail".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    app.state
+        .document_repo
+        .complete_ocr(app.vault, doc.id, "")
+        .await
+        .unwrap();
+    app.state
+        .document_repo
+        .set_stage_status(
+            app.vault,
+            doc.id,
+            ProcessingStage::Embed,
+            ProcessingStatus::Failed,
+        )
+        .await
+        .unwrap();
+    let response = raw_get(&app, &format!("/documents/{}", doc.id)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(html.contains("Text extraction"));
+    assert!(html.contains("Completed with no text"));
+    assert!(html.contains("Search indexing"));
+    assert!(html.contains("Last attempt failed"));
+    assert!(html.contains("The original file is unchanged."));
 }

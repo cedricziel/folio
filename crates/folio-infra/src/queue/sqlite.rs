@@ -1,8 +1,8 @@
 //! SQLite job queue backend
 
 use chrono::{DateTime, Duration, Utc};
-use sqlx::SqlitePool;
-use tracing::{debug, error, info, instrument, warn};
+use sqlx::{SqliteConnection, SqlitePool};
+use tracing::{debug, instrument};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
@@ -10,22 +10,32 @@ use folio_core::error::{Error, Result};
 use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
-pub(crate) async fn insert_job<'e>(
-    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+pub(crate) async fn insert_job(
+    conn: &mut SqliteConnection,
     job_type: JobType,
     scheduled_at: DateTime<Utc>,
     max_attempts: i32,
 ) -> Result<Uuid> {
-    let id = Uuid::new_v4();
+    let plan =
+        super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
+    if plan.existing {
+        return Ok(plan.id);
+    }
+    let id = plan.id;
     let now = Utc::now();
     let type_name = job_type.type_name();
+    let lineage =
+        folio_core::mutation::current_lineage().unwrap_or(folio_core::mutation::MutationLineage {
+            correlation_id: Uuid::new_v4(),
+            causation_id: None,
+        });
     let payload = serde_json::to_string(&job_type)
         .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
 
     sqlx::query(
         r#"
-        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at)
-        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id)
+        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(id.to_string())
@@ -35,9 +45,15 @@ pub(crate) async fn insert_job<'e>(
     .bind(now.to_rfc3339())
     .bind(now.to_rfc3339())
     .bind(scheduled_at.to_rfc3339())
-    .execute(executor)
+    .bind(plan.vault_id.map(|id| id.to_string()))
+    .bind(lineage.correlation_id.to_string())
+    .bind(lineage.causation_id.map(|id| id.to_string()))
+    .bind(plan.group_id.map(|id| id.to_string()))
+    .execute(&mut *conn)
     .await
     .map_err(|e| Error::Repository(format!("Failed to enqueue job: {}", e)))?;
+
+    super::processing_scope::sqlite::finish_enqueue(conn, &job_type, &plan).await?;
 
     debug!("Enqueued job {} of type {}", id, type_name);
     Ok(id)
@@ -53,6 +69,10 @@ impl SqliteJobQueue {
     /// Create a new job queue
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    pub(super) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     /// Enqueue a new job
@@ -80,7 +100,16 @@ impl SqliteJobQueue {
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<Uuid> {
-        insert_job(&self.pool, job_type, scheduled_at, max_attempts).await
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        let id = insert_job(&mut tx, job_type, scheduled_at, max_attempts).await?;
+        tx.commit()
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        Ok(id)
     }
 
     /// Dequeue the next available job
@@ -190,44 +219,47 @@ impl SqliteJobQueue {
     }
 
     pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
-        let now = Utc::now();
-        let retrying = retry && job.attempts < job.max_attempts;
-        let result = if retrying {
-            let delay_seconds = 2_i64.pow(job.attempts as u32) * 10;
-            let retry_at = now + Duration::seconds(delay_seconds);
-            sqlx::query(
-                "UPDATE jobs SET status = 'pending', error = ?, scheduled_at = ?, updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND claim_id = ? AND status = 'processing' AND lease_expires_at > unixepoch()",
-            )
-            .bind(error)
-            .bind(retry_at.to_rfc3339())
-            .bind(now.to_rfc3339())
-            .bind(job.id.to_string())
-            .bind(job.claim_id.map(|id| id.to_string()))
-            .execute(&self.pool)
-            .await
-        } else {
-            sqlx::query(
-                "UPDATE jobs SET status = 'failed', error = ?, completed_at = ?, updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND claim_id = ? AND status = 'processing' AND lease_expires_at > unixepoch()",
-            )
-            .bind(error)
-            .bind(now.to_rfc3339())
-            .bind(now.to_rfc3339())
-            .bind(job.id.to_string())
-            .bind(job.claim_id.map(|id| id.to_string()))
-            .execute(&self.pool)
-            .await
-        }
-        .map_err(|e| Error::Repository(format!("Failed to fail job: {e}")))?;
-        if result.rows_affected() == 0 {
-            return Ok(FailOutcome::LostLease);
-        }
-        Ok(if retrying {
-            warn!(job.id = %job.id, job.attempt = job.attempts, %error, "Job failed; scheduled retry");
-            FailOutcome::Retrying
-        } else {
-            error!(job.id = %job.id, job.attempt = job.attempts, %error, "Job permanently failed");
-            FailOutcome::GaveUp
-        })
+        self.fail_with_reason(
+            job,
+            error,
+            retry,
+            folio_core::processing_events::ProcessingReason::ProviderFailed,
+        )
+        .await
+    }
+
+    pub async fn fail_with_reason(
+        &self,
+        job: &Job,
+        error: &str,
+        retry: bool,
+        reason: folio_core::processing_events::ProcessingReason,
+    ) -> Result<FailOutcome> {
+        super::recovery::sqlite::fail(&self.pool, job, error, retry, reason).await
+    }
+
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<super::JobContext>> {
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT origin_vault_id, correlation_id, causation_id FROM jobs WHERE id = ?",
+        )
+        .bind(job_id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Error::Repository(e.to_string()))?;
+        let Some((vault, Some(correlation), causation)) = row else {
+            return Ok(None);
+        };
+        let parse = |id: String| Uuid::parse_str(&id).map_err(|e| Error::Repository(e.to_string()));
+        Ok(Some(super::JobContext {
+            vault_id: vault
+                .map(parse)
+                .transpose()?
+                .map(folio_core::models::VaultId),
+            lineage: folio_core::mutation::MutationLineage {
+                correlation_id: parse(correlation)?,
+                causation_id: causation.map(parse).transpose()?,
+            },
+        }))
     }
 
     /// Get count of pending jobs
@@ -255,18 +287,7 @@ impl SqliteJobQueue {
     }
 
     pub async fn reset_stuck(&self) -> Result<i64> {
-        let now = Utc::now();
-        let result = sqlx::query(
-            "UPDATE jobs SET status = 'pending', updated_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= unixepoch())",
-        )
-        .bind(now.to_rfc3339())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| Error::Repository(format!("Failed to recover expired jobs: {e}")))?;
-        if result.rows_affected() > 0 {
-            info!("Recovered {} expired jobs", result.rows_affected());
-        }
-        Ok(result.rows_affected() as i64)
+        super::recovery::sqlite::reset_stuck(&self.pool).await
     }
 
     /// Find active jobs (pending or processing) for a specific document
@@ -335,6 +356,17 @@ impl SqliteJobQueue {
     }
 
     /// Whether the latest finished job for any processing stage failed
+    pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
+        let payload: Option<String> = sqlx::query_scalar("SELECT payload FROM jobs WHERE job_type = 'purge_document' AND json_extract(payload, '$.data.document_id') = ? ORDER BY created_at DESC, id DESC LIMIT 1")
+            .bind(document_id.to_string()).fetch_optional(&self.pool).await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        payload
+            .map(|value| {
+                serde_json::from_str(&value).map_err(|error| Error::Repository(error.to_string()))
+            })
+            .transpose()
+    }
+
     pub async fn has_failed_jobs_for_document(&self, document_id: Uuid) -> Result<bool> {
         let search_pattern = format!("%\"document_id\":\"{}\"%", document_id);
 

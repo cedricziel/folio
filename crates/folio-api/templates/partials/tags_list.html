@@ -6,7 +6,8 @@
         {% else %}
         {% for tag in tags %}
         <li class="manage-list-item" id="tag-{{ tag.id }}">
-            <span class="manage-item-name"><span class="f-tag f-tag-{{ tag.tone() }}">{{ tag.name }}</span></span>
+            <div class="manage-item-name"><span class="f-tag f-tag-{{ tag.tone() }}">{{ tag.name }}</span>
+            <details class="f-meta"><summary>History</summary>Created {{ tag.created_at }}{% if let Some(actor) = tag.created_by %} by {{ actor }}{% endif %}<br>Updated {{ tag.updated_at }}{% if let Some(actor) = tag.updated_by %} by {{ actor }}{% endif %}</details></div>
             {% if true|can_manage %}
             <div class="manage-item-actions">
                 <button type="button" class="f-btn f-btn-quiet icon-btn" aria-label="Rename tag {{ tag.name }}"
@@ -36,4 +37,19 @@
         {% endfor %}
         {% endif %}
     </ul>
+    <details class="manage-trash">
+        <summary class="hint">Trash ({{ trashed_tags.len() }})</summary>
+        <ul class="manage-list">
+        {% for entry in trashed_tags %}
+            <li class="manage-list-item">
+                <span class="manage-item-name">{{ entry.name }} <span class="f-meta">{% if let Some(at) = entry.deleted_at %}Deleted {{ at }}{% endif %}</span><br><span class="f-meta">Created {{ entry.created_at }}{% if let Some(actor) = entry.created_by %} by {{ actor }}{% endif %}<br>Updated {{ entry.updated_at }}{% if let Some(actor) = entry.updated_by %} by {{ actor }}{% endif %}</span></span>
+                {% if true|can_manage %}
+                <form action="{{ "/manage/tags"|vault_url }}/{{ entry.id }}/restore" method="post" data-turbo-frame="tags-list">
+                    <button type="submit" class="f-btn f-btn-quiet">Restore</button>
+                </form>
+                {% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </details>
 </turbo-frame>

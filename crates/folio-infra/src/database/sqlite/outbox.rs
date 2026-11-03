@@ -33,7 +33,7 @@ pub(crate) async fn capture_document(
     id: Id,
     expected_vault: Option<VaultId>,
 ) -> Result<Option<EventSnapshot>> {
-    let row = sqlx::query("SELECT d.id AS document_id, d.vault_id, d.title, d.original_filename, d.mime_type,
+    let row = sqlx::query("SELECT d.id AS document_id, d.reviewed_at, d.reviewed_by, d.review_origin, d.document_date, d.vault_id, d.title, d.original_filename, d.mime_type,
         d.file_path, d.source_type, d.source_meta, d.created_at, d.correspondent_id, c.name AS correspondent_name,
         d.document_type_id, k.name AS document_type_name, COALESCE((SELECT json_group_array(json_object('id', tags.id, 'name', tags.name)) FROM (SELECT t.id, t.name FROM document_tags dt JOIN tags t ON t.id = dt.tag_id AND t.vault_id = d.vault_id WHERE dt.document_id = d.id ORDER BY t.id) tags), '[]') AS tags
         FROM documents d LEFT JOIN correspondents c ON c.id = d.correspondent_id AND c.vault_id = d.vault_id
@@ -44,6 +44,20 @@ pub(crate) async fn capture_document(
         let source_type: String = row.get("source_type");
         let source_meta: Option<String> = row.get("source_meta");
         Ok(EventSnapshot {
+            reviewed_at: row.get("reviewed_at"),
+            reviewed_by: row
+                .get::<Option<String>, _>("reviewed_by")
+                .map(folio_core::models::UserId),
+            review_origin: row
+                .get::<Option<String>, _>("review_origin")
+                .map(|v| v.parse())
+                .transpose()
+                .map_err(repo_err)?,
+            document_date: row
+                .get::<Option<String>, _>("document_date")
+                .map(|value| value.parse::<folio_core::models::DocumentDate>())
+                .transpose()
+                .map_err(repo_err)?,
             document_id: row
                 .get::<String, _>("document_id")
                 .parse()

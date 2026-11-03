@@ -130,6 +130,35 @@ const escapeHtml = (text) => {
   return div.innerHTML;
 };
 
+Stimulus.register("document-review", class extends Controller {
+  static targets = ["button", "error"];
+
+  async submit(event) {
+    event.preventDefault();
+    if (this.saving) return;
+    this.saving = true;
+    const label = this.buttonTarget.textContent;
+    this.buttonTarget.disabled = true;
+    this.buttonTarget.textContent = "Saving review…";
+    this.errorTarget.hidden = true;
+    try {
+      const response = await fetch(this.element.action, {
+        method: "POST", credentials: "same-origin",
+        body: new URLSearchParams(new FormData(this.element)),
+      });
+      if (!response.ok) throw new Error("Review rejected");
+      window.location.reload();
+    } catch (_) {
+      this.errorTarget.textContent = "Could not save review. Try again.";
+      this.errorTarget.hidden = false;
+    } finally {
+      this.saving = false;
+      this.buttonTarget.disabled = false;
+      this.buttonTarget.textContent = label;
+    }
+  }
+});
+
 // Upload Controller
 Stimulus.register(
   "upload",
@@ -1070,7 +1099,7 @@ Stimulus.register(
     connect() {
       this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
-      for (const name of ["trashed", "restored", "deleted"]) {
+      for (const name of ["trashed", "restored", "purge_requested", "deleted"]) {
         this.source.addEventListener(name, () => {
           if (!document.getElementById("trash-content")) return;
           if (this.refreshingTrash) {

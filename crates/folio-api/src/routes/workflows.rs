@@ -41,6 +41,7 @@ pub fn router() -> Router<AppState> {
                 .delete(delete_workflow),
         )
         .route("/{id}/test", post(test_workflow))
+        .route("/{id}/restore", post(restore_workflow))
         .route("/{id}/runs", get(list_runs))
 }
 
@@ -129,12 +130,21 @@ fn reject_masks(input: &WorkflowInput) -> Result<(), ApiError> {
     Ok(())
 }
 
+#[derive(Debug, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct WorkflowListQuery {
+    /// List retained workflows in trash instead of active workflows.
+    #[serde(default)]
+    pub deleted: bool,
+}
+
 /// List all workflows
 #[utoipa::path(
     get,
     path = "/api/workflows",
     operation_id = "listWorkflows",
     tag = "workflows",
+    params(WorkflowListQuery),
     responses(
         (status = 200, description = "All workflows; webhook secrets are masked", body = Vec<Workflow>),
         InternalError,
@@ -143,8 +153,13 @@ fn reject_masks(input: &WorkflowInput) -> Result<(), ApiError> {
 pub(crate) async fn list_workflows(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
+    ApiQuery(query): ApiQuery<WorkflowListQuery>,
 ) -> ApiResult<Json<Vec<Workflow>>> {
-    let workflows = state.workflow_repo.list(vault).await?;
+    let workflows = if query.deleted {
+        state.workflow_repo.list_deleted(vault).await?
+    } else {
+        state.workflow_repo.list(vault).await?
+    };
     Ok(Json(workflows.into_iter().map(redact).collect()))
 }
 
@@ -222,7 +237,7 @@ pub(crate) async fn update_workflow(
     Ok(Json(redact(workflow)))
 }
 
-/// Delete a workflow and its run history
+/// Move a workflow to trash, preserving history and stopping pending runs
 #[utoipa::path(
     delete,
     path = "/api/workflows/{id}",
@@ -230,7 +245,7 @@ pub(crate) async fn update_workflow(
     tag = "workflows",
     params(("id" = Uuid, Path, description = "Workflow ID")),
     responses(
-        (status = 204, description = "The workflow was deleted"),
+        (status = 204, description = "The workflow is in trash; pending runs are stopped"),
         NotFound,
         InternalError,
     )
@@ -242,6 +257,28 @@ pub(crate) async fn delete_workflow(
 ) -> ApiResult<StatusCode> {
     state.workflow_repo.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Restore the configuration without restarting retained execution history.
+#[utoipa::path(
+    post,
+    path = "/api/workflows/{id}/restore",
+    operation_id = "restoreWorkflow",
+    tag = "workflows",
+    params(("id" = Uuid, Path, description = "Workflow ID")),
+    responses(
+        (status = 200, description = "The restored workflow; secrets are masked", body = Workflow),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn restore_workflow(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<Json<Workflow>> {
+    let workflow = state.workflow_repo.restore(vault, id).await?;
+    Ok(Json(redact(workflow)))
 }
 
 /// Outcome of sending the sample payload to one webhook
@@ -369,7 +406,7 @@ pub(crate) async fn list_runs(
     ApiPath(id): ApiPath<Uuid>,
     ApiQuery(query): ApiQuery<ListRunsQuery>,
 ) -> ApiResult<Json<Vec<WorkflowRun>>> {
-    find(vault, &*state.workflow_repo, id).await?;
+    find_retained(vault, &*state.workflow_repo, id).await?;
     let limit = query.limit.unwrap_or(DEFAULT_RUN_LIMIT).min(MAX_RUN_LIMIT);
     Ok(Json(state.workflow_repo.list_runs(vault, id, limit).await?))
 }
@@ -380,6 +417,19 @@ pub(crate) async fn find(
     id: Uuid,
 ) -> ApiResult<Workflow> {
     repo.find_by_id(vault, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Workflow not found"))
+}
+
+pub(crate) async fn find_retained(
+    vault: VaultId,
+    repo: &dyn WorkflowRepository,
+    id: Uuid,
+) -> ApiResult<Workflow> {
+    if let Some(workflow) = repo.find_by_id(vault, id).await? {
+        return Ok(workflow);
+    }
+    repo.find_deleted(vault, id)
         .await?
         .ok_or_else(|| ApiError::not_found("Workflow not found"))
 }

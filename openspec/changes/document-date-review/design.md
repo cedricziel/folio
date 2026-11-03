@@ -1,6 +1,6 @@
 ## Data and ownership
 
-Use the validated `DocumentDate` wrapper around `chrono::NaiveDate` for optional `document_date`, serialized as YYYY-MM-DD. Accept years 1 through 9999 and strict ASCII calendar dates in both Rust and Swift. SQLite stores canonical text and PostgreSQL stores DATE. Do not translate dates through a local timezone or change `created_at` when editing them.
+Use the validated `DocumentDate` wrapper around `chrono::NaiveDate` for optional `document_date`, serialized as YYYY-MM-DD. Accept years 1 through 9999 and strict ASCII calendar dates in both Rust and Swift. SQLite stores canonical text and PostgreSQL stores DATE. Do not translate dates through a local timezone or change `created_at` when editing them. OpenAPI uses inline nullable string/date fields for Swift generator compatibility. A custom generated-client PATCH payload preserves omitted fields, explicit null, and date strings; synthesized optional encoding cannot represent all three.
 
 Review fields are `reviewed_at`, nullable `reviewed_by`, and nullable `review_origin` with human, system, or legacy_classification values. Reviewed means reviewed_at is present. Unreviewed clears all three fields. Signed-in review uses the authenticated actor and server clock. Authentication-disabled review uses system provenance with no actor. Request bodies never accept actor, timestamp, or origin. Repeated requests for the current state preserve attribution and timestamps.
 
@@ -10,7 +10,7 @@ Follow the domain-lifecycle contract: created_at/updated_at/deleted_at are top-l
 
 ## API and queries
 
-Add PATCH `/api/documents/{id}` for document_date, preserving the repository's omission-versus-null convention. An omitted date is unchanged; null clears it. Reject impossible dates and timestamp strings with 400. Add idempotent PUT `/api/documents/{id}/review` with a required boolean `reviewed`; return the updated document with 200. Provide vault-scoped equivalents through the existing scoped router.
+Add PATCH `/api/documents/{id}` for document_date, preserving the repository's omission-versus-null convention. An omitted date is unchanged; null clears it. Reject impossible dates, timestamp strings, and unsupported fields with the existing JSON extractor’s 422 validation response. Add idempotent PUT `/api/documents/{id}/review` with a required boolean `reviewed`; return the updated document with 200. Provide vault-scoped equivalents through the existing scoped router.
 
 Read and browse DTOs expose these fields. Add reviewed=true/false and inclusive document_date_from/document_date_to filters. Null dates do not match a date bound. Bind all new filters into pagination cursors and reject reversed bounds. Leave existing created_after/created_before semantics intact. Date filtering is unrelated to import-date filtering.
 
@@ -48,7 +48,7 @@ Review uses a dedicated repository operation with a server-derived actor and boo
 
 ## Foundation API integration
 
-The proposed foundation API is not merged. Verify these signatures against its merged commit before implementation:
+Foundation envelope PR #265, trusted lineage PR #266, and metadata producer PR #271 are merged. Date integration uses these contracts:
 
 - `folio_core::domain_event::DomainEventEnvelope::new(event_type, vault_id, subject, document_id, audience, data)` derives actor, time, and UUID on the server.
 - `DomainEventSubject { subject_type, id }` serializes subject_type as `type`. These events use document subject type and `Some(document_id)`.
@@ -56,7 +56,7 @@ The proposed foundation API is not merged. Verify these signatures against its m
 - `with_correlation(correlation_id, causation_id)` carries workflow lineage. Reuse the envelope identity across retries instead of calling new again for delivery.
 - `folio_infra::database::{sqlite,postgres}::insert_domain_event(&mut Connection, &DomainEventEnvelope) -> Result<i64>` must execute on the domain mutation's transaction connection.
 
-The foundation owns migration `20261102160050_domain_event_identity.sql` and its nullable unique event_id. Do not add a parallel envelope table, identity migration, or event bus. Payload data schemas remain owned by this slice. OutboxEvent exposes optional envelope and optional legacy DocumentEvent; new document events carry both through foundation compatibility mapping, while old rows may have only the legacy event. Keep current SSE/workflow consumers compatible and test both row formats.
+The foundation owns migration `20261102160050_domain_event_identity.sql` and its nullable unique event_id. Do not add a parallel envelope table, identity migration, or event bus. Payload data schemas remain owned by this slice. OutboxEvent exposes optional envelope and optional legacy DocumentEvent; specific date events carry an envelope, and the single generic Updated row carries both the envelope and legacy event. Old rows may have only the legacy event. Keep current SSE/workflow consumers compatible and test both row formats.
 
 ## Migration reservation
 

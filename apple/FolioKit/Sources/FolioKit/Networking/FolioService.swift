@@ -1,12 +1,19 @@
 import Foundation
 
 /// Everything the app needs from a Folio server. View models depend on this, not on the generated client.
-public protocol FolioService: Sendable {
+public protocol FolioService: DocumentEntryService {
     func vaults() async throws -> VaultCatalog
+    func savedViews(after: UUID?) async throws -> [SavedView]
+    func savedView(id: UUID) async throws -> SavedView
+    func saveView(_ draft: SavedViewDraft) async throws -> SavedView
+    func updateSavedView(id: UUID, draft: SavedViewDraft) async throws -> SavedView
+    func deleteSavedView(id: UUID) async throws
     /// Returns a service whose requests retain this vault even if the visible library changes.
     func scoped(to vaultID: UUID) -> any FolioService
     func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage
     func document(id: Document.ID) async throws -> Document
+    func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document
+    func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document
     func ping() async throws
     func documents(matching query: String) async throws -> [Document]
     /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.
@@ -71,5 +78,15 @@ public struct NoToken: BearerTokenProvider {
     public init() {}
     public func token() async throws -> String? {
         nil
+    }
+}
+
+public extension FolioService {
+    func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document {
+        throw FolioError.server(status: 501, message: "This server does not support document review.")
+    }
+
+    func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
+        throw FolioError.server(status: 501, message: "This server does not support document date editing.")
     }
 }

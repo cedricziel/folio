@@ -1,7 +1,10 @@
 //! Job queue for background processing (SQLite or PostgreSQL)
 
 mod postgres;
+mod processing_scope;
+mod recovery;
 mod sqlite;
+pub mod stages;
 mod worker;
 
 pub(crate) use postgres::insert_job as insert_job_postgres;
@@ -66,7 +69,13 @@ pub enum JobType {
     /// Process a newly uploaded document (all steps)
     ProcessDocument { document_id: Uuid },
     /// Remove objects and metadata after an explicit permanent-deletion request.
-    PurgeDocument { document_id: Uuid },
+    PurgeDocument {
+        document_id: Uuid,
+        #[serde(default)]
+        correlation_id: Option<Uuid>,
+        #[serde(default)]
+        causation_id: Option<Uuid>,
+    },
     /// Execute the actions of a workflow run
     ExecuteWorkflowRun { run_id: Uuid },
 }
@@ -78,7 +87,7 @@ impl JobType {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id }
             | JobType::GenerateEmbedding { document_id }
-            | JobType::PurgeDocument { document_id }
+            | JobType::PurgeDocument { document_id, .. }
             | JobType::ProcessDocument { document_id } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
         }
@@ -127,6 +136,12 @@ pub enum FailOutcome {
     GaveUp,
     /// The claim expired or another worker owns the job.
     LostLease,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobContext {
+    pub vault_id: Option<folio_core::models::VaultId>,
+    pub lineage: folio_core::mutation::MutationLineage,
 }
 
 /// A job in the queue
@@ -224,9 +239,55 @@ impl JobQueue {
         dispatch!(self, fail(job, error, retry))
     }
 
+    pub async fn fail_with_reason(
+        &self,
+        job: &Job,
+        error: &str,
+        retry: bool,
+        reason: folio_core::processing_events::ProcessingReason,
+    ) -> Result<FailOutcome> {
+        dispatch!(self, fail_with_reason(job, error, retry, reason))
+    }
+
+    pub async fn start_ocr(&self, job: &Job) -> Result<Option<stages::OcrStageFence>> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::start_ocr(queue.pool(), job).await,
+            Self::Postgres(queue) => stages::postgres::start_ocr(queue.pool(), job).await,
+        }
+    }
+
+    /// `embed` false skips embedding with `provider_disabled` instead of queueing it.
+    pub async fn complete_ocr(
+        &self,
+        fence: &stages::OcrStageFence,
+        content: &str,
+        embed: bool,
+    ) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => {
+                stages::sqlite::complete_ocr(queue.pool(), fence, content, embed).await
+            }
+            Self::Postgres(queue) => {
+                stages::postgres::complete_ocr(queue.pool(), fence, content, embed).await
+            }
+        }
+    }
+
+    pub async fn skip_ocr(&self, fence: &stages::OcrStageFence, embed: bool) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::skip_ocr(queue.pool(), fence, embed).await,
+            Self::Postgres(queue) => stages::postgres::skip_ocr(queue.pool(), fence, embed).await,
+        }
+    }
+
     /// Renew only the current, unexpired claim. An expired claim cannot be revived.
     pub async fn renew(&self, job: &Job) -> Result<bool> {
         dispatch!(self, renew(job))
+    }
+
+    /// Returns the enqueue-time scope, or None for jobs created before context persistence.
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<JobContext>> {
+        dispatch!(self, context(job_id))
     }
 
     /// Get count of pending jobs
@@ -247,6 +308,10 @@ impl JobQueue {
     /// Find active jobs (pending or processing) for a specific document
     pub async fn find_active_jobs_for_document(&self, document_id: Uuid) -> Result<Vec<Job>> {
         dispatch!(self, find_active_jobs_for_document(document_id))
+    }
+
+    pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
+        dispatch!(self, latest_purge_job(document_id))
     }
 
     /// Whether the latest finished job for any processing stage failed

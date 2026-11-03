@@ -80,7 +80,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                     health = .notChecked
                 }
                 return SourceActivity(
-                    id: row.id, vaultID: vaultID, name: row.name, health: health, lastCheckedAt: row.status?.lastRunAt)
+                    id: row.id, vaultID: vaultID, name: row.name, health: health, lastCheckedAt: row.status?.lastRunAt
+                )
             }
         }
     }
@@ -101,16 +102,17 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             }
             let outcomes = try page.outcomes.map { row in
                 guard try Self.uuid(row.vaultId) == vaultID, try Self.uuid(row.sourceId) == sourceID,
-                    let result = SourceOutcome.Result(rawValue: row.outcome.rawValue)
+                      let result = SourceOutcome.Result(rawValue: row.outcome.rawValue)
                 else { throw FolioError.unreadableResponse }
-                return SourceOutcome(
-                    id: row.id, itemID: try Self.uuid(row.itemId), attemptID: try Self.uuid(row.attemptId),
+                return try SourceOutcome(
+                    id: row.id, itemID: Self.uuid(row.itemId), attemptID: Self.uuid(row.attemptId),
                     occurredAt: row.occurredAt, outcome: result,
-                    documentID: try row.documentId.map(Self.uuid)
+                    documentID: row.documentId.map(Self.uuid)
                 )
             }
             return SourceOutcomePage(
-                vaultID: vaultID, sourceID: sourceID, outcomes: outcomes, nextBefore: page.nextBefore)
+                vaultID: vaultID, sourceID: sourceID, outcomes: outcomes, nextBefore: page.nextBefore
+            )
         }
     }
 
@@ -120,10 +122,154 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
             try check(response, body: data)
             guard let catalog = try? JSONDecoder().decode(VaultCatalog.self, from: data),
-                let defaultID = catalog.defaultVaultID,
-                catalog.vaults.contains(where: { $0.id == defaultID })
+                  let defaultID = catalog.defaultVaultID,
+                  catalog.vaults.contains(where: { $0.id == defaultID })
             else { throw FolioError.unreadableResponse }
             return catalog
+        }
+    }
+
+    public func savedViews(after: UUID?) async throws -> [SavedView] {
+        guard let vaultID else { throw FolioError.server(status: 400, message: "Select a vault first.") }
+        return try await call("saved_views.list") {
+            try await client.listSavedViews(
+                path: .init(vaultId: vaultID.uuidString.lowercased()),
+                query: .init(after: after?.uuidString.lowercased(), limit: 50)
+            ).ok.body.json.map { try Self.savedView($0) }
+        }
+    }
+
+    public func savedView(id: UUID) async throws -> SavedView {
+        guard let vaultID else { throw FolioError.server(status: 400, message: "Select a vault first.") }
+        return try await call("saved_views.get") {
+            try await Self.savedView(
+                client.getSavedView(
+                    path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased())
+                ).ok.body.json
+            )
+        }
+    }
+
+    public func saveView(_ draft: SavedViewDraft) async throws -> SavedView {
+        guard let vaultID else { throw FolioError.server(status: 400, message: "Select a vault first.") }
+        return try await call("saved_views.create") {
+            try await Self.savedView(
+                client.createSavedView(
+                    path: .init(vaultId: vaultID.uuidString.lowercased()), body: .json(Self.savedViewInput(draft))
+                ).created.body.json
+            )
+        }
+    }
+
+    public func updateSavedView(id: UUID, draft: SavedViewDraft) async throws -> SavedView {
+        guard let vaultID else { throw FolioError.server(status: 400, message: "Select a vault first.") }
+        return try await call("saved_views.update") {
+            let input = Self.savedViewInput(draft)
+            var patch = Components.Schemas.UpdateSavedView()
+            patch.name = input.name
+            patch.visibility = input.visibility
+            patch.query = draft.replacesQuery ? input.query : nil
+            patch.presentation = input.presentation
+            return try await Self.savedView(
+                client.updateSavedView(
+                    path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased()),
+                    body: .json(patch)
+                ).ok.body.json
+            )
+        }
+    }
+
+    public func deleteSavedView(id: UUID) async throws {
+        guard let vaultID else { throw FolioError.server(status: 400, message: "Select a vault first.") }
+        try await call("saved_views.delete") {
+            _ = try await client.deleteSavedView(
+                path: .init(vaultId: vaultID.uuidString.lowercased(), id: id.uuidString.lowercased())
+            ).noContent
+        }
+    }
+
+    private static func savedViewInput(_ draft: SavedViewDraft) -> Components.Schemas.SavedViewInput {
+        var filters = Components.Schemas.DocumentFilter()
+        filters.correspondentId = draft.query.filter.correspondentID?.uuidString.lowercased()
+        filters.documentTypeId = draft.query.filter.documentTypeID?.uuidString.lowercased()
+        filters.tagIds = draft.query.filter.tagIDs.map { $0.uuidString.lowercased() }
+        filters.searchQuery = draft.query.text
+        filters.createdAfter = draft.query.filter.createdAfter
+        filters.createdBefore = draft.query.filter.createdBefore
+        var query = Components.Schemas.SavedViewQuery(version: 1)
+        query.filters = filters
+        query.sort = .init(rawValue: draft.query.sort.rawValue)
+        var input = Components.Schemas.SavedViewInput(name: draft.name, query: query)
+        input.visibility = .init(rawValue: draft.visibility.rawValue)
+        input.presentation = .init(rawValue: draft.presentation.rawValue)
+        return input
+    }
+
+    private static func savedView(_ value: Components.Schemas.SavedView) throws -> SavedView {
+        guard value.query.version == 1,
+              let visibility = SavedView.Visibility(rawValue: value.visibility.rawValue),
+              let presentation = SavedView.Presentation(rawValue: value.presentation.rawValue)
+        else { throw FolioError.unreadableResponse }
+        let filters = value.query.filters ?? .init()
+        let query = try DocumentBrowseQuery(
+            text: filters.searchQuery ?? "",
+            filter: .init(
+                tagIDs: (filters.tagIds ?? []).map(Self.uuid),
+                correspondentID: filters.correspondentId.map(Self.uuid),
+                documentTypeID: filters.documentTypeId.map(Self.uuid),
+                createdAfter: filters.createdAfter, createdBefore: filters.createdBefore
+            ), sort: .init(rawValue: value.query.sort?.rawValue ?? "newest") ?? .newest
+        )
+        return try SavedView(
+            id: uuid(value.id), vaultID: uuid(value.vaultId), ownerID: value.ownerId, name: value.name,
+            visibility: visibility, query: query, presentation: presentation,
+            createdAt: value.createdAt, updatedAt: value.updatedAt,
+            createdBy: value.createdBy, updatedBy: value.updatedBy
+        )
+    }
+
+    public func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) async throws -> DocumentEntryPage {
+        try await call("document_entries.list") {
+            let page = try await client.listDocumentEntries(
+                path: .init(id: documentID.uuidString.lowercased()),
+                query: .init(kind: kind.apiValue, limit: 50, cursor: cursor)
+            ).ok.body.json
+            return try DocumentEntryPage(
+                entries: page.entries.map(DocumentEntry.init), nextCursor: page.nextCursor, canCreate: page.canCreate
+            )
+        }
+    }
+
+    public func createEntry(documentID: UUID, kind: DocumentEntryKind, body: String, key: UUID) async throws
+        -> DocumentEntry
+    {
+        try await call("document_entries.create") {
+            try await DocumentEntry(
+                client.createDocumentEntry(
+                    path: .init(id: documentID.uuidString.lowercased()),
+                    headers: .init(idempotencyKey: key.uuidString.lowercased()),
+                    body: .json(.init(body: body, kind: kind.apiValue))
+                ).created.body.json
+            )
+        }
+    }
+
+    public func updateEntry(documentID: UUID, entryID: UUID, body: String) async throws -> DocumentEntry {
+        try await call("document_entries.update") {
+            try await DocumentEntry(
+                client.updateDocumentEntry(
+                    path: .init(id: documentID.uuidString.lowercased(), entryId: entryID.uuidString.lowercased()),
+                    body: .json(.init(body: body))
+                ).ok.body.json
+            )
+        }
+    }
+
+    public func deleteEntry(documentID: UUID, entryID: UUID) async throws {
+        try await call("document_entries.delete") {
+            _ = try await client.deleteDocumentEntry(
+                path: .init(id: documentID.uuidString.lowercased(), entryId: entryID.uuidString.lowercased())
+            ).noContent
         }
     }
 
@@ -137,15 +283,18 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             let input = Operations.BrowseDocuments.Input.Query(
                 q: query.text.isEmpty ? nil : query.text,
                 limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
+                reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                documentDateTo: filter.documentDateTo?.rawValue,
                 correspondentId: filter.correspondentID?.uuidString.lowercased(),
                 documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
                 tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
                 createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
             )
             let page = try await client.browseDocuments(query: input).ok.body.json
+            try requireReviewFilters(filter, supported: page.supportsDocumentReviewFilters)
             return try DocumentPage(
                 vaultID: Self.uuid(page.vaultId), documents: page.documents.map { try Document($0) },
-                nextCursor: page.nextCursor
+                nextCursor: page.nextCursor, supportsReviewFilters: page.supportsDocumentReviewFilters == true
             )
         }
     }
@@ -153,6 +302,27 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     public func document(id: Document.ID) async throws -> Document {
         try await call("documents.get") {
             try await Document(client.getDocument(path: .init(id: id.uuidString.lowercased())).ok.body.json)
+        }
+    }
+
+    public func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document {
+        try await call("documents.review") {
+            try await Document(
+                client.setDocumentReview(
+                    path: .init(id: id.uuidString.lowercased()), body: .json(.init(reviewed: reviewed))
+                ).ok.body.json
+            )
+        }
+    }
+
+    public func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
+        try await call("documents.date") {
+            try await Document(
+                client.updateDocumentDate(
+                    path: .init(id: id.uuidString.lowercased()),
+                    body: .json(.init(documentDate: .some(date?.rawValue)))
+                ).ok.body.json
+            )
         }
     }
 
@@ -170,12 +340,24 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     public func documents(filter: DocumentFilter) async throws -> [Document] {
         try await call("documents.filter") {
             let query = Operations.ListDocuments.Input.Query(
+                reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                documentDateTo: filter.documentDateTo?.rawValue,
                 correspondentId: filter.correspondentID?.uuidString.lowercased(),
                 documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
                 tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
                 createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
             )
-            return try await client.listDocuments(query: query).ok.body.json.documents.map { try Document($0) }
+            let response = try await client.listDocuments(query: query).ok.body.json
+            try requireReviewFilters(filter, supported: response.supportsDocumentReviewFilters)
+            return try response.documents.map { try Document($0) }
+        }
+    }
+
+    private func requireReviewFilters(_ filter: DocumentFilter, supported: Bool?) throws {
+        if filter.requiresReviewSupport, supported != true {
+            throw FolioError.server(
+                status: 501, message: "This server does not support review and document date filters."
+            )
         }
     }
 
@@ -224,7 +406,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     public func tags() async throws -> [Tag] {
         try await call("tags.list") {
             try await client.listTags().ok.body.json.map {
-                try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color)
+                try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
             }
         }
     }
@@ -257,12 +439,16 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 } catch let error as URLError where error.code == .cancelled {
                     throw CancellationError()
                 }
-                if (result.1 as? HTTPURLResponse)?.statusCode == 401 { result.0.task.cancel() }
+                if (result.1 as? HTTPURLResponse)?.statusCode == 401 {
+                    result.0.task.cancel()
+                }
                 return result
             }
             defer { bytes.task.cancel() }
             try Task.checkCancellation()
-            if (response as? HTTPURLResponse)?.statusCode == 404 { return nil }
+            if (response as? HTTPURLResponse)?.statusCode == 404 {
+                return nil
+            }
             try check(response, body: nil)
             guard response.mimeType == "image/jpeg", response.expectedContentLength <= 2_097_152 else {
                 throw FolioError.unreadableResponse
@@ -274,12 +460,12 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 data.append(byte)
             }
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                CGImageSourceGetType(source) as String? == UTType.jpeg.identifier,
-                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                let height = properties[kCGImagePropertyPixelHeight] as? Int,
-                width > 0, height > 0, width <= 4_000_000 / height,
-                CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) != nil
+                  CGImageSourceGetType(source) as String? == UTType.jpeg.identifier,
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  width > 0, height > 0, width <= 4_000_000 / height,
+                  CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) != nil
             else { throw FolioError.unreadableResponse }
             return data
         }
@@ -298,8 +484,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let filename = Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
         let directory =
             downloadDirectory
-            ?? FileManager.default.temporaryDirectory
-            .appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
+                ?? FileManager.default.temporaryDirectory
+                .appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let ext = (filename as NSString).pathExtension
         let suffix = !ext.isEmpty && ext.utf8.count <= 32 ? "." + ext : ""
@@ -353,6 +539,12 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         return ext.map { "document.\($0)" } ?? "document"
     }
 
+    fileprivate static func documentDate(_ value: String?) throws -> DocumentDate? {
+        guard let value else { return nil }
+        guard let date = DocumentDate(rawValue: value) else { throw FolioError.unreadableResponse }
+        return date
+    }
+
     fileprivate static func uuid(_ string: String) throws -> UUID {
         guard let id = UUID(uuidString: string) else { throw FolioError.unreadableResponse }
         return id
@@ -379,7 +571,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let token = try await tokenProvider.token()
         let first = try await transfer { try await perform(signed(token)) }
         guard (first.1 as? HTTPURLResponse)?.statusCode == 401, let token,
-            let fresh = try await tokenProvider.refresh(rejecting: token)
+              let fresh = try await tokenProvider.refresh(rejecting: token)
         else { return first }
         return try await transfer { try await perform(signed(fresh)) }
     }
@@ -397,7 +589,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         if http.statusCode == 401 {
             throw FolioError.signInRequired
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200 ..< 300).contains(http.statusCode) else {
             throw FolioError.server(status: http.statusCode, message: body.flatMap(ErrorMappingMiddleware.message))
         }
     }
@@ -434,6 +626,8 @@ extension Document {
             documentTypeID: raw.documentTypeId.map(LiveFolioService.uuid),
             pageCount: raw.pageCount.map(Int.init),
             ocrStatus: .init(raw.ocrStatus), embedStatus: .init(raw.embedStatus),
+            documentDate: LiveFolioService.documentDate(raw.documentDate),
+            reviewedAt: raw.reviewedAt, reviewedBy: raw.reviewedBy, reviewOrigin: raw.reviewOrigin,
             createdAt: raw.createdAt, updatedAt: raw.updatedAt
         )
     }
@@ -455,8 +649,11 @@ extension Document {
     /// The list and get endpoints add the document's tags to the plain document.
     init(_ raw: Components.Schemas.DocumentView) throws {
         try self.init(raw.value1)
+        canEditDocumentDate = raw.value2.canEditDocumentDate ?? false
+        canReviewDocument = raw.value2.canReviewDocument ?? false
+        reviewed = raw.value2.reviewed
         tags = try raw.value2.tags.map {
-            try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color)
+            try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
         }
     }
 }
@@ -466,9 +663,31 @@ private struct SourceActivityWire: Decodable {
         let lastError: String?
         let lastRunAt: Date?
     }
+
     let id: UUID
     let vaultId: UUID
     let name: String
     let enabled: Bool
     let status: Status?
+}
+
+private extension DocumentEntryKind {
+    var apiValue: Components.Schemas.EntryKind {
+        switch self {
+        case .note: .note
+        case .comment: .comment
+        }
+    }
+}
+
+private extension DocumentEntry {
+    init(_ raw: Components.Schemas.EntryView) throws {
+        let entry = raw.value1
+        try self.init(
+            id: LiveFolioService.uuid(entry.id), documentID: LiveFolioService.uuid(entry.documentId),
+            vaultID: LiveFolioService.uuid(entry.vaultId), kind: entry.kind == .note ? .note : .comment,
+            body: entry.body, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
+            createdBy: entry.createdBy, canEdit: raw.value2.canEdit, canDelete: raw.value2.canDelete
+        )
+    }
 }

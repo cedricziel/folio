@@ -35,3 +35,6 @@ mod title;
 
 #[path = "document_transitions/moves.rs"]
 mod moves;
+
+#[path = "document_transitions/purge.rs"]
+mod purge;

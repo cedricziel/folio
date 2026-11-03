@@ -3,7 +3,7 @@
 use crate::vault::filters;
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Form, Router,
@@ -17,7 +17,9 @@ use folio_core::models::{
     MailAfterImport, MailBody, MailSecurity, SourceConfig, SourceOrigin, REDACTED,
 };
 
-use super::sources::{all_sources, find, prepare_input, require_managed, run_test};
+use super::sources::{
+    all_sources, find, find_retained, prepare_input, require_managed, run_test, SourceListQuery,
+};
 use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -30,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/sources/{id}", get(edit_page).post(update))
         .route("/settings/sources/{id}/toggle", post(toggle))
         .route("/settings/sources/{id}/delete", post(delete))
+        .route("/settings/sources/{id}/restore", post(restore))
         .route("/settings/sources/{id}/test", post(test_saved))
         .route("/settings/sources/{id}/outcomes", get(outcomes_page))
 }
@@ -40,6 +43,8 @@ struct Notice {
 }
 
 struct Row {
+    deleted: bool,
+    lifecycle_summary: Option<String>,
     id: String,
     name: String,
     kind: &'static str,
@@ -54,6 +59,7 @@ struct Row {
 #[derive(Template)]
 #[template(path = "sources.html")]
 struct ListTemplate {
+    deleted: bool,
     sidebar: Sidebar,
     title: String,
     rows: Vec<Row>,
@@ -67,11 +73,29 @@ fn summary(def: &IngestionSourceDef) -> String {
     }
 }
 
-async fn rows(DefaultVault(vault): DefaultVault, state: &AppState) -> ApiResult<Vec<Row>> {
+async fn rows(
+    DefaultVault(vault): DefaultVault,
+    state: &AppState,
+    deleted: bool,
+) -> ApiResult<Vec<Row>> {
     let mut rows = Vec::new();
-    for def in all_sources(DefaultVault(vault), state).await? {
+    let definitions = if deleted {
+        state.ingestion.managed.list_deleted(vault).await?
+    } else {
+        all_sources(DefaultVault(vault), state).await?
+    };
+    for def in definitions {
         let status = state.ingestion.managed.status(def.id).await?;
         rows.push(Row {
+            deleted,
+            lifecycle_summary: def.lifecycle.as_ref().map(|m| match m.deleted_at {
+                Some(at) => format!("Deleted {}", at.format("%Y-%m-%d %H:%M UTC")),
+                None => format!(
+                    "Created {}, updated {}",
+                    m.created_at.format("%Y-%m-%d %H:%M UTC"),
+                    m.updated_at.format("%Y-%m-%d %H:%M UTC")
+                ),
+            }),
             id: def.id.to_string(),
             kind: match def.config {
                 SourceConfig::Folder(_) => "Folder",
@@ -103,11 +127,13 @@ async fn rows(DefaultVault(vault): DefaultVault, state: &AppState) -> ApiResult<
 async fn list_page(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
+    Query(query): Query<SourceListQuery>,
 ) -> ApiResult<Html<String>> {
     render(ListTemplate {
+        deleted: query.deleted,
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Sources - Folio".into(),
-        rows: rows(DefaultVault(vault), &state).await?,
+        rows: rows(DefaultVault(vault), &state, query.deleted).await?,
         notice: None,
     })
 }
@@ -120,9 +146,10 @@ async fn test_saved(
     let def = find(vault, &state, id).await?;
     let result = run_test(&state, &def).await;
     render(ListTemplate {
+        deleted: false,
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: "Sources - Folio".into(),
-        rows: rows(DefaultVault(vault), &state).await?,
+        rows: rows(DefaultVault(vault), &state, false).await?,
         notice: Some(Notice {
             danger: !result.ok,
             text: format!("{}: {}", def.name, result.message),
@@ -391,6 +418,7 @@ async fn try_connection(
         return danger(e.to_string());
     }
     let def = IngestionSourceDef {
+        lifecycle: existing.and_then(|d| d.lifecycle.clone()),
         vault_id: existing.and_then(|d| d.vault_id),
         id: existing.map(|d| d.id).unwrap_or_else(Uuid::new_v4),
         name: input.name,
@@ -500,9 +528,18 @@ async fn delete(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
-    let def = find(vault, &state, id).await?;
+    let def = find_retained(vault, &state, id).await?;
     require_managed(&def)?;
     state.ingestion.managed.delete(vault, id).await?;
+    Ok(Redirect::to("/settings/sources"))
+}
+
+async fn restore(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Redirect> {
+    state.ingestion.managed.restore(vault, id).await?;
     Ok(Redirect::to("/settings/sources"))
 }
 
@@ -558,6 +595,7 @@ struct OutcomesTemplate {
     last_run: Option<String>,
     load_failed: bool,
     retry_path: String,
+    limit: u32,
     rows: Vec<OutcomeRow>,
     next_before: Option<i64>,
 }
@@ -580,6 +618,7 @@ async fn outcomes_page(
         ),
         None => format!("/settings/sources/{id}/outcomes?limit={}", query.limit),
     };
+    let limit = query.limit;
     let (rows, next_before, load_failed) =
         match super::sources::outcome_page(&state, vault, id, query).await {
             Ok(page) => (
@@ -587,7 +626,10 @@ async fn outcomes_page(
                 page.next_before,
                 false,
             ),
-            Err(_) => (Vec::new(), None, true),
+            Err(error) => {
+                tracing::warn!(source = %id, ?error, "Could not load source outcomes");
+                (Vec::new(), None, true)
+            }
         };
     let response_status = if load_failed {
         axum::http::StatusCode::SERVICE_UNAVAILABLE
@@ -608,6 +650,7 @@ async fn outcomes_page(
             .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string()),
         load_failed,
         retry_path,
+        limit,
         rows,
         next_before,
     })?;

@@ -11,8 +11,8 @@
 - [ ] Write failing `skip_veto_precedes_import` and `outcome_payload_excludes_private_input`; retain veto and sanitize event data.
 
 ## 3. User interfaces
-- [ ] Specify exact JSON outcome route and failure statuses; write failing cross-vault and pagination tests, implement API, regenerate OpenAPI and Swift.
-- [ ] Write failing web source outcome display regression; implement recent outcomes and source health using tokens.
+- [x] Specify exact JSON outcome route and failure statuses; write failing cross-vault and pagination tests, implement API, regenerate OpenAPI and Swift.
+- [x] Write failing web source outcome display regression; implement recent outcomes and source health using tokens.
 - [ ] Write failing native outcome loading/error/retry tests; implement source outcome views using tokens.
 - [ ] Integrate shared trigger registry and both builders; test rejection of SkipImport and document actions on non-document outcomes.
 
@@ -28,7 +28,7 @@
 - [x] Add matching reserved SQLite/PostgreSQL schema; SQLite constraints and expired-lease fencing tests pass.
 - [x] Verify PostgreSQL claim/read implementation with an isolated container.
 - [x] Add native outcome component and state model; six isolated regressions pass and component compiles with shared theme.
-- [ ] Connect read-only API, web page, OpenAPI, and generated native adapter.
+- [x] Connect read-only API, web page, OpenAPI, and generated native adapter.
 - [ ] Integrate transactional completion and health publication with the merged shared publisher; adapters currently retain existing ingestion behavior.
 
 ## Landed increments and current verification
@@ -37,7 +37,8 @@
 - [x] Pass the generated native outcome adapter regression. The first full native run had ten attachment-title expectation failures already fixed on main; that fix is now integrated.
 - [x] Verify post-merge identity deduplication, trusted lineage, content-ledger fencing, observed pipeline integration, and folder/email recovery after outcome commit failure.
 - [x] Add explicit managed/configured source context and verify managed ownership and enabled state in claim/completion transactions on both databases. Recheck soft-deletion once the foundation source lifecycle lands.
-- [ ] Implement and verify atomic source status/failure/recovery publication, then finish connected UI and workflow integration.
+- [x] Implement and verify atomic source status/failure/recovery publication.
+- [ ] Finish connected native UI and workflow integration (tracked below).
 
 Completed task-owned build outputs were removed after host disk pressure. No build remains active. Coordinate the next bounded Rust verification and full Apple build with the orchestrator; retain jobs <= 2 and disable debug symbols/incremental compilation for fresh Rust targets.
 
@@ -52,8 +53,13 @@ Current bounded builds are complete. Task-owned Rust output was removed to relea
 ## Merged persistence
 - [x] Merge #293 at ff7c20e with atomic outcome/content-ledger/outbox commits, source health transitions, explicit source origin, both migrations, and regression coverage.
 - [x] Archive the focused ingestion-outcome-persistence spec after verification; retain this broader change for producer and connected UI completion.
-- [ ] Verify restored producer/UI work against merged persistence and subsequent shared contracts.
+- [x] Verify restored producer/UI work against merged persistence and subsequent shared contracts.
 
 ## Producer retry preparation
-- [ ] Run new failed/cancelled folder/email pipeline regressions after the coordinated build queue releases capacity.
+- [x] Run new failed/cancelled folder/email pipeline regressions after the coordinated build queue releases capacity.
 - [ ] Integrate workflow authorization for owner-only non-document events; current engine filters them out. Preserve Owners audience.
+
+## Producer and server UI completion (2026-11-03)
+- [x] Merge origin/main; regenerate OpenAPI. Pass 26 ingest pipeline regressions, the scheduler regression (managed-vault routing, failure/recovery health), and 75 folio-api source/vault/route/workflow tests on SQLite. fmt and clippy are clean for the touched crates.
+- [ ] Native outcome views ship in a separate Apple PR; verified in CI only (local Swift builds paused for disk pressure).
+- [ ] Workflow builder/engine integration for owner-only non-document events remains open.

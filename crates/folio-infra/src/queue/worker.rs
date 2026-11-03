@@ -28,6 +28,24 @@ const EMBED_BATCH_SIZE: usize = 16;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
+struct ProcessingFailure {
+    reason: folio_core::processing_events::ProcessingReason,
+    #[source]
+    source: BoxError,
+}
+
+fn processing_failure(
+    reason: folio_core::processing_events::ProcessingReason,
+    source: impl Into<BoxError>,
+) -> BoxError {
+    Box::new(ProcessingFailure {
+        reason,
+        source: source.into(),
+    })
+}
+
 async fn run_with_lease<T>(
     queue: &JobQueue,
     job: &Job,
@@ -280,7 +298,7 @@ impl Worker {
         let Some(result) = run_with_lease(
             &self.queue,
             &job,
-            self.process_job(&job.job_type).instrument(span.clone()),
+            self.process_claim(&job).instrument(span.clone()),
             Duration::from_secs(HEARTBEAT_SECONDS),
             Duration::from_secs(HEARTBEAT_SECONDS),
         )
@@ -301,7 +319,15 @@ impl Worker {
                 let error_msg = e.to_string();
                 match self
                     .queue
-                    .fail(&job, &error_msg, true)
+                    .fail_with_reason(
+                        &job,
+                        &error_msg,
+                        true,
+                        e.downcast_ref::<ProcessingFailure>().map_or(
+                            folio_core::processing_events::ProcessingReason::ProviderFailed,
+                            |failure| failure.reason,
+                        ),
+                    )
                     .instrument(span.clone())
                     .await
                 {
@@ -342,11 +368,14 @@ impl Worker {
                 .iter()
                 .any(|job| matches!(job.job_type, JobType::PurgeDocument { .. }))
             {
-                self.queue
-                    .enqueue(JobType::PurgeDocument {
+                let job = self.queue.latest_purge_job(document.id).await?.unwrap_or(
+                    JobType::PurgeDocument {
                         document_id: document.id,
-                    })
-                    .await?;
+                        correlation_id: None,
+                        causation_id: None,
+                    },
+                );
+                self.queue.enqueue(job).await?;
             }
         }
 
@@ -426,8 +455,54 @@ impl Worker {
             .is_empty())
     }
 
-    /// Process a single job, then clean up after a document that was deleted while it ran
+    async fn process_claim(&self, job: &Job) -> Result<(), BoxError> {
+        let scope = match super::processing_scope::prepare_claim(&self.queue, job).await? {
+            super::processing_scope::ClaimPreparation::Ready(scope) => scope,
+            super::processing_scope::ClaimPreparation::Obsolete => {
+                if let Some(document_id) = job.job_type.document_id() {
+                    self.purge_if_deleted(document_id).await?;
+                }
+                return Ok(());
+            }
+        };
+        let context = self.queue.context(job.id).await?;
+        if let (Some(vault), Some(document)) = (
+            context.and_then(|context| context.vault_id),
+            job.job_type.document_id(),
+        ) {
+            if self
+                .document_repo
+                .locate(document)
+                .await?
+                .is_some_and(|current| current != vault)
+            {
+                warn!(job.id = %job.id, %document, "Skipping job for a document moved to another vault");
+                return Ok(());
+            }
+        }
+        folio_core::mutation::with_actor(
+            None,
+            folio_core::mutation::with_lineage(
+                context.map(|context| context.lineage),
+                super::processing_scope::with_scope(
+                    scope,
+                    Box::pin(self.process_job_with_claim(&job.job_type, Some(job))),
+                ),
+            ),
+        )
+        .await
+    }
+
+    #[cfg(test)]
     async fn process_job(&self, job_type: &JobType) -> Result<(), BoxError> {
+        self.process_job_with_claim(job_type, None).await
+    }
+
+    async fn process_job_with_claim(
+        &self,
+        job_type: &JobType,
+        claim: Option<&Job>,
+    ) -> Result<(), BoxError> {
         if let Some(document_id) = job_type.document_id() {
             if !matches!(job_type, JobType::PurgeDocument { .. })
                 && self.document_repo.locate(document_id).await?.is_none()
@@ -436,7 +511,14 @@ impl Worker {
                 return Ok(());
             }
         }
-        let result = self.run_job(job_type).await;
+        let result = if matches!(job_type, JobType::ExtractText { .. }) {
+            match claim {
+                Some(job) => Box::pin(self.process_claimed_ocr(job)).await,
+                None => Box::pin(self.run_job(job_type)).await,
+            }
+        } else {
+            Box::pin(self.run_job(job_type)).await
+        };
         if let Some(document_id) = job_type.document_id() {
             if let Err(e) = self.purge_if_deleted(document_id).await {
                 error!("Failed to purge leftovers of deleted document {document_id}: {e}");
@@ -481,7 +563,22 @@ impl Worker {
             }
             JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
             JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
-            JobType::PurgeDocument { document_id } => self.purge_requested(*document_id).await,
+            JobType::PurgeDocument {
+                document_id,
+                correlation_id,
+                causation_id,
+            } => {
+                let lineage =
+                    correlation_id.map(|correlation_id| folio_core::mutation::MutationLineage {
+                        correlation_id,
+                        causation_id: *causation_id,
+                    });
+                folio_core::mutation::with_actor(
+                    None,
+                    folio_core::mutation::with_lineage(lineage, self.purge_requested(*document_id)),
+                )
+                .await
+            }
         }
     }
 
@@ -590,6 +687,61 @@ impl Worker {
                 Err(e)
             }
         }
+    }
+
+    async fn process_claimed_ocr(&self, job: &Job) -> Result<(), BoxError> {
+        use folio_core::processing_events::ProcessingReason;
+        let Some(fence) = self.queue.start_ocr(job).await? else {
+            return Ok(());
+        };
+        let settings = self.pipeline.settings().await;
+        let embed = settings.processing.auto_embed && settings.embeddings.provider != "none";
+        let document = self
+            .document_repo
+            .find_by_id(fence.vault_id(), fence.document_id())
+            .await?
+            .ok_or("Document not found")?;
+        if let Some(content) = document
+            .content
+            .as_deref()
+            .filter(|content| !content.is_empty())
+        {
+            self.queue
+                .complete_ocr(&fence, content, embed)
+                .await
+                .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+            return Ok(());
+        }
+        if settings.ocr.provider == "none" {
+            self.queue
+                .skip_ocr(&fence, embed)
+                .await
+                .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+            return Ok(());
+        }
+        let path = document
+            .file_path
+            .as_ref()
+            .ok_or_else(|| processing_failure(ProcessingReason::StorageFailed, "No file path"))?;
+        let data = self
+            .store
+            .get_bytes(path)
+            .await
+            .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+        let mime_type = document
+            .mime_type
+            .as_deref()
+            .unwrap_or("application/octet-stream");
+        let output = self
+            .ocr_service
+            .extract(&data, mime_type)
+            .await
+            .map_err(|error| processing_failure(ProcessingReason::ProviderFailed, error))?;
+        self.queue
+            .complete_ocr(&fence, &output.text, embed)
+            .await
+            .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
+        Ok(())
     }
 
     /// Process OCR text extraction
@@ -1111,6 +1263,78 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn processing_claim_restores_source_lineage_without_inheriting_actor() {
+        use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
+        let f = fixture("OCR").await;
+        let lineage = MutationLineage {
+            correlation_id: uuid::Uuid::new_v4(),
+            causation_id: Some(uuid::Uuid::new_v4()),
+        };
+        with_lineage(
+            Some(lineage),
+            f.queue.enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+            }),
+        )
+        .await
+        .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        with_actor(
+            Some(folio_core::models::UserId("fixture-user".into())),
+            f.worker.process_claim(&job),
+        )
+        .await
+        .unwrap();
+        let payload: String =
+            sqlx::query_scalar("SELECT payload FROM outbox_events WHERE type = 'ocr_complete'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        let event = folio_core::events::decode_stored_outbox_payload(&payload)
+            .unwrap()
+            .envelope
+            .unwrap();
+        assert_eq!(event.correlation_id(), lineage.correlation_id);
+        assert_eq!(event.causation_id(), lineage.causation_id);
+        assert_eq!(event.actor_id(), None);
+    }
+
+    #[tokio::test]
+    async fn processing_claim_does_not_start_in_a_different_vault() {
+        let f = fixture("OCR").await;
+        f.queue
+            .enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+            })
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        let destination = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO vaults(id, name, created_at, updated_at) VALUES (?, 'Moved', '2026-11-03T00:00:00Z', '2026-11-03T00:00:00Z')")
+            .bind(destination.to_string()).execute(&f.pool).await.unwrap();
+        sqlx::query("UPDATE documents SET vault_id = ? WHERE id = ?")
+            .bind(destination.to_string())
+            .bind(f.doc_id.to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        f.worker.process_claim(&job).await.unwrap();
+        let state: (String, Option<String>) =
+            sqlx::query_as("SELECT ocr_status, content FROM documents WHERE id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(state, ("pending".into(), None));
+        let events: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM outbox_events WHERE type = 'ocr_complete'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(events, 0);
+    }
+
     async fn drain(f: &Fixture) {
         while let Some(job) = f.queue.dequeue().await.unwrap() {
             f.worker.process_job(&job.job_type).await.unwrap();
@@ -1570,6 +1794,8 @@ mod tests {
             .unwrap()
             .unwrap();
 
+        let original_payload = serde_json::to_value(&job.job_type).unwrap();
+        assert!(original_payload["data"]["causation_id"].is_string());
         f.worker.handle_job(job).await;
 
         assert!(f.repo.find_by_id(vault, f.doc_id).await.unwrap().is_none());
@@ -1598,9 +1824,35 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(retry.job_type, JobType::PurgeDocument { .. }));
+        assert_eq!(
+            serde_json::to_value(&retry.job_type).unwrap(),
+            original_payload
+        );
         f.worker.store = f.storage.clone();
 
-        f.worker.handle_job(retry).await;
+        folio_core::mutation::with_actor(
+            Some(folio_core::models::UserId::from("unexpected-parent")),
+            f.worker.handle_job(retry),
+        )
+        .await;
+        let payloads: Vec<(String,)> = sqlx::query_as("SELECT payload FROM outbox_events")
+            .fetch_all(&f.pool)
+            .await
+            .unwrap();
+        let purged = payloads
+            .iter()
+            .map(|(value,)| serde_json::from_str::<serde_json::Value>(value).unwrap())
+            .find(|value| value["envelope"]["event_type"] == "document.purged")
+            .unwrap();
+        assert_eq!(
+            purged["envelope"]["correlation_id"],
+            original_payload["data"]["correlation_id"]
+        );
+        assert_eq!(
+            purged["envelope"]["causation_id"],
+            original_payload["data"]["causation_id"]
+        );
+        assert!(purged["envelope"]["actor_id"].is_null());
 
         assert!(f
             .repo
@@ -1617,6 +1869,8 @@ mod tests {
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None,
             })
             .await
             .unwrap();
@@ -1642,6 +1896,8 @@ mod tests {
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None,
             })
             .await
             .unwrap();
@@ -1684,7 +1940,9 @@ mod tests {
         assert!(f
             .worker
             .process_job(&JobType::PurgeDocument {
-                document_id: f.doc_id
+                document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None
             })
             .await
             .is_err());
@@ -1697,6 +1955,8 @@ mod tests {
         f.worker
             .process_job(&JobType::PurgeDocument {
                 document_id: f.doc_id,
+                correlation_id: None,
+                causation_id: None,
             })
             .await
             .unwrap();

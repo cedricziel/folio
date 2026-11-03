@@ -133,6 +133,22 @@ impl WorkflowTriggerRegistry {
             .find(|definition| definition.event_type == event_type)
     }
 
+    pub fn resolve_candidates<'a>(
+        &'a self,
+        envelope_type: Option<&str>,
+        legacy_type: Option<&str>,
+    ) -> Vec<&'a WorkflowTriggerDefinition> {
+        let mut candidates = Vec::new();
+        for event_type in [envelope_type, legacy_type].into_iter().flatten() {
+            if let Some(definition) = self.get(event_type) {
+                if !candidates.contains(&definition) {
+                    candidates.push(definition);
+                }
+            }
+        }
+        candidates
+    }
+
     /// Every selected trigger must support every action. Does not check access or action fields.
     pub fn validate_actions(&self, selected: &[&str], actions: &[WorkflowAction]) -> Result<()> {
         if selected.is_empty() || actions.is_empty() {
@@ -167,6 +183,39 @@ impl WorkflowTriggerRegistry {
 mod tests {
     use super::*;
     use crate::models::{Id, WorkflowAction};
+
+    #[test]
+    fn candidates_preserve_purge_and_legacy_delete_without_duplicates() {
+        let registry = WorkflowTriggerRegistry::new(vec![
+            definition("document.purged", WorkflowTarget::Event),
+            definition("document.deleted", WorkflowTarget::Event),
+        ])
+        .unwrap();
+        let names = |envelope, legacy| {
+            registry
+                .resolve_candidates(envelope, legacy)
+                .into_iter()
+                .map(|definition| definition.event_type.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(Some("document.purged"), Some("document.deleted")),
+            vec!["document.purged", "document.deleted"]
+        );
+        assert_eq!(
+            names(Some("document.deleted"), Some("document.deleted")),
+            vec!["document.deleted"]
+        );
+        assert_eq!(
+            names(Some("document.unknown"), Some("document.deleted")),
+            vec!["document.deleted"]
+        );
+        assert_eq!(
+            names(None, Some("document.deleted")),
+            vec!["document.deleted"]
+        );
+        assert!(names(Some("document.unknown"), None).is_empty());
+    }
 
     fn definition(event_type: &str, target: WorkflowTarget) -> WorkflowTriggerDefinition {
         WorkflowTriggerDefinition {

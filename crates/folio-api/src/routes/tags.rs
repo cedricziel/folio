@@ -15,6 +15,8 @@ use crate::vault::DefaultVault;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/trash", get(list_tags_trash))
+        .route("/{id}/restore", axum::routing::post(restore_tag))
         .route("/", get(list_tags).post(create_tag))
         .route("/{id}", get(get_tag).put(update_tag).delete(delete_tag))
 }
@@ -180,4 +182,21 @@ pub(crate) async fn delete_tag(
 ) -> ApiResult<StatusCode> {
     state.tag_repo.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(get, path = "/api/tags/trash", operation_id = "listTagsTrash", tag = "tags", responses((status = 200, description = "Deleted entries", body = Vec<Tag>), InternalError))]
+pub(crate) async fn list_tags_trash(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+) -> ApiResult<Json<Vec<Tag>>> {
+    Ok(Json(state.tag_repo.list_trash(vault).await?))
+}
+
+#[utoipa::path(post, path = "/api/tags/{id}/restore", operation_id = "restoreTag", tag = "tags", params(("id" = Uuid, Path, description = "Entry ID")), responses((status = 200, description = "Restored entry", body = Tag), NotFound, Conflict, InternalError))]
+pub(crate) async fn restore_tag(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<Json<Tag>> {
+    Ok(Json(state.tag_repo.restore(vault, id).await?))
 }

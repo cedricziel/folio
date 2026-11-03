@@ -196,8 +196,8 @@ impl IngestPipeline {
     ) -> bool {
         match outcomes.complete(attempt, result, document, claim).await {
             Ok(record) => record.is_some(),
-            Err(_) => {
-                warn!("Could not commit ingestion outcome");
+            Err(error) => {
+                warn!(source = %attempt.source_id, %error, "Could not commit ingestion outcome");
                 false
             }
         }
@@ -551,7 +551,10 @@ impl IngestScheduler {
             };
             let fingerprint =
                 serde_json::to_string(&(&def.name, &def.config, vault)).unwrap_or_default();
-            if running.get(&def.id).is_some_and(|(f, _)| *f == fingerprint) {
+            if running
+                .get(&def.id)
+                .is_some_and(|(f, handle)| *f == fingerprint && !handle.is_finished())
+            {
                 continue;
             }
             if let Some((_, old)) = running.remove(&def.id) {
@@ -574,7 +577,7 @@ impl IngestScheduler {
                 Ok(source) => source,
                 Err(e) => {
                     warn!("Source '{}' cannot start: {e}", def.name);
-                    let status = failed_status(&e.to_string());
+                    let status = failed_status(&e);
                     tokio::spawn(async move {
                         if run.save_status(&status).await.is_err() {
                             warn!("Could not save source startup failure");
@@ -598,10 +601,21 @@ impl IngestScheduler {
     }
 }
 
-fn failed_status(error: &str) -> SourceStatus {
+/// Raw adapter errors can carry hosts, paths or credentials, so clients only see a fixed reason
+fn failure_reason(error: &Error) -> &'static str {
+    match error {
+        Error::Validation(_) | Error::Duplicate { .. } => "The source configuration is invalid",
+        Error::NotFound { .. } => "The source location was not found",
+        Error::Storage(_) => "The source could not be reached or read",
+        Error::Conflict(_) => "The source is busy",
+        Error::Repository(_) | Error::AiService(_) => "Folio could not process this source run",
+    }
+}
+
+fn failed_status(error: &Error) -> SourceStatus {
     SourceStatus {
         last_run_at: Some(Utc::now()),
-        last_error: Some(error.to_string()),
+        last_error: Some(failure_reason(error).to_string()),
         ..Default::default()
     }
 }
@@ -645,6 +659,17 @@ async fn run_source(
             _ = shutdown.changed() => if *shutdown.borrow() { return },
         }
 
+        if run.origin == crate::models::SourceOrigin::Managed {
+            match run.managed.find(run.vault, run.id).await {
+                Ok(Some(def)) if def.enabled => {}
+                Ok(_) => return,
+                Err(error) => {
+                    warn!("Could not verify ingestion source '{name}': {error}");
+                    wait = interval;
+                    continue;
+                }
+            }
+        }
         let (status, next) = match source.poll(sink.as_ref()).await {
             Ok(PollReport {
                 imported,
@@ -663,7 +688,7 @@ async fn run_source(
             ),
             Err(e) => {
                 warn!("Source '{name}' failed: {e}");
-                (failed_status(&e.to_string()), interval)
+                (failed_status(&e), interval)
             }
         };
         if let Err(e) = run.save_status(&status).await {
