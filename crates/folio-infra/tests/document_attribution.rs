@@ -8,12 +8,31 @@ use folio_infra::Database;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
 
+async fn user(r: &folio_infra::Repositories, id: &str) -> UserId {
+    r.auth
+        .create_user(folio_auth::User {
+            id: id.into(),
+            username: id.into(),
+            password_hash: "!".into(),
+            created_at: 1,
+            email: None,
+            display_name: None,
+            is_admin: false,
+            is_owner: false,
+            auth_source: "local".into(),
+            external_id: None,
+        })
+        .await
+        .unwrap();
+    UserId::from(id)
+}
+
 async fn attribution_contract(db: Database) {
     db.migrate().await.unwrap();
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
-    let creator = UserId::from("creator");
-    let uploader = UserId::from("contributor-owner");
+    let creator = user(&r, "creator").await;
+    let uploader = user(&r, "contributor-owner").await;
     let document = with_actor(
         Some(creator.clone()),
         r.documents.create(
@@ -41,7 +60,7 @@ async fn attribution_contract(db: Database) {
     assert_eq!(persisted.created_by, document.created_by);
     assert_eq!(persisted.updated_by, document.updated_by);
 
-    let editor = UserId::from("editor");
+    let editor = user(&r, "editor").await;
     let staged = with_actor(
         Some(creator.clone()),
         r.documents.create_for_upload(
