@@ -6641,6 +6641,16 @@
             "type": "string",
             "format": "date-time"
           },
+          "source_event": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEventIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "version": {
             "type": "integer",
             "format": "int32",
@@ -6918,6 +6928,28 @@
           }
         }
       },
+      "WorkflowEventIdentity": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "mutation_id",
+          "correlation_id"
+        ],
+        "properties": {
+          "correlation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "mutation_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WorkflowInput": {
         "type": "object",
         "description": "Fields for creating or replacing a workflow",
@@ -7034,6 +7066,10 @@
           "document.uploaded",
           "document.processed",
           "document.updated",
+          "document.title_changed",
+          "document.tags_changed",
+          "document.correspondent_changed",
+          "document.document_type_changed",
           "document.deleted",
           "ingest.received"
         ]

@@ -216,6 +216,12 @@ recursive schema references, and preserving API-created groups through HTML edit
 The core suite also verifies trigger registration, duplicate and unknown selections,
 condition catalogs, and action compatibility across document, event, and import targets.
 The API fixture uses temporary SQLite state and loopback webhook receivers.
+For precise metadata transitions, `cargo test -p folio-infra --test workflows`
+checks actual producer dispatch, delayed snapshots, replay deduplication, and
+system-actor lineage after source-outbox deletion. Run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test repository_contract satisfies_the_contract`
+for SQLite/PostgreSQL producer-to-run persistence, and the workflow API suite
+for trigger selection and web-editor roundtrip.
 
 Run `cargo test -p folio-infra --test workflows` and
 `cargo test -p folio-api --test vaults --test live` for immutable event delivery.
