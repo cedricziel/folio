@@ -206,6 +206,51 @@ struct DocumentStatusTests {
 }
 
 @MainActor struct DocumentDetailViewModelTests {
+    @Test func reopeningDetailsRefreshesTheSavedDocumentDate() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter")
+        var saved = original
+        saved.documentDate = try #require(DocumentDate(rawValue: "2026-11-02"))
+        await service.setDocuments([saved])
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        await model.refreshMetadata()
+        #expect(model.document.documentDate == saved.documentDate)
+        #expect(model.metadataFailure == nil)
+    }
+
+    @Test func aSlowRefreshDoesNotRevertASavedDocumentDate() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter", canEditDocumentDate: true)
+        await service.setDocuments([original])
+        await service.suspendDocumentReads()
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let refresh = Task { await model.refreshMetadata() }
+        await service.waitForDocumentRead()
+        let date = try #require(DocumentDate(rawValue: "2024-01-05"))
+        try await model.saveDocumentDate(date)
+        await service.releaseDocumentReads()
+        await refresh.value
+        #expect(model.document.documentDate == date)
+        #expect(model.metadata.first { $0.label == "Document date" }?.value == "2024-01-05")
+    }
+
+    @Test func documentDateSaveAndFailurePreserveImportTime() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter", canEditDocumentDate: true, createdAt: Date(timeIntervalSince1970: 0))
+        await service.setDocuments([original])
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let date = try #require(DocumentDate(rawValue: "1582-10-10"))
+        try await model.saveDocumentDate(date)
+        #expect(model.document.documentDate == date)
+        #expect(model.document.createdAt == original.createdAt)
+        await service.setFailure(.unreachable)
+        await #expect(throws: FolioError.self) { try await model.saveDocumentDate(nil) }
+        #expect(model.document.documentDate == date)
+        await service.setFailure(nil)
+        try await model.saveDocumentDate(nil)
+        #expect(model.document.documentDate == nil)
+    }
+
     @Test func metadataListsRecordsInMono() {
         let model = DocumentDetailViewModel(
             document: Document(

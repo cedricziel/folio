@@ -73,6 +73,40 @@ private let documentJSON = """
     """
 
 @Suite(.serialized) struct LiveFolioServiceTests {
+    @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {
+        let vault = UUID()
+        let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "PATCH")
+            #expect(
+                request.url?.path
+                    == "/api/documents/\(id.uuidString.lowercased())")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(json?["document_date"] is NSNull)
+            return .init(body: Data(documentJSON.utf8))
+        }
+        let document = try await makeService().scoped(to: vault).setDocumentDate(nil, for: id)
+        #expect(document.documentDate == nil)
+    }
+
+    @Test func dateResponsePreservesHistoricalDayAndEditCapability() async throws {
+        StubURLProtocol.handler = { _, _ in
+            let json = documentJSON.replacingOccurrences(
+                of: "\"title\":", with: "\"document_date\":\"1582-10-10\",\"can_edit_document_date\":true,\"title\":")
+            return .init(body: Data(json.utf8))
+        }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.documentDate?.rawValue == "1582-10-10")
+        #expect(document.canEditDocumentDate)
+    }
+
+    @Test func oldServerDoesNotGrantDateEditingCapability() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(documentJSON.utf8)) }
+        let document = try await makeService().document(id: UUID())
+        #expect(!document.canEditDocumentDate)
+    }
+
     private let baseURL = URL(string: "https://folio.example.com")!
 
     private let savedViewJSON = """
@@ -504,6 +538,73 @@ private let documentJSON = """
         }
 
         try await makeService().scoped(to: vault).addTag(tag, to: document)
+    }
+
+    @Test func entryRequestsRetainVaultRetryKeyAndLiteralText() async throws {
+        let vault = UUID()
+        let document = UUID()
+        let entry = UUID()
+        let key = UUID()
+        let body = "<script>literal</script>\nsecond line"
+        let response = try JSONSerialization.data(withJSONObject: [
+            "id": entry.uuidString, "document_id": document.uuidString, "vault_id": vault.uuidString,
+            "kind": "note", "body": body, "created_at": "2026-11-03T01:02:03.123456Z",
+            "updated_at": "2026-11-03T01:02:03Z", "created_by": "author",
+            "can_edit": true, "can_delete": true,
+        ])
+        StubURLProtocol.handler = { request, data in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == key.uuidString.lowercased())
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer entry-token")
+            let json = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: String]
+            #expect(json == ["kind": "note", "body": body])
+            return .init(status: 201, body: response)
+        }
+        let result = try await makeService(token: FixedToken(value: "entry-token")).scoped(to: vault).createEntry(
+            documentID: document, kind: .note, body: body, key: key)
+        #expect(result.body == body)
+        #expect(result.canEdit)
+        #expect(result.vaultID == vault)
+    }
+
+    @Test func entryPagingEscapesCursorAndRetainsCapabilities() async throws {
+        let cursor = "opaque+continuation/="
+        StubURLProtocol.handler = { request, _ in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            #expect(query?.first(where: { $0.name == "cursor" })?.value == cursor)
+            #expect(query?.first(where: { $0.name == "kind" })?.value == "comment")
+            return .init(body: Data("{\"entries\":[],\"next_cursor\":null,\"can_create\":false}".utf8))
+        }
+        let page = try await makeService().entryPage(documentID: UUID(), kind: .comment, cursor: cursor)
+        #expect(!page.canCreate)
+        #expect(page.nextCursor == nil)
+    }
+
+    @Test func entryEditDeleteAndAccessErrors() async throws {
+        let document = UUID()
+        let entry = UUID()
+        StubURLProtocol.handler = { request, data in
+            #expect(request.httpMethod == "PATCH")
+            #expect(
+                request.url?.path.lowercased()
+                    == "/api/documents/\(document.uuidString.lowercased())/entries/\(entry.uuidString.lowercased())")
+            let json = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: String]
+            #expect(json == ["body": "Updated"])
+            return .init(status: 403, body: Data("{\"error\":\"Access revoked\"}".utf8))
+        }
+        await #expect(throws: FolioError.server(status: 403, message: "Access revoked")) {
+            _ = try await makeService().updateEntry(documentID: document, entryID: entry, body: "Updated")
+        }
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "DELETE")
+            return .init(status: 204)
+        }
+        try await makeService().deleteEntry(documentID: document, entryID: entry)
+        StubURLProtocol.handler = { _, _ in .init(body: Data("{}".utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) {
+            _ = try await makeService().entryPage(documentID: document, kind: .note, cursor: nil)
+        }
     }
 
     @Test func surfacesServerErrorMessage() async throws {

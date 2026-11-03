@@ -23,6 +23,7 @@ targets:
       - "../Folio/Sources/InboxView.swift"
       - "../Folio/Sources/DocumentDetailView.swift"
       - "../Folio/Sources/DocumentProcessingView.swift"
+      - "../Folio/Sources/DocumentDiscussionView.swift"
       - "../Folio/Sources/DocumentRowView.swift"
       - "../Folio/Sources/QuickLookPreview.swift"
       - "../Folio/Sources/Commands.swift"

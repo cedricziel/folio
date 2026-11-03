@@ -108,3 +108,32 @@ test.describe("JSON API", () => {
     await request.delete(`/api/documents/${listed.id}`);
   });
 });
+
+test("document date can be saved and cleared without changing import time", async ({ page, request }, testInfo) => {
+  const title = uniqueTitle("document-date");
+  await uploadViaUi(page, title);
+  const response = await request.get("/api/documents");
+  const { documents } = await response.json();
+  const original = documents.find((document: { title: string }) => document.title === title);
+  expect(original).toBeDefined();
+  try {
+    await page.goto(`/documents/${original.id}`);
+    await page.getByLabel("Document date", { exact: true }).fill("2000-02-29");
+    await Promise.all([
+      page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(`/documents/${original.id}/date`)),
+      page.getByRole("button", { name: "Save date", exact: true }).click(),
+    ]);
+    await expect(page.getByLabel("Document date", { exact: true })).toHaveValue("2000-02-29");
+    const dated = await (await request.get(`/api/documents/${original.id}`)).json();
+    expect(dated.document_date).toBe("2000-02-29");
+    expect(dated.created_at).toBe(original.created_at);
+    await page.screenshot({ path: testInfo.outputPath("document-date.png") });
+    await page.getByRole("button", { name: "Clear date", exact: true }).click();
+    await expect(page.getByLabel("Document date", { exact: true })).toHaveValue("");
+    const cleared = await (await request.get(`/api/documents/${original.id}`)).json();
+    expect(cleared.document_date).toBeNull();
+    expect(cleared.created_at).toBe(original.created_at);
+  } finally {
+    await request.delete(`/api/documents/${original.id}`);
+  }
+});

@@ -4,12 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use crate::events::{document_event_envelope, DocumentEvent, EventSnapshot};
-use crate::models::{Document, Id};
+use crate::models::{Document, DocumentDate, Id};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type")]
 pub enum DocumentChange {
+    #[serde(rename = "document.date_changed")]
+    DateChanged {
+        previous_document_date: Option<DocumentDate>,
+        document_date: Option<DocumentDate>,
+    },
     #[serde(rename = "document.title_changed")]
     TitleChanged { before: String, after: String },
     #[serde(rename = "document.correspondent_changed")]
@@ -41,12 +46,14 @@ pub fn document_changes(
 ) -> Vec<DocumentChange> {
     compare_metadata(
         Metadata {
+            document_date: before.document_date,
             title: &before.title,
             correspondent_id: before.correspondent_id,
             document_type_id: before.document_type_id,
         },
         before_tags,
         Metadata {
+            document_date: after.document_date,
             title: &after.title,
             correspondent_id: after.correspondent_id,
             document_type_id: after.document_type_id,
@@ -56,6 +63,7 @@ pub fn document_changes(
 }
 
 struct Metadata<'a> {
+    document_date: Option<DocumentDate>,
     title: &'a str,
     correspondent_id: Option<Id>,
     document_type_id: Option<Id>,
@@ -68,6 +76,12 @@ fn compare_metadata(
     after_tags: &[Id],
 ) -> Vec<DocumentChange> {
     let mut changes = Vec::new();
+    if before.document_date != after.document_date {
+        changes.push(DocumentChange::DateChanged {
+            previous_document_date: before.document_date,
+            document_date: after.document_date,
+        });
+    }
     if before.title != after.title {
         changes.push(DocumentChange::TitleChanged {
             before: before.title.to_owned(),
@@ -122,12 +136,14 @@ pub fn metadata_envelopes(
     let after_tags: Vec<Id> = after.tags.iter().map(|tag| tag.id).collect();
     let changes = compare_metadata(
         Metadata {
+            document_date: before.document_date,
             title: &before.title,
             correspondent_id: before.correspondent_id,
             document_type_id: before.document_type_id,
         },
         &before_tags,
         Metadata {
+            document_date: after.document_date,
             title: &after.title,
             correspondent_id: after.correspondent_id,
             document_type_id: after.document_type_id,
