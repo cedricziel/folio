@@ -70,13 +70,7 @@ struct WorkspaceView: View {
                             Button("More saved views") { Task { await workspace.loadSavedViews(more: true) } }
                         }
                     }
-                    Section("Manage") {
-                        Button {
-                            showTaxonomy = true
-                        } label: {
-                            Label("Classifications", systemImage: "tag")
-                        }
-                    }
+                    manageSection
                 }
             }
             .navigationTitle("Folio")
@@ -172,6 +166,16 @@ struct WorkspaceView: View {
             Button("OK") { workspace.dismissNavigationError() }
         } message: {
             Text(workspace.navigationError ?? "")
+        }
+    }
+
+    private var manageSection: some View {
+        Section("Manage") {
+            Button {
+                showTaxonomy = true
+            } label: {
+                Label("Classifications", systemImage: "tag")
+            }
         }
     }
 
