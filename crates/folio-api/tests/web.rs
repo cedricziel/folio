@@ -302,6 +302,8 @@ async fn unreadable_files_say_so_instead_of_waiting_for_review() {
     .await;
     assert!(page.contains("Text extraction did not finish"));
     assert!(page.contains("The original file is unchanged"));
+    assert!(page.contains("Read it again, or move it to Trash"));
+    assert_eq!(page.matches("Text extraction did not finish").count(), 1);
     assert!(!page.contains("It may be damaged"));
     assert!(!page.contains("Reading"));
 }

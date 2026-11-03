@@ -172,7 +172,7 @@
                 {% when None %}
                 {% if document.ocr_status.as_str() == "failed" %}
                 <div class="f-notice f-notice-danger" role="status">
-                    <p>Text extraction did not finish. The original file is unchanged.</p>
+                    <p>Text extraction did not finish. The original file is unchanged. Read it again, or move it to Trash.</p>
                 </div>
                 {% else %}
                 <p><span class="f-status f-status-pending">{{ reading }}</span></p>
