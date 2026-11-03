@@ -90,7 +90,12 @@ impl PostgresVaultRepository {
         Self { pool }
     }
 
-    async fn insert_vault(&self, name: &str, owner: Option<&UserId>) -> Result<Vault> {
+    async fn insert_vault(
+        &self,
+        name: &str,
+        owner: Option<&UserId>,
+        publish: bool,
+    ) -> Result<Vault> {
         let name = checked_name(name)?;
         let mut tx = self.pool.begin().await.map_err(db)?;
         if let Some(owner) = owner {
@@ -122,7 +127,10 @@ impl PostgresVaultRepository {
             deleted_at: None,
         };
         let mutation = Uuid::new_v4();
-        emit_vault(&mut tx, &created, "created", mutation).await?;
+        // Bootstrapping the instance default is not a lifecycle transition anyone requested.
+        if publish {
+            emit_vault(&mut tx, &created, "created", mutation).await?;
+        }
         if let Some(owner) = owner {
             let principal = Principal::User(owner.clone());
             write_grant(
@@ -182,7 +190,7 @@ impl PostgresVaultRepository {
 #[async_trait]
 impl VaultRepository for PostgresVaultRepository {
     async fn create(&self, name: &str, owner: Option<&UserId>) -> Result<Vault> {
-        self.insert_vault(name, owner).await
+        self.insert_vault(name, owner, true).await
     }
 
     async fn find(&self, id: VaultId) -> Result<Option<Vault>> {
@@ -356,7 +364,7 @@ impl VaultRepository for PostgresVaultRepository {
         if let Some((id,)) = oldest {
             return Ok(VaultId(id));
         }
-        Ok(self.insert_vault("Archive", None).await?.id)
+        Ok(self.insert_vault("Archive", None, false).await?.id)
     }
 }
 
