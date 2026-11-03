@@ -21,7 +21,11 @@ public final class SourceActivityViewModel {
         requestID = request
         isLoading = true
         error = nil
-        defer { if requestID == request { isLoading = false } }
+        defer {
+            if requestID == request {
+                isLoading = false
+            }
+        }
         do {
             let sources = try await service.sourceActivity(vaultID: vaultID)
             guard requestID == request, !Task.isCancelled else { return }
@@ -31,7 +35,7 @@ public final class SourceActivityViewModel {
         } catch is CancellationError {
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
-            error = "Could not load sources. Try again."
+            self.error = "Could not load sources. Try again."
         }
     }
 }
