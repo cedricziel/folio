@@ -18,6 +18,7 @@ fn snapshot() -> EventSnapshot {
         file_path: Some("private/storage/key".into()),
         source: DocumentSource::default(),
         created_at: Utc::now(),
+        document_date: None,
         correspondent_id: None,
         correspondent_name: None,
         document_type_id: None,
