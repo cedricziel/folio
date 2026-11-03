@@ -218,6 +218,22 @@ struct DocumentStatusTests {
         #expect(model.metadataFailure == nil)
     }
 
+    @Test func aSlowRefreshDoesNotRevertASavedDocumentDate() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter", canEditDocumentDate: true)
+        await service.setDocuments([original])
+        await service.suspendDocumentReads()
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let refresh = Task { await model.refreshMetadata() }
+        await service.waitForDocumentRead()
+        let date = try #require(DocumentDate(rawValue: "2024-01-05"))
+        try await model.saveDocumentDate(date)
+        await service.releaseDocumentReads()
+        await refresh.value
+        #expect(model.document.documentDate == date)
+        #expect(model.metadata.first { $0.label == "Document date" }?.value == "2024-01-05")
+    }
+
     @Test func documentDateSaveAndFailurePreserveImportTime() async throws {
         let service = MockFolioService()
         let original = Document(title: "Letter", canEditDocumentDate: true, createdAt: Date(timeIntervalSince1970: 0))

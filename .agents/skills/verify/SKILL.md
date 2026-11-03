@@ -518,6 +518,9 @@ Inspect its image diffs and update affected baselines before merging.
 
 ## Verify typed metadata fields and options
 
+Run `cargo test -p folio-core --lib --features openapi` for complete long-text event
+snapshots, exact serialized-byte limits, and audience/target validation on decode.
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields --test metadata_options`
 with task-owned build storage, at most two jobs, incremental compilation disabled,
 and zero debug symbols when capacity is constrained. The shared contract uses a
