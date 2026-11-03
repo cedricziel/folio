@@ -3,6 +3,7 @@
 
 ## 2. Atomic processing
 - [x] Persist enqueue-time vault and lineage; restore system attribution and reject moved work before execution. Merged in PR #288.
+- [ ] Constrained stage-run storage, canonical event builders, fenced OCR stage transitions with atomic embedding assignment, and stage-aware retry and lease recovery in both databases merged in PR #307. Embedding and thumbnail stage transitions remain.
 - [x] Commit OCR state and legacy completion events atomically; verify `ocr_completion_contract` on both databases and `retry_after_empty_ocr_completion_does_not_repeat_ocr_or_its_event`. Merged in PR #274, commit 3aa4d1f.
 - [x] Reject incomplete or malformed embedding batches before storage/completion; prove with `missing_embedding_vectors_never_publish_completion` and `embedding_batch`. Merged in PR #268, commit b40a353.
 - [x] Add attempt transition model after failing `processing_attempts` tests for retry, terminal outcomes, stale attempts, duplicate completion, persisted-state restoration, and counter exhaustion. Core suite passes; merged in PR #270, commit 2353a4d. Database integration remains pending.
