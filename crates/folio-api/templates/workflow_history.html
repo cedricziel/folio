@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<section class="page">
+    <header class="page-head">
+        {% if deleted %}<a href="{{ "/workflows?deleted=true"|vault_url }}" class="back-link">Deleted workflows</a>{% else %}<a href="{{ "/workflows"|vault_url }}" class="back-link">Workflows</a>{% endif %}
+        <div class="page-head-row">
+            <h1 class="title">{{ name }} history</h1>
+            {% if deleted %}
+            <form action="{{ "/workflows"|vault_url }}/{{ id }}/restore" method="post" data-turbo="false">
+                <button type="submit" class="f-btn f-btn-primary">Restore</button>
+            </form>
+            {% else %}<a href="{{ "/workflows"|vault_url }}/{{ id }}" class="f-btn">Edit workflow</a>{% endif %}
+        </div>
+        <p class="f-meta">{{ lifecycle_summary }}</p>
+        {% if deleted %}<p class="lede">Pending runs were stopped when this workflow was deleted. Restoring preserves history and resumes enabled workflows for future events.</p>{% endif %}
+    </header>
+    {% if runs.is_empty() %}<div class="f-notice"><p>No runs yet.</p></div>{% else %}
+    <p class="f-meta">The 20 most recent runs are shown. Times are UTC.</p>
+    <div class="f-list">
+        {% for run in runs %}
+        <div class="f-row f-row-plain">
+            <div class="row-main">
+                <div class="f-row-sub"><span>{{ run.event }}</span> <span class="f-status {{ run.status_class }}">{{ run.status_label }}</span> <span class="f-meta">{{ run.created }}</span></div>
+                <div class="f-row-sub"><span class="f-meta">{{ run.attempts }} attempts</span>{% match run.response_status %}{% when Some with (status) %}<span class="f-meta">HTTP {{ status }}</span>{% when None %}{% endmatch %}</div>
+                {% match run.error %}{% when Some with (error) %}<p>{{ error }}</p>{% when None %}{% endmatch %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
