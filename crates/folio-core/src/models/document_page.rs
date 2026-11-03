@@ -63,6 +63,7 @@ impl DocumentPageQuery {
 
     /// Reject invalid limits and continuations belonging to another query.
     pub fn validate(&self, vault: VaultId) -> Result<()> {
+        self.filter.validate()?;
         if !(1..=100).contains(&self.limit) {
             return Err(Error::Validation(
                 "Page limit must be between 1 and 100".into(),

@@ -1226,6 +1226,32 @@
         "operationId": "listDocuments",
         "parameters": [
           {
+            "name": "reviewed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "document_date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "document_date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
             "name": "correspondent_id",
             "in": "query",
             "description": "Only return documents from this correspondent",
@@ -1461,6 +1487,32 @@
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "reviewed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "document_date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "document_date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
             }
           },
           {
@@ -2731,6 +2783,111 @@
           },
           "409": {
             "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/documents/{id}/review": {
+      "put": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "setDocumentReview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Document ID",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Document with its explicit review decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Missing boolean review state or unsupported field",
             "content": {
               "application/json": {
                 "schema": {
@@ -4132,6 +4289,32 @@
             }
           },
           {
+            "name": "reviewed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "document_date_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "document_date_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
             "name": "correspondent_id",
             "in": "query",
             "description": "Only return documents from this correspondent",
@@ -5323,6 +5506,9 @@
               "null"
             ]
           },
+          "supports_document_review_filters": {
+            "type": "boolean"
+          },
           "vault_id": {
             "type": "string",
             "format": "uuid"
@@ -5981,12 +6167,32 @@
             "format": "date-time",
             "description": "Only documents created strictly before this instant"
           },
+          "document_date_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "document_date_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
           "document_type_id": {
             "type": [
               "string",
               "null"
             ],
             "format": "uuid"
+          },
+          "reviewed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           },
           "search_query": {
             "type": [
@@ -6025,8 +6231,23 @@
             "items": {
               "$ref": "#/components/schemas/DocumentView"
             }
+          },
+          "supports_document_review_filters": {
+            "type": "boolean"
           }
         }
+      },
+      "DocumentReviewRequest": {
+        "type": "object",
+        "required": [
+          "reviewed"
+        ],
+        "properties": {
+          "reviewed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       },
       "DocumentSort": {
         "type": "string",
@@ -6180,6 +6401,9 @@
               "can_edit_document_date": {
                 "type": "boolean"
               },
+              "can_review_document": {
+                "type": "boolean"
+              },
               "correspondent": {
                 "type": [
                   "string",
@@ -6193,6 +6417,9 @@
                   "null"
                 ],
                 "description": "Name of the document type, when one is set"
+              },
+              "reviewed": {
+                "type": "boolean"
               },
               "tags": {
                 "type": "array",

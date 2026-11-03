@@ -19,6 +19,9 @@
       <input type="hidden" name="created_before_original" value="{{ before_original }}">
       <label>Added on or after (UTC)<input class="input" type="datetime-local" step="any" name="created_after" value="{{ after }}"></label>
       <label>Added before (UTC)<input class="input" type="datetime-local" step="any" name="created_before" value="{{ before }}"></label>
+      <label>Review<select class="select" name="reviewed"><option value="" {% if reviewed.is_empty() %}selected{% endif %}>Any review state</option><option value="false" {% if reviewed == "false" %}selected{% endif %}>Not reviewed</option><option value="true" {% if reviewed == "true" %}selected{% endif %}>Reviewed</option></select></label>
+      <label>Document date from<input class="input" type="date" name="document_date_from" value="{{ document_date_from }}" min="0001-01-01" max="9999-12-31"></label>
+      <label>Document date to<input class="input" type="date" name="document_date_to" value="{{ document_date_to }}" min="0001-01-01" max="9999-12-31"></label>
       <label>Sort<select class="select" name="sort"><option value="newest" {% if sort == "newest" %}selected{% endif %}>Newest first</option><option value="oldest" {% if sort == "oldest" %}selected{% endif %}>Oldest first</option><option value="title" {% if sort == "title" %}selected{% endif %}>Title</option></select></label>
       <label>Display<select class="select" name="presentation"><option value="list" {% if presentation == "list" %}selected{% endif %}>List</option><option value="grid" {% if presentation == "grid" %}selected{% endif %}>Grid</option></select></label>
       <label>Visible to<select class="select" name="visibility"><option value="private" {% if !shared %}selected{% endif %}>Only me</option>{% if can_share %}<option value="shared" {% if shared %}selected{% endif %}>Everyone in this vault</option>{% endif %}</select></label>
