@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentSource, Id, VaultId};
+use super::{DocumentSource, Id, UserId, VaultId};
 use crate::error::{Error, Result};
 
 /// Marker shown instead of a stored password
@@ -249,10 +249,26 @@ pub enum SourceOrigin {
     Managed,
 }
 
+/// Audit metadata retained for managed sources, including sources moved to trash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SourceLifecycle {
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub created_by: Option<UserId>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub updated_by: Option<UserId>,
+}
+
 /// A configured ingestion source
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct IngestionSourceDef {
+    /// Configured sources have no persisted lifecycle record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<SourceLifecycle>,
     #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
     pub id: Id,
     pub name: String,
