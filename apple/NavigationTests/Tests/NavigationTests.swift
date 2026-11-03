@@ -80,7 +80,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["Updated"].exists)
 
         app.buttons["document-entry-delete"].tap()
-        let confirm = app.buttons["confirm-entry-delete"]
+        let confirm = app.sheets["Delete this note?"].buttons["confirm-entry-delete"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         confirm.tap()
         XCTAssertTrue(revised.waitForNonExistence(timeout: 5), app.debugDescription)
