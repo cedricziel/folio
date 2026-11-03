@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{Document, DocumentSource, Id, SourceConditions, UserId, VaultId};
+use super::{
+    Document, DocumentSource, Id, SourceConditions, UserId, VaultId, WorkflowEventConditions,
+    WorkflowEventIdentity, WorkflowTarget,
+};
 use crate::error::{Error, Result};
 
 /// Events a workflow can listen for
@@ -21,6 +24,14 @@ pub enum WorkflowTrigger {
     /// A document's metadata changed
     #[serde(rename = "document.updated")]
     DocumentUpdated,
+    #[serde(rename = "document.title_changed")]
+    DocumentTitleChanged,
+    #[serde(rename = "document.tags_changed")]
+    DocumentTagsChanged,
+    #[serde(rename = "document.correspondent_changed")]
+    DocumentCorrespondentChanged,
+    #[serde(rename = "document.document_type_changed")]
+    DocumentTypeChanged,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -31,10 +42,14 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 5] = [
+    pub const ALL: [WorkflowTrigger; 9] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
+        Self::DocumentTitleChanged,
+        Self::DocumentTagsChanged,
+        Self::DocumentCorrespondentChanged,
+        Self::DocumentTypeChanged,
         Self::DocumentDeleted,
         Self::IngestReceived,
     ];
@@ -45,6 +60,10 @@ impl WorkflowTrigger {
             Self::DocumentUploaded => "document.uploaded",
             Self::DocumentProcessed => "document.processed",
             Self::DocumentUpdated => "document.updated",
+            Self::DocumentTitleChanged => "document.title_changed",
+            Self::DocumentTagsChanged => "document.tags_changed",
+            Self::DocumentCorrespondentChanged => "document.correspondent_changed",
+            Self::DocumentTypeChanged => "document.document_type_changed",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
         }
@@ -56,8 +75,26 @@ impl WorkflowTrigger {
             Self::DocumentUploaded => "When a document is added",
             Self::DocumentProcessed => "When a document has been read",
             Self::DocumentUpdated => "When a document's details change",
+            Self::DocumentTitleChanged => "When a document title changes",
+            Self::DocumentTagsChanged => "When document tags change",
+            Self::DocumentCorrespondentChanged => "When a document correspondent changes",
+            Self::DocumentTypeChanged => "When a document type changes",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
+        }
+    }
+
+    pub fn target(&self) -> WorkflowTarget {
+        match self {
+            Self::DocumentUploaded
+            | Self::DocumentProcessed
+            | Self::DocumentUpdated
+            | Self::DocumentTitleChanged
+            | Self::DocumentTagsChanged
+            | Self::DocumentCorrespondentChanged
+            | Self::DocumentTypeChanged => WorkflowTarget::Document,
+            Self::DocumentDeleted => WorkflowTarget::Event,
+            Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
     }
 
@@ -106,6 +143,9 @@ pub struct WorkflowConditions {
     #[serde(default, skip_serializing_if = "SourceConditions::is_empty")]
     pub source: SourceConditions,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<WorkflowEventConditions>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(feature = "openapi", schema(no_recursion))]
     pub all: Vec<WorkflowConditions>,
@@ -134,6 +174,9 @@ impl WorkflowConditions {
                 ));
             }
             conditions.source.validate()?;
+            if let Some(event) = &conditions.event {
+                event.validate()?;
+            }
             for child in conditions
                 .all
                 .iter()
@@ -171,7 +214,85 @@ impl WorkflowConditions {
         )
     }
 
+    /// Matches one occurrence without substituting current metadata for missing snapshots.
+    pub fn matches_occurrence(
+        &self,
+        snapshot: Option<&crate::EventSnapshot>,
+        event: &crate::DomainEventEnvelope,
+    ) -> bool {
+        if snapshot.is_some_and(|snapshot| {
+            snapshot.vault_id != event.vault_id()
+                || Some(snapshot.document_id) != event.document_id()
+        }) {
+            return false;
+        }
+        let tag_ids: Vec<_> = snapshot
+            .map(|snapshot| snapshot.tags.iter().map(|tag| tag.id).collect())
+            .unwrap_or_default();
+        self.matches_occurrence_parts(snapshot, event, &tag_ids)
+    }
+
+    fn matches_occurrence_parts(
+        &self,
+        snapshot: Option<&crate::EventSnapshot>,
+        event: &crate::DomainEventEnvelope,
+        tag_ids: &[Id],
+    ) -> bool {
+        self.event
+            .as_ref()
+            .is_none_or(|condition| condition.matches(event))
+            && match snapshot {
+                Some(snapshot) => self.matches_metadata_leaf(
+                    snapshot.mime_type.as_deref(),
+                    snapshot.original_filename.as_deref(),
+                    &snapshot.source,
+                    tag_ids,
+                    snapshot.correspondent_id,
+                    snapshot.document_type_id,
+                ),
+                None => {
+                    self.mime_type.is_none()
+                        && self.filename_glob.is_none()
+                        && self.tag_id.is_none()
+                        && self.correspondent_id.is_none()
+                        && self.document_type_id.is_none()
+                        && self.source.is_empty()
+                }
+            }
+            && self.matches_groups(|child| child.matches_occurrence_parts(snapshot, event, tag_ids))
+    }
+
     fn matches_metadata(
+        &self,
+        mime: Option<&str>,
+        filename: Option<&str>,
+        source: &DocumentSource,
+        tag_ids: &[Id],
+        correspondent_id: Option<Id>,
+        document_type_id: Option<Id>,
+    ) -> bool {
+        self.event.is_none()
+            && self.matches_metadata_leaf(
+                mime,
+                filename,
+                source,
+                tag_ids,
+                correspondent_id,
+                document_type_id,
+            )
+            && self.matches_groups(|child| {
+                child.matches_metadata(
+                    mime,
+                    filename,
+                    source,
+                    tag_ids,
+                    correspondent_id,
+                    document_type_id,
+                )
+            })
+    }
+
+    fn matches_metadata_leaf(
         &self,
         mime: Option<&str>,
         filename: Option<&str>,
@@ -188,16 +309,16 @@ impl WorkflowConditions {
             && self
                 .document_type_id
                 .is_none_or(|id| document_type_id == Some(id))
-            && self.matches_groups(|child| {
-                child.matches_metadata(
-                    mime,
-                    filename,
-                    source,
-                    tag_ids,
-                    correspondent_id,
-                    document_type_id,
-                )
-            })
+    }
+
+    fn requires_event_context(&self) -> bool {
+        self.event.is_some()
+            || self
+                .all
+                .iter()
+                .chain(self.any.iter().flatten())
+                .chain(&self.none)
+                .any(Self::requires_event_context)
     }
 
     fn matches_groups(&self, matches: impl Fn(&Self) -> bool) -> bool {
@@ -390,17 +511,20 @@ impl WorkflowInput {
                 }
                 _ => {}
             }
-            if self.trigger == WorkflowTrigger::DocumentDeleted && !action.is_webhook() {
-                return invalid("Only webhook actions can run when a document is deleted");
-            }
-            let skips = matches!(action, WorkflowAction::SkipImport);
-            if skips != (self.trigger == WorkflowTrigger::IngestReceived) {
-                return invalid(
-                    "ingest.received workflows take only skip_import, and skip_import needs that trigger",
-                );
+            if !self.trigger.target().accepts(action) {
+                return invalid(if self.trigger == WorkflowTrigger::DocumentDeleted {
+                    "Only webhook actions can run when a document is deleted"
+                } else {
+                    "ingest.received workflows take only skip_import, and skip_import needs that trigger"
+                });
             }
         }
         self.conditions.validate()?;
+        if self.trigger == WorkflowTrigger::IngestReceived
+            && self.conditions.requires_event_context()
+        {
+            return invalid("Pre-import workflows do not have a committed event actor or subject");
+        }
         Ok(())
     }
 }
@@ -511,6 +635,19 @@ pub struct WorkflowRun {
 }
 
 impl WorkflowRun {
+    pub fn source_identity(&self) -> Result<Option<WorkflowEventIdentity>> {
+        #[derive(Deserialize)]
+        struct Context {
+            #[serde(default)]
+            source_event: Option<WorkflowEventIdentity>,
+        }
+        serde_json::from_str::<Context>(&self.payload)
+            .map(|context| context.source_event)
+            .map_err(|error| {
+                Error::Repository(format!("Invalid captured workflow payload: {error}"))
+            })
+    }
+
     pub fn new(
         vault_id: VaultId,
         workflow_id: Id,
@@ -559,6 +696,162 @@ mod tests {
         Document::new(VaultId::new(), "t")
             .with_filename(filename)
             .with_mime_type(mime)
+    }
+
+    fn note_event(actor: Option<&str>) -> crate::DomainEventEnvelope {
+        let event = crate::DomainEventEnvelope::new(
+            "document_note.created",
+            VaultId::new(),
+            crate::DomainEventSubject {
+                subject_type: "document_note".into(),
+                id: Id::from_u128(1),
+            },
+            Some(Id::new_v4()),
+            crate::EventAudience::Vault,
+            serde_json::json!({"entry_kind": "note", "transition": "created"}),
+        )
+        .unwrap();
+        let mut encoded = serde_json::to_value(event).unwrap();
+        encoded["actor_id"] = serde_json::json!(actor);
+        serde_json::from_value(encoded).unwrap()
+    }
+
+    #[test]
+    fn event_conditions_match_only_the_selected_user_and_subject() {
+        let event = note_event(Some("editor"));
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: Some(event.subject().id),
+                actor: Some(crate::models::WorkflowActorCondition::User {
+                    user_id: "editor".into(),
+                }),
+            }),
+            ..Default::default()
+        };
+        assert!(conditions.matches_occurrence(None, &event));
+        assert!(!conditions.matches_occurrence(None, &note_event(Some("other"))));
+        assert!(!conditions.matches_occurrence(None, &note_event(None)));
+    }
+
+    #[test]
+    fn event_conditions_reject_a_different_subject() {
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: Some(Id::from_u128(2)),
+                actor: None,
+            }),
+            ..Default::default()
+        };
+        assert!(!conditions.matches_occurrence(None, &note_event(Some("editor"))));
+    }
+
+    #[test]
+    fn pre_import_conditions_reject_nested_committed_event_filters() {
+        let mut workflow = input(
+            WorkflowTrigger::IngestReceived,
+            vec![WorkflowAction::SkipImport],
+        );
+        workflow.conditions.all = vec![WorkflowConditions {
+            event: Some(WorkflowEventConditions::default()),
+            ..Default::default()
+        }];
+        assert!(workflow.validate().is_err());
+    }
+
+    #[test]
+    fn system_actor_conditions_require_an_explicit_null_actor() {
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: None,
+                actor: Some(crate::models::WorkflowActorCondition::System),
+            }),
+            ..Default::default()
+        };
+        assert!(conditions.matches_occurrence(None, &note_event(None)));
+        assert!(!conditions.matches_occurrence(None, &note_event(Some("editor"))));
+    }
+
+    #[test]
+    fn event_conditions_require_the_same_any_branch_to_match() {
+        let event = note_event(Some("editor"));
+        let mut document = doc("invoice.pdf", "application/pdf");
+        document.id = event.document_id().unwrap();
+        document.vault_id = event.vault_id();
+        let snapshot = crate::EventSnapshot::from(&crate::events::DeletedDocument {
+            document,
+            tags: vec![],
+        });
+        let conditions = WorkflowConditions {
+            any: Some(vec![
+                WorkflowConditions {
+                    mime_type: Some("application/pdf".into()),
+                    event: Some(WorkflowEventConditions {
+                        subject_id: None,
+                        actor: Some(crate::models::WorkflowActorCondition::System),
+                    }),
+                    ..Default::default()
+                },
+                WorkflowConditions {
+                    mime_type: Some("image/*".into()),
+                    event: Some(WorkflowEventConditions {
+                        subject_id: Some(event.subject().id),
+                        actor: None,
+                    }),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        };
+        assert!(!conditions.matches_occurrence(Some(&snapshot), &event));
+        assert!(!conditions.matches_occurrence(None, &event));
+    }
+
+    #[test]
+    fn event_conditions_reject_unavailable_body_filters() {
+        assert!(
+            serde_json::from_value::<WorkflowEventConditions>(serde_json::json!({
+                "body": "secret"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn missing_event_context_does_not_satisfy_event_conditions() {
+        let conditions = WorkflowConditions {
+            event: Some(WorkflowEventConditions {
+                subject_id: None,
+                actor: Some(crate::models::WorkflowActorCondition::System),
+            }),
+            ..Default::default()
+        };
+        let document = Document::new(VaultId::new(), "invoice");
+        assert!(!conditions.matches(&document, &[]));
+    }
+
+    #[test]
+    fn nested_event_actor_ids_are_validated() {
+        let conditions = WorkflowConditions {
+            none: vec![WorkflowConditions {
+                event: Some(WorkflowEventConditions {
+                    subject_id: None,
+                    actor: Some(crate::models::WorkflowActorCondition::User {
+                        user_id: "  ".into(),
+                    }),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(conditions.validate().is_err());
+    }
+
+    #[test]
+    fn metadata_transition_triggers_are_selectable() {
+        assert!(WorkflowTrigger::parse("document.title_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.tags_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.correspondent_changed").is_some());
+        assert!(WorkflowTrigger::parse("document.document_type_changed").is_some());
     }
 
     #[test]

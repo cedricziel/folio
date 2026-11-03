@@ -91,6 +91,7 @@ pub async fn harness_with(
     let state = AppState::new(
         repos.saved_views,
         repos.documents,
+        repos.entries,
         repos.tags,
         repos.correspondents,
         repos.document_types,

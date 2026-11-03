@@ -99,6 +99,21 @@ async fn update_document_changes_fields() {
     )
     .await;
 
+    let events = fx
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100)
+        .await
+        .unwrap();
+    let title_event = events
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .find(|event| event.event_type() == "document.title_changed")
+        .unwrap();
+    assert_eq!(title_event.document_id(), Some(doc.id));
+    assert_eq!(title_event.vault_id(), fx.vault);
+    assert_eq!(title_event.data()["before"], "Scan 001");
+    assert_eq!(title_event.data()["after"], "Rent contract");
+
     let out = call_ok(&client, "get_document", json!({"id": id})).await;
     assert_eq!(out["title"], "Rent contract");
     assert_eq!(out["correspondent"], "ACME Housing");

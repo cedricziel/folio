@@ -62,6 +62,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let state = AppState::new(
         repos.saved_views,
         repos.documents,
+        repos.entries,
         repos.tags,
         repos.correspondents,
         repos.document_types,
@@ -846,4 +847,68 @@ async fn classification_forms_reject_invalid_or_missing_ids_without_clearing() {
             }
         }
     }
+}
+
+async fn classification_form_emits_a_transition(prefix: &str) {
+    let app = test_app().await;
+    let correspondent = app
+        .state
+        .correspondent_repo
+        .create(
+            app.vault,
+            CreateCorrespondent {
+                name: "Event sender".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let document = app
+        .state
+        .document_repo
+        .create(
+            app.vault,
+            CreateDocument {
+                title: "HTTP transition".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(format!("{prefix}/{}/correspondent", document.id))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("correspondent_id={}", correspondent.id)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let events = app
+        .state
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100)
+        .await
+        .unwrap();
+    let transition = events
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .find(|event| event.event_type() == "document.correspondent_changed")
+        .unwrap();
+    assert_eq!(transition.vault_id(), app.vault);
+    assert_eq!(transition.document_id(), Some(document.id));
+    assert!(transition.data()["before_id"].is_null());
+    assert_eq!(transition.data()["after_id"], correspondent.id.to_string());
+}
+
+#[tokio::test]
+async fn html_classification_form_publishes_the_committed_transition() {
+    classification_form_emits_a_transition("/documents").await;
+}
+
+#[tokio::test]
+async fn api_classification_form_publishes_the_committed_transition() {
+    classification_form_emits_a_transition("/api/documents").await;
 }

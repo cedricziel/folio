@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { loadDiscussion } from "./fixtures";
 import { config, tour, TourInstance, viewportsFor } from "./tour";
 
 // Baselines are rendered on Linux (CI or the Playwright container, see
@@ -23,6 +24,7 @@ for (const screen of config.screens.filter((s) => s.snapshot)) {
         const context = await instance.context(browser, screen, viewport, theme);
         const page = await context.newPage();
         await tour.openScreen(page, screen);
+        await loadDiscussion(page);
         await expect(page).toHaveScreenshot(`${screen.name}-${viewport.name}-${theme}.png`, {
           fullPage: true,
           animations: "disabled",
