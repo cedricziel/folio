@@ -790,20 +790,52 @@ async fn disabled_embedding_skips_text_without_queueing(db: &Database) {
     fixture.finish().await;
 }
 
+async fn superseded_embedding_run_keeps_ocr_result(db: &Database) {
+    let fixture = Fixture::new(db).await;
+    let fence = fixture.start().await.unwrap().unwrap();
+    fixture
+        .update(format!(
+            "UPDATE processing_stage_runs SET is_current = FALSE WHERE id = '{}'",
+            fixture.embedding_run
+        ))
+        .await;
+    let embed_status = fixture.embedding_state().await.5;
+    assert!(fixture
+        .complete(&fence, "text racing a re-embed")
+        .await
+        .unwrap());
+    assert_eq!(
+        fixture.state().await,
+        (
+            "completed".into(),
+            1,
+            Some("text racing a re-embed".into()),
+            "done".into()
+        )
+    );
+    assert!(fixture.embedding_jobs().await.is_empty());
+    let embedding = fixture.embedding_state().await;
+    assert_eq!(embedding.0, "pending");
+    assert_eq!(embedding.5, embed_status);
+    assert_eq!(fixture.events().await.len(), 2);
+    fixture.finish().await;
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
-    duplicate_empty_completion_is_one_combined_event(db).await;
-    outbox_rejection_rolls_back_start_and_completion(db).await;
-    embedding_enqueue_failure_rolls_back_ocr_and_events(db).await;
-    disabled_ocr_skips_empty_embedding_without_ocr_complete(db).await;
-    embedding_skip_outbox_failure_rolls_back_ocr_completion(db).await;
-    disabled_ocr_preserves_content_and_assigns_embedding(db).await;
-    disabled_embedding_skips_text_without_queueing(db).await;
-    expired_and_replaced_claims_cannot_publish(db).await;
-    moved_and_trashed_documents_cannot_publish(db).await;
-    noncurrent_and_revision_backed_runs_cannot_execute(db).await;
-    retry_counts_stage_starts_separately_from_queue_attempts(db).await;
-    changed_job_group_and_missing_lineage_reject_existing_fences(db).await;
+    Box::pin(duplicate_empty_completion_is_one_combined_event(db)).await;
+    Box::pin(outbox_rejection_rolls_back_start_and_completion(db)).await;
+    Box::pin(embedding_enqueue_failure_rolls_back_ocr_and_events(db)).await;
+    Box::pin(disabled_ocr_skips_empty_embedding_without_ocr_complete(db)).await;
+    Box::pin(embedding_skip_outbox_failure_rolls_back_ocr_completion(db)).await;
+    Box::pin(disabled_ocr_preserves_content_and_assigns_embedding(db)).await;
+    Box::pin(disabled_embedding_skips_text_without_queueing(db)).await;
+    Box::pin(superseded_embedding_run_keeps_ocr_result(db)).await;
+    Box::pin(expired_and_replaced_claims_cannot_publish(db)).await;
+    Box::pin(moved_and_trashed_documents_cannot_publish(db)).await;
+    Box::pin(noncurrent_and_revision_backed_runs_cannot_execute(db)).await;
+    Box::pin(retry_counts_stage_starts_separately_from_queue_attempts(db)).await;
+    Box::pin(changed_job_group_and_missing_lineage_reject_existing_fences(db)).await;
 }
 
 #[tokio::test]

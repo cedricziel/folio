@@ -198,12 +198,22 @@ async fn finish_ocr(
     if changed.rows_affected() == 0 {
         return Ok(false);
     }
+    // A newer processing group may own embedding; its status and job stay untouched.
+    let owns_embedding: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM processing_stage_runs WHERE group_id = ? AND document_id = ?
+             AND stage = 'embedding' AND is_current = 1 AND revision_id IS NULL)",
+    )
+    .bind(fence.group_id.to_string())
+    .bind(fence.document_id.to_string())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(repo_err)?;
     sqlx::query(
-        "UPDATE documents SET content = ?, ocr_status = ?, embed_status = ?, updated_at = ? WHERE id = ?",
+        "UPDATE documents SET content = ?, ocr_status = ?, embed_status = COALESCE(?, embed_status), updated_at = ? WHERE id = ?",
     )
     .bind(&content)
     .bind(if completed { "done" } else { "skipped" })
-    .bind(if embed { "pending" } else { "skipped" })
+    .bind(owns_embedding.then_some(if embed { "pending" } else { "skipped" }))
     .bind(&now)
     .bind(fence.document_id.to_string())
     .execute(&mut *tx)
@@ -248,7 +258,9 @@ async fn finish_ocr(
     } else {
         Some(ProcessingReason::NoText)
     };
-    complete_embedding_plan(&mut tx, fence, &snapshot, stage.lineage, plan).await?;
+    if owns_embedding {
+        complete_embedding_plan(&mut tx, fence, &snapshot, stage.lineage, plan).await?;
+    }
     tx.commit().await.map_err(repo_err)?;
     Ok(true)
 }
