@@ -35,3 +35,5 @@
 - [ ] Verify protected defaults, current-owner recovery, viewer/admin isolation, workflow cancellation/fencing, and managed/configured source activity checks.
 - [ ] Verify usable web owner controls and desktop/mobile lifecycle regression coverage.
 - [ ] Regenerate API/client contracts and implement Apple metadata, owner management, recovery, and isolated native regressions before completing the full lifecycle change.
+- [ ] Stop queued OCR and AI jobs for documents in a deleted vault: the worker's `vault_of`/`locate` lookups ignore `vaults.deleted_at`.
+- [ ] Limit owner lifecycle history to vault and membership facts so document activity cannot push them out of the 100-event window.
