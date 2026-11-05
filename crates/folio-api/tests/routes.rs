@@ -24,6 +24,7 @@ struct TestApp {
     router: Router,
     state: AppState,
     vault: folio_core::models::VaultId,
+    vault_repository: Arc<dyn folio_core::ports::VaultRepository>,
     dir: std::path::PathBuf,
 }
 
@@ -96,6 +97,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         ),
         state,
         vault,
+        vault_repository: repos.vaults.clone(),
         dir,
     }
 }
@@ -163,11 +165,20 @@ async fn tagged_document(
     title: &str,
     tags: &[Uuid],
 ) -> folio_core::models::Document {
+    tagged_document_in(app, app.vault, title, tags).await
+}
+
+async fn tagged_document_in(
+    app: &TestApp,
+    vault: folio_core::models::VaultId,
+    title: &str,
+    tags: &[Uuid],
+) -> folio_core::models::Document {
     let doc = app
         .state
         .document_repo
         .create(
-            app.vault,
+            vault,
             CreateDocument {
                 title: title.into(),
                 ..Default::default()
@@ -178,11 +189,31 @@ async fn tagged_document(
     for tag in tags {
         app.state
             .document_repo
-            .add_tag(app.vault, doc.id, *tag)
+            .add_tag(vault, doc.id, *tag)
             .await
             .unwrap();
     }
     doc
+}
+
+async fn tag_in(app: &TestApp, vault: folio_core::models::VaultId, name: &str) -> Uuid {
+    let tag = CreateTag {
+        name: name.into(),
+        color: None,
+    };
+    app.state.tag_repo.create(vault, tag).await.unwrap().id
+}
+
+/// Tags `Tax` and `Home` on documents "both", "tax only" and "none"
+async fn tax_and_home_documents(app: &TestApp) -> (Uuid, Uuid) {
+    let (tax, home) = (
+        tag_in(app, app.vault, "Tax").await,
+        tag_in(app, app.vault, "Home").await,
+    );
+    tagged_document(app, "both", &[tax, home]).await;
+    tagged_document(app, "tax only", &[tax]).await;
+    tagged_document(app, "none", &[]).await;
+    (tax, home)
 }
 
 #[tokio::test]
@@ -240,37 +271,14 @@ async fn documents_carry_their_tags_and_names() {
 #[tokio::test]
 async fn list_filters_by_all_tags_and_by_creation_time() {
     let app = test_app().await;
-    let make = |name: &str| {
-        app.state.tag_repo.create(
-            app.vault,
-            CreateTag {
-                name: name.into(),
-                color: None,
-            },
-        )
-    };
-    let (tax, home) = (make("Tax").await.unwrap(), make("Home").await.unwrap());
-    tagged_document(&app, "both", &[tax.id, home.id]).await;
-    tagged_document(&app, "tax only", &[tax.id]).await;
-    tagged_document(&app, "none", &[]).await;
+    let (tax, home) = tax_and_home_documents(&app).await;
 
-    let titles = |body: &serde_json::Value| {
-        let mut titles: Vec<String> = body["documents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|d| d["title"].as_str().unwrap().to_string())
-            .collect();
-        titles.sort();
-        titles
-    };
+    let (_, body) = request(&app, "GET", &format!("/api/documents?tag_id={tax}")).await;
+    assert_eq!(sorted_titles(&body), ["both", "tax only"]);
 
-    let (_, body) = request(&app, "GET", &format!("/api/documents?tag_id={}", tax.id)).await;
-    assert_eq!(titles(&body), ["both", "tax only"]);
-
-    let uri = format!("/api/documents?tag_id={}&tag_id={}", tax.id, home.id);
+    let uri = format!("/api/documents?tag_id={tax}&tag_id={home}");
     let (_, body) = request(&app, "GET", &uri).await;
-    assert_eq!(titles(&body), ["both"]);
+    assert_eq!(sorted_titles(&body), ["both"]);
     assert_eq!(body["count"], 1);
 
     let (_, body) = request(
@@ -287,6 +295,74 @@ async fn list_filters_by_all_tags_and_by_creation_time() {
     )
     .await;
     assert_eq!(body["count"], 3);
+}
+
+fn sorted_titles(body: &serde_json::Value) -> Vec<String> {
+    let mut titles: Vec<String> = body["documents"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no documents in {body}"))
+        .iter()
+        .map(|d| d["title"].as_str().unwrap().to_string())
+        .collect();
+    titles.sort();
+    titles
+}
+
+#[tokio::test]
+async fn list_filters_survive_unknown_parameters_in_any_order() {
+    let app = test_app().await;
+    let (tax, home) = tax_and_home_documents(&app).await;
+
+    for (query, expected) in [
+        (format!("tag_id={tax}&limit=20"), &["both", "tax only"][..]),
+        (format!("limit=20&tag_id={tax}"), &["both", "tax only"]),
+        (format!("tag_id={tax}&limit=1&tag_id={home}"), &["both"]),
+        (format!("tag_id={home}&tag_id={tax}&limit=20"), &["both"]),
+        (format!("limit=20&tag_id={home}&tag_id={tax}"), &["both"]),
+        ("limit=20".to_string(), &["both", "none", "tax only"]),
+    ] {
+        let (status, body) = request(&app, "GET", &format!("/api/documents?{query}")).await;
+        assert_eq!(status, StatusCode::OK, "{query}");
+        assert_eq!(sorted_titles(&body), expected, "{query}");
+    }
+}
+
+#[tokio::test]
+async fn list_rejects_invalid_filters_next_to_unknown_parameters() {
+    let app = test_app().await;
+    let tag = Uuid::new_v4();
+    for query in [
+        "limit=20&tag_id=nope".to_string(),
+        "tag_id=nope&limit=20".to_string(),
+        format!("tag_id={tag}&created_after=yesterday&limit=20"),
+        format!("limit=20&created_after=yesterday&tag_id={tag}"),
+        format!("tag_id={tag}&tag_id=nope"),
+    ] {
+        let (status, body) = request(&app, "GET", &format!("/api/documents?{query}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+        assert!(body["error"].as_str().is_some(), "{query}");
+    }
+}
+
+#[tokio::test]
+async fn list_filters_stay_inside_the_requested_vault() {
+    let app = test_app().await;
+    let mine = tag_in(&app, app.vault, "Tax").await;
+    tagged_document(&app, "mine", &[mine]).await;
+    let other = app.vault_repository.create("Other", None).await.unwrap().id;
+    let theirs = tag_in(&app, other, "Tax").await;
+    tagged_document_in(&app, other, "theirs", &[theirs]).await;
+
+    for (query, expected) in [
+        (format!("tag_id={mine}&limit=20"), &["mine"][..]),
+        (format!("limit=20&tag_id={theirs}"), &[]),
+        (format!("tag_id={mine}&tag_id={theirs}"), &[]),
+        ("limit=20".to_string(), &["mine"]),
+    ] {
+        let (status, body) = request(&app, "GET", &format!("/api/documents?{query}")).await;
+        assert_eq!(status, StatusCode::OK, "{query}");
+        assert_eq!(sorted_titles(&body), expected, "{query}");
+    }
 }
 
 #[tokio::test]
