@@ -53,9 +53,9 @@ CSS classes live in `components/bundle.css` with the `f-` prefix and read only t
 - **Status** (`f-status`): a dot and a word. `-done` for finished, `-pending` for running or needs review, `-failed` for errors, `-idle` (a ring) for queued, cancelled or paused.
 - **Notice** (`f-notice`): `pending-tint` by default for warnings, `-danger` for errors, `-info` (`paper-sunken`) for neutral facts such as "Nothing in this vault changed".
 - **Form field** (`f-field`): `f-field-label`, an `f-input`, then `f-error` (with `aria-invalid="true"` on the input and `aria-describedby` pointing at it) and `f-help`.
-- **Switch** (`f-switch`): an `<input type="checkbox" role="switch">` followed by `f-switch-track`, inside a `<label>` with the visible text.
-- **Progress** (`f-progress`): segments sized by `flex-grow` from the counts, `-done`, `-skipped`, `-failed`, and a plain `<span>` for what's still waiting. It is `aria-hidden`; an `f-stats` list (`<dl>` of `f-stat`, each `dt` with an `f-swatch`) carries the numbers.
-- **Table** (`f-table` in `f-table-wrap`): real `<table>` markup for records people compare, such as failed import items. `f-num` right-aligns numbers.
+- **Switch** (`f-switch`): an `<input type="checkbox" role="switch">` followed by `f-switch-track`. Always wrap it in a `<label>` with the visible text: the input is transparent and only the label gives it a name and a larger click target.
+- **Progress** (`f-progress`): segments sized by `flex-grow` from the counts, `-done`, `-skipped`, `-failed`, and a plain `<span>` for what's still waiting. Leave out segments whose count is zero; each segment keeps a 2px minimum width and would draw a sliver. `f-progress-sm` is the thinner bar for rows and phone cards. The bar is `aria-hidden`; an `f-stats` list (`<dl>` of `f-stat`, each `dt` with an `f-swatch`: `-done`, `-skipped`, `-failed`, or `-waiting` for the outlined empty swatch) carries the numbers.
+- **Table** (`f-table` in `f-table-wrap`): real `<table>` markup for records people compare, such as failed import items. `f-num` on a `th` or `td` right-aligns numbers. The wrapper scrolls sideways at narrow widths, so give it `tabindex="0" role="region" aria-label="…"` to let keyboard users scroll it.
 - **Filter chips** (`f-chips`, `f-chip` with `aria-pressed`): switch between subsets of one list.
 - **Breadcrumb** (`f-crumbs`): `<nav aria-label="Breadcrumb"><ol>` with the current page as `aria-current="page"`.
 

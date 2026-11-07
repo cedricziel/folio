@@ -23,7 +23,7 @@ body {
   color: var(--ink-muted);
 }
 
-:where(.f-btn, .f-input, .f-tag, .f-row, .f-search):focus-visible {
+:where(.f-btn, .f-input, .f-tag, .f-row, .f-search, .f-table-wrap, .f-crumbs a):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -486,6 +486,9 @@ a.f-row-title:hover {
 .f-switch input:disabled + .f-switch-track {
   background: var(--rule);
 }
+.f-switch input:checked:disabled + .f-switch-track {
+  background: var(--control-border);
+}
 
 /* A run's outcome split. Segment widths come from the data (flex-grow);
    the legend (.f-stat) carries the numbers, so the bar is aria-hidden. */
@@ -590,7 +593,10 @@ a.f-row-title:hover {
   border-top: 1px solid var(--rule);
   vertical-align: top;
 }
-.f-table .f-num {
+.f-table th.f-num {
+  text-align: right;
+}
+.f-table td.f-num {
   text-align: right;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -645,7 +651,7 @@ a.f-row-title:hover {
   line-height: 18px;
 }
 .f-crumbs li + li::before {
-  content: "/";
+  content: "/" / "";
   margin-right: var(--space-2);
   color: var(--ink-faint);
 }
@@ -669,7 +675,9 @@ a.f-row-title:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     transition: none !important;
   }
 }
