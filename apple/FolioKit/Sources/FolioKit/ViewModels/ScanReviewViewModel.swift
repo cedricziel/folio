@@ -2,6 +2,24 @@ import CoreGraphics
 import Foundation
 import Observation
 
+/// The pages of one scan waiting for review.
+public struct ScannedPages: Identifiable {
+    public let id = UUID()
+    public let images: [CGImage]
+
+    public init(images: [CGImage]) {
+        self.images = images
+    }
+}
+
+extension Optional where Wrapped: Identifiable {
+    /// Clears the item only while `id` is still the one shown, so a late completion
+    /// cannot close an item presented after it.
+    public mutating func close(_ id: Wrapped.ID) {
+        if self?.id == id { self = nil }
+    }
+}
+
 /// "Review a scan": shows the captured pages and files them as one PDF.
 @MainActor @Observable
 public final class ScanReviewViewModel {
@@ -19,6 +37,7 @@ public final class ScanReviewViewModel {
     private let service: any FolioService
     private let defaultTitle: String
     public let destination: VaultDestinationViewModel?
+    private(set) var filing: Task<Void, Never>?
 
     public init(
         pages: [CGImage], service: any FolioService, now: Date = Date(),
@@ -31,7 +50,23 @@ public final class ScanReviewViewModel {
         title = defaultTitle
     }
 
-    public func fileIt() async {
+    /// Files the scan in a task this model owns. `onFiled` runs only if the upload
+    /// succeeds and the filing was not cancelled.
+    public func file(onFiled: @escaping @MainActor () -> Void) {
+        guard filing == nil else { return }
+        filing = Task {
+            await fileIt()
+            filing = nil
+            if state == .filed, !Task.isCancelled { onFiled() }
+        }
+    }
+
+    public func cancelFiling() {
+        filing?.cancel()
+        filing = nil
+    }
+
+    func fileIt() async {
         guard state != .filing else { return }
         guard destination?.canUpload != false else {
             state = .failed("Choose a vault you can upload to.")

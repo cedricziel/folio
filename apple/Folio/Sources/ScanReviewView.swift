@@ -72,12 +72,7 @@ struct ScanReviewView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    Task {
-                        await model.fileIt()
-                        if model.state == .filed {
-                            onFinished(true)
-                        }
-                    }
+                    model.file { onFinished(true) }
                 } label: {
                     Text(model.state == .filing ? "Filing…" : "File it").frame(maxWidth: .infinity)
                 }
@@ -88,6 +83,7 @@ struct ScanReviewView: View {
             }
         }
         .interactiveDismissDisabled()
+        .onDisappear { model.cancelFiling() }
         .alert("Discard this scan?", isPresented: $confirmDiscard) {
             Button("Discard Scan", role: .destructive) { onFinished(false) }
             Button("Keep Scan", role: .cancel) {}

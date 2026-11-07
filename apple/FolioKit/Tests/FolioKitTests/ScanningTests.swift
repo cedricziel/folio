@@ -128,3 +128,80 @@ struct UploadFileTests {
         #expect(model.pages.count == 1)
     }
 }
+
+@MainActor private final class Inbox {
+    var showing: ScannedPages?
+    var finished = 0
+}
+
+@MainActor struct ScanCompletionTests {
+    private func startFilingA(on service: MockFolioService, inbox: Inbox) async -> ScanReviewViewModel {
+        let scanA = ScannedPages(images: [page(width: 10, height: 10)])
+        inbox.showing = scanA
+        await service.suspendUploads()
+        let model = ScanReviewViewModel(pages: scanA.images, service: service)
+        model.file {
+            inbox.finished += 1
+            inbox.showing.close(scanA.id)
+        }
+        await service.waitForUploadRequest()
+        return model
+    }
+
+    @Test func delayedSuccessDoesNotCloseALaterScan() async {
+        let service = MockFolioService()
+        let inbox = Inbox()
+        let modelA = await startFilingA(on: service, inbox: inbox)
+        let scanB = ScannedPages(images: [page(width: 10, height: 10)])
+        inbox.showing = scanB
+
+        await service.releaseUploads()
+        await modelA.filing?.value
+
+        #expect(modelA.state == .filed)
+        #expect(inbox.finished == 1)
+        #expect(inbox.showing?.id == scanB.id)
+    }
+
+    @Test func delayedFailureDoesNotCloseALaterScan() async {
+        let service = MockFolioService()
+        let inbox = Inbox()
+        let modelA = await startFilingA(on: service, inbox: inbox)
+        let scanB = ScannedPages(images: [page(width: 10, height: 10)])
+        inbox.showing = scanB
+        await service.setFailure(.unreachable)
+
+        await service.releaseUploads()
+        await modelA.filing?.value
+
+        #expect(modelA.state == .failed("Couldn't reach the server."))
+        #expect(inbox.finished == 0)
+        #expect(inbox.showing?.id == scanB.id)
+    }
+
+    @Test func filedScanClosesItsOwnReview() async {
+        let service = MockFolioService()
+        let inbox = Inbox()
+        let model = await startFilingA(on: service, inbox: inbox)
+
+        await service.releaseUploads()
+        await model.filing?.value
+
+        #expect(inbox.finished == 1)
+        #expect(inbox.showing == nil)
+    }
+
+    @Test func cancelledFilingNeverReportsCompletion() async {
+        let service = MockFolioService()
+        let inbox = Inbox()
+        let model = await startFilingA(on: service, inbox: inbox)
+        let filing = model.filing
+
+        model.cancelFiling()
+        await service.releaseUploads()
+        await filing?.value
+
+        #expect(inbox.finished == 0)
+        #expect(inbox.showing != nil)
+    }
+}
