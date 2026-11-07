@@ -225,3 +225,29 @@ async fn reader_keeps_reading_the_directory_it_opened_after_the_path_is_replaced
     let info = reader.source_info().await.unwrap();
     assert_eq!(info.version.to_string(), "3.4.2");
 }
+
+#[tokio::test]
+async fn split_manifest_discovery_skips_symlinks() {
+    let layout = Layout::new();
+    let export = layout.path("imports/export");
+    fs::write(export.join("manifest.json"), "[]").unwrap();
+    fs::create_dir_all(layout.path("outside/json")).unwrap();
+    let planted = manifest_with_originals(&["planted.pdf"]);
+    fs::write(layout.path("outside/json/x-manifest.json"), &planted).unwrap();
+    fs::write(layout.path("outside/y-manifest.json"), &planted).unwrap();
+    symlink(layout.path("outside/json"), export.join("json")).unwrap();
+    symlink(
+        layout.path("outside/y-manifest.json"),
+        export.join("y-manifest.json"),
+    )
+    .unwrap();
+
+    let records: Vec<PaperlessRecord> = reader_at(&export)
+        .scan()
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    assert!(records.is_empty(), "{records:?}");
+}
