@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use folio_core::models::{
     redact_url, WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun,
+    WorkflowTrigger,
 };
 use folio_core::ports::WorkflowRepository;
 use folio_infra::{workflow::WebhookRequest, WebhookClient};
@@ -324,22 +325,29 @@ pub(crate) async fn test_workflow(
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<TestResult>> {
     let workflow = find(vault, &*state.workflow_repo, id).await?;
-    let result = send_test(&state.webhook_client, &workflow, &state.public_url).await?;
+    let result = send_test(
+        &state.webhook_client,
+        workflow.trigger,
+        &workflow.actions,
+        &state.public_url,
+    )
+    .await?;
     Ok(Json(result))
 }
 
 pub(crate) async fn send_test(
     client: &WebhookClient,
-    workflow: &Workflow,
+    trigger: WorkflowTrigger,
+    actions: &[WorkflowAction],
     public_url: &str,
 ) -> ApiResult<TestResult> {
-    let payload = WebhookPayload::sample(workflow.trigger, public_url);
+    let payload = WebhookPayload::sample(trigger, public_url);
     let body = serde_json::to_string(&payload)
         .map_err(|e| ApiError::internal(format!("Failed to encode payload: {e}")))?;
 
     let mut deliveries = Vec::new();
     let run_id = Uuid::new_v4();
-    for (action_index, action) in workflow.actions.iter().enumerate() {
+    for (action_index, action) in actions.iter().enumerate() {
         let WorkflowAction::Webhook {
             url,
             headers,
@@ -354,7 +362,7 @@ pub(crate) async fn send_test(
                 url,
                 headers,
                 secret: secret.as_deref(),
-                event: workflow.trigger,
+                event: trigger,
                 run_id,
                 action_index,
                 body: &body,
