@@ -964,7 +964,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         if document.file_path.is_some() {
             crate::queue::insert_job_postgres(
                 &mut tx,
-                crate::queue::JobType::ProcessDocument { document_id: id },
+                crate::queue::JobType::process_document(id),
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
             )

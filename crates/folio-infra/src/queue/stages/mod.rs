@@ -147,7 +147,7 @@ fn claimed_ocr_document(job: &Job) -> Option<(Uuid, Uuid)> {
         return None;
     }
     let document_id = match job.job_type {
-        JobType::ExtractText { document_id } | JobType::ProcessDocument { document_id } => {
+        JobType::ExtractText { document_id, .. } | JobType::ProcessDocument { document_id, .. } => {
             document_id
         }
         _ => return None,

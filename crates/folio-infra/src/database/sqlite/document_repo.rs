@@ -1023,7 +1023,7 @@ impl DocumentRepository for SqliteDocumentRepository {
         if document.file_path.is_some() {
             crate::queue::insert_job_sqlite(
                 &mut tx,
-                crate::queue::JobType::ProcessDocument { document_id: id },
+                crate::queue::JobType::process_document(id),
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
             )

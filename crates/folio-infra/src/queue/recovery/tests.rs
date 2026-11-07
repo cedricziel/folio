@@ -80,9 +80,7 @@ impl<'a> Fixture<'a> {
         let id = with_lineage(
             Some(lineage),
             repos.jobs.enqueue_with_max_attempts(
-                JobType::ExtractText {
-                    document_id: document,
-                },
+                JobType::extract_text(document),
                 Utc::now(),
                 max_attempts,
             ),
@@ -568,9 +566,7 @@ async fn superseded_stage_is_untouched_by_failure(db: &Database) {
     let f = Fixture::new(db, 3).await;
     let newer = f
         .queue
-        .enqueue(JobType::ExtractText {
-            document_id: f.document,
-        })
+        .enqueue(JobType::extract_text(f.document))
         .await
         .unwrap();
     assert_eq!(
@@ -631,9 +627,7 @@ async fn nonstage_and_prelease_jobs_still_recover(db: &Database) {
     assert!(f.queue.complete(&f.job).await.unwrap());
     let id = f
         .queue
-        .enqueue(JobType::ExtractText {
-            document_id: Uuid::new_v4(),
-        })
+        .enqueue(JobType::extract_text(Uuid::new_v4()))
         .await
         .unwrap();
     let legacy = f.queue.dequeue().await.unwrap().unwrap();

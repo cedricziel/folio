@@ -908,10 +908,7 @@ async fn jobs_contract(db: &Database, r: &Repositories) {
     assert!(jobs.dequeue().await.unwrap().is_none());
     assert_eq!(jobs.pending_count().await.unwrap(), 0);
 
-    let first = jobs
-        .enqueue(JobType::ExtractText { document_id: doc })
-        .await
-        .unwrap();
+    let first = jobs.enqueue(JobType::extract_text(doc)).await.unwrap();
     let second = jobs
         .enqueue(JobType::GenerateThumbnail { document_id: other })
         .await
@@ -935,7 +932,9 @@ async fn jobs_contract(db: &Database, r: &Repositories) {
     let claimed = jobs.dequeue().await.unwrap().unwrap();
     assert_eq!(claimed.id, first);
     assert_eq!(claimed.attempts, 1);
-    assert!(matches!(claimed.job_type, JobType::ExtractText { document_id } if document_id == doc));
+    assert!(
+        matches!(claimed.job_type, JobType::ExtractText { document_id, .. } if document_id == doc)
+    );
     assert_eq!(claimed.status.to_string(), "processing");
     assert!(claimed.started_at.is_some());
     let second_claim = jobs.dequeue().await.unwrap().unwrap();
@@ -989,7 +988,7 @@ async fn jobs_contract(db: &Database, r: &Repositories) {
 
     // Live claims are not recovered
     let stuck = jobs
-        .enqueue(JobType::ProcessDocument { document_id: other })
+        .enqueue(JobType::process_document(other))
         .await
         .unwrap();
     let stuck_claim = jobs.dequeue().await.unwrap().unwrap();
@@ -1004,11 +1003,7 @@ async fn jobs_contract(db: &Database, r: &Repositories) {
 
 async fn processing_recovery_contract(r: &Repositories) {
     let id = Id::new_v4();
-    let failed = r
-        .jobs
-        .enqueue(JobType::ProcessDocument { document_id: id })
-        .await
-        .unwrap();
+    let failed = r.jobs.enqueue(JobType::process_document(id)).await.unwrap();
     let failed_claim = r.jobs.dequeue().await.unwrap().unwrap();
     assert_eq!(failed_claim.id, failed);
     r.jobs
@@ -1032,11 +1027,7 @@ async fn processing_recovery_contract(r: &Repositories) {
         folio_core::ports::ProcessingStatus::Failed,
         "successful embedding must not hide a failed processing stage"
     );
-    let retry = r
-        .jobs
-        .enqueue(JobType::ProcessDocument { document_id: id })
-        .await
-        .unwrap();
+    let retry = r.jobs.enqueue(JobType::process_document(id)).await.unwrap();
     assert_eq!(
         r.jobs.processing_status(id).await.unwrap(),
         folio_core::ports::ProcessingStatus::Pending

@@ -8,9 +8,7 @@ use uuid::Uuid;
 
 async fn claim(queue: &JobQueue) -> Job {
     queue
-        .enqueue(JobType::ExtractText {
-            document_id: Uuid::new_v4(),
-        })
+        .enqueue(JobType::extract_text(Uuid::new_v4()))
         .await
         .unwrap();
     queue.dequeue().await.unwrap().unwrap()

@@ -58,9 +58,7 @@ impl<'a> Fixture<'a> {
         };
         let id = with_lineage(
             Some(lineage),
-            repos.jobs.enqueue(JobType::ExtractText {
-                document_id: document,
-            }),
+            repos.jobs.enqueue(JobType::extract_text(document)),
         )
         .await
         .unwrap();
@@ -374,9 +372,7 @@ async fn outbox_rejection_rolls_back_start_and_completion(db: &Database) {
 async fn expired_and_replaced_claims_cannot_publish(db: &Database) {
     let fixture = Fixture::new(db).await;
     let mut stale = fixture.job.clone();
-    stale.job_type = JobType::ProcessDocument {
-        document_id: fixture.document,
-    };
+    stale.job_type = JobType::process_document(fixture.document);
     assert!(fixture.start_job(&stale).await.unwrap().is_none());
     stale = fixture.job.clone();
     stale.claim_id = Some(Uuid::new_v4());
@@ -736,10 +732,7 @@ async fn retry_counts_stage_starts_separately_from_queue_attempts(db: &Database)
 
 async fn changed_job_group_and_missing_lineage_reject_existing_fences(db: &Database) {
     let fixture = Fixture::new(db).await;
-    let redirected = serde_json::to_string(&JobType::ExtractText {
-        document_id: Uuid::new_v4(),
-    })
-    .unwrap();
+    let redirected = serde_json::to_string(&JobType::extract_text(Uuid::new_v4())).unwrap();
     fixture
         .update(format!(
             "UPDATE jobs SET payload = '{redirected}' WHERE id = '{}'",

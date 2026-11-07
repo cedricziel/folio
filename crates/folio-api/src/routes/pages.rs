@@ -691,7 +691,10 @@ async fn reprocess_document(
     debug!("Queuing ProcessDocument job for {}", id);
     state
         .job_queue
-        .enqueue(JobType::ProcessDocument { document_id: id })
+        .enqueue(JobType::ProcessDocument {
+            document_id: id,
+            force: true,
+        })
         .await
         .map_err(|e| {
             error!("Failed to queue reprocessing job for {}: {}", id, e);
