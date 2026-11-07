@@ -111,7 +111,7 @@ The `paperless_taxonomy` table maps `(vault_id, kind, paperless_id)` to a Folio 
 
 The `paperless_sync_state` table holds per vault: `source_id`, `library_sample`, `cursor_modified` (the highest `modified` the last finished run fully processed, stored on the run as `cursor_after` and copied when the run ends `completed` or `completed_with_errors`), `last_poll_at`, `last_full_reconcile_at`, `once_done` and `retry_ids` (failed Paperless IDs with a poll count; included in the next five polls' candidates, then moved to `parked_ids`). Dry runs never move the cursor.
 
-**Trash safety.** Trash items are computed only from a `CompleteIdSet`, and never when the set is empty while the ledger has live rows (health `empty_listing`). Before applying any trash item, the run compares the trash count against `max(50, 10% of live ledger rows)`. Above that threshold, every trash item is failed with `trash_threshold_exceeded` and the rest of the run proceeds. `POST …/retry {"confirm_trash": true}` resets those items and lifts the threshold for that run only.
+**Trash safety.** Trash items are computed only from a `CompleteIdSet`, and never when the set is empty while the ledger has live rows (health `empty_listing`). Before applying any trash item, the run holds trashing when the count is more than 50 or more than 10% of the live ledger rows, whichever is lower. When held, every trash item is failed with `trash_threshold_exceeded` and the rest of the run proceeds. `POST …/retry {"confirm_trash": true}` resets those items and lifts the threshold for that run only.
 
 ### 3. Polling through the existing scheduler
 
