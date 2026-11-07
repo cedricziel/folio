@@ -280,6 +280,10 @@ The system SHALL compare each original's checksum with the checksum Paperless re
 - **WHEN** an export manifest names an original by an absolute path, by a path containing `..`, or through a symlink
 - **THEN** the item is `failed` with reason `unsafe_path`, the file isn't read, and the run continues
 
+#### Scenario: Malformed document record
+- **WHEN** an export manifest has a document record that can't be read (for example no exported file name, as in a `--data-only` export, an unrecognized checksum, or a value for an unknown custom field) but its Paperless ID can be read
+- **THEN** that item is `failed` with reason `malformed_record`, and the run continues with the next item
+
 #### Scenario: File too large
 - **WHEN** an original is larger than `import.max_file_bytes`
 - **THEN** the item is `failed` with reason `file_too_large` and the run continues

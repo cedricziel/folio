@@ -47,7 +47,7 @@ Current state that shapes the approach:
 
 The port lives in `folio-core::ports::import`. It provides:
 - `scan()`: a stream of typed taxonomy, document, note and custom-field records
-- `list_document_ids()`
+- `list_document_ids()`: the IDs of live root documents. Trashed documents and Paperless 3 file versions are excluded by both adapters, so a document missing from a complete set was deleted or trashed in Paperless
 - `open_original(&DocumentRecord)`
 - `modified_since(cursor)`, used by the REST adapter for incremental polls; the export adapter returns everything
 
@@ -66,7 +66,7 @@ The record types are identical for both adapters. Anything adapter-specific (man
   - Incremental listing uses keyset paging: `/api/documents/?page_size=100&ordering=modified,id&modified__gte=<last seen>` with `fields=…`. Each next page starts from the last `(modified, id)` seen, so documents modified mid-listing aren't skipped.
   - The list response includes notes and custom fields, so each document needs one metadata request (`/api/documents/{id}/metadata/` for the checksum and size) and one download (`/download/?original=true`).
   - Taxonomy comes from `/api/tags|correspondents|document_types|custom_fields/`, paginated.
-  - `list_document_ids()` uses `/api/documents/?fields=id&page_size=1000` and returns a `CompleteIdSet` only when every page succeeded and the ID count equals the `count` of the first response. Otherwise it returns an error. Trash decisions take only a `CompleteIdSet` (§3).
+  - `list_document_ids()` uses `/api/documents/?fields=id&page_size=1000` and returns a `CompleteIdSet` (live root documents only; the documents endpoint already excludes trashed ones, and versions are filtered by `root_document`) only when every page succeeded and the ID count equals the `count` of the first response. Otherwise it returns an error. Trash decisions take only a `CompleteIdSet` (§3).
 - Trash detection: `/api/trash/` (2.10 or later).
 - One request at a time per source. 429 and 5xx responses are retried with exponential backoff (1, 2, 4, 8 s, then the item fails with `upstream_error`).
 - The token comes from `token` or `token_file`, and the HTTP client never logs it. The URL must be http(s).
@@ -111,7 +111,7 @@ The `paperless_taxonomy` table maps `(vault_id, kind, paperless_id)` to a Folio 
 
 The `paperless_sync_state` table holds per vault: `source_id`, `library_sample`, `cursor_modified` (the highest `modified` the last finished run fully processed, stored on the run as `cursor_after` and copied when the run ends `completed` or `completed_with_errors`), `last_poll_at`, `last_full_reconcile_at`, `once_done` and `retry_ids` (failed Paperless IDs with a poll count; included in the next five polls' candidates, then moved to `parked_ids`). Dry runs never move the cursor.
 
-**Trash safety.** Trash items are computed only from a `CompleteIdSet`, and never when the set is empty while the ledger has live rows (health `empty_listing`). Before applying any trash item, the run compares the trash count against `max(50, 10% of live ledger rows)`. Above that threshold, every trash item is failed with `trash_threshold_exceeded` and the rest of the run proceeds. `POST …/retry {"confirm_trash": true}` resets those items and lifts the threshold for that run only.
+**Trash safety.** Trash items are computed only from a `CompleteIdSet`, and never when the set is empty while the ledger has live rows (health `empty_listing`). Before applying any trash item, the run holds trashing when the count is more than 50 or more than 10% of the live ledger rows, whichever is lower. When held, every trash item is failed with `trash_threshold_exceeded` and the rest of the run proceeds. `POST …/retry {"confirm_trash": true}` resets those items and lifts the threshold for that run only.
 
 ### 3. Polling through the existing scheduler
 
