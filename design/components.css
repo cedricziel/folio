@@ -23,7 +23,7 @@ body {
   color: var(--ink-muted);
 }
 
-:where(.f-btn, .f-input, .f-tag, .f-row, .f-search):focus-visible {
+:where(.f-btn, .f-input, .f-tag, .f-row, .f-search, .f-table-wrap, .f-crumbs a):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -385,8 +385,299 @@ a.f-row-title:hover {
   overflow: hidden;
 }
 
+/* Idle states (queued, cancelled, paused): a ring instead of a dot, so they
+   differ from done by shape, not only by color. */
+.f-status-idle {
+  color: var(--ink-muted);
+}
+.f-status-idle::before {
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  background: transparent;
+}
+
+.f-notice-info {
+  background: var(--paper-sunken);
+}
+
+.f-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.f-field-label {
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.f-help {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-muted);
+}
+.f-error {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--danger);
+}
+.f-error svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+.f-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.f-switch {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 36px;
+  height: 20px;
+}
+.f-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.f-switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--control-border);
+  pointer-events: none;
+  transition: background 120ms ease-out;
+}
+.f-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--paper-raised);
+  transition: transform 120ms ease-out;
+}
+.f-switch input:checked + .f-switch-track {
+  background: var(--archive);
+}
+.f-switch input:checked + .f-switch-track::after {
+  transform: translateX(16px);
+}
+.f-switch input:focus-visible + .f-switch-track {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.f-switch input:disabled {
+  cursor: not-allowed;
+}
+.f-switch input:disabled + .f-switch-track {
+  background: var(--rule);
+}
+.f-switch input:checked:disabled + .f-switch-track {
+  background: var(--control-border);
+}
+
+/* A run's outcome split. Segment widths come from the data (flex-grow);
+   the legend (.f-stat) carries the numbers, so the bar is aria-hidden. */
+.f-progress {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--paper-sunken);
+}
+.f-progress-sm {
+  height: 6px;
+  border-radius: 3px;
+}
+.f-progress > span {
+  flex: 0 1 0;
+  min-width: 2px;
+}
+.f-progress-done,
+.f-swatch-done {
+  background: var(--archive);
+}
+.f-progress-skipped,
+.f-swatch-skipped {
+  background: var(--control-border);
+}
+.f-progress-failed,
+.f-swatch-failed {
+  background: var(--danger);
+}
+.f-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.f-swatch-waiting {
+  box-sizing: border-box;
+  border: 1px solid var(--control-border);
+  background: var(--paper-sunken);
+}
+.f-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+}
+.f-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.f-stat dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--ink-muted);
+}
+.f-stat dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  line-height: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.f-stat dd + dd {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--ink-muted);
+}
+
+.f-table-wrap {
+  overflow-x: auto;
+  background: var(--paper-raised);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+}
+.f-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+.f-table th {
+  padding: var(--space-2) var(--space-4);
+  background: var(--paper-sunken);
+  text-align: left;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.f-table td {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--rule);
+  vertical-align: top;
+}
+.f-table th.f-num {
+  text-align: right;
+}
+.f-table td.f-num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.f-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.f-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control-border);
+  border-radius: 15px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+.f-chip:hover {
+  background: var(--paper-sunken);
+}
+.f-chip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.f-chip[aria-pressed="true"] {
+  border-color: var(--archive);
+  background: var(--archive-tint);
+  font-weight: 600;
+}
+.f-chip .f-meta {
+  color: inherit;
+}
+
+.f-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  line-height: 18px;
+}
+.f-crumbs li + li::before {
+  content: "/" / "";
+  margin-right: var(--space-2);
+  color: var(--ink-faint);
+}
+.f-crumbs a {
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+.f-crumbs a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+.f-crumbs [aria-current="page"] {
+  color: var(--ink);
+}
+
+@media (pointer: coarse) {
+  .f-chip {
+    height: 44px;
+    border-radius: 22px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     transition: none !important;
   }
 }
