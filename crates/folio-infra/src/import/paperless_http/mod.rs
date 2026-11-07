@@ -16,14 +16,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use folio_core::ports::{
-    CompleteIdSet, InvalidDocumentReason, MalformedKind, OriginalFile, PaperlessDocument,
-    PaperlessFieldType, PaperlessInvalidDocument, PaperlessReadError, PaperlessReader,
-    PaperlessRecord, PaperlessSourceInfo, PaperlessVersion, RecordStream, SourceFailure,
+    digest_original, ChecksumAlgorithm, CompleteIdSet, InvalidDocumentReason, MalformedKind,
+    OriginalFile, PaperlessDocument, PaperlessFieldType, PaperlessInvalidDocument,
+    PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessSourceInfo, PaperlessVersion,
+    RecordStream, SourceFailure,
 };
 use futures::TryStreamExt;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::io::AsyncRead;
 use tokio::sync::mpsc;
 use tokio_util::io::StreamReader;
 
@@ -100,6 +102,13 @@ impl PaperlessReader for PaperlessHttpReader {
         Ok(self.listing(None))
     }
 
+    async fn modified_since(
+        &self,
+        cursor: DateTime<Utc>,
+    ) -> Result<RecordStream, PaperlessReadError> {
+        Ok(self.listing(Some(cursor)))
+    }
+
     async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError> {
         let mut ids = BTreeSet::new();
         let mut expected = None;
@@ -150,22 +159,30 @@ impl PaperlessReader for PaperlessHttpReader {
                 what: "original handle".to_owned(),
             }
         })?;
-        let path = format!("api/documents/{}/download/", handle.id);
-        let version = handle.version.map(|v| v.to_string());
-        let mut query = vec![("original", "true")];
-        if let Some(version) = version.as_deref() {
-            query.push(("version", version));
-        }
-        let response = self.api.get(&path, &query).await?;
-        let size = response.content_length();
-        let body = response
-            .bytes_stream()
-            .map_err(|_| io::Error::other("the Paperless download was interrupted"));
+        let response = download(&self.api, handle).await?;
         Ok(OriginalFile {
-            size,
-            reader: Box::new(StreamReader::new(body)),
+            size: response.content_length(),
+            reader: Box::new(body_reader(response)),
         })
     }
+}
+
+async fn download(api: &Api, handle: Handle) -> Result<reqwest::Response, Failure> {
+    let path = format!("api/documents/{}/download/", handle.id);
+    let version = handle.version.map(|v| v.to_string());
+    let mut query = vec![("original", "true")];
+    if let Some(version) = version.as_deref() {
+        query.push(("version", version));
+    }
+    api.get(&path, &query).await
+}
+
+fn body_reader(response: reqwest::Response) -> impl AsyncRead + Send + Unpin {
+    StreamReader::new(
+        response
+            .bytes_stream()
+            .map_err(|_| io::Error::other("the Paperless download was interrupted")),
+    )
 }
 
 /// A listing whose pages don't add up can't prove what is missing
@@ -208,7 +225,8 @@ async fn list_records(
         field_types.insert(field.id, field.data_type);
         sink.send(PaperlessRecord::CustomField(field)).await?;
     }
-    list_documents(api, since, &field_types, sink).await
+    list_documents(api, since, &field_types, sink).await?;
+    list_trash(api, since, &field_types, sink).await
 }
 
 /// Taxonomy is small, so each kind is read whole before any record goes out
@@ -326,13 +344,12 @@ async fn document_records(
         document.content = own;
     }
 
-    let versions = std::mem::take(&mut document.versions);
     let Some(records) = document.into_records(metadata, field_types) else {
         return Ok(vec![invalid(id)]);
     };
     let root = records.document;
     let mut out = Vec::new();
-    let added = versions.iter().rev().filter(|v| !v.is_root);
+    let added = records.versions.iter().rev().filter(|v| !v.is_root);
     for (index, version) in (1..).zip(added) {
         let vid = version.id.to_string();
         let path = format!("api/documents/{vid}/metadata/");
@@ -352,6 +369,71 @@ async fn document_records(
     out.insert(0, PaperlessRecord::Document(Box::new(root)));
     out.extend(records.rest);
     Ok(out)
+}
+
+/// Trashed documents, which `/api/documents/` leaves out. Paperless won't
+/// serve their `/metadata/`, so the size, and the checksum when the listing
+/// lacks it, come from hashing the original.
+async fn list_trash(
+    api: &Api,
+    since: Option<DateTime<Utc>>,
+    field_types: &HashMap<i64, PaperlessFieldType>,
+    sink: &Sink,
+) -> Result<(), PaperlessReadError> {
+    for page in 1.. {
+        let page = page.to_string();
+        let response: Page<Value> = api
+            .get_json("api/trash/", &[("page", &page), ("page_size", PAGE_SIZE)])
+            .await?;
+        let empty = response.results.is_empty();
+        for raw in response.results {
+            let id = raw
+                .get("id")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| malformed(MalformedKind::InvalidRecord, "api/trash/"))?;
+            let Ok(document) = Document::deserialize(raw) else {
+                sink.send(invalid(id)).await?;
+                continue;
+            };
+            if since.is_some_and(|since| document.modified < since) {
+                continue;
+            }
+            for record in trashed_records(api, document, field_types).await? {
+                sink.send(record).await?;
+            }
+        }
+        if response.next.is_none() || empty {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+async fn trashed_records(
+    api: &Api,
+    document: Document,
+    field_types: &HashMap<i64, PaperlessFieldType>,
+) -> Result<Vec<PaperlessRecord>, PaperlessReadError> {
+    let id = document.id;
+    let Some(response) = optional(download(api, document.handle()).await)? else {
+        return Ok(Vec::new());
+    };
+    // Paperless 2 checksums are MD5; hashing for it yields SHA-256 as well
+    let digests = digest_original(body_reader(response), ChecksumAlgorithm::Md5)
+        .await
+        .map_err(|_| PaperlessReadError::Source(SourceFailure::Unreachable))?;
+    let checksum = match document.listed_checksum() {
+        Some(listed) => listed.to_owned(),
+        None => digests.md5.unwrap_or_default(),
+    };
+    Ok(
+        match document.into_records(Metadata::of_file(checksum, digests.size), field_types) {
+            Some(records) => std::iter::once(PaperlessRecord::Document(Box::new(records.document)))
+                .chain(records.rest)
+                .collect(),
+            None => vec![invalid(id)],
+        },
+    )
 }
 
 /// The content of one file of `root`

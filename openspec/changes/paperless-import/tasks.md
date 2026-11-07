@@ -37,7 +37,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 - [x] 3.2 Add the root guard. Failing test first: `..`, symlinks outside the root, `/imports-x`, and missing paths, all with the same error.
 - [x] 3.3 Add the original-file guard. Failing test first: `../etc/passwd`, `/etc/passwd` and a symlinked original yield `unsafe_path` without being opened.
 - [x] 3.4 REST adapter, part 1: client with token auth, API version 9, a same-origin redirect policy and fixed error reasons, plus paginated taxonomy and document records. Failing test first, against `wiremock`: the records equal the export fixture's for the same library, and a cross-origin redirect yields `redirected` without sending the token.
-- [ ] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
+- [x] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
   - a page failure or a count mismatch yields an error, not a set
   - a document modified mid-listing isn't skipped
   - a 429 followed by a 200 succeeds

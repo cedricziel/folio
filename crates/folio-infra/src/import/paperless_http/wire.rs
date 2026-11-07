@@ -118,6 +118,7 @@ pub(super) struct Version {
     pub id: i64,
     pub added: DateTime<Utc>,
     pub version_label: Option<String>,
+    pub checksum: Option<String>,
     pub is_root: bool,
 }
 
@@ -128,6 +129,18 @@ pub(super) struct Metadata {
     original_size: Option<u64>,
     original_mime_type: Option<String>,
     original_filename: Option<String>,
+}
+
+impl Metadata {
+    /// For a trashed document, whose `/metadata/` Paperless won't serve
+    pub fn of_file(checksum: String, size: u64) -> Self {
+        Self {
+            original_checksum: checksum,
+            original_size: Some(size),
+            original_mime_type: None,
+            original_filename: None,
+        }
+    }
 }
 
 /// `GET /api/documents/{id}/?fields=content`
@@ -168,11 +181,28 @@ impl Handle {
 pub(super) struct DocumentRecords {
     pub document: PaperlessDocument,
     pub rest: Vec<PaperlessRecord>,
+    /// As listed: the root and every file version, newest first
+    pub versions: Vec<Version>,
 }
 
 impl Document {
     pub fn has_versions(&self) -> bool {
         self.versions.len() > 1
+    }
+
+    pub fn handle(&self) -> Handle {
+        Handle {
+            id: self.id,
+            version: self.has_versions().then_some(self.id),
+        }
+    }
+
+    /// The checksum Paperless 3 lists for the document's own file
+    pub fn listed_checksum(&self) -> Option<&str> {
+        self.versions
+            .iter()
+            .find(|v| v.is_root)
+            .and_then(|v| v.checksum.as_deref())
     }
 
     /// `None` when a value doesn't fit its field's type, or names no field
@@ -182,7 +212,7 @@ impl Document {
         field_types: &HashMap<i64, PaperlessFieldType>,
     ) -> Option<DocumentRecords> {
         let id = self.id;
-        let version = self.has_versions().then_some(id);
+        let handle = self.handle();
         let checksum = PaperlessChecksum::parse(&file.original_checksum)?;
         let mut rest = Vec::with_capacity(self.notes.len() + self.custom_fields.len());
         rest.extend(self.notes.into_iter().map(|note| {
@@ -221,9 +251,13 @@ impl Document {
             archive_serial_number: self.archive_serial_number,
             trashed: self.deleted_at.is_some(),
             version_of: None,
-            original_handle: Handle { id, version }.encode(),
+            original_handle: handle.encode(),
         };
-        Some(DocumentRecords { document, rest })
+        Some(DocumentRecords {
+            document,
+            rest,
+            versions: self.versions,
+        })
     }
 }
 
