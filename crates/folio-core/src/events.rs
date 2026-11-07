@@ -121,11 +121,14 @@ impl DocumentEvent {
 ///
 /// Workflow edits are announced to live clients like any other change, but
 /// must not trigger workflows again, or two workflows could feed each other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventOrigin {
+    #[default]
     User,
     Workflow,
+    /// An import or Paperless sync; like workflow edits, never triggers workflows
+    Import,
 }
 
 /// Immutable metadata captured in the transaction that produced an event.

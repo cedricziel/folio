@@ -231,6 +231,36 @@ async fn check_reference(
     }
 }
 
+struct FieldForWrite {
+    kind_name: String,
+    required: bool,
+    unique: bool,
+    live: bool,
+}
+
+async fn field_for_write(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    field: Id,
+) -> Result<FieldForWrite> {
+    let row: Option<(String, bool, bool, bool)> = sqlx::query_as(
+        "SELECT kind, is_required, is_unique, deleted_at IS NULL FROM metadata_fields WHERE vault_id = $1 AND id = $2 FOR SHARE",
+    )
+    .bind(vault.0)
+    .bind(field)
+    .fetch_optional(conn)
+    .await
+    .map_err(db_error)?;
+    let (kind_name, required, unique, live) =
+        row.ok_or_else(|| not_found("Metadata field", field))?;
+    Ok(FieldForWrite {
+        kind_name,
+        required,
+        unique,
+        live,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn write_value(
     conn: &mut PgConnection,
@@ -283,6 +313,52 @@ async fn write_value(
         return Err(Error::Repository(
             "Metadata value no longer matches its field".into(),
         ));
+    }
+    Ok(())
+}
+
+/// Write the values of a document created in the same transaction, without
+/// announcing them: the document's `created` event covers them.
+pub(crate) async fn insert_new_values(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    document: Id,
+    values: &BTreeMap<Id, MetadataValue>,
+    actor: Option<&UserId>,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    for (&field_id, value) in values {
+        let FieldForWrite {
+            kind_name,
+            required: _,
+            unique,
+            live,
+        } = field_for_write(&mut *conn, vault, field_id).await?;
+        if !live {
+            return Err(Error::Conflict(
+                "Retired fields cannot receive new values".into(),
+            ));
+        }
+        let value = parse_kind(&kind_name)?
+            .validate_value(Some(value.clone()), false)?
+            .ok_or_else(|| Error::Validation("Imported metadata value is empty".into()))?;
+        check_reference(conn, vault, field_id, &value).await?;
+        write_value(
+            conn,
+            vault,
+            document,
+            field_id,
+            &kind_name,
+            unique,
+            Some(&value),
+            false,
+            actor,
+            now,
+        )
+        .await?;
+    }
+    if !values.is_empty() {
+        bump_revision(conn, vault, document).await?;
     }
     Ok(())
 }
@@ -422,16 +498,12 @@ impl MetadataValueRepository for PostgresMetadataValueRepository {
         let now = Utc::now().trunc_subsecs(6);
         let mut applied = Vec::new();
         for MetadataChange { field_id, value } in changes {
-            let field: Option<(String, bool, bool, bool)> = sqlx::query_as(
-                "SELECT kind, is_required, is_unique, deleted_at IS NULL FROM metadata_fields WHERE vault_id = $1 AND id = $2 FOR SHARE",
-            )
-            .bind(vault.0)
-            .bind(field_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_error)?;
-            let (kind_name, required, unique, live) =
-                field.ok_or_else(|| not_found("Metadata field", field_id))?;
+            let FieldForWrite {
+                kind_name,
+                required,
+                unique,
+                live,
+            } = field_for_write(&mut tx, vault, field_id).await?;
             let kind = parse_kind(&kind_name)?;
             let existing: Option<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "SELECT {VALUE_COLS} FROM metadata_values WHERE vault_id = $1 AND document_id = $2 AND field_id = $3"

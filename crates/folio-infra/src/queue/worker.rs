@@ -163,16 +163,19 @@ impl Worker {
     }
 
     /// Persist an event, to be announced to clients and workflows by the dispatcher
-    async fn emit(&self, vault: VaultId, event: DocumentEvent) -> Result<(), BoxError> {
-        self.outbox
-            .append_document(vault, &event, EventOrigin::User)
-            .await?;
+    async fn emit(
+        &self,
+        vault: VaultId,
+        event: DocumentEvent,
+        origin: EventOrigin,
+    ) -> Result<(), BoxError> {
+        self.outbox.append_document(vault, &event, origin).await?;
         Ok(())
     }
 
     /// Like [`emit`](Self::emit) for a progress hint that must not fail the step it follows
     async fn emit_logged(&self, vault: VaultId, event: DocumentEvent) {
-        if let Err(e) = self.emit(vault, event).await {
+        if let Err(e) = self.emit(vault, event, EventOrigin::User).await {
             error!("Failed to persist event: {e}");
         }
     }
@@ -409,9 +412,7 @@ impl Worker {
                     continue;
                 }
                 self.queue
-                    .enqueue(JobType::GenerateEmbedding {
-                        document_id: doc.id,
-                    })
+                    .enqueue(JobType::generate_embedding(doc.id))
                     .await?;
                 repaired_count += 1;
             } else if doc.ocr_status != ProcessingStatus::Pending
@@ -558,9 +559,10 @@ impl Worker {
             JobType::ExtractText { document_id, force } => {
                 self.process_ocr(*document_id, *force).await
             }
-            JobType::GenerateEmbedding { document_id } => {
-                self.process_embedding(*document_id).await
-            }
+            JobType::GenerateEmbedding {
+                document_id,
+                origin,
+            } => self.process_embedding(*document_id, *origin).await,
             JobType::ProcessDocument { document_id, force } => {
                 self.process_document(*document_id, *force).await
             }
@@ -659,8 +661,12 @@ impl Worker {
         info!("Generated thumbnail for document {}", document_id);
 
         // Emit event
-        self.emit(vault, DocumentEvent::ThumbnailReady { document_id })
-            .await?;
+        self.emit(
+            vault,
+            DocumentEvent::ThumbnailReady { document_id },
+            EventOrigin::User,
+        )
+        .await?;
 
         Ok(())
     }
@@ -821,11 +827,12 @@ impl Worker {
         vault: VaultId,
         document_id: uuid::Uuid,
         status: ProcessingStatus,
+        origin: EventOrigin,
     ) -> Result<(), BoxError> {
         self.document_repo
             .set_stage_status(vault, document_id, ProcessingStage::Embed, status)
             .await?;
-        self.emit(vault, DocumentEvent::Processed { document_id })
+        self.emit(vault, DocumentEvent::Processed { document_id }, origin)
             .await?;
         Ok(())
     }
@@ -848,17 +855,26 @@ impl Worker {
                 )
                 .await?;
             self.queue
-                .enqueue(JobType::GenerateEmbedding { document_id })
+                .enqueue(JobType::generate_embedding(document_id))
                 .await?;
         } else {
-            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
-                .await?;
+            self.finish_embed_stage(
+                vault,
+                document_id,
+                ProcessingStatus::Skipped,
+                EventOrigin::User,
+            )
+            .await?;
         }
         Ok(())
     }
 
     /// Process embedding generation
-    async fn process_embedding(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+    async fn process_embedding(
+        &self,
+        document_id: uuid::Uuid,
+        origin: EventOrigin,
+    ) -> Result<(), BoxError> {
         let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
@@ -869,13 +885,13 @@ impl Worker {
         let content = document.content.unwrap_or_default();
         let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
         if chunks.is_empty() {
-            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped, origin)
                 .await?;
             return Ok(());
         }
 
         if self.pipeline.settings().await.embeddings.provider == "none" {
-            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Skipped, origin)
                 .await?;
             return Ok(());
         }
@@ -904,7 +920,7 @@ impl Worker {
             self.search_service
                 .store_chunks(vault, document_id, &model, &embedded)
                 .await?;
-            self.finish_embed_stage(vault, document_id, ProcessingStatus::Done)
+            self.finish_embed_stage(vault, document_id, ProcessingStatus::Done, origin)
                 .await?;
             info!(
                 "Stored {} embedded chunks for document {} (model {})",
@@ -1163,7 +1179,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(f.worker.process_embedding(f.doc_id).await.is_err());
+        assert!(f
+            .worker
+            .process_embedding(f.doc_id, EventOrigin::User)
+            .await
+            .is_err());
 
         let doc = f
             .repo
@@ -2143,6 +2163,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn processed_carries_the_origin_of_the_embedding_job() {
+        let f = fixture("").await;
+        f.repo
+            .complete_ocr(crate::database::test_vault(), f.doc_id, "imported text")
+            .await
+            .unwrap();
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+
+        for origin in [EventOrigin::Import, EventOrigin::User] {
+            f.worker
+                .process_job(&JobType::GenerateEmbedding {
+                    document_id: f.doc_id,
+                    origin,
+                })
+                .await
+                .unwrap();
+        }
+
+        let origins: Vec<_> = SqliteOutboxStore::new(f.pool.clone())
+            .replay(0, chrono::Utc::now() - chrono::Duration::minutes(5), 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|event| matches!(event.event, Some(DocumentEvent::Processed { .. })))
+            .map(|event| event.origin)
+            .collect();
+        assert_eq!(origins, vec![EventOrigin::Import, EventOrigin::User]);
+    }
+
+    #[tokio::test]
     async fn a_document_deleted_mid_job_gets_no_embedding() {
         let mut f = fixture("some text").await;
         f.worker.embedding_service = Arc::new(DeletingEmbeddings(f.repo.clone(), f.doc_id));
@@ -2157,9 +2211,7 @@ mod tests {
         f.pipeline.invalidate().await;
 
         f.worker
-            .process_job(&JobType::GenerateEmbedding {
-                document_id: f.doc_id,
-            })
+            .process_job(&JobType::generate_embedding(f.doc_id))
             .await
             .ok();
 

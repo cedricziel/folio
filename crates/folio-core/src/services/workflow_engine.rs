@@ -268,7 +268,7 @@ impl WorkflowEngine {
 #[async_trait]
 impl EventConsumer for WorkflowEngine {
     async fn consume(&self, event: &OutboxEvent) -> Result<()> {
-        if event.origin == EventOrigin::Workflow {
+        if matches!(event.origin, EventOrigin::Workflow | EventOrigin::Import) {
             return Ok(());
         }
         self.handle(event).await.map(|_| ())
