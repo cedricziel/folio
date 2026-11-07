@@ -12,6 +12,7 @@ use folio_core::models::{
     SourceStatus, UserId, VaultId,
 };
 use folio_core::ports::{IngestLedger, SourceRepository};
+use folio_core::services::PAPERLESS_SLOT_TAKEN;
 
 fn repo_err(e: impl std::fmt::Display) -> Error {
     Error::Repository(e.to_string())
@@ -19,6 +20,12 @@ fn repo_err(e: impl std::fmt::Display) -> Error {
 
 fn write_err(e: sqlx::Error, name: &str) -> Error {
     match e.as_database_error() {
+        Some(db)
+            if db.is_unique_violation()
+                && db.constraint() == Some("ingestion_sources_one_paperless") =>
+        {
+            Error::Conflict(PAPERLESS_SLOT_TAKEN.into())
+        }
         Some(db) if db.is_unique_violation() => Error::Duplicate {
             entity_type: "Source",
             field: "name",
@@ -56,6 +63,33 @@ fn source_from_row(row: &PgRow) -> Result<IngestionSourceDef> {
         config: serde_json::from_str(row.get("config")).map_err(repo_err)?,
         vault_id: Some(VaultId(row.get("vault_id"))),
     })
+}
+
+/// Serialises Paperless writes per vault, then refuses a second live Paperless source
+async fn claim_paperless(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vault: VaultId,
+    except: Option<Id>,
+) -> Result<()> {
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended('folio-paperless:' || $1::text, 0))",
+    )
+    .bind(vault.0)
+    .execute(&mut **tx)
+    .await
+    .map_err(repo_err)?;
+    let taken: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM ingestion_sources WHERE vault_id = $1 AND kind = 'paperless' AND deleted_at IS NULL AND id IS DISTINCT FROM $2)",
+    )
+    .bind(vault.0)
+    .bind(except)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(repo_err)?;
+    if taken {
+        return Err(Error::Conflict(PAPERLESS_SLOT_TAKEN.into()));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -126,6 +160,9 @@ impl SourceRepository for PostgresSourceRepository {
         let now = Utc::now();
         let actor = folio_core::mutation::current_actor();
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        if input.config.is_paperless() {
+            claim_paperless(&mut tx, vault, None).await?;
+        }
         let row = sqlx::query(
             "INSERT INTO ingestion_sources (id, vault_id, name, enabled, kind, config, created_at, updated_at, created_by, updated_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *",
         )
@@ -171,6 +208,9 @@ impl SourceRepository for PostgresSourceRepository {
             && existing.config == input.config
         {
             return Ok(existing);
+        }
+        if input.config.is_paperless() {
+            claim_paperless(&mut tx, vault, Some(id)).await?;
         }
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query(
@@ -257,6 +297,9 @@ impl SourceRepository for PostgresSourceRepository {
             .is_none()
         {
             return Ok(existing);
+        }
+        if existing.config.is_paperless() {
+            claim_paperless(&mut tx, vault, Some(id)).await?;
         }
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();

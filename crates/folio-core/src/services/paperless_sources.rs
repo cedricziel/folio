@@ -4,6 +4,9 @@ use crate::error::{Error, Result};
 use crate::models::{Caller, Id, IngestionSourceDef, VaultId, VaultRole};
 use crate::ports::SourceRepository;
 
+/// Why a second live Paperless source in a vault is refused
+pub const PAPERLESS_SLOT_TAKEN: &str = "This vault already has a Paperless source";
+
 /// A Paperless source reads a whole library with a long-lived token, so only
 /// an instance admin who owns the vault may manage it
 pub fn authorize_paperless(caller: &Caller, vault_role: Option<VaultRole>) -> Result<()> {
@@ -36,9 +39,7 @@ pub async fn ensure_paperless_slot(
         ));
     }
     if managed.list(vault).await?.iter().any(is_other_paperless) {
-        return Err(Error::Conflict(
-            "This vault already has a Paperless source".into(),
-        ));
+        return Err(Error::Conflict(PAPERLESS_SLOT_TAKEN.into()));
     }
     Ok(())
 }

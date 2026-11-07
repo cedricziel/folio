@@ -12,6 +12,7 @@ use folio_core::models::{
     SourceStatus, UserId, VaultId,
 };
 use folio_core::ports::{IngestLedger, SourceRepository};
+use folio_core::services::PAPERLESS_SLOT_TAKEN;
 
 fn repo_err(e: impl std::fmt::Display) -> Error {
     Error::Repository(e.to_string())
@@ -62,6 +63,11 @@ fn source_from_row(row: &SqliteRow) -> Result<IngestionSourceDef> {
 
 fn write_err(e: sqlx::Error, name: &str) -> Error {
     match &e {
+        sqlx::Error::Database(db)
+            if db.is_unique_violation() && db.message().ends_with("ingestion_sources.vault_id") =>
+        {
+            Error::Conflict(PAPERLESS_SLOT_TAKEN.into())
+        }
         sqlx::Error::Database(db) if db.is_unique_violation() => Error::Duplicate {
             entity_type: "Source",
             field: "name",
@@ -69,6 +75,26 @@ fn write_err(e: sqlx::Error, name: &str) -> Error {
         },
         _ => repo_err(e),
     }
+}
+
+/// Refuses a second live Paperless source; `BEGIN IMMEDIATE` already serialises writers
+async fn claim_paperless(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    vault: VaultId,
+    except: Option<Id>,
+) -> Result<()> {
+    let taken: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM ingestion_sources WHERE vault_id = ? AND kind = 'paperless' AND deleted_at IS NULL AND id IS NOT ?)",
+    )
+    .bind(vault.to_string())
+    .bind(except.map(|id| id.to_string()))
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(repo_err)?;
+    if taken {
+        return Err(Error::Conflict(PAPERLESS_SLOT_TAKEN.into()));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -143,6 +169,9 @@ impl SourceRepository for SqliteSourceRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(repo_err)?;
+        if input.config.is_paperless() {
+            claim_paperless(&mut tx, vault, None).await?;
+        }
         let row = sqlx::query(
             "INSERT INTO ingestion_sources (id, vault_id, name, enabled, kind, config, created_at, updated_at, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
         )
@@ -195,6 +224,9 @@ impl SourceRepository for SqliteSourceRepository {
             && existing.config == input.config
         {
             return Ok(existing);
+        }
+        if input.config.is_paperless() {
+            claim_paperless(&mut tx, vault, Some(id)).await?;
         }
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query(
@@ -285,6 +317,9 @@ impl SourceRepository for SqliteSourceRepository {
             .is_none()
         {
             return Ok(existing);
+        }
+        if existing.config.is_paperless() {
+            claim_paperless(&mut tx, vault, Some(id)).await?;
         }
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now().to_rfc3339();

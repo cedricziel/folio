@@ -21,7 +21,7 @@ pub use library::{
 pub use outbox_dispatcher::{
     retry_delay, BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher,
 };
-pub use paperless_sources::{authorize_paperless, ensure_paperless_slot};
+pub use paperless_sources::{authorize_paperless, ensure_paperless_slot, PAPERLESS_SLOT_TAKEN};
 pub use vaults::{VaultService, PERSONAL_NAME};
 pub use workflow_engine::WorkflowEngine;
 
