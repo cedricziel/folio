@@ -42,8 +42,9 @@ pub use file_identity::FileIdentity;
 pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
-    IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
-    SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus, REDACTED,
+    IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PaperlessConfig,
+    PaperlessSyncMode, PollReport, SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus,
+    PAPERLESS_MIN_POLL_SECS, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{

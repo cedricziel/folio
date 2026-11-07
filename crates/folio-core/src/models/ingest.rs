@@ -181,6 +181,104 @@ impl EmailConfig {
     }
 }
 
+/// How much of a Paperless library a source keeps in sync
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PaperlessSyncMode {
+    /// Import the library once, then stop polling
+    Once,
+    /// Import documents that are new in Paperless; ignore every other change
+    NewOnly,
+    /// Paperless is the master: changes, trashing and restores are applied
+    #[default]
+    Mirror,
+}
+
+/// A Paperless-ngx library reached over its REST API
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct PaperlessConfig {
+    /// Base URL, `http` or `https`
+    pub url: String,
+    /// Shown as `********` by the API; send it back unchanged to keep the stored one
+    /// while the URL stays the same
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Read the token from this file; only accepted in `config.toml`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_file: Option<String>,
+    #[serde(default)]
+    pub sync_mode: PaperlessSyncMode,
+    /// At least 60
+    #[serde(default = "default_paperless_poll_secs")]
+    pub poll_interval_secs: u64,
+    /// ISO 4217 code for monetary values that carry no currency
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_currency: Option<String>,
+}
+
+/// The shortest poll interval a Paperless source accepts
+pub const PAPERLESS_MIN_POLL_SECS: u64 = 60;
+
+impl std::fmt::Debug for PaperlessConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PaperlessConfig")
+            .field("url", &self.url)
+            .field("token", &crate::redact::Redacted(&self.token))
+            .field("token_file", &self.token_file)
+            .field("sync_mode", &self.sync_mode)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("default_currency", &self.default_currency)
+            .finish()
+    }
+}
+
+impl PaperlessConfig {
+    /// The effective token: the file's trimmed content, else the inline value
+    pub fn resolve_token(&self) -> Result<String> {
+        if let Some(path) = &self.token_file {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| Error::Validation(format!("Cannot read token file {path}: {e}")))?;
+            return Ok(raw.trim_end_matches(['\r', '\n']).to_string());
+        }
+        self.token
+            .clone()
+            .filter(|t| !t.is_empty() && t != REDACTED)
+            .ok_or_else(|| Error::Validation("No Paperless token configured".to_string()))
+    }
+
+    fn validate(&self) -> Result<()> {
+        let invalid = |msg: &str| Err(Error::Validation(msg.to_string()));
+        match url::Url::parse(self.url.trim()) {
+            Ok(url)
+                if matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some_and(|h| !h.is_empty())
+                    && url.username().is_empty()
+                    && url.password().is_none() => {}
+            _ => return invalid("url must be an http or https URL without credentials"),
+        }
+        if self.poll_interval_secs < PAPERLESS_MIN_POLL_SECS {
+            return invalid("poll_interval_secs must be at least 60");
+        }
+        if self
+            .default_currency
+            .as_deref()
+            .is_some_and(|c| c.len() != 3 || !c.bytes().all(|b| b.is_ascii_uppercase()))
+        {
+            return invalid("default_currency must be a three-letter ISO 4217 code such as EUR");
+        }
+        if self.token_file.is_none() && self.token.as_deref().is_none_or(str::is_empty) {
+            return invalid("token is required");
+        }
+        Ok(())
+    }
+}
+
+fn default_paperless_poll_secs() -> u64 {
+    900
+}
+
 /// Kind-specific settings of a source
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -188,6 +286,7 @@ impl EmailConfig {
 pub enum SourceConfig {
     Folder(FolderConfig),
     Email(EmailConfig),
+    Paperless(PaperlessConfig),
 }
 
 impl SourceConfig {
@@ -195,6 +294,7 @@ impl SourceConfig {
         match self {
             Self::Folder(_) => super::SourceKind::Folder,
             Self::Email(_) => super::SourceKind::Email,
+            Self::Paperless(_) => super::SourceKind::Paperless,
         }
     }
 
@@ -222,6 +322,7 @@ impl SourceConfig {
                     return invalid("after_import = move needs move_to");
                 }
             }
+            Self::Paperless(p) => p.validate()?,
         }
         Ok(())
     }
@@ -232,6 +333,10 @@ impl SourceConfig {
             Self::Email(e) if e.password.is_some() => Self::Email(EmailConfig {
                 password: Some(REDACTED.to_string()),
                 ..e.clone()
+            }),
+            Self::Paperless(p) if p.token.is_some() => Self::Paperless(PaperlessConfig {
+                token: Some(REDACTED.to_string()),
+                ..p.clone()
             }),
             other => other.clone(),
         }
@@ -422,5 +527,137 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.resolve_password().unwrap(), "from-file");
         std::fs::remove_file(dir).unwrap();
+    }
+
+    fn paperless(extra: serde_json::Value) -> SourceConfig {
+        let mut body = serde_json::json!({
+            "type": "paperless",
+            "url": "https://paperless.example",
+            "token": "secret-token",
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(body).unwrap()
+    }
+
+    fn validation_message(cfg: &SourceConfig) -> String {
+        match cfg.validate() {
+            Err(Error::Validation(message)) => message,
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paperless_defaults_to_mirror_every_fifteen_minutes() {
+        let SourceConfig::Paperless(p) = paperless(serde_json::json!({})) else {
+            panic!("paperless")
+        };
+        assert_eq!(p.sync_mode, PaperlessSyncMode::Mirror);
+        assert_eq!(p.poll_interval_secs, 900);
+        assert_eq!(p.default_currency, None);
+        assert_eq!(
+            SourceConfig::Paperless(p).kind(),
+            crate::models::SourceKind::Paperless
+        );
+    }
+
+    #[test]
+    fn paperless_sync_modes_use_snake_case() {
+        for (wire, mode) in [
+            ("once", PaperlessSyncMode::Once),
+            ("new_only", PaperlessSyncMode::NewOnly),
+            ("mirror", PaperlessSyncMode::Mirror),
+        ] {
+            let SourceConfig::Paperless(p) = paperless(serde_json::json!({ "sync_mode": wire }))
+            else {
+                panic!("paperless")
+            };
+            assert_eq!(p.sync_mode, mode);
+        }
+    }
+
+    #[test]
+    fn paperless_accepts_http_and_https() {
+        for url in [
+            "http://paperless.lan:8000",
+            "https://paperless.example/sub/",
+        ] {
+            paperless(serde_json::json!({ "url": url }))
+                .validate()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn paperless_rejects_other_url_schemes_naming_the_field() {
+        for url in [
+            "ftp://paperless.example",
+            "file:///etc/passwd",
+            "paperless.example",
+            "",
+        ] {
+            let message = validation_message(&paperless(serde_json::json!({ "url": url })));
+            assert!(message.contains("url"), "{url}: {message}");
+        }
+    }
+
+    #[test]
+    fn paperless_rejects_urls_with_credentials() {
+        let cfg = paperless(serde_json::json!({ "url": "https://user:pw@paperless.example" }));
+        assert!(validation_message(&cfg).contains("url"));
+    }
+
+    #[test]
+    fn paperless_poll_interval_must_be_at_least_a_minute() {
+        let message =
+            validation_message(&paperless(serde_json::json!({ "poll_interval_secs": 59 })));
+        assert!(message.contains("poll_interval_secs"), "{message}");
+        paperless(serde_json::json!({ "poll_interval_secs": 60 }))
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn paperless_default_currency_is_a_three_letter_code() {
+        paperless(serde_json::json!({ "default_currency": "EUR" }))
+            .validate()
+            .unwrap();
+        for bad in ["EU", "EURO", "eu1"] {
+            let message =
+                validation_message(&paperless(serde_json::json!({ "default_currency": bad })));
+            assert!(message.contains("default_currency"), "{bad}: {message}");
+        }
+    }
+
+    #[test]
+    fn paperless_needs_a_token_or_a_token_file() {
+        let cfg: SourceConfig = serde_json::from_value(serde_json::json!({
+            "type": "paperless", "url": "https://paperless.example"
+        }))
+        .unwrap();
+        assert!(validation_message(&cfg).contains("token"));
+    }
+
+    #[test]
+    fn paperless_token_is_redacted_and_hidden_from_debug_output() {
+        let cfg = paperless(serde_json::json!({}));
+        assert!(!format!("{cfg:?}").contains("secret-token"));
+        let json = serde_json::to_string(&cfg.redacted()).unwrap();
+        assert!(!json.contains("secret-token"), "{json}");
+        assert!(json.contains(REDACTED));
+    }
+
+    #[test]
+    fn paperless_token_file_wins_and_is_trimmed() {
+        let path = std::env::temp_dir().join(format!("folio-pl-{}", Id::new_v4()));
+        std::fs::write(&path, "from-file\n").unwrap();
+        let SourceConfig::Paperless(p) =
+            paperless(serde_json::json!({ "token_file": path.to_str().unwrap() }))
+        else {
+            panic!("paperless")
+        };
+        assert_eq!(p.resolve_token().unwrap(), "from-file");
+        std::fs::remove_file(path).unwrap();
     }
 }

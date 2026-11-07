@@ -41,7 +41,8 @@ Folio answers `201` with the token redacted. Its first poll starts right away an
 | `url` | | `http` or `https` only. |
 | `token` | | A Paperless API token. Redacted in every response. |
 | `sync_mode` | `mirror` | `once`, `new_only` or `mirror`. See [Sync modes](#3-choose-a-sync-mode). |
-| poll interval | 900 seconds | At least 60. |
+| `poll_interval_secs` | 900 | Seconds between polls. At least 60. |
+| `default_currency` | | Three-letter code for monetary values without one, such as `EUR`. |
 
 Folio imports only the documents the Paperless token can see. Test the connection to check:
 
@@ -73,7 +74,7 @@ Rules for the source:
 [ingest.paperless.home]
 url = "https://paperless.example"
 token_file = "/run/secrets/paperless_token"
-vault = "<vault>"
+vault = "<vault ID>"
 sync_mode = "mirror"
 poll_interval_secs = 900
 default_currency = "EUR"

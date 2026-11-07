@@ -45,7 +45,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 4. Paperless source
 
-- [ ] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
+- [x] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
   - the validation errors
   - a URL change with the placeholder fails
   - config without `vault` fails at load

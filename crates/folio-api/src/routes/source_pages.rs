@@ -70,6 +70,7 @@ fn summary(def: &IngestionSourceDef) -> String {
     match &def.config {
         SourceConfig::Folder(f) => f.path.clone(),
         SourceConfig::Email(e) => format!("{}@{}:{}", e.username, e.host, e.port),
+        SourceConfig::Paperless(p) => p.url.clone(),
     }
 }
 
@@ -100,6 +101,7 @@ async fn rows(
             kind: match def.config {
                 SourceConfig::Folder(_) => "Folder",
                 SourceConfig::Email(_) => "Email",
+                SourceConfig::Paperless(_) => "Paperless",
             },
             summary: summary(&def),
             read_only: def.origin == SourceOrigin::Config,
@@ -258,6 +260,7 @@ impl FormValues {
                     v.password = REDACTED.into();
                 }
             }
+            SourceConfig::Paperless(_) => v.kind = "paperless".into(),
         }
         v
     }

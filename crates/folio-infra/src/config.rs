@@ -20,7 +20,7 @@ use figment::{
 };
 use folio_core::models::{
     EmailConfig, EmbeddingSettings, FolderConfig, Id, IngestionSourceDef, OcrSettings,
-    ProcessingSettings, SourceConfig, SourceOrigin,
+    PaperlessConfig, ProcessingSettings, SourceConfig, SourceOrigin, VaultId,
 };
 use folio_core::redact::Redacted;
 use serde::{Deserialize, Serialize};
@@ -58,6 +58,11 @@ pub struct Config {
 /// host = "imap.example.com"
 /// username = "me"
 /// password_file = "/run/secrets/imap_work"
+///
+/// [ingest.paperless.home]
+/// url = "https://paperless.example"
+/// token_file = "/run/secrets/paperless_token"
+/// vault = "<vault ID>"
 /// ```
 ///
 /// The same keys work as environment variables, for example
@@ -67,6 +72,19 @@ pub struct Config {
 pub struct IngestConfig {
     pub folders: BTreeMap<String, Configured<FolderConfig>>,
     pub email: BTreeMap<String, Configured<EmailConfig>>,
+    pub paperless: BTreeMap<String, ConfiguredPaperless>,
+}
+
+/// A configured Paperless library; unlike folders and mailboxes it names its vault
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfiguredPaperless {
+    #[serde(default = "enabled_by_default")]
+    pub enabled: bool,
+    /// Required; checked by [`IngestConfig::check`] so the error can name the section
+    #[serde(default)]
+    pub vault: Option<VaultId>,
+    #[serde(flatten)]
+    pub settings: PaperlessConfig,
 }
 
 /// A configured source with an on/off switch next to its settings
@@ -111,7 +129,37 @@ impl IngestConfig {
             config: SourceConfig::Email(c.settings.clone()),
             vault_id: None,
         });
-        folders.chain(mailboxes).collect()
+        let paperless = self.paperless.iter().map(|(name, c)| IngestionSourceDef {
+            lifecycle: None,
+            id: config_source_id("paperless", name),
+            name: name.clone(),
+            enabled: c.enabled,
+            origin: SourceOrigin::Config,
+            config: SourceConfig::Paperless(c.settings.clone()),
+            vault_id: c.vault,
+        });
+        folders.chain(mailboxes).chain(paperless).collect()
+    }
+
+    /// Paperless sections need a vault, valid settings and a vault of their own
+    pub fn check(&self) -> Result<(), String> {
+        let mut vaults = HashMap::new();
+        for (name, source) in &self.paperless {
+            let section = format!("[ingest.paperless.{name}]");
+            let vault = source
+                .vault
+                .ok_or_else(|| format!("{section} needs a vault: set vault = \"<vault ID>\""))?;
+            SourceConfig::Paperless(source.settings.clone())
+                .validate()
+                .map_err(|e| format!("{section}: {e}"))?;
+            if let Some(other) = vaults.insert(vault, name) {
+                return Err(format!(
+                    "{section} uses the same vault as [ingest.paperless.{other}]; \
+                     a vault has at most one Paperless source"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -850,13 +898,15 @@ impl Config {
         if let Some(ingest) = ingest_from_env(&vars)? {
             figment = figment.merge(Serialized::default("ingest", ingest));
         }
-        figment.extract()
+        let config: Self = figment.extract()?;
+        config.ingest.check().map_err(figment::Error::from)?;
+        Ok(config)
     }
 }
 
 const INGEST_ENV_PREFIX: &str = "FOLIO_INGEST__";
 
-/// Collect `FOLIO_INGEST__<FOLDERS|EMAIL>__<NAME>__<KEY>` variables into a tree
+/// Collect `FOLIO_INGEST__<FOLDERS|EMAIL|PAPERLESS>__<NAME>__<KEY>` variables into a tree
 ///
 /// Sources have arbitrary names, so they cannot be listed in [`SETTINGS`].
 /// Values are read as bool, integer, `[a, b]` list, or text. A `_FILE` suffix
@@ -890,7 +940,7 @@ fn ingest_from_env(
             .collect();
         let [kind, source, key] = path.as_slice() else {
             return Err(figment::Error::from(format!(
-                "{base}: expected FOLIO_INGEST__<FOLDERS|EMAIL>__<NAME>__<KEY>"
+                "{base}: expected FOLIO_INGEST__<FOLDERS|EMAIL|PAPERLESS>__<NAME>__<KEY>"
             )));
         };
         root.entry(kind.clone())
@@ -1097,6 +1147,117 @@ mod tests {
         assert_eq!(e.password.as_deref(), Some("from-file"));
         assert!(!defs.iter().find(|d| d.name == "old").unwrap().enabled);
         assert_eq!(defs[0].id, config.ingest.definitions()[0].id);
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn load_toml(toml: &str) -> Result<Config, figment::Error> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, toml).unwrap();
+        Config::load_with(path.to_str().unwrap(), env(&[]))
+    }
+
+    const VAULT: &str = "0190d0d2-6c4b-7d3e-9c35-000000000001";
+
+    #[test]
+    fn paperless_sources_load_from_config_toml_into_their_vault() {
+        let config = load_toml(&format!(
+            r#"
+[ingest.paperless.home]
+url = "https://paperless.example"
+token_file = "/run/secrets/paperless_token"
+vault = "{VAULT}"
+sync_mode = "new_only"
+poll_interval_secs = 600
+default_currency = "EUR"
+"#
+        ))
+        .unwrap();
+        let defs = config.ingest.definitions();
+        let [def] = defs.as_slice() else {
+            panic!("one source: {defs:?}")
+        };
+        assert_eq!(def.name, "home");
+        assert_eq!(def.origin, SourceOrigin::Config);
+        assert_eq!(def.vault_id, Some(VAULT.parse().unwrap()));
+        let SourceConfig::Paperless(p) = &def.config else {
+            panic!("paperless")
+        };
+        assert_eq!(p.url, "https://paperless.example");
+        assert_eq!(
+            p.token_file.as_deref(),
+            Some("/run/secrets/paperless_token")
+        );
+        assert_eq!(p.sync_mode, folio_core::models::PaperlessSyncMode::NewOnly);
+        assert_eq!(p.poll_interval_secs, 600);
+        assert_eq!(p.default_currency.as_deref(), Some("EUR"));
+        assert_eq!(def.id, config.ingest.definitions()[0].id);
+    }
+
+    #[test]
+    fn paperless_sources_load_from_environment_variables() {
+        let config = load(&[
+            (
+                "FOLIO_INGEST__PAPERLESS__HOME__URL",
+                "http://paperless:8000",
+            ),
+            ("FOLIO_INGEST__PAPERLESS__HOME__TOKEN", "t0ken"),
+            ("FOLIO_INGEST__PAPERLESS__HOME__VAULT", VAULT),
+        ]);
+        let defs = config.ingest.definitions();
+        assert_eq!(defs[0].vault_id, Some(VAULT.parse().unwrap()));
+        assert!(!format!("{config:?}").contains("t0ken"));
+    }
+
+    #[test]
+    fn paperless_source_without_a_vault_fails_naming_the_section() {
+        let error = load_toml(
+            r#"
+[ingest.paperless.home]
+url = "https://paperless.example"
+token_file = "/run/secrets/paperless_token"
+"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ingest.paperless.home"), "{error}");
+        assert!(error.contains("vault"), "{error}");
+    }
+
+    #[test]
+    fn invalid_paperless_settings_fail_naming_the_section() {
+        let error = load_toml(&format!(
+            r#"
+[ingest.paperless.home]
+url = "ftp://paperless.example"
+token = "t"
+vault = "{VAULT}"
+"#
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ingest.paperless.home"), "{error}");
+        assert!(error.contains("url"), "{error}");
+    }
+
+    #[test]
+    fn two_paperless_sources_for_one_vault_fail() {
+        let error = load_toml(&format!(
+            r#"
+[ingest.paperless.a]
+url = "https://a.example"
+token = "t"
+vault = "{VAULT}"
+
+[ingest.paperless.b]
+url = "https://b.example"
+token = "t"
+vault = "{VAULT}"
+"#
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ingest.paperless.b"), "{error}");
     }
 
     #[test]

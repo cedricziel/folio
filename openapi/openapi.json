@@ -7580,6 +7580,58 @@
           }
         }
       },
+      "PaperlessConfig": {
+        "type": "object",
+        "description": "A Paperless-ngx library reached over its REST API",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "default_currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO 4217 code for monetary values that carry no currency"
+          },
+          "poll_interval_secs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "At least 60",
+            "minimum": 0
+          },
+          "sync_mode": {
+            "$ref": "#/components/schemas/PaperlessSyncMode"
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown as `********` by the API; send it back unchanged to keep the stored one\nwhile the URL stays the same"
+          },
+          "token_file": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Read the token from this file; only accepted in `config.toml`"
+          },
+          "url": {
+            "type": "string",
+            "description": "Base URL, `http` or `https`"
+          }
+        }
+      },
+      "PaperlessSyncMode": {
+        "type": "string",
+        "description": "How much of a Paperless library a source keeps in sync",
+        "enum": [
+          "once",
+          "new_only",
+          "mirror"
+        ]
+      },
       "PersonalTokenMetadata": {
         "type": "object",
         "required": [
@@ -7926,6 +7978,27 @@
                 }
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaperlessConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "paperless"
+                    ]
+                  }
+                }
+              }
+            ]
           }
         ],
         "description": "Kind-specific settings of a source"
@@ -7940,7 +8013,8 @@
           "email",
           "mcp",
           "share",
-          "import"
+          "import",
+          "paperless"
         ]
       },
       "SourceOrigin": {

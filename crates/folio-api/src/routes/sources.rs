@@ -158,29 +158,60 @@ pub(crate) fn require_managed(def: &IngestionSourceDef) -> ApiResult<()> {
     Ok(())
 }
 
-/// Replace a masked password by the stored one and refuse server-side password files
+/// Replace a masked secret by the stored one and refuse server-side secret files
 ///
-/// A password file would let a UI user make the server read any file and send
-/// its content to a host of their choosing, so files are configuration-only.
+/// A password or token file would let a UI user make the server read any file
+/// and send its content to a host of their choosing, so files are
+/// configuration-only. A stored Paperless token is only kept while the URL
+/// stays the same, so it is never sent to a host the user just typed in.
 pub(crate) fn prepare_input(
     input: &mut IngestionSourceInput,
     existing: Option<&IngestionSourceDef>,
 ) -> Result<(), DomainError> {
-    if let SourceConfig::Email(email) = &mut input.config {
-        if email.password_file.is_some() {
-            return Err(DomainError::Validation(
-                "Password files can only be set in the server configuration".into(),
-            ));
+    let previous = existing.map(|d| &d.config);
+    match &mut input.config {
+        SourceConfig::Email(email) => {
+            if email.password_file.is_some() {
+                return Err(DomainError::Validation(
+                    "Password files can only be set in the server configuration".into(),
+                ));
+            }
+            if email.password.as_deref() == Some(REDACTED) || email.password.is_none() {
+                let stored = match previous {
+                    Some(SourceConfig::Email(old)) => old.password.clone(),
+                    _ => None,
+                };
+                email.password = Some(stored.ok_or_else(|| {
+                    DomainError::Validation("Enter the account password".to_string())
+                })?);
+            }
         }
-        if email.password.as_deref() == Some(REDACTED) || email.password.is_none() {
-            let stored = match existing.map(|d| &d.config) {
-                Some(SourceConfig::Email(old)) => old.password.clone(),
-                _ => None,
-            };
-            email.password = Some(stored.ok_or_else(|| {
-                DomainError::Validation("Enter the account password".to_string())
-            })?);
+        SourceConfig::Paperless(paperless) => {
+            if paperless.token_file.is_some() {
+                return Err(DomainError::Validation(
+                    "token_file can only be set in the server configuration".into(),
+                ));
+            }
+            if paperless
+                .token
+                .as_deref()
+                .is_none_or(|t| t.is_empty() || t == REDACTED)
+            {
+                paperless.token = Some(match previous {
+                    Some(SourceConfig::Paperless(old)) if old.url == paperless.url => old
+                        .token
+                        .clone()
+                        .ok_or_else(|| DomainError::Validation("token is required".to_string()))?,
+                    Some(SourceConfig::Paperless(_)) => {
+                        return Err(DomainError::Validation(
+                            "token: enter the API token again, because the url changed".to_string(),
+                        ))
+                    }
+                    _ => return Err(DomainError::Validation("token is required".to_string())),
+                });
+            }
         }
+        SourceConfig::Folder(_) => {}
     }
     input.validate()
 }
