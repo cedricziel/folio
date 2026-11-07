@@ -3,23 +3,23 @@
 //! Everything here is pure: callers pass in reader records and the vault's
 //! current state as values, and get plans back. Nothing touches a repository.
 
-pub mod diff;
-pub mod fields;
-pub mod fingerprint;
-pub mod payload;
-pub mod taxonomy;
-pub mod trash;
-pub mod values;
+mod diff;
+mod fields;
+mod fingerprint;
+mod payload;
+mod taxonomy;
+mod trash;
+mod values;
 
 #[cfg(test)]
 mod test_support;
 
 use serde::{Deserialize, Serialize};
 
-pub use diff::{decide, Decision, FolioState, ItemAction, LedgerEntry, SkipReason};
+pub use diff::{FolioState, ItemAction, LedgerEntry, SkipReason};
 pub use fields::{
-    field_conflicts, folio_kind, plan_fields, ExistingField, FieldConflict, FieldConflictReason,
-    FieldPlan, FieldTarget, NewField, ASN_FIELD_NAME,
+    field_conflicts, plan_fields, ExistingField, FieldConflict, FieldConflictReason, FieldPlan,
+    FieldTarget, NewField, ASN_FIELD_NAME,
 };
 pub use fingerprint::{
     document_id, fingerprint, DocumentRecords, FINGERPRINT_VERSION, IMPORT_NAMESPACE,
@@ -28,13 +28,13 @@ pub use payload::{
     plan_document, DraftItem, FailReason, ItemOutcome, ItemPayload, PlanContext, PlannedItem,
 };
 pub use taxonomy::{
-    plan_named, plan_tags, ExistingEntity, KindPlan, TagPlan, Target, TaxonomyKind,
-    TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
+    plan_named, plan_tags, ExistingEntity, FlattenedTag, KindPlan, MappedEntity, NewEntity, Rename,
+    TagPlan, Target, TaxonomyKind, TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
+    MAX_FLATTENED_NAME,
 };
 pub use trash::{TrashGate, TrashHealth, TrashPlan, TRASH_MAX_COUNT, TRASH_MAX_PERCENT};
 pub use values::{
-    plan_values, ItemWarning, PlannedNote, PlannedValue, PlannedValues, ValueContext,
-    DEFAULT_CURRENCY,
+    ItemWarning, PlannedNote, PlannedValue, PlannedValues, ValueContext, DEFAULT_CURRENCY,
 };
 
 /// Which Paperless changes a run applies; a `once` source's first run plans
