@@ -44,6 +44,25 @@ pub async fn ensure_paperless_slot(
     Ok(())
 }
 
+/// Splits managed sources into the ones to run and the Paperless ones that a
+/// config-defined Paperless source of the same vault overrides
+pub fn split_shadowed_paperless(
+    configured: &[IngestionSourceDef],
+    managed: Vec<IngestionSourceDef>,
+) -> (Vec<IngestionSourceDef>, Vec<IngestionSourceDef>) {
+    let config_vaults: Vec<_> = configured
+        .iter()
+        .filter(|def| def.config.is_paperless())
+        .filter_map(|def| def.vault_id)
+        .collect();
+    managed.into_iter().partition(|def| {
+        !(def.config.is_paperless()
+            && def
+                .vault_id
+                .is_some_and(|vault| config_vaults.contains(&vault)))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,5 +92,38 @@ mod tests {
                 assert!(matches!(error, Error::Forbidden(_)), "{error:?}");
             }
         }
+    }
+
+    fn source(kind: &str, vault: VaultId) -> IngestionSourceDef {
+        let config = match kind {
+            "paperless" => {
+                serde_json::json!({"type": "paperless", "url": "https://p.example", "token": "t"})
+            }
+            _ => serde_json::json!({"type": "folder", "path": "/scans"}),
+        };
+        IngestionSourceDef {
+            lifecycle: None,
+            id: Id::new_v4(),
+            name: kind.into(),
+            enabled: true,
+            origin: crate::models::SourceOrigin::Managed,
+            config: serde_json::from_value(config).unwrap(),
+            vault_id: Some(vault),
+        }
+    }
+
+    #[test]
+    fn a_config_paperless_source_shadows_the_managed_one_of_its_vault_only() {
+        let (home, other) = (VaultId::new(), VaultId::new());
+        let configured = vec![source("paperless", home)];
+        let shadowed = source("paperless", home);
+        let kept = vec![source("folder", home), source("paperless", other)];
+        let mut managed = kept.clone();
+        managed.push(shadowed.clone());
+
+        let (run, skipped) = split_shadowed_paperless(&configured, managed);
+
+        assert_eq!(run, kept);
+        assert_eq!(skipped, vec![shadowed]);
     }
 }
