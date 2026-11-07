@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, SubsecRound, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -91,10 +91,56 @@ struct CanonicalV1<'a> {
     inbox: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct CanonicalField<'a> {
     field: i64,
-    value: Option<&'a PaperlessFieldValue>,
+    value: Option<CanonicalValue<'a>>,
+}
+
+/// A custom-field value in a form fixed for fingerprint v1, independent of
+/// how the port's types serialize
+#[derive(Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(tag = "type", content = "value")]
+enum CanonicalValue<'a> {
+    #[serde(rename = "string")]
+    Text(&'a str),
+    #[serde(rename = "longtext")]
+    LongText(&'a str),
+    #[serde(rename = "url")]
+    Url(&'a str),
+    #[serde(rename = "date")]
+    Date(String),
+    #[serde(rename = "boolean")]
+    Boolean(bool),
+    #[serde(rename = "integer")]
+    Integer(i64),
+    /// As text, so NaN and infinities stay distinct from an empty value
+    #[serde(rename = "float")]
+    Float(String),
+    #[serde(rename = "monetary")]
+    Monetary(&'a str),
+    #[serde(rename = "select")]
+    Select(&'a str),
+    #[serde(rename = "documentlink")]
+    DocumentLink(&'a [i64]),
+}
+
+impl<'a> From<&'a PaperlessFieldValue> for CanonicalValue<'a> {
+    fn from(value: &'a PaperlessFieldValue) -> Self {
+        use PaperlessFieldValue as P;
+        match value {
+            P::Text(text) => Self::Text(text),
+            P::LongText(text) => Self::LongText(text),
+            P::Url(url) => Self::Url(url),
+            P::Date(date) => Self::Date(date.format("%Y-%m-%d").to_string()),
+            P::Boolean(flag) => Self::Boolean(*flag),
+            P::Integer(number) => Self::Integer(*number),
+            P::Float(number) => Self::Float(number.to_string()),
+            P::Monetary(raw) => Self::Monetary(raw),
+            P::Select(option) => Self::Select(option),
+            P::DocumentLink(ids) => Self::DocumentLink(ids),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -132,10 +178,11 @@ pub(super) fn fingerprint_of(
         .iter()
         .map(|f| CanonicalField {
             field: f.field,
-            value: f.value.as_ref(),
+            value: f.value.as_ref().map(CanonicalValue::from),
         })
         .collect();
-    custom_fields.sort_by_key(|f| f.field);
+    // Sorting by value too keeps duplicate instances order-independent
+    custom_fields.sort();
     let canonical = CanonicalV1 {
         fingerprint_version: FINGERPRINT_VERSION,
         title: &document.title,
@@ -152,7 +199,8 @@ pub(super) fn fingerprint_of(
             .map(|n| CanonicalNote {
                 id: n.id,
                 body: &n.body,
-                created: n.created,
+                // The export has milliseconds, the API microseconds
+                created: n.created.trunc_subsecs(0),
             })
             .collect(),
     };
@@ -210,10 +258,7 @@ mod tests {
         );
         assert_eq!(
             document_id(vault, 42),
-            Uuid::new_v5(
-                &IMPORT_NAMESPACE,
-                b"00000000-0000-0000-0000-000000000001/paperless/42"
-            )
+            Uuid::parse_str("bbe09c1a-d038-5062-8a28-5a530ff1a1db").unwrap()
         );
     }
 
@@ -223,7 +268,10 @@ mod tests {
         let mut b = records();
         b.notes.reverse();
         b.fields.reverse();
+        b.fields.push(b.fields[0].clone());
         b.document.tags.reverse();
+        let mut a = a;
+        a.fields.push(a.fields[1].clone());
         assert_eq!(
             fingerprint(&a, &BTreeSet::new()),
             fingerprint(&b, &BTreeSet::new())
@@ -233,14 +281,22 @@ mod tests {
     #[test]
     fn fingerprint_tracks_mirrored_state() {
         let base = fingerprint(&records(), &BTreeSet::new());
-        let changes: [fn(&mut DocumentRecords); 7] = [
+        let changes: [fn(&mut DocumentRecords); 15] = [
             |r| r.document.title.push('!'),
             |r| r.document.content.push('!'),
+            |r| r.document.created = r.document.created.succ_opt().unwrap(),
+            |r| r.document.correspondent = Some(99),
+            |r| r.document.document_type = None,
             |r| r.document.tags.push(5),
             |r| r.document.archive_serial_number = None,
             |r| r.notes[0].body.push('!'),
+            |r| r.notes[0].created += chrono::Duration::seconds(1),
             |r| r.notes[0].deleted = true,
+            |r| r.notes.push(note(3, 1, "third")),
             |r| r.fields[0].value = None,
+            |r| r.fields[1].value = Some(PaperlessFieldValue::Float(f64::NAN)),
+            |r| r.fields[1].field = 4,
+            |r| r.versions.push(newer_version()),
         ];
         for change in changes {
             let mut changed = records();
@@ -248,6 +304,49 @@ mod tests {
             assert_ne!(fingerprint(&changed, &BTreeSet::new()), base);
         }
         assert_ne!(fingerprint(&records(), &BTreeSet::from([3])), base);
+    }
+
+    fn newer_version() -> PaperlessDocument {
+        let mut version = document(2);
+        version.content = "Newer text".into();
+        version.version_of = Some(PaperlessVersionInfo {
+            root_document: 1,
+            index: Some(1),
+            label: None,
+        });
+        version
+    }
+
+    #[test]
+    fn nan_and_an_empty_value_fingerprint_differently() {
+        let mut nan = records();
+        nan.fields[1].value = Some(PaperlessFieldValue::Float(f64::NAN));
+        let mut empty = records();
+        empty.fields[1].value = None;
+        assert_ne!(
+            fingerprint(&nan, &BTreeSet::new()),
+            fingerprint(&empty, &BTreeSet::new())
+        );
+    }
+
+    #[test]
+    fn note_times_count_in_whole_seconds() {
+        let mut millis = records();
+        millis.notes[0].created += chrono::Duration::milliseconds(123);
+        let mut micros = records();
+        micros.notes[0].created += chrono::Duration::microseconds(123_456);
+        assert_eq!(
+            fingerprint(&millis, &BTreeSet::new()),
+            fingerprint(&micros, &BTreeSet::new())
+        );
+    }
+
+    #[test]
+    fn fingerprint_v1_is_pinned() {
+        assert_eq!(
+            fingerprint(&records(), &BTreeSet::from([3])),
+            "6a482659973a3069c8a2def3fb62b5e8ccb3ffd489438391c30a8b7ca27afc06"
+        );
     }
 
     #[test]
