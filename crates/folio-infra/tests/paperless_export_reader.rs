@@ -3,13 +3,20 @@ use std::path::{Path, PathBuf};
 
 use chrono::{NaiveDate, TimeZone, Utc};
 use folio_core::ports::{
-    digest_original, ChecksumAlgorithm, PaperlessDocument, PaperlessFieldType, PaperlessFieldValue,
-    PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessTag, PaperlessVersion,
+    digest_original, ChecksumAlgorithm, InvalidDocumentReason, MalformedKind, PaperlessDocument,
+    PaperlessFieldType, PaperlessFieldValue, PaperlessReadError, PaperlessReader, PaperlessRecord,
+    PaperlessTag, PaperlessVersion, SourceLocation,
 };
 use folio_infra::import::{resolve_import_dir, PaperlessFsReader};
 use futures::{StreamExt, TryStreamExt};
 
-const FIXTURES: [&str; 4] = ["v2_20", "v3_4", "v3_4_split", "v3_4_folder_prefix"];
+const FIXTURES: [&str; 5] = [
+    "v2_20",
+    "v3_4",
+    "v3_4_split",
+    "v3_4_folder_prefix",
+    "v3_4_split_archive",
+];
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -318,13 +325,16 @@ async fn omits_deleted_custom_field_values() {
 }
 
 #[tokio::test]
-async fn lists_every_document_id() {
-    let reader = reader_at(&fixture("v3_4_split"));
-    let ids = reader.list_document_ids().await.unwrap();
-    assert_eq!(
-        ids.ids().iter().copied().collect::<Vec<_>>(),
-        [1, 2, 3, 4, 5]
-    );
+async fn lists_live_root_document_ids() {
+    for name in ["v3_4", "v3_4_split"] {
+        let ids = reader_at(&fixture(name)).list_document_ids().await.unwrap();
+        // 3 is trashed and 5 is a file version of 4
+        assert_eq!(
+            ids.ids().iter().copied().collect::<Vec<_>>(),
+            [1, 2, 4],
+            "{name}"
+        );
+    }
 }
 
 fn canonical(records: Vec<PaperlessRecord>) -> Vec<String> {
@@ -332,10 +342,7 @@ fn canonical(records: Vec<PaperlessRecord>) -> Vec<String> {
         .into_iter()
         .map(|mut r| {
             if let PaperlessRecord::Document(d) = &mut r {
-                d.original_handle = d
-                    .original_handle
-                    .trim_start_matches("originals/")
-                    .to_string();
+                d.original_handle = d.original_handle.rsplit('/').next().unwrap().to_string();
             }
             serde_json::to_string(&r).unwrap()
         })
@@ -349,6 +356,7 @@ async fn split_and_folder_prefix_layouts_yield_the_same_records() {
     let single = canonical(scan("v3_4").await);
     assert_eq!(canonical(scan("v3_4_split").await), single);
     assert_eq!(canonical(scan("v3_4_folder_prefix").await), single);
+    assert_eq!(canonical(scan("v3_4_split_archive").await), single);
 }
 
 #[tokio::test]
@@ -384,7 +392,18 @@ async fn missing_and_malformed_files_are_typed_errors() {
     std::fs::write(dir.path().join("metadata.json"), "{\"version\": 3}").unwrap();
     assert!(matches!(
         reader.source_info().await,
-        Err(PaperlessReadError::Malformed { .. })
+        Err(PaperlessReadError::Malformed {
+            kind: MalformedKind::InvalidRecord,
+            ..
+        })
+    ));
+    std::fs::write(dir.path().join("metadata.json"), "{\"version\": \"two\"}").unwrap();
+    assert!(matches!(
+        reader.source_info().await,
+        Err(PaperlessReadError::Malformed {
+            kind: MalformedKind::InvalidVersion,
+            ..
+        })
     ));
 
     std::fs::write(
@@ -395,13 +414,189 @@ async fn missing_and_malformed_files_are_typed_errors() {
     let results: Vec<_> = reader.scan().await.unwrap().collect::<Vec<_>>().await;
     assert!(matches!(
         results.last(),
-        Some(Err(PaperlessReadError::Malformed { .. }))
+        Some(Err(PaperlessReadError::Malformed {
+            kind: MalformedKind::UnexpectedEnd,
+            ..
+        }))
     ));
 
     std::fs::write(dir.path().join("manifest.json"), "{}").unwrap();
     let results: Vec<_> = reader.scan().await.unwrap().collect::<Vec<_>>().await;
     assert!(matches!(
         results.as_slice(),
-        [Err(PaperlessReadError::Malformed { .. })]
+        [Err(PaperlessReadError::Malformed {
+            kind: MalformedKind::NotAnArray,
+            ..
+        })]
+    ));
+}
+
+fn export(manifest: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("manifest.json"), manifest).unwrap();
+    dir
+}
+
+async fn scan_dir(dir: &Path) -> Vec<Result<PaperlessRecord, PaperlessReadError>> {
+    reader_at(dir).scan().await.unwrap().collect().await
+}
+
+fn doc(pk: i64, checksum: &str, handle: Option<&str>) -> String {
+    let handle = handle
+        .map(|h| format!(r#", "__exported_file_name__": "{h}""#))
+        .unwrap_or_default();
+    format!(
+        r#"{{"model": "documents.document", "pk": {pk}, "fields": {{"title": "t", "content": "", "mime_type": "application/pdf", "checksum": "{checksum}", "created": "2024-01-01", "added": "2024-01-01T00:00:00Z", "modified": "2024-01-01T00:00:00Z", "tags": []}}{handle}}}"#
+    )
+}
+
+fn invalid_ids(records: &[Result<PaperlessRecord, PaperlessReadError>]) -> Vec<i64> {
+    records
+        .iter()
+        .filter_map(|r| match r {
+            Ok(PaperlessRecord::InvalidDocument(d)) => {
+                assert_eq!(d.reason, InvalidDocumentReason::MalformedRecord);
+                Some(d.id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_bad_document_record_fails_only_that_document() {
+    let md5 = "0".repeat(32);
+    let manifest = format!(
+        "[{}, {}, {}, {}, {}]",
+        r#"{"model": "documents.customfield", "pk": 1, "fields": {"name": "Ref", "data_type": "string", "extra_data": null}}"#,
+        // --data-only exports carry no __exported_file_name__
+        doc(1, &md5, None),
+        doc(2, "not-a-checksum", Some("b.pdf")),
+        doc(3, &md5, Some("c.pdf")),
+        r#"{"model": "documents.customfieldinstance", "pk": 1, "fields": {"document": 3, "field": 9, "deleted_at": null, "value_text": "x"}}"#,
+    );
+    let dir = export(&manifest);
+    let records = scan_dir(dir.path()).await;
+    assert!(records.iter().all(Result::is_ok), "{records:?}");
+    assert_eq!(invalid_ids(&records), [1, 2, 3]);
+    let docs: Vec<_> = records
+        .iter()
+        .filter_map(|r| match r {
+            Ok(PaperlessRecord::Document(d)) => Some(d.id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(docs, [3]);
+
+    // Unreadable records still count as live, so mirror sync never trashes them
+    let ids = reader_at(dir.path()).list_document_ids().await.unwrap();
+    assert_eq!(ids.ids().iter().copied().collect::<Vec<_>>(), [1, 2, 3]);
+}
+
+#[tokio::test]
+async fn a_record_without_a_readable_id_fails_the_scan() {
+    let no_pk = r#"[{"model": "documents.document", "fields": {"title": "t"}}]"#;
+    let no_document = r#"[{"model": "documents.note", "pk": 1, "fields": {"note": "n"}}]"#;
+    for manifest in [no_pk, no_document, "[1]"] {
+        let dir = export(manifest);
+        let records = scan_dir(dir.path()).await;
+        match records.as_slice() {
+            [Err(PaperlessReadError::Malformed {
+                kind: MalformedKind::InvalidRecord,
+                location,
+            })] => assert_eq!(
+                location,
+                &SourceLocation {
+                    file: "manifest.json".into(),
+                    record: Some(0)
+                }
+            ),
+            other => panic!("{manifest}: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn malformed_errors_carry_no_source_text() {
+    let dir = export(
+        r#"[{"model": "documents.tag", "pk": 7, "fields": {"name": 5, "color": "SOURCE-TEXT"}}]"#,
+    );
+    let error = match scan_dir(dir.path()).await.pop() {
+        Some(Err(e)) => e.to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        error,
+        "manifest.json record 0 is not valid Paperless data: invalid record"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_document_ids_across_manifests_fail_the_scan() {
+    let md5 = "0".repeat(32);
+    let dir = export(&format!("[{}]", doc(1, &md5, Some("a.pdf"))));
+    std::fs::write(
+        dir.path().join("a-manifest.json"),
+        format!("[{}]", doc(1, &md5, Some("a.pdf"))),
+    )
+    .unwrap();
+    let records = scan_dir(dir.path()).await;
+    assert!(
+        matches!(
+            records.last(),
+            Some(Err(PaperlessReadError::Malformed {
+                kind: MalformedKind::DuplicateDocument,
+                ..
+            }))
+        ),
+        "{records:?}"
+    );
+}
+
+#[tokio::test]
+async fn file_directories_are_skipped_only_in_folder_prefix_exports() {
+    let md5 = "0".repeat(32);
+    let dir = export("[]");
+    std::fs::create_dir_all(dir.path().join("originals")).unwrap();
+    std::fs::write(
+        dir.path().join("originals/x-manifest.json"),
+        format!("[{}]", doc(1, &md5, Some("originals/x.pdf"))),
+    )
+    .unwrap();
+    assert_eq!(scan_dir(dir.path()).await.len(), 1);
+
+    std::fs::create_dir(dir.path().join("json")).unwrap();
+    assert!(scan_dir(dir.path()).await.is_empty());
+}
+
+#[tokio::test]
+async fn deep_directory_trees_fail_the_scan() {
+    let dir = export("[]");
+    let deep: PathBuf = (0..20).map(|i| format!("d{i}")).collect();
+    std::fs::create_dir_all(dir.path().join(deep)).unwrap();
+    assert!(matches!(
+        reader_at(dir.path()).scan().await.err(),
+        Some(PaperlessReadError::Malformed {
+            kind: MalformedKind::TooDeep,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn a_non_utf8_manifest_name_fails_the_scan() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = export("[]");
+    let name = std::ffi::OsStr::from_bytes(b"\xff-manifest.json");
+    // Some filesystems, such as APFS, refuse names that aren't UTF-8
+    if std::fs::write(dir.path().join(name), "[]").is_err() {
+        return;
+    }
+    assert!(matches!(
+        reader_at(dir.path()).scan().await.err(),
+        Some(PaperlessReadError::Malformed {
+            kind: MalformedKind::NonUtf8Name,
+            ..
+        })
     ));
 }

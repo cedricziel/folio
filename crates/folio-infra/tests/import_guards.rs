@@ -251,3 +251,21 @@ async fn split_manifest_discovery_skips_symlinks() {
         .unwrap();
     assert!(records.is_empty(), "{records:?}");
 }
+
+#[test]
+fn hard_linked_and_fifo_originals_are_refused() {
+    let layout = Layout::new();
+    let export = layout.path("imports/export");
+    fs::write(layout.path("outside/linked.pdf"), b"outside").unwrap();
+    fs::hard_link(layout.path("outside/linked.pdf"), export.join("hard.pdf")).unwrap();
+    let fifo = export.join("pipe.pdf");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    assert_unsafe(open_in(&export, "hard.pdf"));
+    // A FIFO would block an ordinary open; the type check refuses it first
+    assert_unsafe(open_in(&export, "pipe.pdf"));
+}

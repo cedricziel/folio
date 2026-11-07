@@ -300,7 +300,7 @@ def trailing(v3):
     return out
 
 
-def build(name, *, version, v3, split=False, prefix=False):
+def build(name, *, version, v3, split=False, prefix=False, nest=None):
     out = HERE / name
     if out.exists():
         shutil.rmtree(out)
@@ -312,6 +312,9 @@ def build(name, *, version, v3, split=False, prefix=False):
         body = d.pop("body")
         base = d.pop("base")
         pk = d.pop("pk")
+        # --use-filename-format can put originals and split manifests in any directory
+        if nest and pk in nest:
+            base = f"{nest[pk]}/{base}"
         rel = f"{base}.pdf"
         rel_original = f"originals/{rel}" if prefix else rel
         target = out / rel_original
@@ -354,3 +357,4 @@ build("v2_20", version="2.20.15", v3=False)
 build("v3_4", version="3.4.2", v3=True)
 build("v3_4_split", version="3.4.2", v3=True, split=True)
 build("v3_4_folder_prefix", version="3.4.2", v3=True, prefix=True, split=True)
+build("v3_4_split_archive", version="3.4.2", v3=True, split=True, nest={4: "archive/2024", 5: "archive/2024"})

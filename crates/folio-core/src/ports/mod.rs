@@ -23,11 +23,12 @@ pub use ai::{
 pub use document_entries::{DocumentEntryRepository, EntryCreation};
 pub use health::HealthCheck;
 pub use import::{
-    digest_original, ChecksumAlgorithm, CompleteIdSet, FileDigests, OriginalFile,
-    PaperlessChecksum, PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessDocument,
-    PaperlessFieldType, PaperlessFieldValue, PaperlessNamed, PaperlessNote, PaperlessReadError,
-    PaperlessReader, PaperlessRecord, PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag,
-    PaperlessVersion, PaperlessVersionInfo, RecordStream,
+    digest_original, ChecksumAlgorithm, CompleteIdSet, FileDigests, InvalidDocumentReason,
+    MalformedKind, OriginalFile, PaperlessChecksum, PaperlessCustomField,
+    PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldType, PaperlessFieldValue,
+    PaperlessInvalidDocument, PaperlessNamed, PaperlessNote, PaperlessReadError, PaperlessReader,
+    PaperlessRecord, PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
+    PaperlessVersionInfo, RecordStream, SourceFailure, SourceLocation,
 };
 pub use ingest::{
     DocumentImporter, IngestLedger, IngestOutcomeReader, IngestOutcomeRepository, IngestSink,

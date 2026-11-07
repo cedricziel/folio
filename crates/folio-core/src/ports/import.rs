@@ -35,9 +35,10 @@ pub trait PaperlessReader: Send + Sync {
         self.scan().await
     }
 
-    /// IDs of every document the source holds, trashed ones and file versions
-    /// included. Only a listing that read everything may be returned, since
-    /// mirror sync trashes whatever is missing from it.
+    /// IDs of the live root documents: not trashed and not a file version.
+    /// A document whose record can't be read counts as live, so it is never
+    /// trashed by mistake. Only a listing that read everything may be
+    /// returned, since mirror sync trashes whatever is missing from it.
     async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError>;
 }
 
@@ -67,20 +68,94 @@ pub struct OriginalFile {
     pub reader: Box<dyn AsyncRead + Send + Unpin>,
 }
 
+/// Failures that stop a whole read; a single unreadable document arrives as
+/// [`PaperlessRecord::InvalidDocument`] instead. Messages never carry text
+/// from the source, so they are safe to show callers.
 #[derive(Debug, thiserror::Error)]
 pub enum PaperlessReadError {
     #[error("{what} is missing")]
     Missing { what: String },
-    #[error("{what} is not valid Paperless data: {message}")]
-    Malformed { what: String, message: String },
+    #[error("{location} is not valid Paperless data: {kind}")]
+    Malformed {
+        kind: MalformedKind,
+        location: SourceLocation,
+    },
     #[error("unsafe path: {what}")]
     UnsafePath { what: String },
-    #[error("could not read {what}: {source}")]
+    #[error("could not read {what}")]
     Io {
         what: String,
         #[source]
         source: io::Error,
     },
+    #[error("the Paperless source failed: {0}")]
+    Source(SourceFailure),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
+pub enum MalformedKind {
+    #[error("not a JSON array of records")]
+    NotAnArray,
+    #[error("data after the end of the array")]
+    TrailingData,
+    #[error("file ends inside the array")]
+    UnexpectedEnd,
+    #[error("invalid JSON")]
+    InvalidJson,
+    /// A record whose model or ID can't be read, or a taxonomy record that
+    /// doesn't fit its model
+    #[error("invalid record")]
+    InvalidRecord,
+    #[error("unrecognized version")]
+    InvalidVersion,
+    #[error("document ID appears twice")]
+    DuplicateDocument,
+    #[error("file name is not valid UTF-8")]
+    NonUtf8Name,
+    #[error("directories nested too deeply")]
+    TooDeep,
+}
+
+/// Where a malformed record sits: the file, and the record's index in it
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceLocation {
+    pub file: String,
+    pub record: Option<u64>,
+}
+
+impl SourceLocation {
+    pub fn file(file: &str) -> Self {
+        Self {
+            file: file.to_owned(),
+            record: None,
+        }
+    }
+}
+
+impl std::fmt::Display for SourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.record {
+            Some(index) => write!(f, "{} record {index}", self.file),
+            None => f.write_str(&self.file),
+        }
+    }
+}
+
+/// Fixed reasons a live source fails, with no upstream text
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceFailure {
+    #[error("unreachable")]
+    Unreachable,
+    #[error("unauthorized")]
+    Unauthorized,
+    #[error("unsupported version")]
+    UnsupportedVersion,
+    #[error("redirected")]
+    Redirected,
+    #[error("upstream error")]
+    UpstreamError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,6 +216,21 @@ pub enum PaperlessRecord {
     CustomFieldInstance(PaperlessCustomFieldInstance),
     Note(PaperlessNote),
     Document(Box<PaperlessDocument>),
+    /// A document, or a note or field value of one, whose record can't be
+    /// read; the engine fails that document and carries on
+    InvalidDocument(PaperlessInvalidDocument),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperlessInvalidDocument {
+    pub id: i64,
+    pub reason: InvalidDocumentReason,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvalidDocumentReason {
+    MalformedRecord,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

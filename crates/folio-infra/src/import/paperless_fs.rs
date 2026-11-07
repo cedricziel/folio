@@ -6,7 +6,7 @@
 //! social tokens and authenticators, are skipped with [`IgnoredAny`] and never
 //! materialized.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
@@ -18,15 +18,17 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use folio_core::ports::{
-    CompleteIdSet, OriginalFile, PaperlessChecksum, PaperlessCustomField,
-    PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldType, PaperlessFieldValue,
-    PaperlessNamed, PaperlessNote, PaperlessReadError, PaperlessReader, PaperlessRecord,
-    PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
-    PaperlessVersionInfo, RecordStream,
+    CompleteIdSet, InvalidDocumentReason, MalformedKind, OriginalFile, PaperlessChecksum,
+    PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldType,
+    PaperlessFieldValue, PaperlessInvalidDocument, PaperlessNamed, PaperlessNote,
+    PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessSelectOption,
+    PaperlessSourceInfo, PaperlessTag, PaperlessVersion, PaperlessVersionInfo, RecordStream,
+    SourceLocation,
 };
-use rustix::fs::{AtFlags, FileType};
+use rustix::fs::{statat, AtFlags, FileType};
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
+use serde_json::error::Category;
 
 use super::paths::{io_error, open_original_file, open_subdir, ImportDir};
 
@@ -36,6 +38,8 @@ const SPLIT_SUFFIX: &[u8] = b"-manifest.json";
 /// `--use-folder-prefix` directories that hold files, not manifests
 const FILE_DIRS: [&str; 3] = ["originals", "archive", "thumbnails"];
 const CHANNEL_DEPTH: usize = 256;
+/// How deep split-manifest discovery descends below the export directory
+const MAX_DEPTH: usize = 16;
 
 /// Export adapter for [`PaperlessReader`]; a document's `original_handle` is
 /// its path relative to the export directory. The directory is opened once,
@@ -87,7 +91,7 @@ impl PaperlessReader for PaperlessFsReader {
                         }
                     }
                     Ok(Item::Skipped(model)) => *counts.entry(model).or_default() += 1,
-                    Ok(Item::Omitted | Item::DocumentId(_)) => {}
+                    Ok(Item::Omitted | Item::DocumentId(_) | Item::DuplicateDocument) => {}
                     Err(e) => {
                         let _ = tx.blocking_send(Err(e));
                         return;
@@ -155,18 +159,25 @@ fn read_metadata(dir: &File) -> Result<PaperlessSourceInfo, PaperlessReadError> 
     }
 
     let file = open_in_export(dir, METADATA)?;
+    let location = || SourceLocation::file(METADATA);
     let raw: Raw =
-        serde_json::from_reader(BufReader::new(file)).map_err(|e| json_error(METADATA, e))?;
+        serde_json::from_reader(BufReader::new(file)).map_err(|e| json_error(e, location()))?;
     let version = PaperlessVersion::parse(&raw.version)
-        .ok_or_else(|| malformed(METADATA, format!("unrecognized version {:?}", raw.version)))?;
+        .ok_or_else(|| malformed(MalformedKind::InvalidVersion, location()))?;
     Ok(PaperlessSourceInfo { version })
 }
 
-/// `--split-manifest` files, in path order; symlinks are never followed and
-/// every directory is opened relative to its parent
+/// `--split-manifest` files, in path order. Every directory is opened
+/// relative to its parent and symlinks are never followed. Like Paperless's
+/// `**/*-manifest.json` glob, the whole tree is searched, except the file
+/// directories of a `--use-folder-prefix` export, recognized by its `json/`.
 fn split_manifests(dir: &File) -> Result<Vec<String>, PaperlessReadError> {
+    let folder_prefix = matches!(
+        statat(dir, "json", AtFlags::SYMLINK_NOFOLLOW),
+        Ok(stat) if FileType::from_raw_mode(stat.st_mode as _) == FileType::Directory
+    );
     let mut found = Vec::new();
-    walk_for_manifests(dir, Path::new(""), &mut found)?;
+    walk_for_manifests(dir, Path::new(""), 0, folder_prefix, &mut found)?;
     found.sort();
     Ok(found)
 }
@@ -174,6 +185,8 @@ fn split_manifests(dir: &File) -> Result<Vec<String>, PaperlessReadError> {
 fn walk_for_manifests(
     dir: &File,
     relative: &Path,
+    depth: usize,
+    folder_prefix: bool,
     found: &mut Vec<String>,
 ) -> Result<(), PaperlessReadError> {
     let label = relative.display().to_string();
@@ -186,25 +199,37 @@ fn walk_for_manifests(
         }
         let file_type = match entry.file_type() {
             FileType::Unknown => FileType::from_raw_mode(
-                rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+                statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
                     .map_err(fail)?
                     .st_mode as _,
             ),
             known => known,
         };
+        let path = relative.join(name);
         match file_type {
             FileType::Directory => {
                 let holds_files =
-                    relative.as_os_str().is_empty() && FILE_DIRS.iter().any(|d| name == *d);
-                if !holds_files {
-                    let child = File::from(open_subdir(dir, name).map_err(fail)?);
-                    walk_for_manifests(&child, &relative.join(name), found)?;
+                    folder_prefix && depth == 0 && FILE_DIRS.iter().any(|d| name == *d);
+                if holds_files {
+                    continue;
                 }
+                if depth + 1 >= MAX_DEPTH {
+                    return Err(malformed(
+                        MalformedKind::TooDeep,
+                        SourceLocation::file(&path.display().to_string()),
+                    ));
+                }
+                let child = File::from(open_subdir(dir, name).map_err(fail)?);
+                walk_for_manifests(&child, &path, depth + 1, folder_prefix, found)?;
             }
             FileType::RegularFile if name.as_bytes().ends_with(SPLIT_SUFFIX) => {
-                if let Some(path) = relative.join(name).to_str() {
-                    found.push(path.to_owned());
-                }
+                let path = path.to_str().ok_or_else(|| {
+                    malformed(
+                        MalformedKind::NonUtf8Name,
+                        SourceLocation::file(&path.display().to_string()),
+                    )
+                })?;
+                found.push(path.to_owned());
             }
             _ => {}
         }
@@ -222,6 +247,8 @@ enum Item {
     Record(PaperlessRecord),
     DocumentId(i64),
     Skipped(String),
+    /// A document ID seen before; fails the read
+    DuplicateDocument,
     /// Read but not passed on: deleted field values, or anything but
     /// documents when only IDs are wanted
     Omitted,
@@ -239,6 +266,7 @@ struct ManifestRecords {
 struct Context {
     mode: Mode,
     field_types: HashMap<i64, PaperlessFieldType>,
+    seen_documents: HashSet<i64>,
 }
 
 impl ManifestRecords {
@@ -252,6 +280,7 @@ impl ManifestRecords {
             context: Context {
                 mode,
                 field_types: HashMap::new(),
+                seen_documents: HashSet::new(),
             },
         })
     }
@@ -292,6 +321,8 @@ struct ManifestStream {
     label: String,
     reader: BufReader<File>,
     position: Position,
+    /// Index of the next element in the array
+    index: u64,
 }
 
 impl ManifestStream {
@@ -300,6 +331,7 @@ impl ManifestStream {
             label,
             reader: BufReader::with_capacity(64 * 1024, file),
             position: Position::BeforeArray,
+            index: 0,
         }
     }
 
@@ -318,7 +350,7 @@ impl ManifestStream {
                     self.reader.consume(1);
                     return match self.peek_non_whitespace() {
                         Ok(None) => None,
-                        Ok(Some(_)) => Some(Err(self.malformed("trailing data after the array"))),
+                        Ok(Some(_)) => Some(Err(self.malformed(MalformedKind::TrailingData))),
                         Err(e) => Some(Err(e)),
                     };
                 }
@@ -331,20 +363,33 @@ impl ManifestStream {
                     return Some(self.read_element(context));
                 }
                 (Position::BeforeArray, _) => {
-                    return Some(Err(self.malformed("expected a JSON array of records")))
+                    return Some(Err(self.malformed(MalformedKind::NotAnArray)))
                 }
-                (_, None) => return Some(Err(self.malformed("unexpected end of file"))),
-                (_, Some(_)) => return Some(Err(self.malformed("expected `,` or `]`"))),
+                (_, None) => return Some(Err(self.malformed(MalformedKind::UnexpectedEnd))),
+                (_, Some(_)) => return Some(Err(self.malformed(MalformedKind::InvalidJson))),
             }
         }
     }
 
     /// Reads one object; serde_json stops right after its closing brace
     fn read_element(&mut self, context: &mut Context) -> Result<Item, PaperlessReadError> {
+        let location = self.location();
+        self.index += 1;
         let mut de = serde_json::Deserializer::from_reader(&mut self.reader);
-        RecordSeed(context)
-            .deserialize(&mut de)
-            .map_err(|e| json_error(&self.label, e))
+        match RecordSeed(context).deserialize(&mut de) {
+            Ok(Item::DuplicateDocument) => {
+                Err(malformed(MalformedKind::DuplicateDocument, location))
+            }
+            Ok(item) => Ok(item),
+            Err(e) => Err(json_error(e, location)),
+        }
+    }
+
+    fn location(&self) -> SourceLocation {
+        SourceLocation {
+            file: self.label.clone(),
+            record: Some(self.index),
+        }
     }
 
     fn peek_non_whitespace(&mut self) -> Result<Option<u8>, PaperlessReadError> {
@@ -364,24 +409,24 @@ impl ManifestStream {
         }
     }
 
-    fn malformed(&self, message: &str) -> PaperlessReadError {
-        malformed(&self.label, message.to_owned())
+    fn malformed(&self, kind: MalformedKind) -> PaperlessReadError {
+        malformed(kind, self.location())
     }
 }
 
-fn malformed(what: &str, message: String) -> PaperlessReadError {
-    PaperlessReadError::Malformed {
-        what: what.to_owned(),
-        message,
-    }
+fn malformed(kind: MalformedKind, location: SourceLocation) -> PaperlessReadError {
+    PaperlessReadError::Malformed { kind, location }
 }
 
-fn json_error(what: &str, error: serde_json::Error) -> PaperlessReadError {
-    if error.is_io() {
-        io_error(what, error.into())
-    } else {
-        malformed(what, error.to_string())
-    }
+/// Keeps serde's message out: it can quote source data
+fn json_error(error: serde_json::Error, location: SourceLocation) -> PaperlessReadError {
+    let kind = match error.classify() {
+        Category::Io => return io_error(&location.to_string(), error.into()),
+        Category::Eof => MalformedKind::UnexpectedEnd,
+        Category::Syntax => MalformedKind::InvalidJson,
+        Category::Data => MalformedKind::InvalidRecord,
+    };
+    malformed(kind, location)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -432,6 +477,13 @@ impl<'de> DeserializeSeed<'de> for RecordSeed<'_> {
     }
 }
 
+/// What the `fields` value held, before keys after it are known
+enum Fields {
+    Done(Item),
+    /// Document fields, read as JSON so one bad document can't stop the scan
+    Document(serde_json::Value),
+}
+
 /// Paperless writes `model`, `pk`, `fields`, then any exporter keys; the
 /// model must be known before `fields` so unused records are never read
 impl<'de> Visitor<'de> for RecordSeed<'_> {
@@ -445,7 +497,7 @@ impl<'de> Visitor<'de> for RecordSeed<'_> {
         let context = self.0;
         let mut kind: Option<Result<Model, String>> = None;
         let mut pk: Option<i64> = None;
-        let mut item = None;
+        let mut fields = None;
         let mut original_handle: Option<String> = None;
 
         while let Some(key) = map.next_key::<Key>()? {
@@ -463,11 +515,11 @@ impl<'de> Visitor<'de> for RecordSeed<'_> {
                     Some(Ok(model)) => {
                         let id = pk
                             .ok_or_else(|| de::Error::custom("record fields come before its pk"))?;
-                        item = Some(read_fields(*model, id, context, &mut map)?);
+                        fields = Some(read_fields(*model, id, context, &mut map)?);
                     }
                 },
                 Key::ExportedFileName if kind == Some(Ok(Model::Document)) => {
-                    original_handle = Some(map.next_value()?)
+                    original_handle = map.next_value()?
                 }
                 _ => {
                     map.next_value::<IgnoredAny>()?;
@@ -478,13 +530,12 @@ impl<'de> Visitor<'de> for RecordSeed<'_> {
         match kind {
             None => Err(de::Error::missing_field("model")),
             Some(Err(label)) => Ok(Item::Skipped(label)),
-            Some(Ok(_)) => match item.ok_or_else(|| de::Error::missing_field("fields"))? {
-                Item::Record(PaperlessRecord::Document(mut doc)) => {
-                    doc.original_handle = original_handle
-                        .ok_or_else(|| de::Error::missing_field("__exported_file_name__"))?;
-                    Ok(Item::Record(PaperlessRecord::Document(doc)))
+            Some(Ok(_)) => match fields.ok_or_else(|| de::Error::missing_field("fields"))? {
+                Fields::Done(item) => Ok(item),
+                Fields::Document(value) => {
+                    let id = pk.ok_or_else(|| de::Error::missing_field("pk"))?;
+                    Ok(document_item(id, value, original_handle, context.mode))
                 }
-                item => Ok(item),
             },
         }
     }
@@ -495,24 +546,28 @@ fn read_fields<'de, A: MapAccess<'de>>(
     id: i64,
     context: &mut Context,
     map: &mut A,
-) -> Result<Item, A::Error> {
-    if context.mode == Mode::DocumentIds {
-        map.next_value::<IgnoredAny>()?;
-        return Ok(match model {
-            Model::Document => Item::DocumentId(id),
-            _ => Item::Omitted,
-        });
-    }
-    let record = match model {
-        Model::Correspondent => {
+) -> Result<Fields, A::Error> {
+    let record = match (model, context.mode) {
+        (Model::Document, _) => {
+            if !context.seen_documents.insert(id) {
+                map.next_value::<IgnoredAny>()?;
+                return Ok(Fields::Done(Item::DuplicateDocument));
+            }
+            return Ok(Fields::Document(map.next_value()?));
+        }
+        (_, Mode::DocumentIds) => {
+            map.next_value::<IgnoredAny>()?;
+            return Ok(Fields::Done(Item::Omitted));
+        }
+        (Model::Correspondent, _) => {
             let NamedFields { name } = map.next_value()?;
             PaperlessRecord::Correspondent(PaperlessNamed { id, name })
         }
-        Model::DocumentType => {
+        (Model::DocumentType, _) => {
             let NamedFields { name } = map.next_value()?;
             PaperlessRecord::DocumentType(PaperlessNamed { id, name })
         }
-        Model::Tag => {
+        (Model::Tag, _) => {
             let f: TagFields = map.next_value()?;
             PaperlessRecord::Tag(PaperlessTag {
                 id,
@@ -522,40 +577,90 @@ fn read_fields<'de, A: MapAccess<'de>>(
                 parent: f.tn_parent,
             })
         }
-        Model::CustomField => {
+        (Model::CustomField, _) => {
             let field = map.next_value::<CustomFieldFields>()?.into_record(id);
             context.field_types.insert(id, field.data_type);
             PaperlessRecord::CustomField(field)
         }
-        Model::CustomFieldInstance => {
-            let f: InstanceFields = map.next_value()?;
+        (Model::CustomFieldInstance, _) => {
+            let value: serde_json::Value = map.next_value()?;
+            let document = owning_document(&value)?;
+            let Ok(f) = InstanceFields::deserialize(value) else {
+                return Ok(Fields::Done(invalid(document)));
+            };
             if f.deleted_at.is_some() {
-                return Ok(Item::Omitted);
+                return Ok(Fields::Done(Item::Omitted));
             }
-            let data_type = *context.field_types.get(&f.field).ok_or_else(|| {
-                de::Error::custom(format!("value for unknown custom field {}", f.field))
-            })?;
+            let Some(&data_type) = context.field_types.get(&f.field) else {
+                return Ok(Fields::Done(invalid(document)));
+            };
             PaperlessRecord::CustomFieldInstance(PaperlessCustomFieldInstance {
-                document: f.document,
+                document,
                 field: f.field,
                 value: f.into_value(data_type),
             })
         }
-        Model::Note => {
-            let f: NoteFields = map.next_value()?;
+        (Model::Note, _) => {
+            let value: serde_json::Value = map.next_value()?;
+            let document = owning_document(&value)?;
+            let Ok(f) = NoteFields::deserialize(value) else {
+                return Ok(Fields::Done(invalid(document)));
+            };
             PaperlessRecord::Note(PaperlessNote {
                 id,
-                document: f.document,
+                document,
                 body: f.note,
                 created: f.created,
                 deleted: f.deleted_at.is_some(),
             })
         }
-        Model::Document => PaperlessRecord::Document(Box::new(
-            map.next_value::<DocumentFields>()?.into_record(id)?,
-        )),
     };
-    Ok(Item::Record(record))
+    Ok(Fields::Done(Item::Record(record)))
+}
+
+/// The document a note or field value belongs to; without it the record
+/// can't be tied to one document, so the scan fails
+fn owning_document<E: de::Error>(fields: &serde_json::Value) -> Result<i64, E> {
+    fields
+        .get("document")
+        .and_then(serde_json::Value::as_i64)
+        .ok_or_else(|| E::missing_field("document"))
+}
+
+fn invalid(document: i64) -> Item {
+    Item::Record(PaperlessRecord::InvalidDocument(PaperlessInvalidDocument {
+        id: document,
+        reason: InvalidDocumentReason::MalformedRecord,
+    }))
+}
+
+fn document_item(id: i64, fields: serde_json::Value, handle: Option<String>, mode: Mode) -> Item {
+    if mode == Mode::DocumentIds {
+        #[derive(Deserialize)]
+        struct Liveness {
+            deleted_at: Option<IgnoredAny>,
+            root_document: Option<i64>,
+        }
+        return match Liveness::deserialize(fields) {
+            Ok(Liveness {
+                deleted_at: Some(_),
+                ..
+            })
+            | Ok(Liveness {
+                root_document: Some(_),
+                ..
+            }) => Item::Omitted,
+            _ => Item::DocumentId(id),
+        };
+    }
+    let document = DocumentFields::deserialize(fields)
+        .ok()
+        .zip(handle)
+        .and_then(|(fields, handle)| fields.into_record(id, handle));
+    match document {
+        Some(document) => Item::Record(PaperlessRecord::Document(Box::new(document))),
+        None => invalid(id),
+    }
 }
 
 #[derive(Deserialize)]
@@ -628,7 +733,6 @@ enum SelectValue {
 /// Paperless keeps one column per value type; the field's type picks the column
 #[derive(Deserialize)]
 struct InstanceFields {
-    document: i64,
     field: i64,
     deleted_at: Option<String>,
     value_text: Option<String>,
@@ -671,7 +775,6 @@ impl InstanceFields {
 struct NoteFields {
     note: String,
     created: DateTime<Utc>,
-    document: i64,
     deleted_at: Option<String>,
 }
 
@@ -699,11 +802,9 @@ struct DocumentFields {
 }
 
 impl DocumentFields {
-    /// The handle is set once `__exported_file_name__`, which follows the fields, is read
-    fn into_record<E: de::Error>(self, id: i64) -> Result<PaperlessDocument, E> {
-        let checksum = PaperlessChecksum::parse(&self.checksum)
-            .ok_or_else(|| E::custom(format!("document {id} has an unrecognized checksum")))?;
-        Ok(PaperlessDocument {
+    fn into_record(self, id: i64, original_handle: String) -> Option<PaperlessDocument> {
+        let checksum = PaperlessChecksum::parse(&self.checksum)?;
+        Some(PaperlessDocument {
             id,
             title: self.title,
             content: self.content,
@@ -726,7 +827,7 @@ impl DocumentFields {
                     index: self.version_index,
                     label: self.version_label,
                 }),
-            original_handle: String::new(),
+            original_handle,
         })
     }
 }
