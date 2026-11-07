@@ -294,7 +294,7 @@ struct InboxView: View {
                     pages: scan.images, service: service, destination: makeUploadDestination()
                 ),
                 onFinished: { filed in
-                    scannedPages = nil
+                    scannedPages.close(scan.id)
                     Task { await list.load(afterUpload: filed) }
                 }
             )
@@ -648,9 +648,4 @@ struct InboxView: View {
 private struct UploadBatch: Identifiable {
     let id = UUID()
     let files: [UploadFile]
-}
-
-struct ScannedPages: Identifiable {
-    let id = UUID()
-    let images: [CGImage]
 }
