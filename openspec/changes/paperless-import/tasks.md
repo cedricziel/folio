@@ -116,7 +116,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 9. Docs and verification
 
-- [ ] 9.1 Write the admin guide: connecting Paperless, the sync modes and what `mirror` overwrites, the trash threshold and `confirm_trash`, the forward-only upgrade with a backup first, export imports, dry runs, retry, cancel, MCP, and deleting exports. Delegate the writing to the technical-writer agent.
+- [x] 9.1 Write the admin guide: connecting Paperless, the sync modes and what `mirror` overwrites, the trash threshold and `confirm_trash`, the forward-only upgrade with a backup first, export imports, dry runs, retry, cancel, MCP, and deleting exports. Delegate the writing to the technical-writer agent.
 - [ ] 9.2 Verify end to end with the `verify` skill:
   - Start an ephemeral Folio and a testcontainers Paperless.
   - Use `mirror` mode and import, then kill Folio mid-run and resume.
