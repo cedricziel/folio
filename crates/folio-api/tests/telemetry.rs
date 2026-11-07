@@ -80,9 +80,14 @@ async fn a_request_produces_a_server_span_and_duration_metric() {
         attribute(server.attributes.iter(), "http.request.method").as_deref(),
         Some("GET")
     );
+    // Semantic conventions type the status code as an int; a string is not filterable as one.
     assert_eq!(
-        attribute(server.attributes.iter(), "http.response.status_code").as_deref(),
-        Some("404")
+        server
+            .attributes
+            .iter()
+            .find(|kv| kv.key.as_str() == "http.response.status_code")
+            .map(|kv| kv.value.clone()),
+        Some(opentelemetry::Value::I64(404))
     );
 
     meter_provider.force_flush().unwrap();
