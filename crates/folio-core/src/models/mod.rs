@@ -1,5 +1,6 @@
 //! Domain models
 
+mod caller;
 mod correspondent;
 mod document;
 mod document_date;
@@ -26,6 +27,7 @@ mod workflow;
 mod workflow_event_conditions;
 mod workflow_trigger;
 
+pub use caller::Caller;
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{
     CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
