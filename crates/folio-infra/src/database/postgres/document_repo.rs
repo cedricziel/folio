@@ -1,7 +1,7 @@
 //! PostgreSQL document, tag, correspondent and document type repositories
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use std::sync::Arc;
 
 use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Transaction};
@@ -332,12 +332,21 @@ impl PostgresDocumentRepository {
         tx: &mut Transaction<'_, Postgres>,
         event: DocumentEvent,
     ) -> Result<()> {
+        self.emit_as(tx, event, self.origin).await
+    }
+
+    async fn emit_as(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        event: DocumentEvent,
+        origin: EventOrigin,
+    ) -> Result<()> {
         let context = capture_document(tx, event.document_id(), None)
             .await?
             .ok_or_else(|| {
                 Error::Repository("Document vanished before its event was captured".into())
             })?;
-        insert_event(tx, &event, self.origin, Some(&context))
+        insert_event(tx, &event, origin, Some(&context))
             .await
             .map(|_| ())
     }
@@ -712,8 +721,9 @@ impl DocumentRepository for PostgresDocumentRepository {
         vault: VaultId,
         document: ImportedDocument,
     ) -> Result<Document> {
+        document.validate()?;
         let actor = folio_core::mutation::current_actor();
-        let now = Utc::now();
+        let now = Utc::now().trunc_subsecs(6);
         let id = document.id;
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         if let Some(c) = document.correspondent_id {
@@ -726,7 +736,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             require_entry(&mut tx, "tags", "Tag", vault, *tag_id).await?;
         }
         let review = (!document.in_inbox).then_some(ReviewOrigin::System);
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO documents (id, vault_id, uploaded_by, created_by, updated_by, title, content,
                  original_filename, file_path, mime_type, correspondent_id, document_type_id,
                  ocr_status, embed_status, source_type, created_at, updated_at,
@@ -747,8 +757,8 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(ProcessingStatus::Done.as_str())
         .bind(document.embed_status().as_str())
         .bind(SourceKind::Import.as_str())
-        .bind(document.created_at)
-        .bind(document.updated_at)
+        .bind(document.created_at.trunc_subsecs(6))
+        .bind(document.updated_at.trunc_subsecs(6))
         .bind(document.document_date.map(|date| date.to_string()))
         .bind(review.map(|_| now))
         .bind(review.map(ReviewOrigin::as_str))
@@ -756,8 +766,17 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(&document.external_ref.id)
         .bind(&document.content_sha256)
         .execute(&mut *tx)
-        .await
-        .map_err(crate::database::import_conflict)?;
+        .await;
+        if let Err(error) = inserted {
+            if error
+                .as_database_error()
+                .is_some_and(|e| e.is_unique_violation())
+            {
+                tx.rollback().await.map_err(repo_err)?;
+                return Err(crate::database::import_collision(self, vault, &document, error).await);
+            }
+            return Err(repo_err(error));
+        }
         for tag_id in &document.tag_ids {
             sqlx::query(
                 "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -788,15 +807,31 @@ impl DocumentRepository for PostgresDocumentRepository {
             .bind(vault.0)
             .bind(EntryKind::Note.as_str())
             .bind(note.body.as_str())
-            .bind(note.created_at)
+            .bind(note.created_at.trunc_subsecs(6))
             .bind(actor.as_ref().map(UserId::as_str))
             .bind(&note.external_id)
             .execute(&mut *tx)
             .await
-            .map_err(crate::database::import_conflict)?;
+            .map_err(repo_err)?;
         }
-        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+        if document.embed_status() == ProcessingStatus::Pending {
+            crate::queue::insert_job_postgres(
+                &mut tx,
+                crate::queue::JobType::GenerateEmbedding {
+                    document_id: id,
+                    origin: EventOrigin::Import,
+                },
+                now,
+                crate::queue::DEFAULT_MAX_ATTEMPTS,
+            )
             .await?;
+        }
+        self.emit_as(
+            &mut tx,
+            DocumentEvent::Created { document_id: id },
+            EventOrigin::Import,
+        )
+        .await?;
         let row: DocumentRow = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))
             .bind(id)
             .bind(vault.0)

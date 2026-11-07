@@ -69,6 +69,17 @@ pub struct ImportedDocument {
 }
 
 impl ImportedDocument {
+    /// Reject what the database would only report mid-transaction
+    pub fn validate(&self) -> crate::Result<()> {
+        let mut seen = std::collections::HashSet::new();
+        if !self.notes.iter().all(|note| seen.insert(&note.external_id)) {
+            return Err(crate::Error::Validation(
+                "Imported notes must have distinct external IDs".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Embeddings run only for documents that have text
     pub fn embed_status(&self) -> ProcessingStatus {
         if self

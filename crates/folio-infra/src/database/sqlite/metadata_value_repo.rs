@@ -339,27 +339,36 @@ pub(crate) async fn insert_new_values(
             live,
         } = field_for_write(&mut *conn, vault, field_id).await?;
         if !live {
-            return Err(Error::Conflict(
-                "Retired fields cannot receive new values".into(),
-            ));
+            return Err(Error::Validation(format!(
+                "Metadata field {field_id} is retired"
+            )));
         }
         let value = parse_kind(&kind_name)?
             .validate_value(Some(value.clone()), false)?
             .ok_or_else(|| Error::Validation("Imported metadata value is empty".into()))?;
-        check_reference(conn, vault, field_id, &value).await?;
-        write_value(
-            conn,
-            vault,
-            document,
-            field_id,
-            &kind_name,
-            unique,
-            Some(&value),
-            false,
-            actor,
-            now,
-        )
-        .await?;
+        let written = async {
+            check_reference(&mut *conn, vault, field_id, &value).await?;
+            write_value(
+                conn,
+                vault,
+                document,
+                field_id,
+                &kind_name,
+                unique,
+                Some(&value),
+                false,
+                actor,
+                now,
+            )
+            .await
+        }
+        .await;
+        written.map_err(|error| match error {
+            Error::Conflict(reason) => {
+                Error::Validation(format!("Value for metadata field {field_id}: {reason}"))
+            }
+            error => error,
+        })?;
     }
     if !values.is_empty() {
         bump_revision(conn, vault, document).await?;

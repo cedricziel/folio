@@ -3,8 +3,8 @@ mod common;
 use chrono::{Duration, SubsecRound, Utc};
 use folio_core::models::{
     CreateCorrespondent, CreateDocumentType, CreateTag, DocumentStatus, EntryBody, EntryKind,
-    EntryPageQuery, Id, ImportedNote, MetadataFieldInput, MetadataKind, MetadataValue,
-    ProcessingStatus, ReviewOrigin, SourceKind, UserId,
+    EntryPageQuery, Id, ImportedDocument, ImportedNote, MetadataFieldInput, MetadataKind,
+    MetadataValue, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, UserId,
 };
 use folio_core::mutation::with_actor;
 use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
@@ -13,7 +13,10 @@ use folio_infra::database::{
     postgres::{PostgresMetadataFieldRepository, PostgresMetadataValueRepository},
     sqlite::{SqliteMetadataFieldRepository, SqliteMetadataValueRepository},
 };
-use folio_infra::Database;
+use folio_infra::{Database, JobType};
+
+/// Breaks an import given the ASN and a retired field
+type Spoil = fn(&mut ImportedDocument, Id, Id);
 
 async fn note_external_id(db: &Database, id: Id) -> Option<String> {
     let sql = "SELECT external_id FROM document_entries WHERE id = $1";
@@ -108,7 +111,7 @@ async fn contract(db: Database) {
     let admin = UserId("admin".into());
     let created = with_actor(
         Some(admin.clone()),
-        r.import_documents.create_imported(vault, document.clone()),
+        r.documents.create_imported(vault, document.clone()),
     )
     .await
     .unwrap();
@@ -143,10 +146,33 @@ async fn contract(db: Database) {
             .unwrap(),
         Some(document.id)
     );
-    let embedded = folio_core::models::Document {
-        embed_status: ProcessingStatus::Done,
-        ..read.clone()
-    };
+    assert_eq!(read.status(), DocumentStatus::Processing);
+    let job = r.jobs.dequeue().await.unwrap().expect("an embedding job");
+    assert!(
+        matches!(
+            job.job_type,
+            JobType::GenerateEmbedding { document_id, origin: EventOrigin::Import }
+                if document_id == document.id
+        ),
+        "{:?}",
+        job.job_type
+    );
+    r.jobs.complete(&job).await.unwrap();
+    r.documents
+        .set_stage_status(
+            vault,
+            document.id,
+            ProcessingStage::Embed,
+            ProcessingStatus::Done,
+        )
+        .await
+        .unwrap();
+    let embedded = r
+        .documents
+        .find_by_id(vault, document.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(embedded.status(), DocumentStatus::Filed);
     let tags = r.documents.get_tags(vault, document.id).await.unwrap();
     assert_eq!(tags.iter().map(|t| t.id).collect::<Vec<_>>(), vec![tag.id]);
@@ -193,14 +219,11 @@ async fn contract(db: Database) {
         .collect::<Vec<_>>();
     assert_eq!(created_events, vec![EventOrigin::Import]);
 
-    let again = r
-        .import_documents
-        .create_imported(vault, document.clone())
-        .await;
+    let again = r.documents.create_imported(vault, document.clone()).await;
     assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
     let mut renamed = document.clone();
     renamed.id = Id::new_v4();
-    let duplicate_ref = r.import_documents.create_imported(vault, renamed).await;
+    let duplicate_ref = r.documents.create_imported(vault, renamed).await;
     assert!(
         matches!(duplicate_ref, Err(Error::Conflict(_))),
         "{duplicate_ref:?}"
@@ -211,15 +234,83 @@ async fn contract(db: Database) {
     let mut inbox = common::imported_document(vault, "8", added);
     inbox.content = None;
     inbox.in_inbox = true;
-    let inbox = r
-        .import_documents
-        .create_imported(vault, inbox)
-        .await
-        .unwrap();
+    let inbox = r.documents.create_imported(vault, inbox).await.unwrap();
     assert_eq!(inbox.ocr_status, ProcessingStatus::Done);
     assert_eq!(inbox.embed_status, ProcessingStatus::Skipped);
     assert_eq!(inbox.reviewed_at, None);
     assert_eq!(inbox.status(), DocumentStatus::NeedsReview);
+    assert!(r.jobs.dequeue().await.unwrap().is_none());
+
+    let retired = fields
+        .create(
+            vault,
+            MetadataFieldInput {
+                name: "Old".into(),
+                kind: MetadataKind::Text,
+                required: false,
+                unique: false,
+            },
+        )
+        .await
+        .unwrap();
+    fields.set_deleted(vault, retired.id, true).await.unwrap();
+    let rejected: Vec<(&str, Spoil)> = vec![
+        ("bad value", |d, asn, _| {
+            d.metadata
+                .insert(asn, MetadataValue::Integer("many".into()));
+        }),
+        ("taken ASN", |d, asn, _| {
+            d.metadata
+                .insert(asn, MetadataValue::Integer("1042".into()));
+        }),
+        ("retired field", |d, _, retired| {
+            d.metadata.insert(retired, MetadataValue::Text("x".into()));
+        }),
+        ("duplicate notes", |d, _, _| {
+            let note = ImportedNote {
+                external_id: "1".into(),
+                body: EntryBody::parse("twice".into()).unwrap(),
+                created_at: Utc::now(),
+            };
+            d.notes = vec![note.clone(), note];
+        }),
+    ];
+    for (n, (case, spoil)) in rejected.into_iter().enumerate() {
+        let mut document = common::imported_document(vault, &format!("9{n}"), added);
+        spoil(&mut document, asn.id, retired.id);
+        let result = r.documents.create_imported(vault, document.clone()).await;
+        assert!(
+            matches!(result, Err(Error::Validation(_))),
+            "{case}: {result:?}"
+        );
+        assert_eq!(
+            r.documents
+                .find_by_external_ref(vault, &document.external_ref)
+                .await
+                .unwrap(),
+            None,
+            "{case}"
+        );
+        assert!(r
+            .documents
+            .locate_retained(document.id)
+            .await
+            .unwrap()
+            .is_none());
+        let announced = r
+            .outbox
+            .replay(0, Utc::now() - Duration::minutes(5), 500)
+            .await
+            .unwrap()
+            .into_iter()
+            .any(|e| {
+                e.event
+                    .as_ref()
+                    .is_some_and(|e| e.document_id() == document.id)
+            });
+        assert!(!announced, "{case}");
+    }
+    assert!(r.jobs.dequeue().await.unwrap().is_none());
 }
 
 #[tokio::test]

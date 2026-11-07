@@ -64,10 +64,11 @@ pub trait DocumentRepository: Send + Sync {
     /// Create an upload without announcing creation until its original is finalized.
     async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document>;
 
-    /// Create an imported document with its tags, metadata values and notes
-    /// in one transaction; `Conflict` when the ID or the external reference
-    /// already exists, trashed or not. Call it on a repository with the
-    /// `Import` origin, so the document starts no workflows.
+    /// Create an imported document with its tags, metadata values, notes and
+    /// embedding job in one transaction, announced with origin `Import` so it
+    /// starts no workflows. `Conflict` when the ID or the external reference
+    /// already exists, trashed or not; `Validation` for values the vault
+    /// can't hold.
     async fn create_imported(&self, vault: VaultId, document: ImportedDocument)
         -> Result<Document>;
 

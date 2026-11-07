@@ -2196,6 +2196,158 @@ mod tests {
         assert_eq!(origins, vec![EventOrigin::Import, EventOrigin::User]);
     }
 
+    #[test]
+    fn embedding_jobs_without_an_origin_are_user_jobs() {
+        let id = uuid::Uuid::new_v4();
+        let legacy = serde_json::json!({"type": "GenerateEmbedding", "data": {"document_id": id}});
+        let job: JobType = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(matches!(
+            job,
+            JobType::GenerateEmbedding { document_id, origin: EventOrigin::User } if document_id == id
+        ));
+        assert_eq!(serde_json::to_value(&job).unwrap(), legacy);
+    }
+
+    /// Run processing jobs, leaving queued workflow runs alone
+    async fn drain_processing(f: &Fixture) {
+        while let Some(job) = f.queue.dequeue_class(JobClass::Processing).await.unwrap() {
+            f.worker.process_job(&job.job_type).await.unwrap();
+            f.queue.complete(&job).await.unwrap();
+        }
+    }
+
+    /// Hand every committed event to the workflow engine, as the dispatcher would
+    async fn dispatch_to(engine: &folio_core::services::WorkflowEngine, f: &Fixture) {
+        use folio_core::ports::OutboxStore;
+        use folio_core::services::EventConsumer;
+        let outbox = SqliteOutboxStore::new(f.pool.clone());
+        for event in outbox
+            .claim(1000, chrono::Duration::seconds(30), 10)
+            .await
+            .unwrap()
+        {
+            engine.consume(&event).await.unwrap();
+            outbox.mark_dispatched(event.id).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn imports_start_no_processed_workflows_but_a_user_reprocess_does() {
+        use crate::database::{SqliteCorrespondentRepository, SqliteDocumentTypeRepository};
+        use folio_core::models::{ExternalRef, ImportSource, ImportedDocument};
+
+        let f = fixture("OCR text").await;
+        let vault = crate::database::test_vault();
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        let workflows = Arc::new(SqliteWorkflowRepository::new(f.pool.clone()));
+        let engine = folio_core::services::WorkflowEngine::new(
+            workflows.clone(),
+            f.repo.clone(),
+            Arc::new(SqliteCorrespondentRepository::new(f.pool.clone())),
+            Arc::new(SqliteDocumentTypeRepository::new(f.pool.clone())),
+            Arc::new(crate::StorageFileMetadata::new(f.storage.clone())),
+            "http://folio.test",
+        );
+        let mut on = Vec::new();
+        for trigger in [
+            WorkflowTrigger::DocumentUploaded,
+            WorkflowTrigger::DocumentProcessed,
+        ] {
+            on.push(
+                workflows
+                    .create(
+                        vault,
+                        WorkflowInput {
+                            name: trigger.as_str().into(),
+                            enabled: true,
+                            trigger,
+                            conditions: WorkflowConditions::default(),
+                            actions: vec![WorkflowAction::Webhook {
+                                url: "http://127.0.0.1:1/hook".into(),
+                                method: Default::default(),
+                                headers: Default::default(),
+                                secret: None,
+                            }],
+                        },
+                    )
+                    .await
+                    .unwrap(),
+            );
+        }
+        let id = uuid::Uuid::new_v4();
+        let runs = |index: usize| {
+            let workflows = workflows.clone();
+            let workflow = on[index].id;
+            async move {
+                workflows
+                    .list_runs(vault, workflow, 10)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .filter(|run| run.document_id == Some(id))
+                    .count()
+            }
+        };
+        let path = folio_core::ports::keys::original(id);
+        f.storage
+            .put(&path, b"not a real png".as_slice().into())
+            .await
+            .unwrap();
+        let now = chrono::Utc::now();
+        f.repo
+            .create_imported(
+                vault,
+                ImportedDocument {
+                    id,
+                    external_ref: ExternalRef {
+                        source: ImportSource::Paperless,
+                        id: "7".into(),
+                    },
+                    title: "Imported".into(),
+                    content: Some("imported text".into()),
+                    original_filename: Some("scan.png".into()),
+                    mime_type: Some("image/png".into()),
+                    file_path: path,
+                    content_sha256: "ab".repeat(32),
+                    document_date: None,
+                    created_at: now,
+                    updated_at: now,
+                    correspondent_id: None,
+                    document_type_id: None,
+                    tag_ids: Vec::new(),
+                    metadata: Default::default(),
+                    notes: Vec::new(),
+                    in_inbox: false,
+                },
+            )
+            .await
+            .unwrap();
+        // A repair sweep right after the import must not queue a user-origin twin.
+        f.worker.repair_orphaned_documents().await.unwrap();
+        drain_processing(&f).await;
+        dispatch_to(&engine, &f).await;
+        assert_eq!(runs(0).await, 0, "uploaded");
+        assert_eq!(runs(1).await, 0, "processed");
+        let imported = f.repo.find_by_id(vault, id).await.unwrap().unwrap();
+        assert_eq!(imported.embed_status, ProcessingStatus::Done);
+
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: id,
+                force: false,
+            })
+            .await
+            .unwrap();
+        drain_processing(&f).await;
+        dispatch_to(&engine, &f).await;
+        assert_eq!(runs(1).await, 1, "a user reprocess triggers processed");
+        assert_eq!(runs(0).await, 0);
+    }
+
     #[tokio::test]
     async fn a_document_deleted_mid_job_gets_no_embedding() {
         let mut f = fixture("some text").await;

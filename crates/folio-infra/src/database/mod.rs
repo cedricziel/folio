@@ -47,15 +47,23 @@ pub use sqlite::{
     SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
-/// An import that collides with an existing ID or external reference was
-/// already done by someone else
-fn import_conflict(e: sqlx::Error) -> folio_core::Error {
-    if e.as_database_error()
-        .is_some_and(|e| e.is_unique_violation())
-    {
-        folio_core::Error::Conflict("Document was already imported".into())
-    } else {
-        folio_core::Error::Repository(e.to_string())
+/// The error for an import whose insert hit a unique index: `Conflict` when
+/// the document already exists, otherwise the database error
+async fn import_collision(
+    documents: &dyn DocumentRepository,
+    vault: folio_core::models::VaultId,
+    document: &folio_core::models::ImportedDocument,
+    error: sqlx::Error,
+) -> folio_core::Error {
+    let existing = documents
+        .find_by_external_ref(vault, &document.external_ref)
+        .await;
+    let id_taken = documents.locate_retained(document.id).await;
+    match (existing, id_taken) {
+        (Ok(Some(_)), _) | (_, Ok(Some(_))) => {
+            folio_core::Error::Conflict("Document was already imported".into())
+        }
+        _ => folio_core::Error::Repository(error.to_string()),
     }
 }
 
@@ -120,9 +128,6 @@ pub struct Repositories {
     /// Like `documents`, but its events are attributed to workflows, so they
     /// reach live clients without triggering workflows again
     pub workflow_documents: Arc<dyn DocumentRepository>,
-    /// Like `documents`, but its events are attributed to imports and syncs,
-    /// which never trigger workflows
-    pub import_documents: Arc<dyn DocumentRepository>,
     pub outbox: Arc<dyn OutboxStore>,
     pub tags: Arc<dyn TagRepository>,
     pub correspondents: Arc<dyn CorrespondentRepository>,
@@ -191,7 +196,6 @@ impl Database {
                     ),
                     documents: documents(EventOrigin::User),
                     workflow_documents: documents(EventOrigin::Workflow),
-                    import_documents: documents(EventOrigin::Import),
                     outbox: Arc::new(SqliteOutboxStore::new(pool.clone()).with_wake(wake.clone())),
                     tags: Arc::new(SqliteTagRepository::new(pool.clone())),
                     correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
@@ -233,7 +237,6 @@ impl Database {
                     ),
                     documents: documents(EventOrigin::User),
                     workflow_documents: documents(EventOrigin::Workflow),
-                    import_documents: documents(EventOrigin::Import),
                     outbox: Arc::new(
                         PostgresOutboxStore::new(pool.clone()).with_wake(wake.clone()),
                     ),

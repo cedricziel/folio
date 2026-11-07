@@ -2257,13 +2257,6 @@ async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
             unreachable_hook(),
         )
         .await;
-    let processed = h
-        .workflow(
-            WorkflowTrigger::DocumentProcessed,
-            WorkflowConditions::default(),
-            unreachable_hook(),
-        )
-        .await;
     let tags_changed = h
         .workflow(
             WorkflowTrigger::DocumentTagsChanged,
@@ -2281,36 +2274,14 @@ async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
         .await
         .unwrap();
     mirror.add_tag(h.vault, doc.id, synced_tag).await.unwrap();
-    h.outbox
-        .append_document(
-            h.vault,
-            &DocumentEvent::Processed {
-                document_id: doc.id,
-            },
-            EventOrigin::Import,
-        )
-        .await
-        .unwrap();
     consume_pending(&h).await;
     assert_eq!(workflow_runs(&h, &uploaded).await, 0);
-    assert_eq!(workflow_runs(&h, &processed).await, 0);
     assert_eq!(workflow_runs(&h, &tags_changed).await, 0);
 
     h.documents
         .add_tag(h.vault, doc.id, user_tag)
         .await
         .unwrap();
-    h.outbox
-        .append_document(
-            h.vault,
-            &DocumentEvent::Processed {
-                document_id: doc.id,
-            },
-            EventOrigin::User,
-        )
-        .await
-        .unwrap();
     consume_pending(&h).await;
     assert_eq!(workflow_runs(&h, &tags_changed).await, 1);
-    assert_eq!(workflow_runs(&h, &processed).await, 1);
 }
