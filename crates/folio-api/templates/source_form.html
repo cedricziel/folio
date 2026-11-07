@@ -100,7 +100,10 @@
     {% match source_id %}
     {% when Some with (id) %}
     <div class="form-actions">
-        <form action="{{ "/settings/sources"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false">
+        <form action="{{ "/settings/sources"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false"
+              data-controller="confirm"
+              data-confirm-message-value="Move this source to the trash? You can restore it from the trash later."
+              data-action="submit->confirm#confirm">
             <button type="submit" class="f-btn f-btn-danger">Move to trash</button>
         </form>
     </div>
