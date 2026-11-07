@@ -41,6 +41,49 @@
             <label for="rescan_secs">Rescan every (seconds)</label>
             <input class="input" type="number" min="1" id="rescan_secs" name="rescan_secs" value="{{ values.rescan_secs }}">
         </fieldset>
+        {% else if values.kind == "paperless" %}
+        <fieldset class="field">
+            <legend class="f-label">Paperless</legend>
+            <label for="url">Paperless URL</label>
+            <input class="input mono" type="url" id="url" name="url" value="{{ values.url }}" placeholder="https://paperless.example" inputmode="url" autocomplete="off" required>
+            <label for="token">API token</label>
+            <input class="input" type="password" id="token" name="token" value="{{ values.token }}" autocomplete="off"{% if values.token.is_empty() %} required{% endif %}>
+            <p class="f-meta">Create the token in Paperless under your profile. Folio only imports the documents this token can see. The token is stored unencrypted in the database; to keep it out, define the source in the server configuration with a token file. Changing the URL needs the token again.</p>
+        </fieldset>
+
+        <fieldset class="field">
+            <legend class="f-label">Sync mode</legend>
+            <label class="choice-card">
+                <span class="check"><input type="radio" name="sync_mode" value="once"{% if values.sync_mode == "once" %} checked{% endif %}> Once</span>
+                <span class="f-meta">Import the library once, then stop.</span>
+            </label>
+            <label class="choice-card">
+                <span class="check"><input type="radio" name="sync_mode" value="new_only"{% if values.sync_mode == "new_only" %} checked{% endif %}> New documents only</span>
+                <span class="f-meta">Import documents that are new in Paperless. Other changes are ignored.</span>
+            </label>
+            <label class="choice-card">
+                <span class="check"><input type="radio" name="sync_mode" value="mirror"{% if values.sync_mode == "mirror" %} checked{% endif %}> Mirror Paperless</span>
+                <span class="f-meta">Paperless is the master: edits, deletions and restores there are applied in Folio.</span>
+            </label>
+            <div class="f-notice"><p>In mirror mode, a change in Paperless overwrites edits made to that document in Folio, and a document deleted in Paperless moves to the trash. Notes added in Folio stay.</p></div>
+        </fieldset>
+
+        <div class="field-row">
+            <div class="field">
+                <label for="poll_interval_secs">Check for changes</label>
+                <select class="select" id="poll_interval_secs" name="poll_interval_secs">
+                    {% for option in values.paperless_intervals() %}
+                    <option value="{{ option.secs }}"{% if option.selected %} selected{% endif %}>{{ option.label }}</option>
+                    {% endfor %}
+                </select>
+                <p class="f-meta">Not used after the first sync in Once mode.</p>
+            </div>
+            <div class="field">
+                <label for="default_currency">Default currency</label>
+                <input class="input mono" type="text" id="default_currency" name="default_currency" value="{{ values.default_currency }}" placeholder="EUR" maxlength="3" pattern="[A-Za-z]{3}" autocomplete="off">
+                <p class="f-meta">For amounts in Paperless that carry no currency.</p>
+            </div>
+        </div>
         {% else %}
         <fieldset class="field">
             <legend class="f-label">Mail server (IMAP)</legend>
@@ -92,7 +135,7 @@
         </div>
 
         <div class="form-actions">
-            <button type="submit" class="f-btn f-btn-primary">Save source</button>
+            <button type="submit" class="f-btn f-btn-primary">{% if values.kind == "paperless" && source_id.is_none() %}Save and start first sync{% else %}Save source{% endif %}</button>
             <button type="submit" name="test" value="1" class="f-btn">Test connection</button>
         </div>
     </form>

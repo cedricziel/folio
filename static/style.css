@@ -721,6 +721,27 @@ fieldset.field {
   line-height: 22px;
   font-weight: 600;
 }
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--paper-raised);
+  cursor: pointer;
+}
+.choice-card:has(input:checked) {
+  border-color: var(--archive);
+}
+.input.mono {
+  font-family: var(--font-mono);
+}
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0 var(--space-4);
+}
 .field-group {
   display: flex;
   flex-direction: column;

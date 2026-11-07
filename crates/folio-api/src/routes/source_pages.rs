@@ -14,7 +14,8 @@ use uuid::Uuid;
 
 use folio_core::models::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestionSourceDef, IngestionSourceInput,
-    MailAfterImport, MailBody, MailSecurity, SourceConfig, SourceOrigin, REDACTED,
+    MailAfterImport, MailBody, MailSecurity, PaperlessConfig, PaperlessSyncMode, SourceConfig,
+    SourceOrigin, REDACTED,
 };
 
 use super::sources::{
@@ -52,6 +53,8 @@ struct Row {
     summary: String,
     enabled: bool,
     read_only: bool,
+    /// A Paperless source the caller may see but not change or test
+    admin_only: bool,
     last_run: Option<String>,
     last_result: Option<String>,
     error: Option<String>,
@@ -61,6 +64,8 @@ struct Row {
 #[template(path = "sources.html")]
 struct ListTemplate {
     deleted: bool,
+    /// The caller may connect Paperless and the vault has no Paperless source yet
+    can_add_paperless: bool,
     sidebar: Sidebar,
     title: String,
     rows: Vec<Row>,
@@ -79,6 +84,7 @@ async fn rows(
     DefaultVault(vault): DefaultVault,
     state: &AppState,
     deleted: bool,
+    paperless_admin: bool,
 ) -> ApiResult<Vec<Row>> {
     let mut rows = Vec::new();
     let definitions = if deleted {
@@ -106,6 +112,7 @@ async fn rows(
             },
             summary: summary(&def),
             read_only: def.origin == SourceOrigin::Config,
+            admin_only: matches!(def.config, SourceConfig::Paperless(_)) && !paperless_admin,
             enabled: def.enabled,
             last_run: status
                 .as_ref()
@@ -127,18 +134,33 @@ async fn rows(
     Ok(rows)
 }
 
+async fn list_template(
+    vault: VaultId,
+    state: &AppState,
+    deleted: bool,
+    notice: Option<Notice>,
+) -> ApiResult<ListTemplate> {
+    let paperless_admin = require_paperless_admin(state).await.is_ok();
+    let has_paperless = all_sources(DefaultVault(vault), state)
+        .await?
+        .iter()
+        .any(|def| matches!(def.config, SourceConfig::Paperless(_)));
+    Ok(ListTemplate {
+        deleted,
+        can_add_paperless: paperless_admin && !has_paperless,
+        sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
+        title: "Sources - Folio".into(),
+        rows: rows(DefaultVault(vault), state, deleted, paperless_admin).await?,
+        notice,
+    })
+}
+
 async fn list_page(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<SourceListQuery>,
 ) -> ApiResult<Html<String>> {
-    render(ListTemplate {
-        deleted: query.deleted,
-        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
-        title: "Sources - Folio".into(),
-        rows: rows(DefaultVault(vault), &state, query.deleted).await?,
-        notice: None,
-    })
+    render(list_template(vault, &state, query.deleted, None).await?)
 }
 
 async fn test_saved(
@@ -149,16 +171,11 @@ async fn test_saved(
     let def = find(vault, &state, id).await?;
     guard_paperless(&state, [&def.config]).await?;
     let result = run_test(&state, &def).await;
-    render(ListTemplate {
-        deleted: false,
-        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
-        title: "Sources - Folio".into(),
-        rows: rows(DefaultVault(vault), &state, false).await?,
-        notice: Some(Notice {
-            danger: !result.ok,
-            text: format!("{}: {}", def.name, result.message),
-        }),
-    })
+    let notice = Notice {
+        danger: !result.ok,
+        text: format!("{}: {}", def.name, result.message),
+    };
+    render(list_template(vault, &state, false, Some(notice)).await?)
 }
 
 /// Form fields for both source kinds; the unused kind's fields stay empty
@@ -189,22 +206,30 @@ struct FormValues {
     mail_body: String,
     mail_after_import: String,
     move_to: String,
+    // paperless; the poll interval shares `poll_interval_secs` with mail
+    url: String,
+    token: String,
+    sync_mode: String,
+    default_currency: String,
     /// Set by the "Test connection" button
     test: Option<String>,
 }
 
 impl FormValues {
     fn blank(kind: &str) -> Self {
-        let config = if kind == "email" {
-            SourceConfig::Email(
+        let config = match kind {
+            "email" => SourceConfig::Email(
                 serde_json::from_value(serde_json::json!({"host": "", "username": ""}))
                     .expect("mail defaults deserialize"),
-            )
-        } else {
-            SourceConfig::Folder(
+            ),
+            "paperless" => SourceConfig::Paperless(
+                serde_json::from_value(serde_json::json!({"url": ""}))
+                    .expect("paperless defaults deserialize"),
+            ),
+            _ => SourceConfig::Folder(
                 serde_json::from_value(serde_json::json!({"path": ""}))
                     .expect("folder defaults deserialize"),
-            )
+            ),
         };
         Self::from_config(&config, "", true)
     }
@@ -262,7 +287,22 @@ impl FormValues {
                     v.password = REDACTED.into();
                 }
             }
-            SourceConfig::Paperless(_) => v.kind = "paperless".into(),
+            SourceConfig::Paperless(p) => {
+                v.kind = "paperless".into();
+                v.url = p.url.clone();
+                v.sync_mode = match p.sync_mode {
+                    PaperlessSyncMode::Once => "once",
+                    PaperlessSyncMode::NewOnly => "new_only",
+                    PaperlessSyncMode::Mirror => "mirror",
+                }
+                .into();
+                v.poll_interval_secs = p.poll_interval_secs.to_string();
+                v.default_currency = p.default_currency.clone().unwrap_or_default();
+                // Like the mail password, the token never reaches the page.
+                if p.token.is_some() || p.token_file.is_some() {
+                    v.token = REDACTED.into();
+                }
+            }
         }
         v
     }
@@ -322,6 +362,19 @@ impl FormValues {
                 },
                 move_to: Some(self.move_to.trim().to_string()).filter(|m| !m.is_empty()),
             }),
+            "paperless" => SourceConfig::Paperless(PaperlessConfig {
+                url: self.url.trim().to_string(),
+                token: Some(self.token).filter(|t| !t.is_empty()),
+                token_file: None,
+                sync_mode: match self.sync_mode.as_str() {
+                    "once" => PaperlessSyncMode::Once,
+                    "new_only" => PaperlessSyncMode::NewOnly,
+                    _ => PaperlessSyncMode::Mirror,
+                },
+                poll_interval_secs: number(&self.poll_interval_secs, "Check interval")?,
+                default_currency: Some(self.default_currency.trim().to_ascii_uppercase())
+                    .filter(|c| !c.is_empty()),
+            }),
             _ => return Err("Choose a source type.".to_string()),
         };
         Ok(IngestionSourceInput {
@@ -329,6 +382,44 @@ impl FormValues {
             enabled: self.enabled.is_some(),
             config,
         })
+    }
+}
+
+/// A choice in the Paperless "check for changes" select
+struct IntervalOption {
+    secs: String,
+    label: String,
+    selected: bool,
+}
+
+impl FormValues {
+    /// Common intervals, plus the stored one when it is none of them
+    fn paperless_intervals(&self) -> Vec<IntervalOption> {
+        let current: u64 = self.poll_interval_secs.trim().parse().unwrap_or(900);
+        let mut options: Vec<(u64, String)> = [
+            (60, "minute"),
+            (300, "5 minutes"),
+            (900, "15 minutes"),
+            (1800, "30 minutes"),
+            (3600, "hour"),
+            (21600, "6 hours"),
+            (86400, "day"),
+        ]
+        .into_iter()
+        .map(|(secs, label)| (secs, format!("Every {label}")))
+        .collect();
+        if !options.iter().any(|(secs, _)| *secs == current) {
+            options.push((current, format!("Every {current} seconds")));
+            options.sort_by_key(|(secs, _)| *secs);
+        }
+        options
+            .into_iter()
+            .map(|(secs, label)| IntervalOption {
+                secs: secs.to_string(),
+                label,
+                selected: secs == current,
+            })
+            .collect()
     }
 }
 
@@ -504,6 +595,12 @@ async fn update(
         },
         Err(message) => Err(message),
     };
+    let mut values = values;
+    if let SourceConfig::Paperless(old) = &existing.config {
+        if old.url != values.url.trim() && values.token == REDACTED {
+            values.token.clear();
+        }
+    }
     match saved {
         Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
         Err(message) => Ok(

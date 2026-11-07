@@ -575,3 +575,161 @@ async fn a_paperless_source_from_the_configuration_wins_over_a_managed_one() {
         .unwrap()
         .contains("server configuration"));
 }
+
+async fn page(app: &Harness, method: &str, uri: &str, form: Option<&str>) -> (StatusCode, String) {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if form.is_some() {
+        builder = builder.header("content-type", "application/x-www-form-urlencoded");
+    }
+    let response = app
+        .app
+        .clone()
+        .oneshot(
+            builder
+                .body(Body::from(form.unwrap_or_default().to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, common::text(response).await)
+}
+
+#[tokio::test]
+async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
+    let app = common::harness().await;
+
+    let (status, list) = page(&app, "GET", "/settings/sources", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        list.contains("/settings/sources/new?kind=paperless"),
+        "{list}"
+    );
+
+    let (status, blank) = page(&app, "GET", "/settings/sources/new?kind=paperless", None).await;
+    assert_eq!(status, StatusCode::OK);
+    for needle in [
+        r#"name="kind" value="paperless""#,
+        r#"type="url" id="url" name="url""#,
+        r#"type="password" id="token" name="token""#,
+        r#"name="sync_mode" value="mirror" checked"#,
+        r#"<option value="900" selected>Every 15 minutes</option>"#,
+        r#"id="default_currency""#,
+        "Save and start first sync",
+    ] {
+        assert!(blank.contains(needle), "missing {needle}");
+    }
+
+    let form = format!(
+        "kind=paperless&name=Paperless&enabled=on&url=https%3A%2F%2Fpaperless.example\
+&token={TOKEN}&sync_mode=new_only&poll_interval_secs=3600&default_currency=eur"
+    );
+    let (status, body) = page(&app, "POST", "/settings/sources", Some(&form)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    let def = app
+        .state
+        .ingestion
+        .managed
+        .list(app.vault)
+        .await
+        .unwrap()
+        .remove(0);
+    let SourceConfig::Paperless(saved) = &def.config else {
+        panic!("paperless")
+    };
+    assert_eq!(saved.url, "https://paperless.example");
+    assert_eq!(saved.token.as_deref(), Some(TOKEN));
+    assert_eq!(
+        saved.sync_mode,
+        folio_core::models::PaperlessSyncMode::NewOnly
+    );
+    assert_eq!(saved.poll_interval_secs, 3600);
+    assert_eq!(saved.default_currency.as_deref(), Some("EUR"));
+
+    let (_, list) = page(&app, "GET", "/settings/sources", None).await;
+    assert!(list.contains("https://paperless.example"));
+    assert!(
+        !list.contains("new?kind=paperless"),
+        "a vault has one Paperless source"
+    );
+
+    let edit_uri = format!("/settings/sources/{}", def.id);
+    let (status, edit) = page(&app, "GET", &edit_uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!edit.contains(TOKEN));
+    assert!(edit.contains(r#"value="********""#));
+    assert!(edit.contains(r#"name="sync_mode" value="new_only" checked"#));
+    assert!(edit.contains(r#"<option value="3600" selected>Every hour</option>"#));
+
+    let masked = "kind=paperless&name=Paperless&enabled=on&url=https%3A%2F%2Fpaperless.example\
+&token=********&sync_mode=mirror&poll_interval_secs=900&default_currency=EUR";
+    let (status, _) = page(&app, "POST", &edit_uri, Some(masked)).await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let SourceConfig::Paperless(kept) = app
+        .state
+        .ingestion
+        .managed
+        .find(app.vault, def.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .config
+    else {
+        panic!("paperless")
+    };
+    assert_eq!(kept.token.as_deref(), Some(TOKEN));
+    assert_eq!(
+        kept.sync_mode,
+        folio_core::models::PaperlessSyncMode::Mirror
+    );
+
+    let moved = masked.replace("paperless.example", "elsewhere.example");
+    let (status, refused) = page(&app, "POST", &edit_uri, Some(&moved)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(refused.contains("enter the API token again"), "{refused}");
+    assert!(refused.contains(r#"name="token" value="" autocomplete="off" required"#));
+
+    let second = "kind=paperless&name=Second&enabled=on&url=https%3A%2F%2Fsecond.example\
+&token=t&sync_mode=mirror&poll_interval_secs=900";
+    let (status, conflict) = page(&app, "POST", "/settings/sources", Some(second)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        conflict.contains("already has a Paperless source"),
+        "{conflict}"
+    );
+
+    let (status, tested) = page(
+        &app,
+        "POST",
+        &format!("/settings/sources/{}/test", def.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(tested.contains("Paperless: unsupported"));
+}
+
+#[tokio::test]
+async fn non_admin_owners_see_the_paperless_source_without_its_controls() {
+    let h = common::harness_requiring_login().await;
+    let cookie = vault_owner_session(&h, "viewer-owner", false).await;
+    let def = seed_paperless(&h, "Library", "https://paperless.example").await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/settings/sources")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list = common::text(response).await;
+    assert!(list.contains("Library"));
+    assert!(list.contains("Only an instance admin can change it"));
+    assert!(!list.contains(&format!("/{}/test", def.id)));
+    assert!(!list.contains(&format!("/{}/toggle", def.id)));
+    assert!(!list.contains("new?kind=paperless"));
+}
