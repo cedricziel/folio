@@ -2,4 +2,4 @@
 
 mod paths;
 
-pub use paths::{resolve_import_dir, OutsideAllowedRoots};
+pub use paths::{resolve_import_dir, resolve_original, OutsideAllowedRoots};
