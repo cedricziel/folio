@@ -229,6 +229,13 @@
       "auth": "any"
     },
     {
+      "name": "source-paperless",
+      "path": "/settings/sources/new?kind=paperless",
+      "phase": "seeded",
+      "auth": "any",
+      "wait": "Sync mode"
+    },
+    {
       "name": "workflows",
       "path": "/workflows",
       "phase": "seeded",
