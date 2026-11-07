@@ -285,11 +285,27 @@ async fn v3_export_carries_trash_deleted_notes_and_versions() {
 }
 
 #[tokio::test]
+async fn modified_since_returns_everything_from_an_export() {
+    let reader = PaperlessFsReader::open(&fixture("v3_4")).unwrap();
+    let since = Utc.with_ymd_and_hms(2100, 1, 1, 0, 0, 0).unwrap();
+    let records: Vec<_> = reader
+        .modified_since(since)
+        .await
+        .unwrap()
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(documents(&records).len(), 5);
+}
+
+#[tokio::test]
 async fn lists_every_document_id() {
     let reader = PaperlessFsReader::open(&fixture("v3_4_split")).unwrap();
-    let mut ids = reader.list_document_ids().await.unwrap();
-    ids.sort();
-    assert_eq!(ids, [1, 2, 3, 4, 5]);
+    let ids = reader.list_document_ids().await.unwrap();
+    assert_eq!(
+        ids.ids().iter().copied().collect::<Vec<_>>(),
+        [1, 2, 3, 4, 5]
+    );
 }
 
 fn canonical(records: Vec<PaperlessRecord>) -> Vec<String> {

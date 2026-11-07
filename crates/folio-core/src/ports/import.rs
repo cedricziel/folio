@@ -1,6 +1,6 @@
 //! Port for reading a Paperless-ngx library, from an export or a live instance
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use async_trait::async_trait;
@@ -27,10 +27,21 @@ pub trait PaperlessReader: Send + Sync {
         document: &PaperlessDocument,
     ) -> Result<OriginalFile, PaperlessReadError>;
 
+    /// Records of documents modified at or after `cursor`, plus all taxonomy;
+    /// a source that can't filter returns everything
+    async fn modified_since(
+        &self,
+        _cursor: DateTime<Utc>,
+    ) -> Result<RecordStream, PaperlessReadError> {
+        self.scan().await
+    }
+
     /// IDs of every document the source holds, trashed ones and file versions
-    /// included; mirror sync compares these to find deletions
-    async fn list_document_ids(&self) -> Result<Vec<i64>, PaperlessReadError> {
-        self.scan()
+    /// included. Only a listing that read everything is returned, since mirror
+    /// sync trashes whatever is missing from it.
+    async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError> {
+        let ids = self
+            .scan()
             .await?
             .try_filter_map(|record| async move {
                 Ok(match record {
@@ -39,13 +50,33 @@ pub trait PaperlessReader: Send + Sync {
                 })
             })
             .try_collect()
-            .await
+            .await?;
+        Ok(CompleteIdSet::from_complete_listing(ids))
     }
 
     /// Records of models the import doesn't use, by model name, counted
     /// during the last completed scan
     fn skipped_models(&self) -> BTreeMap<String, u64> {
         BTreeMap::new()
+    }
+}
+
+/// Document IDs from a listing that succeeded on every page
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CompleteIdSet(BTreeSet<i64>);
+
+impl CompleteIdSet {
+    /// Callers vouch that `ids` came from a listing with no failed or missing page
+    pub fn from_complete_listing(ids: BTreeSet<i64>) -> Self {
+        Self(ids)
+    }
+
+    pub fn contains(&self, id: i64) -> bool {
+        self.0.contains(&id)
+    }
+
+    pub fn ids(&self) -> &BTreeSet<i64> {
+        &self.0
     }
 }
 
