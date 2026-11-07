@@ -3,6 +3,7 @@
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 
 use folio_core::ports::PaperlessReadError;
@@ -33,12 +34,12 @@ pub fn resolve_import_dir(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, Out
     }
 }
 
-/// Opens a manifest path under the export directory one component at a time,
-/// each relative to the directory opened before it and none followed if it is
-/// a symlink, so swapping a component mid-walk can't redirect the open.
-/// Returns the opened file and its size.
+/// Opens a manifest path under the opened export directory one component at
+/// a time, each relative to the directory opened before it and none followed
+/// if it is a symlink, so swapping a component mid-walk can't redirect the
+/// open. Returns the opened file and its size.
 pub fn open_original_file(
-    export_dir: &Path,
+    export_dir: &File,
     relative: &str,
 ) -> Result<(File, u64), PaperlessReadError> {
     let unsafe_path = || PaperlessReadError::UnsafePath {
@@ -54,20 +55,14 @@ pub fn open_original_file(
     };
 
     let (last, parents) = components.split_last().ok_or_else(unsafe_path)?;
-    let mut dir = File::open(export_dir).map_err(|e| io_error(relative, e))?;
+    let mut parent: Option<File> = None;
     for name in parents {
-        let fd = openat(
-            &dir,
-            *name,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        )
-        .map_err(open_error)?;
-        dir = File::from(fd);
+        let fd = open_subdir(parent.as_ref().unwrap_or(export_dir), name).map_err(open_error)?;
+        parent = Some(File::from(fd));
     }
     // Non-blocking so a FIFO planted in the export can't stall the open
     let fd = openat(
-        &dir,
+        parent.as_ref().unwrap_or(export_dir),
         *last,
         OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
         Mode::empty(),
@@ -79,6 +74,16 @@ pub fn open_original_file(
         return Err(unsafe_path());
     }
     Ok((file, meta.len()))
+}
+
+/// Opens a directory entry as a directory, refusing a symlink
+pub(super) fn open_subdir(parent: &File, name: &OsStr) -> rustix::io::Result<OwnedFd> {
+    openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
 }
 
 fn normal_components(relative: &str) -> Option<Vec<&OsStr>> {

@@ -7,10 +7,12 @@
 //! materialized.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -22,10 +24,11 @@ use folio_core::ports::{
     PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
     PaperlessVersionInfo, RecordStream,
 };
+use rustix::fs::{AtFlags, FileType};
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::paths::{io_error, open_original_file};
+use super::paths::{io_error, open_original_file, open_subdir};
 
 const MANIFEST: &str = "manifest.json";
 const METADATA: &str = "metadata.json";
@@ -35,9 +38,11 @@ const FILE_DIRS: [&str; 3] = ["originals", "archive", "thumbnails"];
 const CHANNEL_DEPTH: usize = 256;
 
 /// Export adapter for [`PaperlessReader`]; a document's `original_handle` is
-/// its path relative to the export directory
+/// its path relative to the export directory. The directory is opened once,
+/// and every later read goes through that handle, so replacing the path
+/// afterwards can't redirect the reader.
 pub struct PaperlessFsReader {
-    dir: PathBuf,
+    dir: Arc<File>,
     skipped: Arc<Mutex<BTreeMap<String, u64>>>,
 }
 
@@ -47,12 +52,16 @@ impl PaperlessFsReader {
         let missing = || PaperlessReadError::Missing {
             what: dir.display().to_string(),
         };
-        let dir = dir.canonicalize().map_err(|_| missing())?;
-        if !dir.is_dir() {
-            return Err(missing());
-        }
-        Ok(Self {
+        let fd = rustix::fs::open(
             dir,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::DIRECTORY
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(|_| missing())?;
+        Ok(Self {
+            dir: Arc::new(File::from(fd)),
             skipped: Arc::default(),
         })
     }
@@ -70,12 +79,12 @@ impl PaperlessFsReader {
 #[async_trait]
 impl PaperlessReader for PaperlessFsReader {
     async fn source_info(&self) -> Result<PaperlessSourceInfo, PaperlessReadError> {
-        let dir = self.dir.clone();
+        let dir = Arc::clone(&self.dir);
         blocking(move || read_metadata(&dir)).await
     }
 
     async fn scan(&self) -> Result<RecordStream, PaperlessReadError> {
-        let dir = self.dir.clone();
+        let dir = Arc::clone(&self.dir);
         let mut records = blocking(move || ManifestRecords::open(dir, Mode::Full)).await?;
         let skipped = Arc::clone(&self.skipped);
         let (tx, rx) = tokio::sync::mpsc::channel(CHANNEL_DEPTH);
@@ -107,7 +116,7 @@ impl PaperlessReader for PaperlessFsReader {
     }
 
     async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError> {
-        let dir = self.dir.clone();
+        let dir = Arc::clone(&self.dir);
         blocking(move || {
             let mut records = ManifestRecords::open(dir, Mode::DocumentIds)?;
             let mut ids = BTreeSet::new();
@@ -125,7 +134,7 @@ impl PaperlessReader for PaperlessFsReader {
         &self,
         document: &PaperlessDocument,
     ) -> Result<OriginalFile, PaperlessReadError> {
-        let dir = self.dir.clone();
+        let dir = Arc::clone(&self.dir);
         let handle = document.original_handle.clone();
         let (file, size) = blocking(move || open_original_file(&dir, &handle)).await?;
         Ok(OriginalFile {
@@ -146,11 +155,11 @@ async fn blocking<T: Send + 'static>(
         })?
 }
 
-fn open_in_export(dir: &Path, relative: &str) -> Result<File, PaperlessReadError> {
+fn open_in_export(dir: &File, relative: &str) -> Result<File, PaperlessReadError> {
     open_original_file(dir, relative).map(|(file, _)| file)
 }
 
-fn read_metadata(dir: &Path) -> Result<PaperlessSourceInfo, PaperlessReadError> {
+fn read_metadata(dir: &File) -> Result<PaperlessSourceInfo, PaperlessReadError> {
     #[derive(Deserialize)]
     struct Raw {
         version: String,
@@ -164,32 +173,54 @@ fn read_metadata(dir: &Path) -> Result<PaperlessSourceInfo, PaperlessReadError> 
     Ok(PaperlessSourceInfo { version })
 }
 
-/// `--split-manifest` files, in path order; symlinks are never followed
-fn split_manifests(dir: &Path) -> Result<Vec<String>, PaperlessReadError> {
+/// `--split-manifest` files, in path order; symlinks are never followed and
+/// every directory is opened relative to its parent
+fn split_manifests(dir: &File) -> Result<Vec<String>, PaperlessReadError> {
     let mut found = Vec::new();
-    let mut pending = vec![PathBuf::new()];
-    while let Some(relative) = pending.pop() {
-        let label = relative.display().to_string();
-        let entries = std::fs::read_dir(dir.join(&relative)).map_err(|e| io_error(&label, e))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| io_error(&label, e))?;
-            let file_type = entry.file_type().map_err(|e| io_error(&label, e))?;
-            let name = entry.file_name();
-            if file_type.is_dir() {
-                let holds_files = relative.as_os_str().is_empty()
-                    && FILE_DIRS.iter().any(|d| name.as_os_str() == *d);
+    walk_for_manifests(dir, Path::new(""), &mut found)?;
+    found.sort();
+    Ok(found)
+}
+
+fn walk_for_manifests(
+    dir: &File,
+    relative: &Path,
+    found: &mut Vec<String>,
+) -> Result<(), PaperlessReadError> {
+    let label = relative.display().to_string();
+    let fail = |errno: rustix::io::Errno| io_error(&label, errno.into());
+    for entry in rustix::fs::Dir::read_from(dir).map_err(fail)? {
+        let entry = entry.map_err(fail)?;
+        let name = OsStr::from_bytes(entry.file_name().to_bytes());
+        if name == "." || name == ".." {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            FileType::Unknown => FileType::from_raw_mode(
+                rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(fail)?
+                    .st_mode as _,
+            ),
+            known => known,
+        };
+        match file_type {
+            FileType::Directory => {
+                let holds_files =
+                    relative.as_os_str().is_empty() && FILE_DIRS.iter().any(|d| name == *d);
                 if !holds_files {
-                    pending.push(relative.join(&name));
+                    let child = File::from(open_subdir(dir, name).map_err(fail)?);
+                    walk_for_manifests(&child, &relative.join(name), found)?;
                 }
-            } else if file_type.is_file() && name.as_encoded_bytes().ends_with(SPLIT_SUFFIX) {
-                if let Some(path) = relative.join(&name).to_str() {
+            }
+            FileType::RegularFile if name.as_bytes().ends_with(SPLIT_SUFFIX) => {
+                if let Some(path) = relative.join(name).to_str() {
                     found.push(path.to_owned());
                 }
             }
+            _ => {}
         }
     }
-    found.sort();
-    Ok(found)
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -210,7 +241,7 @@ enum Item {
 /// `manifest.json` first, then each `--split-manifest` file. Custom fields
 /// always precede their values, so their types are known by then.
 struct ManifestRecords {
-    dir: PathBuf,
+    dir: Arc<File>,
     current: Option<ManifestStream>,
     pending: VecDeque<String>,
     context: Context,
@@ -222,7 +253,7 @@ struct Context {
 }
 
 impl ManifestRecords {
-    fn open(dir: PathBuf, mode: Mode) -> Result<Self, PaperlessReadError> {
+    fn open(dir: Arc<File>, mode: Mode) -> Result<Self, PaperlessReadError> {
         let main = ManifestStream::new(MANIFEST.to_owned(), open_in_export(&dir, MANIFEST)?);
         let pending = split_manifests(&dir)?.into();
         Ok(Self {

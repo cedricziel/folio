@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use folio_core::ports::{PaperlessReadError, PaperlessReader, PaperlessRecord};
 use folio_infra::import::{open_original_file, resolve_import_dir, PaperlessFsReader};
@@ -79,6 +79,10 @@ fn root_guard_with_no_roots_rejects_everything() {
     assert!(resolve_import_dir(&layout.path("imports/export"), &[]).is_err());
 }
 
+fn open_in(export: &Path, relative: &str) -> Result<(fs::File, u64), PaperlessReadError> {
+    open_original_file(&fs::File::open(export).unwrap(), relative)
+}
+
 fn assert_unsafe(result: Result<impl Sized, PaperlessReadError>) {
     assert!(
         matches!(result, Err(PaperlessReadError::UnsafePath { .. })),
@@ -97,7 +101,7 @@ fn original_guard_refuses_absolute_and_parent_paths() {
         "",
         "./x.pdf",
     ] {
-        assert_unsafe(open_original_file(&export, path));
+        assert_unsafe(open_in(&export, path));
     }
 }
 
@@ -115,11 +119,11 @@ fn original_guard_refuses_symlinks_without_opening_them() {
     fs::write(export.join("real/sub/doc.pdf"), b"doc").unwrap();
     symlink(export.join("real"), export.join("swapped")).unwrap();
 
-    assert_unsafe(open_original_file(&export, "linked.pdf"));
-    assert_unsafe(open_original_file(&export, "dir/secret.pdf"));
-    assert_unsafe(open_original_file(&export, "internal-link.pdf"));
+    assert_unsafe(open_in(&export, "linked.pdf"));
+    assert_unsafe(open_in(&export, "dir/secret.pdf"));
+    assert_unsafe(open_in(&export, "internal-link.pdf"));
     // A directory swapped for a symlink mid-path is refused even when it points inside
-    assert_unsafe(open_original_file(&export, "swapped/sub/doc.pdf"));
+    assert_unsafe(open_in(&export, "swapped/sub/doc.pdf"));
 }
 
 #[test]
@@ -129,13 +133,13 @@ fn original_guard_resolves_plain_files_and_reports_missing_ones() {
     fs::create_dir_all(export.join("originals/2024")).unwrap();
     fs::write(export.join("originals/2024/a b.pdf"), b"pdf").unwrap();
 
-    let (_, size) = open_original_file(&export, "originals/2024/a b.pdf").unwrap();
+    let (_, size) = open_in(&export, "originals/2024/a b.pdf").unwrap();
     assert_eq!(size, 3);
     assert!(matches!(
-        open_original_file(&export, "originals/missing.pdf"),
+        open_in(&export, "originals/missing.pdf"),
         Err(PaperlessReadError::Missing { .. })
     ));
-    assert_unsafe(open_original_file(&export, "originals"));
+    assert_unsafe(open_in(&export, "originals"));
 }
 
 /// Paperless writes `model` before `fields`; `json!` would sort them the other way
@@ -191,4 +195,23 @@ async fn reader_refuses_a_symlinked_manifest() {
     .unwrap();
     let reader = PaperlessFsReader::open(&export).unwrap();
     assert_unsafe(reader.scan().await.map(|_| ()));
+}
+
+#[tokio::test]
+async fn reader_keeps_reading_the_directory_it_opened_after_the_path_is_replaced() {
+    let layout = Layout::new();
+    let export = layout.path("imports/export");
+    fs::write(export.join("metadata.json"), r#"{"version": "3.4.2"}"#).unwrap();
+    fs::write(
+        layout.path("outside/metadata.json"),
+        r#"{"version": "2.0.0"}"#,
+    )
+    .unwrap();
+
+    let reader = PaperlessFsReader::open(&export).unwrap();
+    fs::rename(&export, layout.path("imports/moved")).unwrap();
+    symlink(layout.path("outside"), &export).unwrap();
+
+    let info = reader.source_info().await.unwrap();
+    assert_eq!(info.version.to_string(), "3.4.2");
 }
