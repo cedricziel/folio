@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.10.0](https://github.com/cedricziel/folio/compare/v0.9.1...v0.10.0) (2026-11-07)
+
+
+### Features
+
+* **core:** add modified_since and CompleteIdSet to PaperlessReader ([d3b5b1c](https://github.com/cedricziel/folio/commit/d3b5b1c6be312d29390b935d91e98768f6cdd203))
+* **core:** add the PaperlessReader port ([29aa8cd](https://github.com/cedricziel/folio/commit/29aa8cd0869c944950ba9c447d52832f788ffb8c))
+* **infra:** add [import] config section for allowed roots and file size limit ([1cde079](https://github.com/cedricziel/folio/commit/1cde079e307f08ac7b0a025ab6a41e091654e7fe))
+* **infra:** confine import directories to the allowed roots ([5f447de](https://github.com/cedricziel/folio/commit/5f447deed8f734b7dcb6cb21f0bc0ce35e030433))
+* **infra:** import config section and Paperless migration guide ([#332](https://github.com/cedricziel/folio/issues/332)) ([4f2c75c](https://github.com/cedricziel/folio/commit/4f2c75cc60eb96e408977677cafa9d60f51d692a))
+* **infra:** Paperless export reader and path guards ([#331](https://github.com/cedricziel/folio/issues/331)) ([ba3c65f](https://github.com/cedricziel/folio/commit/ba3c65f749357ddef2035e3b1d911a2cdf77ed93))
+* **infra:** refuse unsafe paths to Paperless originals ([6c405cc](https://github.com/cedricziel/folio/commit/6c405cc9747d88dad07761a65fb44802fce0ee1e))
+* **infra:** stream Paperless-ngx exports through PaperlessReader ([a0ff42a](https://github.com/cedricziel/folio/commit/a0ff42a6f40e68cc36d0c9ff8c9d3eec250f00de))
+
+
+### Bug Fixes
+
+* **apple:** close a scan review only from its own completion ([#321](https://github.com/cedricziel/folio/issues/321)) ([a5d9034](https://github.com/cedricziel/folio/commit/a5d90340e29f62c6436d56b9ad68fe330a5a868b)), closes [#166](https://github.com/cedricziel/folio/issues/166)
+* **core:** keep CompleteIdSet from being built empty by default ([b789e8a](https://github.com/cedricziel/folio/commit/b789e8abe661d62f8754bc14c8c3beceb35c40cc))
+* **core:** keep CompleteIdSet from being built empty by default ([#334](https://github.com/cedricziel/folio/issues/334)) ([707ea45](https://github.com/cedricziel/folio/commit/707ea45a1ee4200cd5cc460acd14cad974bd85f0))
+* **infra:** export unsigned span arguments as integers ([9ff8628](https://github.com/cedricziel/folio/commit/9ff8628a73af4ce87e88a23d53e1e93f93b7e206))
+* **infra:** fail single Paperless documents instead of whole scans ([0cab06b](https://github.com/cedricziel/folio/commit/0cab06b3ac694366c0c68c7523be55a684bdaef3))
+* **infra:** open import directories while checking them against the roots ([ca48472](https://github.com/cedricziel/folio/commit/ca484724c477a48f5c24a3bfaf153a7876fe4854))
+* **infra:** open Paperless originals without following any symlink ([a757928](https://github.com/cedricziel/folio/commit/a75792805b29f13b50280aa98c7d6542642cbced))
+* **infra:** read Paperless exports through one directory handle ([d5fd804](https://github.com/cedricziel/folio/commit/d5fd8047f887dc49815aad67f82a25676776dd5a))
+* **infra:** refuse originals swapped between the path check and the open ([c2aefe2](https://github.com/cedricziel/folio/commit/c2aefe25ca6c328b511e3ef9c989bc1c8ff04a17))
+* **telemetry:** export the HTTP status code as an integer ([d8c8a1e](https://github.com/cedricziel/folio/commit/d8c8a1e794dc50d62c7f8edeba4d89604cf80d97))
+* **telemetry:** export unsigned span attributes as integers ([#328](https://github.com/cedricziel/folio/issues/328)) ([d588efa](https://github.com/cedricziel/folio/commit/d588efa5126b9c0ac1958cf12fc9f80d83aa4739))
+
 ## [0.9.1](https://github.com/cedricziel/folio/compare/v0.9.0...v0.9.1) (2026-11-07)
 
 
