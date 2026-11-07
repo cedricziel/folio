@@ -43,8 +43,9 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
-# HTTP client (for AI APIs)
-reqwest = { workspace = true }
+# HTTP client (AI APIs, Paperless)
+reqwest = { workspace = true, features = ["query", "stream"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 # Object storage
 object_store = { workspace = true }
@@ -84,5 +85,6 @@ optional = true
 axum = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
+wiremock = "0.6"
 hmac = "0.13"
 sha2 = "0.11"

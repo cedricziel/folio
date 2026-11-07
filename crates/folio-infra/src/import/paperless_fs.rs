@@ -678,7 +678,7 @@ struct TagFields {
 }
 
 #[derive(Deserialize)]
-struct CustomFieldFields {
+pub(super) struct CustomFieldFields {
     name: String,
     data_type: PaperlessFieldType,
     extra_data: Option<CustomFieldExtra>,
@@ -699,7 +699,7 @@ enum SelectOption {
 }
 
 impl CustomFieldFields {
-    fn into_record(self, id: i64) -> PaperlessCustomField {
+    pub(super) fn into_record(self, id: i64) -> PaperlessCustomField {
         let extra = self.extra_data.unwrap_or_default();
         PaperlessCustomField {
             id,
