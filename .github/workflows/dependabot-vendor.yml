@@ -2,6 +2,9 @@
 # static/, so the "vendored assets are up to date" check in ci.yml fails. This
 # workflow runs `npm run vendor` on those PRs and pushes the result to the branch.
 #
+# The build job runs PR-controlled code and holds no secrets and a read-only
+# token. A second job, which runs no PR code, commits the output and pushes.
+#
 # Pushes made with GITHUB_TOKEN do not start new workflow runs, so CI would not
 # re-run on the regenerated commit. Add RELEASE_PLEASE_TOKEN (the PAT release.yml
 # already uses) as a *Dependabot* secret (Settings > Secrets and variables >
@@ -22,10 +25,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  vendor:
+  build:
+    # 49699333 is the stable account id of dependabot[bot].
     if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.id == 49699333 &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -38,20 +41,43 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - name: Regenerate vendored assets
         run: |
           npm ci --ignore-scripts --prefix web
           npm run vendor --prefix web
+      - name: Package static/
+        run: tar -C static -czf "$RUNNER_TEMP/static.tgz" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: static
+          path: ${{ runner.temp }}/static.tgz
+          retention-days: 1
+
+  push:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: static
+          path: ${{ runner.temp }}/artifact
       - name: Commit and push
         env:
           PUSH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          HAVE_PAT: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
           BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
-          HAVE_PAT: ${{ secrets.RELEASE_PLEASE_TOKEN != '' }}
         run: |
+          rm -rf static
+          mkdir static
+          tar -C static -xzf "$RUNNER_TEMP/artifact/static.tgz"
           if [ -z "$(git status --porcelain -- static)" ]; then
             echo "Vendored assets already up to date"
             exit 0
@@ -61,7 +87,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- static
+          git add -A -- static
           git commit -m "chore(deps): regenerate vendored web assets"
           git push --force-with-lease="$BRANCH:$HEAD_SHA" \
             "https://x-access-token:${PUSH_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/${BRANCH}"
