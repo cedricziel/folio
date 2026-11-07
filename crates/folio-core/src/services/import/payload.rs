@@ -247,11 +247,36 @@ mod tests {
     #[test]
     fn a_re_plan_produces_an_identical_payload() {
         let fixture = Fixture::new();
-        let first = serde_json::to_string(&fixture.plan(&records(), None)).unwrap();
-        let mut shuffled = records();
-        shuffled.document.tags.reverse();
+        let mut rich = records();
+        rich.document.tags = vec![3, 4, 7, 9];
+        rich.notes = vec![note(1, 1, "one"), note(2, 1, "two"), note(3, 1, "three")];
+        rich.fields.push(PaperlessCustomFieldInstance {
+            document: 1,
+            field: 8,
+            value: Some(PaperlessFieldValue::Integer(5)),
+        });
+        rich.versions = vec![version(10, 1), version(11, 2), version(12, 3)];
+        let mut shuffled = rich.clone();
+        shuffled.document.tags.rotate_left(1);
+        shuffled.notes.rotate_left(1);
+        shuffled.fields.reverse();
+        shuffled.versions.rotate_left(1);
+
+        let first = serde_json::to_string(&fixture.plan(&rich, None)).unwrap();
         let second = serde_json::to_string(&fixture.plan(&shuffled, None)).unwrap();
+
         assert_eq!(first, second);
+    }
+
+    fn version(id: i64, index: i64) -> crate::ports::PaperlessDocument {
+        let mut version = document(id);
+        version.content = format!("version {index}");
+        version.version_of = Some(crate::ports::PaperlessVersionInfo {
+            root_document: 1,
+            index: Some(index),
+            label: None,
+        });
+        version
     }
 
     #[test]
@@ -266,36 +291,48 @@ mod tests {
     }
 
     #[test]
-    fn a_tag_rename_changes_no_fingerprint() {
-        let fixture = Fixture::new();
-        let tag = |name: &str| PaperlessTag {
-            id: 3,
+    fn a_tag_rename_changes_no_document_plan() {
+        let tag = |id, name: &str, is_inbox_tag| PaperlessTag {
+            id,
             name: name.into(),
             color: "#000000".into(),
-            is_inbox_tag: false,
+            is_inbox_tag,
             parent: None,
         };
-        let synced = fixture.plan(&records(), None).unwrap();
-        let ledger = ledger_after(&synced);
-
-        let entity = ExistingEntity {
+        let bills = ExistingEntity {
             id: Id::from_u128(3),
             name: "Bills".into(),
         };
         let mapping = TaxonomyMapping {
             paperless_id: 3,
-            entity_id: entity.id,
+            entity_id: bills.id,
             synced_name: "Bills".into(),
         };
         let vault = VaultTaxonomy {
-            existing: std::slice::from_ref(&entity),
+            existing: std::slice::from_ref(&bills),
             mappings: std::slice::from_ref(&mapping),
         };
-        let tags = plan_tags(&[tag("Invoices")], vault, SyncMode::Mirror);
-        assert_eq!(tags.plan.renames.len(), 1);
+        let plan_with = |name: &str, ledger: Option<&LedgerEntry>| {
+            let tags = plan_tags(
+                &[tag(3, name, false), tag(4, "Inbox", true)],
+                vault,
+                SyncMode::Mirror,
+            );
+            let mut fixture = Fixture::new();
+            fixture.inbox = tags.inbox_tags.iter().copied().collect();
+            (tags, fixture.plan(&records(), ledger).unwrap())
+        };
 
-        let after = fixture.plan(&records(), Some(&ledger)).unwrap();
-        assert_eq!(after.outcome, ItemOutcome::Skipped(SkipReason::Unchanged));
+        let (_, synced) = plan_with("Bills", None);
+        let (renamed, fresh) = plan_with("Invoices", None);
+        let (_, resynced) = plan_with("Invoices", Some(&ledger_after(&synced)));
+
+        assert_eq!(renamed.plan.renames.len(), 1);
+        assert_eq!(fresh, synced);
+        assert_eq!(
+            resynced.outcome,
+            ItemOutcome::Skipped(SkipReason::Unchanged)
+        );
     }
 
     #[test]
