@@ -64,16 +64,16 @@ impl DocumentRecords {
         self.versions.len()
     }
 
+    pub fn tag_set(&self) -> BTreeSet<i64> {
+        self.document.tags.iter().copied().collect()
+    }
+
     /// Notes that still exist in Paperless, by ID
     pub fn live_notes(&self) -> Vec<&PaperlessNote> {
         let mut notes: Vec<_> = self.notes.iter().filter(|n| !n.deleted).collect();
         notes.sort_by_key(|n| n.id);
         notes
     }
-}
-
-pub fn sha256_hex(text: &str) -> String {
-    hex::encode(Sha256::digest(text.as_bytes()))
 }
 
 #[derive(Serialize)]
@@ -107,8 +107,26 @@ struct CanonicalNote<'a> {
 /// SHA-256 over the canonical JSON of what the sync mirrors. It uses
 /// Paperless IDs, not names, so renaming a tag changes no fingerprint.
 pub fn fingerprint(records: &DocumentRecords, inbox_tags: &BTreeSet<i64>) -> String {
+    let tags = records.tag_set();
+    let inbox = !tags.is_disjoint(inbox_tags);
+    fingerprint_of(
+        records,
+        records.original(),
+        tags,
+        &records.live_notes(),
+        inbox,
+    )
+}
+
+/// [`fingerprint`] over parts the caller already derived from `records`
+pub(super) fn fingerprint_of(
+    records: &DocumentRecords,
+    original: &PaperlessDocument,
+    tags: BTreeSet<i64>,
+    live_notes: &[&PaperlessNote],
+    inbox: bool,
+) -> String {
     let document = &records.document;
-    let tags: BTreeSet<i64> = document.tags.iter().copied().collect();
     let mut custom_fields: Vec<CanonicalField> = records
         .fields
         .iter()
@@ -121,17 +139,16 @@ pub fn fingerprint(records: &DocumentRecords, inbox_tags: &BTreeSet<i64>) -> Str
     let canonical = CanonicalV1 {
         fingerprint_version: FINGERPRINT_VERSION,
         title: &document.title,
-        content_sha256: sha256_hex(&records.original().content),
+        content_sha256: hex::encode(Sha256::digest(original.content.as_bytes())),
         created: document.created,
         correspondent: document.correspondent,
         document_type: document.document_type,
-        inbox: !tags.is_disjoint(inbox_tags),
+        inbox,
         tags,
         custom_fields,
         asn: document.archive_serial_number,
-        notes: records
-            .live_notes()
-            .into_iter()
+        notes: live_notes
+            .iter()
             .map(|n| CanonicalNote {
                 id: n.id,
                 body: &n.body,
@@ -139,49 +156,30 @@ pub fn fingerprint(records: &DocumentRecords, inbox_tags: &BTreeSet<i64>) -> Str
             })
             .collect(),
     };
-    let json = serde_json::to_vec(&canonical).expect("canonical fingerprint serializes");
-    hex::encode(Sha256::digest(json))
+    let mut hasher = HashWriter(Sha256::new());
+    serde_json::to_writer(&mut hasher, &canonical).expect("canonical fingerprint serializes");
+    hex::encode(hasher.0.finalize())
+}
+
+/// Streams the canonical JSON into the hash instead of buffering it
+struct HashWriter(Sha256);
+
+impl std::io::Write for HashWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use crate::ports::{ChecksumAlgorithm, PaperlessChecksum, PaperlessVersionInfo};
-
-    pub(crate) fn document(id: i64) -> PaperlessDocument {
-        PaperlessDocument {
-            id,
-            title: format!("Document {id}"),
-            content: "Some text".into(),
-            mime_type: "application/pdf".into(),
-            original_filename: Some(format!("{id}.pdf")),
-            checksum: PaperlessChecksum {
-                value: "0".repeat(32),
-                algorithm: ChecksumAlgorithm::Md5,
-            },
-            size: Some(1024),
-            created: NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
-            added: "2024-03-02T10:00:00Z".parse().unwrap(),
-            modified: "2024-03-03T10:00:00Z".parse().unwrap(),
-            correspondent: Some(1),
-            document_type: Some(2),
-            tags: vec![3, 4],
-            archive_serial_number: Some(17),
-            trashed: false,
-            version_of: None,
-            original_handle: format!("originals/{id}.pdf"),
-        }
-    }
-
-    pub(crate) fn note(id: i64, document: i64, body: &str) -> PaperlessNote {
-        PaperlessNote {
-            id,
-            document,
-            body: body.into(),
-            created: "2024-03-04T10:00:00Z".parse().unwrap(),
-            deleted: false,
-        }
-    }
+    use crate::ports::PaperlessVersionInfo;
+    use crate::services::import::test_support::{document, note};
 
     fn records() -> DocumentRecords {
         let mut records = DocumentRecords::new(document(1));

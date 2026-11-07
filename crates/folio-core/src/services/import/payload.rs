@@ -7,24 +7,22 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::diff::{decide, Decision, ItemAction, LedgerEntry, SkipReason};
-use super::fingerprint::{document_id, fingerprint, DocumentRecords, FINGERPRINT_VERSION};
+use super::fingerprint::{document_id, fingerprint_of, DocumentRecords, FINGERPRINT_VERSION};
 use super::values::{plan_values, PlannedValues, ValueContext};
 use super::SyncMode;
 use crate::models::{Id, VaultId};
 use crate::ports::PaperlessChecksum;
 
-/// Everything the apply phase writes for one document, in Paperless terms;
-/// taxonomy and fields are resolved through `paperless_taxonomy` at apply
+/// Everything the apply phase writes for one document beyond the item's own
+/// columns (Paperless ID, document ID, title), in Paperless terms; taxonomy
+/// and fields are resolved through `paperless_taxonomy` at apply
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemPayload {
     pub fingerprint_version: u32,
     pub fingerprint: String,
-    pub document_id: Id,
-    pub paperless_id: i64,
     pub original_handle: String,
     pub checksum: PaperlessChecksum,
     pub size: Option<u64>,
-    pub title: String,
     pub content: String,
     pub mime_type: String,
     pub original_filename: Option<String>,
@@ -90,51 +88,45 @@ pub fn plan_document(
 ) -> Option<PlannedItem> {
     let root = &records.document;
     let original = records.original();
-    let fingerprint = fingerprint(records, ctx.inbox_tags);
+    let tags = records.tag_set();
+    let in_inbox = !tags.is_disjoint(ctx.inbox_tags);
+    let notes = records.live_notes();
+    let fingerprint = fingerprint_of(records, original, tags.clone(), &notes, in_inbox);
     let document_id = ledger.map_or_else(|| document_id(ctx.vault, root.id), |r| r.document_id);
 
-    let outcome = match decide(root, original, &fingerprint, ledger, ctx.mode) {
-        Decision::Apply(action) => ItemOutcome::Pending(action),
-        Decision::Skip(reason) => ItemOutcome::Skipped(reason),
+    let (outcome, payload) = match decide(root, original, &fingerprint, ledger, ctx.mode) {
         Decision::Ignore => return None,
-    };
-    let payload = matches!(outcome, ItemOutcome::Pending(_)).then(|| {
-        let tags: BTreeSet<i64> = root.tags.iter().copied().collect();
-        let instances: Vec<_> = records
-            .fields
-            .iter()
-            .map(|f| (f.field, f.value.as_ref()))
-            .collect();
-        ItemPayload {
-            fingerprint_version: FINGERPRINT_VERSION,
-            fingerprint,
-            document_id,
-            paperless_id: root.id,
-            original_handle: original.original_handle.clone(),
-            checksum: original.checksum.clone(),
-            size: original.size,
-            title: root.title.clone(),
-            content: original.content.clone(),
-            mime_type: original.mime_type.clone(),
-            original_filename: original.original_filename.clone(),
-            created: root.created,
-            added: root.added,
-            modified: root.modified,
-            correspondent: root.correspondent,
-            document_type: root.document_type,
-            in_inbox: !tags.is_disjoint(ctx.inbox_tags),
-            tags: tags.difference(ctx.inbox_tags).copied().collect(),
-            trashed: root.trashed,
-            skipped_versions: records.skipped_versions(),
-            values: plan_values(
-                document_id,
-                &instances,
-                &records.live_notes(),
-                root.archive_serial_number,
-                &ctx.values,
-            ),
+        Decision::Skip(reason) => (ItemOutcome::Skipped(reason), None),
+        Decision::Apply(action) => {
+            let payload = ItemPayload {
+                fingerprint_version: FINGERPRINT_VERSION,
+                fingerprint,
+                original_handle: original.original_handle.clone(),
+                checksum: original.checksum.clone(),
+                size: original.size,
+                content: original.content.clone(),
+                mime_type: original.mime_type.clone(),
+                original_filename: original.original_filename.clone(),
+                created: root.created,
+                added: root.added,
+                modified: root.modified,
+                correspondent: root.correspondent,
+                document_type: root.document_type,
+                tags: tags.difference(ctx.inbox_tags).copied().collect(),
+                in_inbox,
+                trashed: root.trashed,
+                skipped_versions: records.skipped_versions(),
+                values: plan_values(
+                    document_id,
+                    &records.fields,
+                    &notes,
+                    root.archive_serial_number,
+                    &ctx.values,
+                ),
+            };
+            (ItemOutcome::Pending(action), Some(payload))
         }
-    });
+    };
     Some(PlannedItem {
         paperless_id: root.id,
         document_id,
@@ -154,8 +146,8 @@ mod tests {
         PaperlessFieldValue, PaperlessTag,
     };
     use crate::services::import::diff::FolioState;
-    use crate::services::import::fingerprint::tests::{document, note};
     use crate::services::import::taxonomy::{plan_tags, TaxonomyMapping, VaultTaxonomy};
+    use crate::services::import::test_support::{custom_field, document, note};
     use crate::services::import::values::{ItemWarning, DEFAULT_CURRENCY};
     use crate::services::import::ExistingEntity;
 
@@ -169,13 +161,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let link = PaperlessCustomField {
-                id: 1,
-                name: "Link".into(),
-                data_type: PaperlessFieldType::Url,
-                select_options: vec![],
-                default_currency: None,
-            };
+            let link = custom_field(1, "Link", PaperlessFieldType::Url);
             Self {
                 inbox: BTreeSet::from([4]),
                 fields: HashMap::from([(1, link)]),
@@ -188,9 +174,18 @@ mod tests {
             records: &DocumentRecords,
             ledger: Option<&LedgerEntry>,
         ) -> Option<PlannedItem> {
+            self.plan_in(SyncMode::Mirror, records, ledger)
+        }
+
+        fn plan_in(
+            &self,
+            mode: SyncMode,
+            records: &DocumentRecords,
+            ledger: Option<&LedgerEntry>,
+        ) -> Option<PlannedItem> {
             let ctx = PlanContext {
                 vault: VAULT,
-                mode: SyncMode::Mirror,
+                mode,
                 inbox_tags: &self.inbox,
                 values: ValueContext {
                     fields: &self.fields,
@@ -219,7 +214,6 @@ mod tests {
         LedgerEntry {
             paperless_id: item.paperless_id,
             document_id: item.document_id,
-            paperless_modified: payload.modified,
             checksum: payload.checksum.value.clone(),
             fingerprint: payload.fingerprint.clone(),
             fingerprint_version: payload.fingerprint_version,
@@ -346,18 +340,9 @@ mod tests {
         let created = fixture.plan(&records(), None).unwrap();
         let mut changed = records();
         changed.document.title = "Changed".into();
-        let ctx = PlanContext {
-            vault: VAULT,
-            mode: SyncMode::NewOnly,
-            inbox_tags: &fixture.inbox,
-            values: ValueContext {
-                fields: &fixture.fields,
-                asn_owners: &fixture.asn_owners,
-                default_currency: DEFAULT_CURRENCY,
-            },
-        };
+        let ledger = ledger_after(&created);
         assert_eq!(
-            plan_document(&changed, Some(&ledger_after(&created)), &ctx),
+            fixture.plan_in(SyncMode::NewOnly, &changed, Some(&ledger)),
             None
         );
     }

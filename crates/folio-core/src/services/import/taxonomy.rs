@@ -324,6 +324,15 @@ mod tests {
         }
     }
 
+    /// The mapping a previous sync recorded, under the entity's current name
+    fn mapped(paperless_id: i64, entity: &ExistingEntity) -> TaxonomyMapping {
+        TaxonomyMapping {
+            paperless_id,
+            entity_id: entity.id,
+            synced_name: entity.name.clone(),
+        }
+    }
+
     const EMPTY: VaultTaxonomy<'static> = VaultTaxonomy {
         existing: &[],
         mappings: &[],
@@ -446,11 +455,7 @@ mod tests {
     fn a_paperless_rename_renames_the_mapped_entity_in_mirror_mode() {
         let bills = entity("Bills");
         let existing = [bills.clone()];
-        let mappings = [TaxonomyMapping {
-            paperless_id: 1,
-            entity_id: bills.id,
-            synced_name: "Bills".into(),
-        }];
+        let mappings = [mapped(1, &bills)];
         let vault = VaultTaxonomy {
             existing: &existing,
             mappings: &mappings,
@@ -479,11 +484,7 @@ mod tests {
         let bills = entity("Bills");
         let invoices = entity("Invoices");
         let existing = [bills.clone(), invoices];
-        let mappings = [TaxonomyMapping {
-            paperless_id: 1,
-            entity_id: bills.id,
-            synced_name: "Bills".into(),
-        }];
+        let mappings = [mapped(1, &bills)];
         let vault = VaultTaxonomy {
             existing: &existing,
             mappings: &mappings,
@@ -515,18 +516,7 @@ mod tests {
         let a = entity("A");
         let b = entity("B");
         let existing = [a.clone(), b.clone()];
-        let mappings = [
-            TaxonomyMapping {
-                paperless_id: 1,
-                entity_id: a.id,
-                synced_name: "A".into(),
-            },
-            TaxonomyMapping {
-                paperless_id: 2,
-                entity_id: b.id,
-                synced_name: "B".into(),
-            },
-        ];
+        let mappings = [mapped(1, &a), mapped(2, &b)];
         let vault = VaultTaxonomy {
             existing: &existing,
             mappings: &mappings,
@@ -544,11 +534,7 @@ mod tests {
 
     #[test]
     fn a_mapping_to_a_deleted_entity_maps_again_by_name() {
-        let mappings = [TaxonomyMapping {
-            paperless_id: 1,
-            entity_id: Id::new_v4(),
-            synced_name: "Bills".into(),
-        }];
+        let mappings = [mapped(1, &entity("Bills"))];
         let vault = VaultTaxonomy {
             existing: &[],
             mappings: &mappings,
@@ -565,13 +551,7 @@ mod tests {
             kind: MetadataKind::Money,
             unique: false,
         };
-        let field = |id, name: &str, data_type| PaperlessCustomField {
-            id,
-            name: name.into(),
-            data_type,
-            select_options: vec![],
-            default_currency: None,
-        };
+        let field = crate::services::import::test_support::custom_field;
         use crate::ports::PaperlessFieldType as P;
 
         let plan = plan_fields(

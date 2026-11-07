@@ -11,6 +11,9 @@ pub mod taxonomy;
 pub mod trash;
 pub mod values;
 
+#[cfg(test)]
+mod test_support;
+
 use serde::{Deserialize, Serialize};
 
 pub use diff::{decide, Decision, FolioState, ItemAction, LedgerEntry, SkipReason};
@@ -26,10 +29,7 @@ pub use taxonomy::{
     plan_fields, plan_named, plan_tags, ExistingEntity, FieldPlan, KindPlan, TagPlan, Target,
     TaxonomyKind, TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
 };
-pub use trash::{
-    apply_trash_safety, live_ledger_rows, missing_from_listing, trash_held, MissingDocument,
-    TrashHealth,
-};
+pub use trash::{apply_trash_safety, TrashHealth, TRASH_MAX_COUNT, TRASH_MAX_PERCENT};
 pub use values::{
     plan_values, ItemWarning, PlannedNote, PlannedValue, PlannedValues, ValueContext,
     DEFAULT_CURRENCY,

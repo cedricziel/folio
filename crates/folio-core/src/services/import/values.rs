@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use super::fields::folio_kind;
 use crate::models::{EntryBody, Id, MetadataKind, MetadataValue};
-use crate::ports::{PaperlessCustomField, PaperlessFieldValue, PaperlessNote};
+use crate::ports::{
+    PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessFieldValue, PaperlessNote,
+};
 use crate::Error;
 
 /// Used when neither the value nor its field names a currency
@@ -78,17 +80,20 @@ pub struct ValueContext<'a> {
 /// Validates a document's values. `notes` are the live notes in ID order.
 pub fn plan_values(
     document_id: Id,
-    instances: &[(i64, Option<&PaperlessFieldValue>)],
+    instances: &[PaperlessCustomFieldInstance],
     notes: &[&PaperlessNote],
     asn: Option<i64>,
     ctx: &ValueContext<'_>,
 ) -> PlannedValues {
     let mut planned = PlannedValues::default();
-    let mut sorted = instances.to_vec();
-    sorted.sort_by_key(|(field, _)| *field);
+    let mut sorted: Vec<_> = instances.iter().collect();
+    sorted.sort_by_key(|instance| instance.field);
 
-    for (field_id, value) in sorted {
-        let Some(value) = value else { continue };
+    for instance in sorted {
+        let field_id = instance.field;
+        let Some(value) = &instance.value else {
+            continue;
+        };
         let Some(field) = ctx.fields.get(&field_id) else {
             planned.warnings.push(ItemWarning::ValueDropped {
                 field_id,
@@ -118,9 +123,9 @@ pub fn plan_values(
 
     for note in notes {
         match EntryBody::parse(note.body.clone()) {
-            Ok(_) => planned.notes.push(PlannedNote {
+            Ok(body) => planned.notes.push(PlannedNote {
                 external_id: note.id.to_string(),
-                body: note.body.clone(),
+                body: body.into_inner(),
                 created: note.created,
             }),
             Err(error) => planned.warnings.push(ItemWarning::NoteDropped {
@@ -180,7 +185,7 @@ fn convert(
                 .map(|label| Some(PlannedValue::Option { label }))
                 .ok_or_else(|| "Unknown select option".into());
         }
-        P::DocumentLink(_) => return Ok(None),
+        P::DocumentLink(_) => unreachable!("plan_values keeps links raw"),
     };
     kind.validate_value(Some(metadata), false)
         .map(|value| value.map(|value| PlannedValue::Value { value }))
@@ -228,17 +233,7 @@ fn reason(error: Error) -> String {
 mod tests {
     use super::*;
     use crate::ports::{PaperlessFieldType, PaperlessSelectOption};
-    use crate::services::import::fingerprint::tests::note;
-
-    fn field(id: i64, name: &str, data_type: PaperlessFieldType) -> PaperlessCustomField {
-        PaperlessCustomField {
-            id,
-            name: name.into(),
-            data_type,
-            select_options: vec![],
-            default_currency: None,
-        }
-    }
+    use crate::services::import::test_support::{custom_field as field, note};
 
     struct Fixture {
         fields: HashMap<i64, PaperlessCustomField>,
@@ -259,7 +254,14 @@ mod tests {
             notes: &[PaperlessNote],
             asn: Option<i64>,
         ) -> PlannedValues {
-            let instances: Vec<_> = values.iter().map(|(f, v)| (*f, Some(v))).collect();
+            let instances: Vec<_> = values
+                .iter()
+                .map(|(field, value)| PaperlessCustomFieldInstance {
+                    document: 1,
+                    field: *field,
+                    value: Some(value.clone()),
+                })
+                .collect();
             let notes: Vec<_> = notes.iter().collect();
             let ctx = ValueContext {
                 fields: &self.fields,

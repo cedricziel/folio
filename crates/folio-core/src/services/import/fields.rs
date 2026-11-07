@@ -1,9 +1,11 @@
 //! Custom-field kinds: how Paperless types map onto Folio metadata kinds, and
 //! which existing vault fields can't hold the values an import would write
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 
-use crate::models::{Id, MetadataKind};
+use crate::models::{metadata_name_key, Id, MetadataKind};
 use crate::ports::{PaperlessCustomField, PaperlessFieldType};
 
 /// The unique integer field that holds Paperless archive serial numbers
@@ -54,9 +56,9 @@ pub fn folio_kind(data_type: PaperlessFieldType) -> MetadataKind {
     }
 }
 
-/// Field names match the way the vault's unique index does
+/// Paperless names are trimmed, as field creation trims them, before keying
 pub(crate) fn name_key(name: &str) -> String {
-    name.trim().to_lowercase()
+    metadata_name_key(name.trim())
 }
 
 /// Every existing field, matched by name, whose kind can't hold the values of
@@ -66,26 +68,23 @@ pub fn field_kind_conflicts(
     paperless: &[PaperlessCustomField],
     existing: &[ExistingField],
 ) -> Vec<FieldKindConflict> {
-    let by_key = |name: &str| {
-        let key = name_key(name);
-        existing.iter().find(|f| name_key(&f.name) == key)
-    };
+    let by_key: HashMap<String, &ExistingField> =
+        existing.iter().map(|f| (name_key(&f.name), f)).collect();
+    let by_key = |name: &str| by_key.get(&name_key(name)).copied();
     let mut sorted: Vec<&PaperlessCustomField> = paperless.iter().collect();
     sorted.sort_by_key(|f| f.id);
 
     let mut conflicts = Vec::new();
     for field in sorted {
         let required = folio_kind(field.data_type);
-        if let Some(found) = by_key(&field.name) {
-            if found.kind != required {
-                conflicts.push(FieldKindConflict {
-                    field: found.name.clone(),
-                    paperless_id: Some(field.id),
-                    existing_kind: found.kind,
-                    required_kind: required,
-                    reason: FieldConflictReason::KindMismatch,
-                });
-            }
+        if let Some(found) = by_key(&field.name).filter(|f| f.kind != required) {
+            conflicts.push(FieldKindConflict {
+                field: found.name.clone(),
+                paperless_id: Some(field.id),
+                existing_kind: found.kind,
+                required_kind: required,
+                reason: FieldConflictReason::KindMismatch,
+            });
         }
     }
     if let Some(asn) = by_key(ASN_FIELD_NAME) {
@@ -112,16 +111,7 @@ pub fn field_kind_conflicts(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn paperless(id: i64, name: &str, data_type: PaperlessFieldType) -> PaperlessCustomField {
-        PaperlessCustomField {
-            id,
-            name: name.into(),
-            data_type,
-            select_options: vec![],
-            default_currency: None,
-        }
-    }
+    use crate::services::import::test_support::custom_field as paperless;
 
     fn existing(name: &str, kind: MetadataKind) -> ExistingField {
         ExistingField {

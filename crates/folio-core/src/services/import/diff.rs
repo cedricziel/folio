@@ -1,6 +1,5 @@
 //! What a run does with each Paperless document, given its ledger row
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::fingerprint::FINGERPRINT_VERSION;
@@ -22,7 +21,6 @@ pub enum FolioState {
 pub struct LedgerEntry {
     pub paperless_id: i64,
     pub document_id: Id,
-    pub paperless_modified: DateTime<Utc>,
     pub checksum: String,
     pub fingerprint: String,
     pub fingerprint_version: u32,
@@ -105,22 +103,14 @@ pub fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::import::fingerprint::tests::document;
+    use crate::services::import::test_support::{document, ledger_row};
 
     const FP: &str = "fp";
 
     fn row() -> LedgerEntry {
-        let doc = document(1);
         LedgerEntry {
-            paperless_id: 1,
-            document_id: Id::new_v4(),
-            paperless_modified: doc.modified,
-            checksum: doc.checksum.value,
             fingerprint: FP.into(),
-            fingerprint_version: FINGERPRINT_VERSION,
-            needs_reapply: false,
-            trashed_in_paperless: false,
-            folio_state: FolioState::Live,
+            ..ledger_row(1)
         }
     }
 
