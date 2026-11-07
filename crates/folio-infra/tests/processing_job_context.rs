@@ -30,9 +30,7 @@ async fn contract(db: &Database) {
     };
     let id = with_lineage(
         Some(lineage),
-        repos.jobs.enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        }),
+        repos.jobs.enqueue(JobType::process_document(document.id)),
     )
     .await
     .unwrap();
@@ -52,9 +50,7 @@ async fn contract(db: &Database) {
     );
     let fresh = repos
         .jobs
-        .enqueue(JobType::ProcessDocument {
-            document_id: document.id,
-        })
+        .enqueue(JobType::process_document(document.id))
         .await
         .unwrap();
     let fresh_context = repos.jobs.context(fresh).await.unwrap().unwrap();

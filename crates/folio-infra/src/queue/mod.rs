@@ -62,12 +62,20 @@ impl From<String> for JobStatus {
 pub enum JobType {
     /// Generate thumbnail for a document
     GenerateThumbnail { document_id: Uuid },
-    /// Extract text using OCR
-    ExtractText { document_id: Uuid },
+    /// Extract text using OCR; `force` reruns OCR even when the document already has text
+    ExtractText {
+        document_id: Uuid,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
     /// Generate embedding for search
     GenerateEmbedding { document_id: Uuid },
-    /// Process a newly uploaded document (all steps)
-    ProcessDocument { document_id: Uuid },
+    /// Process a newly uploaded document (all steps); `force` is passed on to OCR
+    ProcessDocument {
+        document_id: Uuid,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
     /// Remove objects and metadata after an explicit permanent-deletion request.
     PurgeDocument {
         document_id: Uuid,
@@ -81,14 +89,28 @@ pub enum JobType {
 }
 
 impl JobType {
+    pub fn process_document(document_id: Uuid) -> Self {
+        JobType::ProcessDocument {
+            document_id,
+            force: false,
+        }
+    }
+
+    pub fn extract_text(document_id: Uuid) -> Self {
+        JobType::ExtractText {
+            document_id,
+            force: false,
+        }
+    }
+
     /// The document this job works on, if it is a document job.
     pub fn document_id(&self) -> Option<Uuid> {
         match self {
             JobType::GenerateThumbnail { document_id }
-            | JobType::ExtractText { document_id }
+            | JobType::ExtractText { document_id, .. }
             | JobType::GenerateEmbedding { document_id }
             | JobType::PurgeDocument { document_id, .. }
-            | JobType::ProcessDocument { document_id } => Some(*document_id),
+            | JobType::ProcessDocument { document_id, .. } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
         }
     }
@@ -323,7 +345,7 @@ impl JobQueue {
 #[async_trait]
 impl ProcessingQueue for JobQueue {
     async fn enqueue_processing(&self, document_id: Uuid) -> Result<()> {
-        self.enqueue(JobType::ProcessDocument { document_id })
+        self.enqueue(JobType::process_document(document_id))
             .await
             .map(|_| ())
     }

@@ -394,9 +394,7 @@ impl Worker {
             }
             info!("Repairing orphaned document {} ({})", doc.id, doc.title);
             self.queue
-                .enqueue(JobType::ProcessDocument {
-                    document_id: doc.id,
-                })
+                .enqueue(JobType::process_document(doc.id))
                 .await?;
             repaired_count += 1;
         }
@@ -557,11 +555,15 @@ impl Worker {
             JobType::GenerateThumbnail { document_id } => {
                 self.process_thumbnail(*document_id).await
             }
-            JobType::ExtractText { document_id } => self.process_ocr(*document_id).await,
+            JobType::ExtractText { document_id, force } => {
+                self.process_ocr(*document_id, *force).await
+            }
             JobType::GenerateEmbedding { document_id } => {
                 self.process_embedding(*document_id).await
             }
-            JobType::ProcessDocument { document_id } => self.process_document(*document_id).await,
+            JobType::ProcessDocument { document_id, force } => {
+                self.process_document(*document_id, *force).await
+            }
             JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
             JobType::PurgeDocument {
                 document_id,
@@ -694,6 +696,7 @@ impl Worker {
         let Some(fence) = self.queue.start_ocr(job).await? else {
             return Ok(());
         };
+        let force = matches!(job.job_type, JobType::ExtractText { force: true, .. });
         let settings = self.pipeline.settings().await;
         let embed = settings.processing.auto_embed && settings.embeddings.provider != "none";
         let document = self
@@ -704,7 +707,7 @@ impl Worker {
         if let Some(content) = document
             .content
             .as_deref()
-            .filter(|content| !content.is_empty())
+            .filter(|content| !force && !content.is_empty())
         {
             self.queue
                 .complete_ocr(&fence, content, embed)
@@ -745,7 +748,7 @@ impl Worker {
     }
 
     /// Process OCR text extraction
-    async fn process_ocr(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+    async fn process_ocr(&self, document_id: uuid::Uuid, force: bool) -> Result<(), BoxError> {
         let vault = self.vault_of(document_id).await?;
         let document = self
             .document_repo
@@ -753,7 +756,7 @@ impl Worker {
             .await?
             .ok_or("Document not found")?;
 
-        if document.ocr_status == ProcessingStatus::Done {
+        if !force && document.ocr_status == ProcessingStatus::Done {
             let has_text = document
                 .content
                 .as_deref()
@@ -769,7 +772,7 @@ impl Worker {
         if let Some(content) = document
             .content
             .as_deref()
-            .filter(|content| !content.is_empty())
+            .filter(|content| !force && !content.is_empty())
         {
             debug!("Document {} already has content, skipping OCR", document_id);
             self.document_repo
@@ -915,7 +918,7 @@ impl Worker {
     }
 
     /// Process a newly uploaded document: thumbnails, then queue the OCR stage
-    async fn process_document(&self, document_id: uuid::Uuid) -> Result<(), BoxError> {
+    async fn process_document(&self, document_id: uuid::Uuid, force: bool) -> Result<(), BoxError> {
         info!("Starting document processing for {}", document_id);
 
         let vault = self.vault_of(document_id).await?;
@@ -1048,7 +1051,7 @@ impl Worker {
         // tracked independently: OCR, then embedding.
         let settings = self.pipeline.settings().await;
         let has_text = document.content.as_deref().is_some_and(|c| !c.is_empty());
-        if has_text || settings.processing.auto_ocr {
+        if force || has_text || settings.processing.auto_ocr {
             self.document_repo
                 .set_stage_status(
                     vault,
@@ -1058,7 +1061,7 @@ impl Worker {
                 )
                 .await?;
             self.queue
-                .enqueue(JobType::ExtractText { document_id })
+                .enqueue(JobType::ExtractText { document_id, force })
                 .await?;
         } else {
             self.document_repo
@@ -1273,9 +1276,7 @@ mod tests {
         };
         with_lineage(
             Some(lineage),
-            f.queue.enqueue(JobType::ExtractText {
-                document_id: f.doc_id,
-            }),
+            f.queue.enqueue(JobType::extract_text(f.doc_id)),
         )
         .await
         .unwrap();
@@ -1304,9 +1305,7 @@ mod tests {
     async fn processing_claim_does_not_start_in_a_different_vault() {
         let f = fixture("OCR").await;
         f.queue
-            .enqueue(JobType::ExtractText {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::extract_text(f.doc_id))
             .await
             .unwrap();
         let job = f.queue.dequeue().await.unwrap().unwrap();
@@ -1339,9 +1338,7 @@ mod tests {
     async fn queued_processing_does_not_write_into_a_deleted_vault() {
         let f = fixture("OCR").await;
         f.queue
-            .enqueue(JobType::ExtractText {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::extract_text(f.doc_id))
             .await
             .unwrap();
         let job = f.queue.dequeue().await.unwrap().unwrap();
@@ -1377,13 +1374,128 @@ mod tests {
         }
     }
 
+    async fn drain_claimed(f: &Fixture) {
+        while let Some(job) = f.queue.dequeue().await.unwrap() {
+            f.worker.process_claim(&job).await.unwrap();
+            f.queue.complete(&job).await.unwrap();
+        }
+    }
+
+    struct FailingOcr;
+
+    #[async_trait]
+    impl OcrService for FailingOcr {
+        async fn extract(&self, _: &[u8], _: &str) -> Result<OcrOutput> {
+            Err(folio_core::Error::AiService("provider down".into()))
+        }
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn processed_with_text(f: &Fixture, text: &str) {
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        f.repo
+            .update(
+                crate::database::test_vault(),
+                f.doc_id,
+                folio_core::models::UpdateDocument {
+                    content: Some(text.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        f.queue
+            .enqueue(JobType::process_document(f.doc_id))
+            .await
+            .unwrap();
+        drain_claimed(f).await;
+    }
+
+    async fn chunk_texts(f: &Fixture) -> Vec<String> {
+        sqlx::query_scalar("SELECT text FROM document_chunks WHERE document_id = ? AND stale = 0")
+            .bind(f.doc_id.to_string())
+            .fetch_all(&f.pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn forced_reprocess_replaces_existing_text_and_reembeds() {
+        let f = fixture("fresh OCR text").await;
+        processed_with_text(&f, "old text").await;
+        assert_eq!(chunk_texts(&f).await, vec!["old text".to_string()]);
+
+        f.queue
+            .enqueue(JobType::ProcessDocument {
+                document_id: f.doc_id,
+                force: true,
+            })
+            .await
+            .unwrap();
+        drain_claimed(&f).await;
+
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc.content.as_deref(), Some("fresh OCR text"));
+        assert_eq!(doc.ocr_status, ProcessingStatus::Done);
+        assert_eq!(doc.embed_status, ProcessingStatus::Done);
+        assert_eq!(chunk_texts(&f).await, vec!["fresh OCR text".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn forced_ocr_failure_keeps_existing_text() {
+        let mut f = fixture("unused").await;
+        processed_with_text(&f, "old text").await;
+        f.worker.ocr_service = Arc::new(FailingOcr);
+
+        f.queue
+            .enqueue(JobType::ExtractText {
+                document_id: f.doc_id,
+                force: true,
+            })
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        assert!(f.worker.process_claim(&job).await.is_err());
+
+        let doc = f
+            .repo
+            .find_by_id(crate::database::test_vault(), f.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(doc.content.as_deref(), Some("old text"));
+        assert_eq!(chunk_texts(&f).await, vec!["old text".to_string()]);
+    }
+
+    #[test]
+    fn job_payloads_without_force_stay_unforced() {
+        let id = uuid::Uuid::new_v4();
+        let legacy = format!(r#"{{"type":"ProcessDocument","data":{{"document_id":"{id}"}}}}"#);
+        let parsed: JobType = serde_json::from_str(&legacy).unwrap();
+        assert!(matches!(
+            parsed,
+            JobType::ProcessDocument { force: false, .. }
+        ));
+        let unforced = JobType::extract_text(id);
+        assert!(!serde_json::to_string(&unforced).unwrap().contains("force"));
+    }
+
     #[tokio::test]
     async fn long_work_renews_its_lease_while_pending() {
         let f = fixture("OCR").await;
         f.queue
-            .enqueue(JobType::ExtractText {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::extract_text(f.doc_id))
             .await
             .unwrap();
         let job = f.queue.dequeue().await.unwrap().unwrap();
@@ -1434,9 +1546,7 @@ mod tests {
         crate::database::run_migrations(&pool).await.unwrap();
         let queue = JobQueue::sqlite(pool.clone());
         queue
-            .enqueue(JobType::ExtractText {
-                document_id: uuid::Uuid::new_v4(),
-            })
+            .enqueue(JobType::extract_text(uuid::Uuid::new_v4()))
             .await
             .unwrap();
         let job = queue.dequeue().await.unwrap().unwrap();
@@ -1488,9 +1598,7 @@ mod tests {
         crate::database::run_migrations(&pool).await.unwrap();
         let queue = JobQueue::sqlite(pool.clone());
         queue
-            .enqueue(JobType::ExtractText {
-                document_id: uuid::Uuid::new_v4(),
-            })
+            .enqueue(JobType::extract_text(uuid::Uuid::new_v4()))
             .await
             .unwrap();
         let job = queue.dequeue().await.unwrap().unwrap();
@@ -1526,9 +1634,7 @@ mod tests {
     async fn expired_claim_does_not_start_work() {
         let f = fixture("OCR").await;
         f.queue
-            .enqueue(JobType::ExtractText {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::extract_text(f.doc_id))
             .await
             .unwrap();
         let job = f.queue.dequeue().await.unwrap().unwrap();
@@ -1561,9 +1667,7 @@ mod tests {
         }
         let f = fixture("OCR").await;
         f.queue
-            .enqueue(JobType::ExtractText {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::extract_text(f.doc_id))
             .await
             .unwrap();
         let job = f.queue.dequeue().await.unwrap().unwrap();
@@ -1598,9 +1702,7 @@ mod tests {
     async fn empty_ocr_result_is_stored_and_not_requeued() {
         let f = fixture("").await;
         f.queue
-            .enqueue(JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::process_document(f.doc_id))
             .await
             .unwrap();
         drain(&f).await;
@@ -1623,10 +1725,10 @@ mod tests {
     #[tokio::test]
     async fn retry_after_empty_ocr_completion_does_not_repeat_ocr_or_its_event() {
         let mut f = fixture("").await;
-        f.worker.process_ocr(f.doc_id).await.unwrap();
+        f.worker.process_ocr(f.doc_id, false).await.unwrap();
         f.worker.ocr_service = Arc::new(FixedOcr("unexpected recomputation"));
 
-        f.worker.process_ocr(f.doc_id).await.unwrap();
+        f.worker.process_ocr(f.doc_id, false).await.unwrap();
 
         let doc = f
             .repo
@@ -1662,9 +1764,7 @@ mod tests {
         f.pipeline.invalidate().await;
 
         f.queue
-            .enqueue(JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::process_document(f.doc_id))
             .await
             .unwrap();
         drain(&f).await;
@@ -1755,9 +1855,7 @@ mod tests {
             .unwrap();
 
         f.worker
-            .process_job(&JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .process_job(&JobType::process_document(f.doc_id))
             .await
             .ok();
 
@@ -1923,9 +2021,7 @@ mod tests {
 
         f.worker.repair_orphaned_documents().await.unwrap();
         f.worker
-            .process_job(&JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .process_job(&JobType::process_document(f.doc_id))
             .await
             .unwrap();
         f.worker
@@ -1958,9 +2054,7 @@ mod tests {
         let f = fixture("text").await;
         let vault = crate::database::test_vault();
         f.queue
-            .enqueue(JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::process_document(f.doc_id))
             .await
             .unwrap();
         let running = f
@@ -2091,9 +2185,7 @@ mod tests {
         f.pipeline.invalidate().await;
 
         f.queue
-            .enqueue(JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::process_document(f.doc_id))
             .await
             .unwrap();
         drain(&f).await;
@@ -2133,9 +2225,7 @@ mod tests {
             .await
             .unwrap();
         f.worker
-            .process_job(&JobType::ProcessDocument {
-                document_id: doc2.id,
-            })
+            .process_job(&JobType::process_document(doc2.id))
             .await
             .unwrap();
         let doc2 = f
@@ -2157,9 +2247,7 @@ mod tests {
 
         assert!(f
             .worker
-            .process_job(&JobType::ExtractText {
-                document_id: f.doc_id
-            })
+            .process_job(&JobType::extract_text(f.doc_id))
             .await
             .is_err());
 
@@ -2272,9 +2360,7 @@ mod tests {
             .await
             .unwrap();
         f.queue
-            .enqueue(JobType::ProcessDocument {
-                document_id: f.doc_id,
-            })
+            .enqueue(JobType::process_document(f.doc_id))
             .await
             .unwrap();
 

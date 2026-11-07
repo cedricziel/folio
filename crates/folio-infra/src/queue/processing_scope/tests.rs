@@ -81,9 +81,7 @@ impl<'a> Fixture<'a> {
 
     async fn enqueue_root(&self) -> Uuid {
         self.queue
-            .enqueue(JobType::ProcessDocument {
-                document_id: self.document,
-            })
+            .enqueue(JobType::process_document(self.document))
             .await
             .unwrap()
     }
@@ -103,9 +101,7 @@ impl<'a> Fixture<'a> {
     async fn ocr(&self, scope: ProcessingScope) -> folio_core::Result<Uuid> {
         with_scope(
             Some(scope),
-            self.queue.enqueue(JobType::ExtractText {
-                document_id: self.document,
-            }),
+            self.queue.enqueue(JobType::extract_text(self.document)),
         )
         .await
     }
@@ -164,9 +160,7 @@ async fn standalone_jobs_seed_only_their_planned_stages(db: &Database) {
     let f = Fixture::new(db).await;
     let ocr = f
         .queue
-        .enqueue(JobType::ExtractText {
-            document_id: f.document,
-        })
+        .enqueue(JobType::extract_text(f.document))
         .await
         .unwrap();
     assert_eq!(
@@ -224,9 +218,7 @@ async fn standalone_jobs_seed_only_their_planned_stages(db: &Database) {
         .await
         .unwrap();
     f.queue
-        .enqueue(JobType::ExtractText {
-            document_id: Uuid::new_v4(),
-        })
+        .enqueue(JobType::extract_text(Uuid::new_v4()))
         .await
         .unwrap();
     assert_eq!(
@@ -400,17 +392,13 @@ async fn unrelated_processing_roots_do_not_inherit_group(db: &Database) {
         .id;
     let other = with_scope(
         Some(scope),
-        f.queue.enqueue(JobType::ExtractText {
-            document_id: other_document,
-        }),
+        f.queue.enqueue(JobType::extract_text(other_document)),
     )
     .await
     .unwrap();
     let fresh = with_scope(
         Some(scope),
-        f.queue.enqueue(JobType::ProcessDocument {
-            document_id: f.document,
-        }),
+        f.queue.enqueue(JobType::process_document(f.document)),
     )
     .await
     .unwrap();
@@ -442,9 +430,7 @@ async fn root_enqueue_rolls_back_job_and_supersession(db: &Database) {
             let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
             crate::queue::insert_job_sqlite(
                 &mut tx,
-                JobType::ProcessDocument {
-                    document_id: f.document,
-                },
+                JobType::process_document(f.document),
                 Utc::now(),
                 DEFAULT_MAX_ATTEMPTS,
             )
@@ -456,9 +442,7 @@ async fn root_enqueue_rolls_back_job_and_supersession(db: &Database) {
             let mut tx = pool.begin().await.unwrap();
             crate::queue::insert_job_postgres(
                 &mut tx,
-                JobType::ProcessDocument {
-                    document_id: f.document,
-                },
+                JobType::process_document(f.document),
                 Utc::now(),
                 DEFAULT_MAX_ATTEMPTS,
             )
@@ -485,9 +469,7 @@ async fn child_enqueue_rolls_back_assignment_with_job(db: &Database) {
                 let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
                 crate::queue::insert_job_sqlite(
                     &mut tx,
-                    JobType::ExtractText {
-                        document_id: f.document,
-                    },
+                    JobType::extract_text(f.document),
                     Utc::now(),
                     DEFAULT_MAX_ATTEMPTS,
                 )
@@ -499,9 +481,7 @@ async fn child_enqueue_rolls_back_assignment_with_job(db: &Database) {
                 let mut tx = pool.begin().await.unwrap();
                 crate::queue::insert_job_postgres(
                     &mut tx,
-                    JobType::ExtractText {
-                        document_id: f.document,
-                    },
+                    JobType::extract_text(f.document),
                     Utc::now(),
                     DEFAULT_MAX_ATTEMPTS,
                 )
@@ -562,9 +542,7 @@ async fn partial_supersession_keeps_the_current_parent_stage_live(db: &Database)
     let f = Fixture::new(db).await;
     let id = f
         .queue
-        .enqueue(JobType::ExtractText {
-            document_id: f.document,
-        })
+        .enqueue(JobType::extract_text(f.document))
         .await
         .unwrap();
     let job = f.queue.dequeue().await.unwrap().unwrap();
@@ -621,9 +599,7 @@ async fn legacy_claim_rejects_a_forged_in_memory_document(db: &Database) {
         .unwrap()
         .id;
     let mut forged = job.clone();
-    forged.job_type = JobType::ProcessDocument {
-        document_id: other_document,
-    };
+    forged.job_type = JobType::process_document(other_document);
     assert!(matches!(
         prepare_claim(&f.queue, &forged).await.unwrap(),
         ClaimPreparation::Obsolete
