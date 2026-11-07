@@ -97,3 +97,10 @@ folio-infra = { path = "crates/folio-infra" }
 folio-api = { path = "crates/folio-api" }
 folio-auth = { path = "crates/folio-auth" }
 folio-mcp = { path = "crates/folio-mcp" }
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
+[profile.dev.package."*"]
+debug = false
