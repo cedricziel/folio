@@ -1,7 +1,7 @@
 //! Rules every Paperless source operation follows, for the API and MCP alike
 
 use crate::error::{Error, Result};
-use crate::models::{Caller, Id, IngestionSourceDef, SourceConfig, VaultId, VaultRole};
+use crate::models::{Caller, Id, IngestionSourceDef, VaultId, VaultRole};
 use crate::ports::SourceRepository;
 
 /// A Paperless source reads a whole library with a long-lived token, so only
@@ -25,9 +25,8 @@ pub async fn ensure_paperless_slot(
     vault: VaultId,
     except: Option<Id>,
 ) -> Result<()> {
-    let is_other_paperless = |def: &IngestionSourceDef| {
-        matches!(def.config, SourceConfig::Paperless(_)) && Some(def.id) != except
-    };
+    let is_other_paperless =
+        |def: &IngestionSourceDef| def.config.is_paperless() && Some(def.id) != except;
     if configured
         .iter()
         .any(|def| def.vault_id == Some(vault) && is_other_paperless(def))

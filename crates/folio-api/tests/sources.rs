@@ -268,55 +268,23 @@ async fn managed_sources_can_be_trashed_and_restored_from_the_existing_page() {
     assert!(restored["deleted_at"].is_null());
 }
 
-async fn source_session(h: &Harness, name: &str, role: folio_core::models::VaultRole) -> String {
-    h.auth_store
-        .create_user(folio_auth::User {
-            id: name.into(),
-            username: name.into(),
-            password_hash: "!".into(),
-            created_at: 1,
-            email: None,
-            display_name: None,
-            is_admin: false,
-            is_owner: false,
-            auth_source: "local".into(),
-            external_id: None,
-        })
-        .await
-        .unwrap();
-    let user = folio_core::models::UserId::from(name);
-    h.members
-        .grant(
-            h.vault,
-            &folio_core::models::Principal::User(user.clone()),
-            role,
-            None,
-        )
-        .await
-        .unwrap();
-    h.vault_repository
-        .set_default(&user, h.vault)
-        .await
-        .unwrap();
-    let token = format!("source-session-{name}");
-    h.auth_store
-        .create_session(folio_auth::Session {
-            id_hash: folio_auth::crypto::hash_token(&token),
-            user_id: name.into(),
-            expires_at: i64::MAX / 2,
-            created_at: 1,
-            user_agent: None,
-        })
-        .await
-        .unwrap();
-    format!("folio_session={token}")
-}
-
 #[tokio::test]
 async fn source_trash_and_restore_preserve_owner_authorization_and_server_actors() {
     let h = common::harness_requiring_login().await;
-    let owner = source_session(&h, "source-owner", folio_core::models::VaultRole::Owner).await;
-    let editor = source_session(&h, "source-editor", folio_core::models::VaultRole::Editor).await;
+    let owner = common::vault_session(
+        &h,
+        "source-owner",
+        folio_core::models::VaultRole::Owner,
+        false,
+    )
+    .await;
+    let editor = common::vault_session(
+        &h,
+        "source-editor",
+        folio_core::models::VaultRole::Editor,
+        false,
+    )
+    .await;
     let input: folio_core::models::IngestionSourceInput = serde_json::from_value(json!({
         "name": "Restricted source", "config": {"type": "folder", "path": "/unused/source"}
     }))

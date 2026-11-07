@@ -166,13 +166,18 @@ fn default_content_types() -> Vec<String> {
         .collect()
 }
 
+/// A secret from a file such as a Docker secret, without its trailing newline
+fn read_secret_file(path: &str, what: &str) -> Result<String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| Error::Validation(format!("Cannot read {what} file {path}: {e}")))?;
+    Ok(raw.trim_end_matches(['\r', '\n']).to_string())
+}
+
 impl EmailConfig {
     /// The effective password: the file's trimmed content, else the inline value
     pub fn resolve_password(&self) -> Result<String> {
         if let Some(path) = &self.password_file {
-            let raw = std::fs::read_to_string(path)
-                .map_err(|e| Error::Validation(format!("Cannot read password file {path}: {e}")))?;
-            return Ok(raw.trim_end_matches(['\r', '\n']).to_string());
+            return read_secret_file(path, "password");
         }
         self.password
             .clone()
@@ -238,9 +243,7 @@ impl PaperlessConfig {
     /// The effective token: the file's trimmed content, else the inline value
     pub fn resolve_token(&self) -> Result<String> {
         if let Some(path) = &self.token_file {
-            let raw = std::fs::read_to_string(path)
-                .map_err(|e| Error::Validation(format!("Cannot read token file {path}: {e}")))?;
-            return Ok(raw.trim_end_matches(['\r', '\n']).to_string());
+            return read_secret_file(path, "token");
         }
         self.token
             .clone()
@@ -250,13 +253,10 @@ impl PaperlessConfig {
 
     fn validate(&self) -> Result<()> {
         let invalid = |msg: &str| Err(Error::Validation(msg.to_string()));
-        match url::Url::parse(self.url.trim()) {
-            Ok(url)
-                if matches!(url.scheme(), "http" | "https")
-                    && url.host_str().is_some_and(|h| !h.is_empty())
-                    && url.username().is_empty()
-                    && url.password().is_none() => {}
-            _ => return invalid("url must be an http or https URL without credentials"),
+        if !url::Url::parse(self.url.trim())
+            .is_ok_and(|url| super::metadata::is_http_url_without_credentials(&url))
+        {
+            return invalid("url must be an http or https URL without credentials");
         }
         if self.poll_interval_secs < PAPERLESS_MIN_POLL_SECS {
             return invalid("poll_interval_secs must be at least 60");
@@ -264,7 +264,7 @@ impl PaperlessConfig {
         if self
             .default_currency
             .as_deref()
-            .is_some_and(|c| c.len() != 3 || !c.bytes().all(|b| b.is_ascii_uppercase()))
+            .is_some_and(|c| !super::metadata::is_currency_code(c))
         {
             return invalid("default_currency must be a three-letter ISO 4217 code such as EUR");
         }
@@ -272,6 +272,26 @@ impl PaperlessConfig {
             return invalid("token is required");
         }
         Ok(())
+    }
+}
+
+impl PaperlessSyncMode {
+    pub const ALL: [Self; 3] = [Self::Once, Self::NewOnly, Self::Mirror];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::NewOnly => "new_only",
+            Self::Mirror => "mirror",
+        }
+    }
+
+    /// Parse the wire name; unknown values fall back to `mirror`
+    pub fn parse(value: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.as_str() == value)
+            .unwrap_or_default()
     }
 }
 
@@ -290,6 +310,10 @@ pub enum SourceConfig {
 }
 
 impl SourceConfig {
+    pub fn is_paperless(&self) -> bool {
+        matches!(self, Self::Paperless(_))
+    }
+
     pub fn kind(&self) -> super::SourceKind {
         match self {
             Self::Folder(_) => super::SourceKind::Folder,

@@ -168,16 +168,12 @@ pub(crate) async fn require_paperless_admin(state: &AppState) -> ApiResult<()> {
     Ok(())
 }
 
-fn is_paperless(config: &SourceConfig) -> bool {
-    matches!(config, SourceConfig::Paperless(_))
-}
-
 /// Applies [`require_paperless_admin`] when any of `configs` is a Paperless source
 pub(crate) async fn guard_paperless<'a>(
     state: &AppState,
     configs: impl IntoIterator<Item = &'a SourceConfig>,
 ) -> ApiResult<()> {
-    if configs.into_iter().any(is_paperless) {
+    if configs.into_iter().any(SourceConfig::is_paperless) {
         require_paperless_admin(state).await?;
     }
     Ok(())
@@ -190,7 +186,7 @@ pub(crate) async fn claim_paperless_slot(
     config: &SourceConfig,
     except: Option<Id>,
 ) -> Result<(), DomainError> {
-    if !is_paperless(config) {
+    if !config.is_paperless() {
         return Ok(());
     }
     folio_core::services::ensure_paperless_slot(
@@ -447,7 +443,7 @@ pub struct SourceTestResult {
 }
 
 pub(crate) async fn run_test(state: &AppState, def: &IngestionSourceDef) -> SourceTestResult {
-    if is_paperless(&def.config) {
+    if def.config.is_paperless() {
         return SourceTestResult {
             ok: false,
             message: "unsupported".to_string(),

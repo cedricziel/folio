@@ -227,49 +227,8 @@ async fn paperless_listener() -> (String, std::sync::Arc<std::sync::atomic::Atom
     (url, hits)
 }
 
-/// A signed-in account that owns the harness vault
 async fn vault_owner_session(h: &Harness, name: &str, is_admin: bool) -> String {
-    h.auth_store
-        .create_user(folio_auth::User {
-            id: name.into(),
-            username: name.into(),
-            password_hash: "!".into(),
-            created_at: 1,
-            email: None,
-            display_name: None,
-            is_admin,
-            is_owner: false,
-            auth_source: "local".into(),
-            external_id: None,
-        })
-        .await
-        .unwrap();
-    let user = folio_core::models::UserId::from(name);
-    h.members
-        .grant(
-            h.vault,
-            &folio_core::models::Principal::User(user.clone()),
-            folio_core::models::VaultRole::Owner,
-            None,
-        )
-        .await
-        .unwrap();
-    h.vault_repository
-        .set_default(&user, h.vault)
-        .await
-        .unwrap();
-    let token = format!("paperless-session-{name}");
-    h.auth_store
-        .create_session(folio_auth::Session {
-            id_hash: folio_auth::crypto::hash_token(&token),
-            user_id: name.into(),
-            expires_at: i64::MAX / 2,
-            created_at: 1,
-            user_agent: None,
-        })
-        .await
-        .unwrap();
-    format!("folio_session={token}")
+    common::vault_session(h, name, folio_core::models::VaultRole::Owner, is_admin).await
 }
 
 async fn seed_paperless(
@@ -288,21 +247,6 @@ async fn seed_paperless(
         .create(h.vault, input)
         .await
         .unwrap()
-}
-
-async fn send_form(h: &Harness, uri: &str, cookie: &str, form: &str) -> StatusCode {
-    h.app
-        .clone()
-        .oneshot(
-            Request::post(uri)
-                .header("cookie", cookie)
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(form.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-        .status()
 }
 
 #[tokio::test]
@@ -356,7 +300,7 @@ async fn a_vault_owner_who_is_not_an_admin_is_forbidden_every_paperless_operatio
     ];
     for (uri, form) in html_calls {
         assert_eq!(
-            send_form(&h, &uri, &cookie, &form).await,
+            page(&h, "POST", &uri, Some(&cookie), Some(&form)).await.0,
             StatusCode::FORBIDDEN,
             "{uri} {form}"
         );
@@ -365,18 +309,8 @@ async fn a_vault_owner_who_is_not_an_admin_is_forbidden_every_paperless_operatio
         "/settings/sources/new?kind=paperless".to_string(),
         format!("/settings/sources/{live_id}"),
     ] {
-        let response = h
-            .app
-            .clone()
-            .oneshot(
-                Request::get(&uri)
-                    .header("cookie", &cookie)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{uri}");
+        let (status, _) = page(&h, "GET", &uri, Some(&cookie), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
     }
 
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -433,7 +367,15 @@ async fn an_admin_who_owns_the_vault_manages_paperless_sources() {
     assert_eq!(tested, json!({"ok": false, "message": "unsupported"}));
 
     assert_eq!(
-        send_form(&h, &format!("/settings/sources/{id}/toggle"), &cookie, "").await,
+        page(
+            &h,
+            "POST",
+            &format!("/settings/sources/{id}/toggle"),
+            Some(&cookie),
+            Some("")
+        )
+        .await
+        .0,
         StatusCode::SEE_OTHER
     );
     let (status, _) = send(
@@ -524,17 +466,9 @@ async fn a_vault_has_at_most_one_live_paperless_source() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{error}");
-    let response = app
-        .app
-        .clone()
-        .oneshot(
-            Request::post(format!("/settings/sources/{first_id}/restore"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let restore = format!("/settings/sources/{first_id}/restore");
+    let (status, _) = page(&app, "POST", &restore, None, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -576,8 +510,17 @@ async fn a_paperless_source_from_the_configuration_wins_over_a_managed_one() {
         .contains("server configuration"));
 }
 
-async fn page(app: &Harness, method: &str, uri: &str, form: Option<&str>) -> (StatusCode, String) {
+async fn page(
+    app: &Harness,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    form: Option<&str>,
+) -> (StatusCode, String) {
     let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(cookie) = cookie {
+        builder = builder.header("cookie", cookie);
+    }
     if form.is_some() {
         builder = builder.header("content-type", "application/x-www-form-urlencoded");
     }
@@ -599,14 +542,21 @@ async fn page(app: &Harness, method: &str, uri: &str, form: Option<&str>) -> (St
 async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
     let app = common::harness().await;
 
-    let (status, list) = page(&app, "GET", "/settings/sources", None).await;
+    let (status, list) = page(&app, "GET", "/settings/sources", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         list.contains("/settings/sources/new?kind=paperless"),
         "{list}"
     );
 
-    let (status, blank) = page(&app, "GET", "/settings/sources/new?kind=paperless", None).await;
+    let (status, blank) = page(
+        &app,
+        "GET",
+        "/settings/sources/new?kind=paperless",
+        None,
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     for needle in [
         r#"name="kind" value="paperless""#,
@@ -624,7 +574,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
         "kind=paperless&name=Paperless&enabled=on&url=https%3A%2F%2Fpaperless.example\
 &token={TOKEN}&sync_mode=new_only&poll_interval_secs=3600&default_currency=eur"
     );
-    let (status, body) = page(&app, "POST", "/settings/sources", Some(&form)).await;
+    let (status, body) = page(&app, "POST", "/settings/sources", None, Some(&form)).await;
     assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
     let def = app
         .state
@@ -646,7 +596,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
     assert_eq!(saved.poll_interval_secs, 3600);
     assert_eq!(saved.default_currency.as_deref(), Some("EUR"));
 
-    let (_, list) = page(&app, "GET", "/settings/sources", None).await;
+    let (_, list) = page(&app, "GET", "/settings/sources", None, None).await;
     assert!(list.contains("https://paperless.example"));
     assert!(
         !list.contains("new?kind=paperless"),
@@ -654,7 +604,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
     );
 
     let edit_uri = format!("/settings/sources/{}", def.id);
-    let (status, edit) = page(&app, "GET", &edit_uri, None).await;
+    let (status, edit) = page(&app, "GET", &edit_uri, None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(!edit.contains(TOKEN));
     assert!(edit.contains(r#"value="********""#));
@@ -663,7 +613,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
 
     let masked = "kind=paperless&name=Paperless&enabled=on&url=https%3A%2F%2Fpaperless.example\
 &token=********&sync_mode=mirror&poll_interval_secs=900&default_currency=EUR";
-    let (status, _) = page(&app, "POST", &edit_uri, Some(masked)).await;
+    let (status, _) = page(&app, "POST", &edit_uri, None, Some(masked)).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let SourceConfig::Paperless(kept) = app
         .state
@@ -684,14 +634,14 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
     );
 
     let moved = masked.replace("paperless.example", "elsewhere.example");
-    let (status, refused) = page(&app, "POST", &edit_uri, Some(&moved)).await;
+    let (status, refused) = page(&app, "POST", &edit_uri, None, Some(&moved)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(refused.contains("enter the API token again"), "{refused}");
     assert!(refused.contains(r#"name="token" value="" autocomplete="off" required"#));
 
     let second = "kind=paperless&name=Second&enabled=on&url=https%3A%2F%2Fsecond.example\
 &token=t&sync_mode=mirror&poll_interval_secs=900";
-    let (status, conflict) = page(&app, "POST", "/settings/sources", Some(second)).await;
+    let (status, conflict) = page(&app, "POST", "/settings/sources", None, Some(second)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         conflict.contains("already has a Paperless source"),
@@ -702,6 +652,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
         &app,
         "POST",
         &format!("/settings/sources/{}/test", def.id),
+        None,
         None,
     )
     .await;
@@ -714,19 +665,8 @@ async fn non_admin_owners_see_the_paperless_source_without_its_controls() {
     let h = common::harness_requiring_login().await;
     let cookie = vault_owner_session(&h, "viewer-owner", false).await;
     let def = seed_paperless(&h, "Library", "https://paperless.example").await;
-    let response = h
-        .app
-        .clone()
-        .oneshot(
-            Request::get("/settings/sources")
-                .header("cookie", &cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let list = common::text(response).await;
+    let (status, list) = page(&h, "GET", "/settings/sources", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK);
     assert!(list.contains("Library"));
     assert!(list.contains("Only an instance admin can change it"));
     assert!(!list.contains(&format!("/{}/test", def.id)));
