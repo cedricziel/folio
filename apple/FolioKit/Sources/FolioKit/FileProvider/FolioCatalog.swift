@@ -33,10 +33,21 @@ public struct FolioCatalog: Sendable {
         ) -> FolioNode {
             FolioNode(
                 id: .folder(self.folder(folder)), parent: .folder(self.folder(parent)),
-                name: FolioCatalog.sanitized(name), isFolder: true, modified: .distantPast,
+                name: name, isFolder: true, modified: .distantPast,
                 contentType: nil, document: nil,
                 canUpload: folder.acceptsUploads && vault.role.canUpload
             )
+        }
+
+        func folderNodes(
+            _ entries: [(id: UUID, name: String)], parent: FolioItemID.Folder,
+            folder: (UUID) -> FolioItemID.Folder
+        ) -> [FolioNode] {
+            var taken = Set<String>()
+            return entries.sorted { $0.id.uuidString < $1.id.uuidString }.map { entry in
+                let name = FolioCatalog.uniqueName(FolioCatalog.sanitized(entry.name), id: entry.id, taken: &taken)
+                return folderNode(folder(entry.id), name, parent: parent)
+            }
         }
     }
 
@@ -144,15 +155,15 @@ public struct FolioCatalog: Sendable {
         case .all:
             return try documentNodes(await context.service.documents(matching: ""), in: context.folder(.all))
         case .tags:
-            return try await context.service.tags().map { context.folderNode(.tag($0.id), $0.name, parent: .tags) }
+            return try await context.folderNodes(
+                context.service.tags().map { ($0.id, $0.name) }, parent: .tags, folder: { .tag($0) })
         case .correspondents:
-            return try await context.service.correspondents().map {
-                context.folderNode(.correspondent($0.id), $0.name, parent: .correspondents)
-            }
+            return try await context.folderNodes(
+                context.service.correspondents().map { ($0.id, $0.name) }, parent: .correspondents,
+                folder: { .correspondent($0) })
         case .types:
-            return try await context.service.documentTypes().map {
-                context.folderNode(.type($0.id), $0.name, parent: .types)
-            }
+            return try await context.folderNodes(
+                context.service.documentTypes().map { ($0.id, $0.name) }, parent: .types, folder: { .type($0) })
         case let .correspondent(id):
             let documents = try await context.service.documents(filter: DocumentFilter(correspondentID: id))
             return documentNodes(documents, in: context.folder(folder))
@@ -176,18 +187,19 @@ public struct FolioCatalog: Sendable {
         var nodes = try await children(of: .root, context: context)
         nodes += documentNodes(documents, in: context.folder(.all))
         nodes += documentNodes(documents.filter { $0.status != .filed }, in: context.folder(.inbox))
+        nodes += context.folderNodes(
+            correspondents.map { ($0.id, $0.name) }, parent: .correspondents, folder: { .correspondent($0) })
+        nodes += context.folderNodes(documentTypes.map { ($0.id, $0.name) }, parent: .types, folder: { .type($0) })
+        nodes += context.folderNodes(allTags.map { ($0.id, $0.name) }, parent: .tags, folder: { .tag($0) })
         for person in correspondents {
-            nodes.append(context.folderNode(.correspondent(person.id), person.name, parent: .correspondents))
             nodes += documentNodes(
                 documents.filter { $0.correspondentID == person.id }, in: context.folder(.correspondent(person.id)))
         }
         for type in documentTypes {
-            nodes.append(context.folderNode(.type(type.id), type.name, parent: .types))
             nodes += documentNodes(
                 documents.filter { $0.documentTypeID == type.id }, in: context.folder(.type(type.id)))
         }
         for tag in allTags {
-            nodes.append(context.folderNode(.tag(tag.id), tag.name, parent: .tags))
             nodes += documentNodes(
                 documents.filter { $0.tags.contains { $0.id == tag.id } }, in: context.folder(.tag(tag.id)))
         }
@@ -195,13 +207,10 @@ public struct FolioCatalog: Sendable {
     }
 
     private func documentNodes(_ documents: [Document], in folder: FolioItemID.Folder) -> [FolioNode] {
-        var seen = Set<String>()
+        var taken = Set<String>()
         return documents.sorted { $0.id.uuidString < $1.id.uuidString }.map { document in
-            var name = Self.sanitized(document.originalFilename ?? document.title)
-            if !seen.insert(name.lowercased()).inserted {
-                name = Self.disambiguated(name, with: document.id)
-                seen.insert(name.lowercased())
-            }
+            let name = Self.uniqueName(
+                Self.sanitized(document.originalFilename ?? document.title), id: document.id, taken: &taken)
             return FolioNode(
                 id: .document(document.id, in: folder), parent: .folder(folder), name: name, isFolder: false,
                 modified: document.updatedAt, contentType: document.mimeType, document: document
@@ -215,8 +224,26 @@ public struct FolioCatalog: Sendable {
         return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "Untitled" : cleaned
     }
 
-    private static func disambiguated(_ name: String, with id: UUID) -> String {
-        let suffix = String(id.uuidString.prefix(4)).lowercased()
+    /// The first of `name`, `name (abcd)`, `name (<full id>)`, `name (<full id> 2)`, … that no sibling
+    /// has taken yet, compared case-insensitively like the file systems Finder and Files show.
+    static func uniqueName(_ name: String, id: UUID, taken: inout Set<String>) -> String {
+        let full = id.uuidString.lowercased()
+        var candidate = name
+        var attempt = 0
+        while !taken.insert(candidate.lowercased()).inserted {
+            let suffix =
+                switch attempt {
+                case 0: String(full.prefix(4))
+                case 1: full
+                default: "\(full) \(attempt)"
+                }
+            candidate = disambiguated(name, with: suffix)
+            attempt += 1
+        }
+        return candidate
+    }
+
+    private static func disambiguated(_ name: String, with suffix: String) -> String {
         let ext = (name as NSString).pathExtension
         let stem = (name as NSString).deletingPathExtension
         return ext.isEmpty ? "\(stem) (\(suffix))" : "\(stem) (\(suffix)).\(ext)"

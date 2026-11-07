@@ -269,6 +269,52 @@ struct FolioCatalogTests {
         #expect(Set(names).count == 3)
     }
 
+    @Test func documentSuffixesSkipNamesAlreadyTaken() async throws {
+        let first = Document(
+            id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!, title: "Bill", originalFilename: "bill.pdf")
+        let literal = Document(
+            id: UUID(uuidString: "11111111-0000-4000-8000-000000000001")!, title: "Bill",
+            originalFilename: "bill (aaaa).pdf")
+        let second = Document(
+            id: UUID(uuidString: "AAAA0000-0000-4000-8000-000000000001")!, title: "Bill", originalFilename: "Bill.pdf")
+        let catalog = FolioCatalog(service: MockFolioService(documents: [second, literal, first]))
+
+        let names = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .all)).map(\.name)
+
+        #expect(Set(names.map { $0.lowercased() }).count == 3)
+        #expect(names.contains("bill.pdf"))
+        #expect(names.contains("bill (aaaa).pdf"))
+    }
+
+    @Test func taxonomyFoldersWhoseNamesSanitizeAlikeGetDistinctNames() async throws {
+        let slash = Correspondent(id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!, name: "A/B")
+        let colon = Correspondent(id: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!, name: "A:B")
+        let service = MockFolioService(correspondents: [colon, slash])
+        await service.setTags([Tag(name: "Tax"), Tag(name: "tax")])
+        let catalog = FolioCatalog(service: service)
+        let vault = MockFolioService.defaultVault.id
+
+        let people = try await catalog.children(of: .scoped(vault, .correspondents)).map(\.name)
+        let tags = try await catalog.children(of: .scoped(vault, .tags)).map(\.name)
+        #expect(people.first == "A-B")
+        #expect(Set(people.map { $0.lowercased() }).count == 2)
+        #expect(Set(tags.map { $0.lowercased() }).count == 2)
+
+        let workingSet = try await catalog.allNodes()
+        let siblings = workingSet.filter { $0.parent == .folder(.scoped(vault, .correspondents)) }.map(\.name)
+        #expect(Set(siblings) == Set(people))
+    }
+
+    @Test func uniqueNameFallsBackToTheFullIdentifier() {
+        let id = UUID(uuidString: "ABCD0000-0000-4000-8000-000000000001")!
+        var taken: Set<String> = ["bill.pdf", "bill (abcd).pdf"]
+
+        let name = FolioCatalog.uniqueName("Bill.pdf", id: id, taken: &taken)
+
+        #expect(name == "Bill (abcd0000-0000-4000-8000-000000000001).pdf")
+        #expect(taken.contains(name.lowercased()))
+    }
+
     @Test func nodeLookupResolvesFoldersAndDocuments() async throws {
         let doc = document("Letter", filename: "letter.pdf")
         let service = MockFolioService(
