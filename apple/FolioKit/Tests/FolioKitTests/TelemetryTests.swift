@@ -1,4 +1,5 @@
 import Foundation
+import OpenAPIRuntime
 import OpenTelemetryApi
 import OpenTelemetryProtocolExporterCommon
 import SwiftProtobuf
@@ -189,6 +190,73 @@ private final class TelemetryCapture: @unchecked Sendable {
         #expect(trace.0.value(forHTTPHeaderField: "Authorization") == "Bearer first-token")
         #expect(trace.0.value(forHTTPHeaderField: "Content-Type") == "application/x-protobuf")
         #expect(trace.0.value(forHTTPHeaderField: "traceparent") == nil)
+    }
+
+    @Test func failedDownloadSpanCarriesStatusAndErrorTypeWhileCancellationIsNotAnError() async throws {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                return (200, Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8))
+            }
+            return (503, Data())
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+        )
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let service = LiveFolioService(
+            baseURL: baseURL, tokenProvider: TelemetryToken(), session: URLSession(configuration: config),
+            telemetry: telemetry
+        )
+        await #expect(throws: FolioError.server(status: 503, message: nil)) {
+            try await service.downloadFile(for: Document(title: "x", originalFilename: "x.pdf"))
+        }
+        await #expect(throws: CancellationError.self) {
+            try await telemetry.operation("documents.thumbnail") { throw CancellationError() }
+        }
+        let runtime = try #require(telemetry.current)
+        await Task.detached { runtime.flush() }.value
+        telemetry.stop()
+        let spans = try capture.requests.filter { $0.0.url?.path == "/api/telemetry/v1/traces" }.flatMap {
+            try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(serializedBytes: $0.1)
+                .resourceSpans.flatMap { $0.scopeSpans.flatMap(\.spans) }
+        }
+        func attributes(_ span: Opentelemetry_Proto_Trace_V1_Span) -> [String: String] {
+            Dictionary(
+                uniqueKeysWithValues: span.attributes.map { attribute in
+                    let value = attribute.value
+                    return (attribute.key, value.stringValue.isEmpty ? String(value.intValue) : value.stringValue)
+                })
+        }
+        let download = try #require(spans.first { $0.name == "documents.downloadFile" })
+        #expect(download.status.code == .error)
+        #expect(attributes(download)["error.type"] == "503")
+        #expect(attributes(download)["http.response.status_code"] == "503")
+        let cancelled = try #require(spans.first { $0.name == "documents.thumbnail" })
+        #expect(cancelled.status.code == .unset)
+        #expect(attributes(cancelled)["error.type"] == nil)
+        #expect(attributes(cancelled)["folio.outcome"] == "cancelled")
+    }
+
+    @Test func operationFailuresAreNamedWithoutMessages() {
+        #expect(OperationFailure(URLError(.timedOut)) == .init(type: "timeout"))
+        #expect(OperationFailure(URLError(.cancelled)).type == OperationFailure.cancelled)
+        #expect(OperationFailure(URLError(.networkConnectionLost)) == .init(type: "unreachable"))
+        #expect(OperationFailure(FolioError.signInRequired) == .init(type: "401", status: 401))
+        #expect(OperationFailure(FolioError.server(status: 500, message: "secret")) == .init(type: "500", status: 500))
+        #expect(OperationFailure(FolioError.unreadableResponse) == .init(type: "unreadable_response"))
+        #expect(OperationFailure(FolioError.server(status: 500, message: nil), cancelled: true).type == "cancelled")
+        #expect(
+            OperationFailure(
+                ClientError(
+                    operationID: "x", operationInput: (), request: nil, requestBody: nil, baseURL: nil,
+                    response: nil, responseBody: nil, causeDescription: "", underlyingError: URLError(.timedOut)
+                )
+            ) == .init(type: "timeout")
+        )
     }
 
     @Test func exportRefreshesOAuthOnceAndStopsAfterSignOut() async throws {

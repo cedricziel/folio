@@ -619,19 +619,11 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             return copy
         }
         let token = try await tokenProvider.token()
-        let first = try await transfer { try await perform(signed(token)) }
+        let first = try await perform(signed(token))
         guard (first.1 as? HTTPURLResponse)?.statusCode == 401, let token,
               let fresh = try await tokenProvider.refresh(rejecting: token)
         else { return first }
-        return try await transfer { try await perform(signed(fresh)) }
-    }
-
-    private func transfer<T>(_ work: () async throws -> T) async throws -> T {
-        do {
-            return try await work()
-        } catch is URLError {
-            throw FolioError.unreachable
-        }
+        return try await perform(signed(fresh))
     }
 
     private func check(_ response: URLResponse, body: Data?) throws {
@@ -645,8 +637,9 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     }
 
     private func call<T>(_ name: String, _ work: () async throws -> T) async throws -> T {
+        // Telemetry sees the transport error before it is mapped, so a span can tell a timeout from a cancel.
         if let telemetry {
-            return try await telemetry.operation(name) { try await mappedCall(work) }
+            return try await mappedCall { try await telemetry.operation(name, work) }
         }
         return try await mappedCall(work)
     }
@@ -656,6 +649,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             return try await work()
         } catch let error as FolioError {
             throw error
+        } catch is URLError {
+            throw FolioError.unreachable
         } catch let error as ClientError {
             switch error.underlyingError {
             case let folio as FolioError: throw folio
