@@ -2,8 +2,9 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 
-use folio_core::ports::PaperlessReadError;
-use folio_infra::import::resolve_original;
+use folio_core::ports::{PaperlessReadError, PaperlessReader, PaperlessRecord};
+use folio_infra::import::{resolve_original, PaperlessFsReader};
+use futures::TryStreamExt;
 
 struct Layout {
     _tmp: tempfile::TempDir,
@@ -83,4 +84,61 @@ fn original_guard_resolves_plain_files_and_reports_missing_ones() {
         Err(PaperlessReadError::Missing { .. })
     ));
     assert_unsafe(resolve_original(&export, "originals"));
+}
+
+/// Paperless writes `model` before `fields`; `json!` would sort them the other way
+fn manifest_with_originals(handles: &[&str]) -> String {
+    let docs: Vec<_> = handles
+        .iter()
+        .enumerate()
+        .map(|(i, handle)| {
+            format!(
+                r#"{{"model": "documents.document", "pk": {}, "fields": {{"title": "t", "content": "", "mime_type": "application/pdf", "checksum": "{}", "created": "2024-01-01", "added": "2024-01-01T00:00:00Z", "modified": "2024-01-01T00:00:00Z", "tags": []}}, "__exported_file_name__": {}}}"#,
+                i + 1,
+                "0".repeat(32),
+                serde_json::to_string(handle).unwrap()
+            )
+        })
+        .collect();
+    format!("[{}]", docs.join(","))
+}
+
+#[tokio::test]
+async fn reader_refuses_unsafe_manifest_paths_without_opening_them() {
+    let layout = Layout::new();
+    let export = layout.path("imports/export");
+    let secret = layout.path("outside/secret.pdf");
+    fs::write(&secret, b"secret").unwrap();
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o000)).unwrap();
+    symlink(&secret, export.join("linked.pdf")).unwrap();
+    fs::write(
+        export.join("manifest.json"),
+        manifest_with_originals(&["linked.pdf", "../outside/secret.pdf", "/etc/passwd"]),
+    )
+    .unwrap();
+
+    let reader = PaperlessFsReader::open(&export).unwrap();
+    let records: Vec<_> = reader.scan().await.unwrap().try_collect().await.unwrap();
+    assert_eq!(records.len(), 3);
+    for record in &records {
+        let PaperlessRecord::Document(doc) = record else {
+            panic!("expected a document");
+        };
+        assert_eq!(doc.size, None);
+        assert_unsafe(reader.open_original(doc).await.map(|_| ()));
+    }
+}
+
+#[tokio::test]
+async fn reader_refuses_a_symlinked_manifest() {
+    let layout = Layout::new();
+    let export = layout.path("imports/export");
+    fs::write(layout.path("outside/manifest.json"), b"[]").unwrap();
+    symlink(
+        layout.path("outside/manifest.json"),
+        export.join("manifest.json"),
+    )
+    .unwrap();
+    let reader = PaperlessFsReader::open(&export).unwrap();
+    assert_unsafe(reader.scan().await.map(|_| ()));
 }

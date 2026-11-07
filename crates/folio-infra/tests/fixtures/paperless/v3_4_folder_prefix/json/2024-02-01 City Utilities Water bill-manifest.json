@@ -1,0 +1,61 @@
+[
+  {
+    "model": "documents.document",
+    "pk": 2,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "owner": 1,
+      "correspondent": 2,
+      "storage_path": null,
+      "title": "Water bill",
+      "document_type": null,
+      "content": "",
+      "mime_type": "application/pdf",
+      "checksum": "e4ce1169f8ca61ff34117e2d34af3b78da7fda4838b29c51bdc3865785cece8d",
+      "archive_checksum": null,
+      "page_count": 1,
+      "created": "2024-02-01",
+      "modified": "2024-03-01T12:30:45.678Z",
+      "added": "2024-02-01T09:15:00.250Z",
+      "filename": "0000002.pdf",
+      "archive_filename": null,
+      "original_filename": "0000002.pdf",
+      "archive_serial_number": null,
+      "tags": [
+        1,
+        4,
+        5
+      ],
+      "content_length": 0,
+      "root_document": null,
+      "version_index": null,
+      "version_label": null
+    },
+    "__exported_file_name__": "originals/2024-02-01 City Utilities Water bill.pdf",
+    "__exported_thumbnail_name__": "thumbnails/2024-02-01 City Utilities Water bill-thumbnail.webp"
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 11,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 2,
+      "field": 8,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": "57.10",
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  }
+]
