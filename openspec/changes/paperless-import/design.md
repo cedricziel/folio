@@ -14,7 +14,7 @@ Current state that shapes the approach:
   - `SourceConfig` is a tagged enum (`Folder`, `Email`) in `crates/folio-core/src/models/ingest.rs:186`. The email password is write-only and can come from `password_file`.
   - `IngestScheduler` (`crates/folio-core/src/services/ingest.rs:437`) polls each enabled source on its interval and records `source_health`. Config-defined sources come from `[ingest.folders.*]` and `[ingest.email.*]`.
   - `/api/sources` has CRUD, `/test` and `/outcomes` (`crates/folio-api/src/routes/sources.rs:26-36`).
-  - The `ingest_outcomes` and `source_health` CHECKs allow only `folder` and `email`.
+  - The `ingest_items` and `source_health` CHECKs allow only `folder` and `email`.
 - **Uploads.** `Importer::import` inserts the row, puts the object, then finalizes. `upload_pending` only defers the `Created` event. `CreateDocument` has no ID, dates or external reference. The repository sets `ocr_status = done` only when content is `Some`.
 - **Review.** A document with `reviewed_at` NULL and finished processing is `needs_review` (`models/document.rs:248-256`).
 - **Storage.** `DocumentStore::put` (`ports/storage.rs:111-116`) replaces existing objects.
@@ -126,13 +126,13 @@ Its `poll()` doesn't push items through `IngestSink`. Instead it:
 The scheduler's first poll, which runs immediately when a source is created or the app starts (`services/ingest.rs:686`), is the only trigger for the first run. The create route queues nothing, so the two can't race. An active run during a poll is a normal "skip", not a `Conflict` in health. `POST /api/vaults/{vault_id}/imports` with `{"kind": "paperless_source"}` starts a run on demand.
 
 **Source rules.**
-- A partial unique index allows one live `paperless` source per vault on `ingestion_sources_lifecycle`.
+- A partial unique index allows one live `paperless` source per vault on `ingestion_sources`.
 - `[ingest.paperless.*]` requires `vault`; startup fails without it. A config-defined source wins over a managed one, so managed create returns 409.
 - `token_file` is accepted only from config, matching how `password_file` is handled today (`routes/sources.rs:161-170`).
 - On PUT, the redacted placeholder keeps the stored token only when the URL is unchanged. Otherwise the request is 400.
 - Every `paperless` operation in `routes/sources.rs` and `routes/source_pages.rs` (create, update, toggle, delete, restore, test, try-connection) goes through the admin-plus-owner guard.
 
-The `source_kind` CHECKs on `ingest_outcomes` and `source_health` gain `paperless`. Per-document outcomes for this kind live in `import_items`, not `ingest_outcomes`.
+The `source_kind` CHECKs on `ingest_items` and `source_health` gain `paperless`. Per-document outcomes for this kind live in `import_items`, not `ingest_items` or `ingest_outcomes`.
 
 ### 4. Plan phase persists a self-contained payload per item
 
@@ -260,7 +260,7 @@ Migration `20261107120000_paperless_import.sql`, the same version in `migrations
   - Primary key `(run_id, paperless_id)`, with an index on `(run_id, status, paperless_id)`.
 - **`import_staging`:** `run_id`, `paperless_document_id`, `kind`, `record JSON`.
 - **`paperless_documents`**, **`paperless_taxonomy`** and **`paperless_sync_state`**, as in §2.
-- **CHECK on `ingest_outcomes.source_kind` and `source_health.source_kind`:** gains `paperless`. SQLite can't alter a CHECK, so the table is rebuilt (create `_new`, copy, drop, rename), as `20261102200000_source_lifecycle.sql` does. PostgreSQL drops and re-adds the constraint.
+- **CHECK on `ingest_items.source_kind` and `source_health.source_kind`:** gains `paperless`. SQLite can't alter a CHECK, so the table is rebuilt (create `_new`, copy, drop, rename), as `20261102200000_source_lifecycle.sql` does. PostgreSQL drops and re-adds the constraint.
 
 Existing rows keep NULL in the new columns.
 

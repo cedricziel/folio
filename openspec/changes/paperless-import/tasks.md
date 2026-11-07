@@ -15,7 +15,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 2. Run, ledger and sync storage
 
-- [ ] 2.1 Migration for `import_runs` (including `cursor_after` and `confirm_trash`), `import_items`, `import_staging`, `paperless_documents` (including `needs_reapply` and `folio_state`), `paperless_taxonomy` and `paperless_sync_state` (including `library_sample`, `once_done`, `retry_ids` and `parked_ids`). It also adds `paperless` to the `ingest_outcomes` and `source_health` CHECKs (a table rebuild on SQLite) and a partial unique index for one live `paperless` source per vault. Failing test first: on both backends, `source_health` accepts `paperless`, and a second live `paperless` source in a vault is rejected.
+- [ ] 2.1 Migration for `import_runs` (including `cursor_after` and `confirm_trash`), `import_items`, `import_staging`, `paperless_documents` (including `needs_reapply` and `folio_state`), `paperless_taxonomy` and `paperless_sync_state` (including `library_sample`, `once_done`, `retry_ids` and `parked_ids`). It also adds `paperless` to the `ingest_items` and `source_health` CHECKs (a table rebuild on SQLite) and a partial unique index for one live `paperless` source per vault. Failing test first: on both backends, `source_health` accepts `paperless`, and a second live `paperless` source in a vault is rejected.
 - [ ] 2.2 Add the models and the `ImportRunRepository`, `ImportItemRepository` and `PaperlessLedgerRepository` ports in `crates/folio-core/src/ports/import_runs.rs`, with SQLite and Postgres adapters:
   - the claim, finish, counts and one-active-run rule
   - the ledger, the taxonomy map and the sync state with the cursor, retry and park sets
@@ -28,6 +28,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
   - an update replaces the title, tags and values, keeps a Folio-native note, and doesn't resurrect a note deleted in Folio
   - a failed transaction leaves the old `file_path`
   - trash and restore update the ledger
+- [ ] 2.5 Write the ledger row and finish the import item inside `create_imported`'s transaction. `ImportedDocument` carries an optional `ImportApplied` (run, claim, fingerprint, checksum, `paperless_modified`), and the repository calls `record_import_applied` in the same transaction, so a lost claim rolls back the document. Failing test first: a create with a lost claim leaves no document, no ledger row and no outbox event, and a successful create leaves the ledger row and a `done` item.
 - [ ] 2.4 Keep `folio_state` current when users trash, restore and purge documents that have a ledger row. Failing test first: a user trash sets `trashed_by_user`, and a purge sets `purged_in_folio`.
 
 ## 3. Readers
