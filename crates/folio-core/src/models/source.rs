@@ -24,6 +24,8 @@ pub enum SourceKind {
     Mcp,
     /// Received through a share link
     Share,
+    /// Carried over from another document system
+    Import,
 }
 
 impl SourceKind {
@@ -35,6 +37,7 @@ impl SourceKind {
             Self::Email => "email",
             Self::Mcp => "mcp",
             Self::Share => "share",
+            Self::Import => "import",
         }
     }
 
@@ -47,6 +50,7 @@ impl SourceKind {
             Self::Email,
             Self::Mcp,
             Self::Share,
+            Self::Import,
         ]
         .into_iter()
         .find(|k| k.as_str() == value)
@@ -137,6 +141,7 @@ impl DocumentSource {
                     SourceKind::Email => "Email",
                     SourceKind::Mcp => "MCP",
                     SourceKind::Share => "Share link",
+                    SourceKind::Import => "Import",
                 };
                 label.to_string()
             }

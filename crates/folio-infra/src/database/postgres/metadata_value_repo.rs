@@ -287,6 +287,47 @@ async fn write_value(
     Ok(())
 }
 
+/// Write the values of a document created in the same transaction, without
+/// announcing them: the document's `created` event covers them.
+pub(crate) async fn insert_new_values(
+    conn: &mut PgConnection,
+    vault: VaultId,
+    document: Id,
+    values: &BTreeMap<Id, MetadataValue>,
+    actor: Option<&UserId>,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    for (&field_id, value) in values {
+        let field: Option<(String, bool, bool, bool)> = sqlx::query_as(
+            "SELECT kind, is_required, is_unique, deleted_at IS NULL FROM metadata_fields WHERE vault_id = $1 AND id = $2 FOR SHARE",
+        )
+        .bind(vault.0)
+        .bind(field_id)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(db_error)?;
+        let (kind_name, _, unique, live) =
+            field.ok_or_else(|| not_found("Metadata field", field_id))?;
+        if !live {
+            return Err(Error::Conflict(
+                "Retired fields cannot receive new values".into(),
+            ));
+        }
+        let value = parse_kind(&kind_name)?
+            .validate_value(Some(value.clone()), false)?
+            .ok_or_else(|| Error::Validation("Imported metadata value is empty".into()))?;
+        check_reference(conn, vault, field_id, &value).await?;
+        write_value(
+            conn, vault, document, field_id, &kind_name, unique, Some(&value), false, actor, now,
+        )
+        .await?;
+    }
+    if !values.is_empty() {
+        bump_revision(conn, vault, document).await?;
+    }
+    Ok(())
+}
+
 /// Clear links into a document that is about to be purged, attributed to the system.
 pub(crate) async fn clear_incoming_links(
     conn: &mut PgConnection,

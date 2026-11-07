@@ -6,7 +6,7 @@ use crate::error::Result;
 use crate::models::AuditEvent;
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, GroupId, Id, NewAuditEvent, Principal, ProcessingStage,
+    DocumentFilter, DocumentType, ExternalRef, GroupId, Id, ImportedDocument, NewAuditEvent, Principal, ProcessingStage,
     ProcessingStatus, Setting, Tag, UpdateCorrespondent, UpdateDocument, UpdateDocumentType,
     UpdateTag, UserId, Vault, VaultId, VaultMember, VaultRole,
 };
@@ -65,6 +65,15 @@ pub trait DocumentRepository: Send + Sync {
     async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document>;
 
     /// Create the reserved identity once while its ledger claim still matches, deferring its event.
+    /// Create an imported document with its tags, metadata values and notes
+    /// in one transaction, announced with origin `Import`; `Conflict` when
+    /// the ID or the external reference already exists, trashed or not
+    async fn create_imported(&self, vault: VaultId, document: ImportedDocument) -> Result<Document>;
+
+    /// The document imported under `external`, trashed or not
+    async fn find_by_external_ref(&self, vault: VaultId, external: &ExternalRef)
+        -> Result<Option<Id>>;
+
     async fn create_for_ingest(
         &self,
         vault: VaultId,

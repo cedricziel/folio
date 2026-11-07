@@ -3,7 +3,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 ## 1. Document model
 
 - [x] 1.1 Migration for the `documents` external reference (columns, paired-NULL CHECK, partial unique index that includes trashed rows) and `document_entries.external_id` with its partial unique index. Failing test first, on SQLite and on testcontainers Postgres: a duplicate external reference is rejected even when the first document is trashed, and a row with only `external_id` set is rejected.
-- [ ] 1.2 Add `SourceKind::Import`, `EventOrigin::Import`, `ExternalRef`, `ImportedDocument`, `ImportedNote` and `DocumentRepository::create_imported` (SQLite and Postgres). It writes the following in one transaction:
+- [x] 1.2 Add `SourceKind::Import`, `EventOrigin::Import`, `ExternalRef`, `ImportedDocument`, `ImportedNote` and `DocumentRepository::create_imported` (SQLite and Postgres). It writes the following in one transaction:
   - the caller-supplied ID and dates
   - `ocr_status = done`, and the embed stage pending or skipped
   - the review state, tags, metadata values, and notes with `external_id`
