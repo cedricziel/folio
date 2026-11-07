@@ -770,16 +770,21 @@ async fn test(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Form(values): Form<FormValues>,
 ) -> ApiResult<Html<String>> {
     let workflow = find(vault, &*state.workflow_repo, id).await?;
-    let notice = match send_test(
-        &state.webhook_client,
-        workflow.trigger,
-        &workflow.actions,
-        &state.public_url,
-    )
-    .await
-    {
+    let sent = match values.clone().into_input(Some(&workflow)) {
+        Ok(draft) => send_test(
+            &state.webhook_client,
+            draft.trigger,
+            &draft.actions,
+            &state.public_url,
+        )
+        .await
+        .map_err(|e| e.message().to_string()),
+        Err(message) => Err(message),
+    };
+    let notice = match sent {
         Ok(result) => Notice {
             danger: result.deliveries.iter().any(|d| !d.success),
             lines: result
@@ -797,12 +802,11 @@ async fn test(
                 })
                 .collect(),
         },
-        Err(e) => Notice {
+        Err(message) => Notice {
             danger: true,
-            lines: vec![e.message().to_string()],
+            lines: vec![message],
         },
     };
-    let values = FormValues::from_workflow(&workflow);
     render(
         build_form(
             DefaultVault(vault),

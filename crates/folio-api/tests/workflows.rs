@@ -136,6 +136,25 @@ async fn json_request(
     (status, value)
 }
 
+async fn post_form(app: &TestApp, uri: &str, form: String) -> (StatusCode, String) {
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
 fn workflow_body(url: &str) -> Value {
     json!({
         "name": "Notify n8n",
@@ -344,6 +363,68 @@ async fn test_endpoint_needs_a_webhook() {
 
     let (status, _) = json_request(&app, "POST", &format!("/api/workflows/{id}/test"), None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn the_form_tests_unsaved_edits_and_keeps_them() {
+    let app = test_app().await;
+    let (url, log) = receiver(200).await;
+    let mut body = workflow_body(&url);
+    body["actions"][0]["headers"] = json!({ "Authorization": "Bearer abc" });
+    let (_, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    let id = created["id"].as_str().unwrap();
+
+    let test_uri = format!("/workflows/{id}/test");
+    let draft = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("name", "Draft name")
+        .append_pair("trigger", "document.processed")
+        .append_pair("enabled", "on")
+        .append_pair("webhook_url", &url)
+        .append_pair("webhook_headers", "Authorization: ********\nX-Draft: yes")
+        .finish();
+    let (status, html) = post_form(&app, &test_uri, draft).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Delivered to"), "{html}");
+    assert!(html.contains("Draft name"), "the edits stay in the form");
+    assert!(html.contains("X-Draft: yes"));
+
+    {
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        let (headers, body) = &log[0];
+        assert_eq!(headers["x-draft"], "yes", "the draft is what gets sent");
+        assert_eq!(
+            headers["authorization"], "Bearer abc",
+            "masked values stand for stored ones"
+        );
+        let timestamp: i64 = headers["x-folio-timestamp"]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            headers["x-folio-signature"].to_str().unwrap(),
+            folio_infra::workflow::sign("hunter2", timestamp, body),
+            "the stored secret signs the draft"
+        );
+        let sent: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(sent["event"], "document.processed");
+    }
+
+    let stored = app
+        .state
+        .workflow_repo
+        .find_by_id(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.name, "Notify n8n", "testing does not save");
+
+    let (status, html) = post_form(&app, &test_uri, "name=Broken&trigger=nope".into()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("Choose a trigger."));
+    assert!(html.contains("Broken"));
+    assert_eq!(log.lock().unwrap().len(), 1, "an invalid draft is not sent");
 }
 
 #[tokio::test]
