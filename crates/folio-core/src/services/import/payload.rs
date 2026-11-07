@@ -55,6 +55,14 @@ impl ItemPayload {
 pub enum ItemOutcome {
     Pending(ItemAction),
     Skipped(SkipReason),
+    Failed(FailReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailReason {
+    /// A trash item held back until a retry with `confirm_trash`
+    TrashThresholdExceeded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

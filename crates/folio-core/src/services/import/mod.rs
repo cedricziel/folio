@@ -8,6 +8,7 @@ pub mod fields;
 pub mod fingerprint;
 pub mod payload;
 pub mod taxonomy;
+pub mod trash;
 pub mod values;
 
 use serde::{Deserialize, Serialize};
@@ -20,10 +21,16 @@ pub use fields::{
 pub use fingerprint::{
     document_id, fingerprint, DocumentRecords, FINGERPRINT_VERSION, IMPORT_NAMESPACE,
 };
-pub use payload::{plan_document, ItemOutcome, ItemPayload, PlanContext, PlannedItem};
+pub use payload::{
+    plan_document, FailReason, ItemOutcome, ItemPayload, PlanContext, PlannedItem,
+};
 pub use taxonomy::{
     plan_fields, plan_named, plan_tags, ExistingEntity, FieldPlan, KindPlan, TagPlan, Target,
     TaxonomyKind, TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
+};
+pub use trash::{
+    apply_trash_safety, live_ledger_rows, missing_from_listing, trash_held, MissingDocument,
+    TrashHealth,
 };
 pub use values::{
     plan_values, ItemWarning, PlannedNote, PlannedValue, PlannedValues, ValueContext,
