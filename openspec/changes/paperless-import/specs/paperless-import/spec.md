@@ -6,27 +6,43 @@ Move an existing Paperless-ngx library into a Folio vault without losing curated
 
 ### Requirement: Admins connect a Paperless library as a vault source
 
-The system SHALL support a source kind `paperless` with a Paperless base URL, an API token (inline or `token_file`), a sync mode (`once`, `new_only` or `mirror`, default `mirror`) and a poll interval in seconds (default 900, minimum 60). A vault SHALL hold at most one Paperless library: at most one live `paperless` source, and imports from an export folder and from the connection SHALL refer to the same library. Only an instance admin (`is_admin` or `is_owner`) who owns the vault SHALL create, change or delete a `paperless` source. The token SHALL never appear in responses.
+The system SHALL support a source kind `paperless` with a Paperless base URL (http or https), an API token, a sync mode (`once`, `new_only` or `mirror`, default `mirror`) and a poll interval in seconds (default 900, minimum 60). A vault SHALL have at most one live `paperless` source. Every operation on a `paperless` source (create, update, enable or disable, delete, restore, test, and the form's try-connection) SHALL require an instance admin (`is_admin` or `is_owner`) who owns the vault. With `auth.required = false`, the same rule as the settings pages applies. Tokens SHALL be redacted in responses the same way email passwords are. A changed URL SHALL require the token to be entered again. `token_file` SHALL be accepted only in `config.toml`. The HTTP client SHALL NOT follow redirects to another origin. Connection failures SHALL be reported as fixed reasons, never as raw error text.
 
 #### Scenario: Add a connection
 - **WHEN** an admin who owns the vault POSTs `{"name": "Paperless", "config": {"type": "paperless", "url": "https://paperless.example", "token": "…", "sync_mode": "mirror"}}` to `/api/sources`
-- **THEN** the API returns 201 with the source, `"token": null` and `"has_token": true`, and the first sync run is queued
+- **THEN** the API returns 201 with the token redacted, and the scheduler's first poll starts the first sync run
 
 #### Scenario: Test a connection
 - **WHEN** the admin POSTs `/api/sources/{id}/test`
-- **THEN** the API returns 200 with the Paperless version and document count when the URL and token work, or 200 with `ok: false` and a reason (`unreachable`, `unauthorized`, `unsupported_version`) when they don't
+- **THEN** the API returns 200 with `ok: true`, the Paperless version, the number of documents the token can see, and `superuser` (whether the token sees every document), or 200 with `ok: false` and a reason (`unreachable`, `unauthorized`, `unsupported_version`, `redirected`) when it can't connect
 
 #### Scenario: Second Paperless source in a vault
 - **WHEN** the vault already has a live `paperless` source
 - **THEN** POST `/api/sources` with type `paperless` returns 409
 
 #### Scenario: Non-admin vault owner
-- **WHEN** a vault owner who isn't an instance admin POSTs a `paperless` source
-- **THEN** the API returns 403 with error code `forbidden`
+- **WHEN** a vault owner who isn't an instance admin POSTs a `paperless` source, or calls PUT, DELETE, `/restore` or `/test` on `/api/sources/{id}` for one
+- **THEN** the API returns 403 with error code `forbidden` and makes no outbound request
+
+#### Scenario: URL changed without a token
+- **WHEN** an admin PUTs `/api/sources/{id}` with a new `url` and the redacted token placeholder
+- **THEN** the API returns 400 asking for the token, and the stored token is never sent to the new URL
+
+#### Scenario: Invalid settings
+- **WHEN** the URL isn't http or https, the poll interval is under 60, or the request contains `token_file`
+- **THEN** POST or PUT returns 400 naming the field
 
 #### Scenario: Source defined in config.toml
 - **WHEN** `config.toml` defines `[ingest.paperless.home]` with `url`, `token_file`, `vault` and `sync_mode`
-- **THEN** the source appears in `GET /api/sources` as config-managed and syncs on its interval, the same way config-defined folder and email sources do
+- **THEN** `GET /api/sources` returns 200 including it as config-managed, and it syncs on its interval
+
+#### Scenario: Config source without a vault
+- **WHEN** a `[ingest.paperless.*]` section has no `vault`
+- **THEN** the app refuses to start and names the section
+
+#### Scenario: Config source and managed source
+- **WHEN** a vault has a config-defined Paperless source and an admin POSTs a managed one for the same vault
+- **THEN** the API returns 409; the config-defined source wins
 
 ### Requirement: Admins import from an export folder
 
@@ -56,9 +72,37 @@ The system SHALL let an instance admin who owns the vault start an import of a P
 - **WHEN** a vault imported a library from an export and the admin then adds a `paperless` source for the same library
 - **THEN** the first sync matches the documents by Paperless ID, recreates none of them, and only applies differences according to the sync mode
 
+### Requirement: A vault stays bound to one Paperless library
+
+The system SHALL record the identity of the vault's Paperless library on first contact (the Paperless ID and `added` time of up to 20 of its oldest documents) and SHALL check every later export import, sync and source change against it. When more than half of the recorded documents that are still present have a different `added` time, the library SHALL be treated as a different one.
+
+#### Scenario: Source pointed at another Paperless
+- **WHEN** an admin changes a source's URL to a different Paperless instance, or deletes the source and adds one for another instance
+- **THEN** the next run fails with error `library_mismatch` before it changes any document, and POST `/api/vaults/{vault_id}/imports` for it returns 409 with `library_mismatch`
+
+#### Scenario: Export from another library
+- **WHEN** an admin starts an export import whose documents don't match the vault's recorded library
+- **THEN** the run fails with `library_mismatch` and changes nothing
+
+### Requirement: Mirror never trashes from incomplete data
+
+In `mirror` mode the system SHALL decide that a document was deleted in Paperless only from a complete listing: every page fetched successfully and the number of IDs equal to the count Paperless reports. It SHALL NOT trash anything when the listing is empty and the ledger isn't. A run that would trash more than 50 documents or more than 10% of the ledger SHALL stop before applying any trash item and wait for an admin to confirm.
+
+#### Scenario: Listing fails part-way
+- **WHEN** fetching the document ID listing fails on any page
+- **THEN** the poll records the error in the source's health and creates no `trash` items
+
+#### Scenario: Paperless returns no documents
+- **WHEN** the listing is empty but the vault's ledger has live documents
+- **THEN** no document is trashed and the source's health shows `empty_listing`
+
+#### Scenario: Token loses access to documents
+- **WHEN** the token's Paperless permissions change so that 400 of 1,000 previously synced documents disappear from the listing
+- **THEN** the run applies its other items and ends `completed_with_errors`, the 400 trash items are `failed` with reason `trash_threshold_exceeded`, and nothing is trashed until an admin POSTs `/api/vaults/{vault_id}/imports/{import_id}/retry` with `{"confirm_trash": true}`, which returns 202 and applies them
+
 ### Requirement: Sync keeps the vault current
 
-A `paperless` source SHALL poll on its interval and start a sync run only when it finds changes. The sync mode SHALL decide which changes are applied.
+A `paperless` source SHALL poll on its interval, starting with a first poll right after it is created or the app starts, and start a sync run only when it finds changes. The source SHALL keep a cursor: the highest Paperless `modified` time it has fully processed. The cursor SHALL advance when a run ends `completed` or `completed_with_errors`. Items that failed SHALL be retried by the next five polls and then parked, which lists them under the source as `parked`. A document that a Folio user trashed or purged SHALL NOT be updated, restored or re-created by sync. A mirrored note that a Folio user deleted SHALL stay deleted. The sync mode SHALL decide which changes are applied.
 
 | Paperless change | `once` | `new_only` | `mirror` |
 |---|---|---|---|
@@ -95,7 +139,19 @@ A `paperless` source SHALL poll on its interval and start a sync run only when i
 
 #### Scenario: Mode `once`
 - **WHEN** a `once` source finishes its first run
-- **THEN** it doesn't poll again until an admin starts a sync with POST `/api/vaults/{vault_id}/imports` `{"kind": "paperless_source", "source_id": …}`, which returns 202
+- **THEN** it records that it is done, doesn't poll again even after a restart, and only syncs when an admin starts a sync with POST `/api/vaults/{vault_id}/imports` `{"kind": "paperless_source", "source_id": …}`, which returns 202
+
+#### Scenario: A document keeps failing
+- **WHEN** one document's download fails on every attempt across five polls
+- **THEN** the cursor still advances, each poll retries that document, and after the fifth it is parked and no longer creates runs
+
+#### Scenario: Folio user trashed a mirrored document
+- **WHEN** a Folio user trashes a mirrored document and it then changes in Paperless
+- **THEN** sync leaves it in the Folio trash and doesn't apply the change
+
+#### Scenario: Folio user purged a mirrored document
+- **WHEN** a Folio user permanently deletes a mirrored document
+- **THEN** sync never re-creates it, and the ledger marks it `purged_in_folio`
 
 #### Scenario: Source deleted
 - **WHEN** an admin deletes the `paperless` source
@@ -111,7 +167,7 @@ For every Paperless document a vault has seen, the system SHALL record the Paper
 
 #### Scenario: Ledger and document agree after a crash
 - **WHEN** the server stops in the middle of applying an item
-- **THEN** either both the document change and its ledger row are committed or neither is, and the resumed run applies the item exactly once
+- **THEN** either both the document change and its ledger row are committed or neither is, and the resumed run applies the item idempotently, so the final state is the same as after one application
 
 ### Requirement: Imports are idempotent and leave no orphans
 
@@ -130,8 +186,8 @@ Each imported document's Folio ID SHALL be derived from the vault and its Paperl
 - **THEN** the stored file is deleted
 
 #### Scenario: Mirror file replacement fails
-- **WHEN** replacing a mirrored document's original fails its checksum
-- **THEN** the item is `failed` with reason `checksum_mismatch` and the document keeps its previous original
+- **WHEN** replacing a mirrored document's original fails its checksum, or the server stops before the change commits
+- **THEN** the document keeps its previous original, content and thumbnail, and the item is `failed` with reason `checksum_mismatch` or is retried
 
 ### Requirement: Runs always finish
 
@@ -174,7 +230,7 @@ The system SHALL import each Paperless document with its metadata and SHALL NOT 
 | inbox tag on the document | the document needs review; without one it is imported as reviewed |
 | custom field values | typed metadata values in fields with the same name, created when missing |
 | archive serial number | value of a unique integer metadata field named `ASN` |
-| notes, excluding deleted notes | document notes written by the admin who started the run or created the source, with their original creation time |
+| notes, excluding deleted notes | document notes with their original creation time, written by the admin who started the run or created the source, or by no user for a config-defined source |
 
 #### Scenario: Import a fully tagged document
 - **WHEN** a Paperless document with a title, created date, added time, correspondent, type, three tags, two custom field values, an ASN, OCR text and a note is imported
@@ -276,7 +332,7 @@ The system SHALL record for each item its Paperless ID, its action (`create`, `u
 - **THEN** the API returns 202, the run goes back to `queued`, its failed items are reset to `pending` with zero attempts, finished items are untouched, and a run that failed before its items were created starts from the beginning
 
 #### Scenario: Retry a run that can't be retried
-- **WHEN** the run is `queued`, `running` or `completed`
+- **WHEN** the run is `queued`, `running` or `completed`, or another run in the vault is `queued` or `running`
 - **THEN** POST `/retry` returns 409
 
 #### Scenario: Cancel a run
@@ -286,6 +342,10 @@ The system SHALL record for each item its Paperless ID, its action (`create`, `u
 #### Scenario: Cancel a finished run
 - **WHEN** the run is not `queued` or `running`
 - **THEN** POST `/cancel` returns 409
+
+#### Scenario: Imports don't block normal processing
+- **WHEN** an import of 5,000 documents is running and a user uploads a document
+- **THEN** the uploaded document's thumbnail, OCR and embedding are processed while the import continues
 
 #### Scenario: Reject callers who may not import
 - **WHEN** an unauthenticated caller, a caller who isn't an instance admin or vault owner, or a caller who can't see the vault calls POST on `/api/vaults/{vault_id}/imports`, `/retry` or `/cancel`

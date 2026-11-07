@@ -70,7 +70,7 @@ Out of scope:
 - **folio-infra:**
   - The export-folder and REST (`reqwest`) Paperless readers.
   - SQLite and PostgreSQL repositories for runs, items, ledger, taxonomy map and sync state.
-  - `JobType::ImportRun` and the stalled-run repair step.
+  - `JobType::ImportRun` in its own `JobClass::Import` worker lane, so imports don't block processing of user uploads, and the stalled-run repair step.
   - Paperless source polling through the existing `IngestScheduler`.
   - The `[import]` and `[ingest.paperless.*]` config sections with their `SETTINGS` entries.
 - **folio-api:**
@@ -78,14 +78,16 @@ Out of scope:
   - The existing HTML source form gains a Paperless variant (URL, token, sync mode, interval). No new HTML pages for runs.
   - OpenAPI schemas and the regenerated Swift client.
 - **folio-mcp:** six import tools, with write scope for the mutating ones.
-- **Database:** new migration `20261107120000_paperless_import.sql` in both `migrations/sqlite` and `migrations/postgres`.
+- **Database:** new migrations, one per implementation PR, named `202611071xxxxx_paperless_*.sql`, each in both `migrations/sqlite` and `migrations/postgres`. The upgrade is forward-only: the previous binary can't decode the new `import` origin and source kind, so admins back up first.
   - `documents`: `external_source`, `external_id`, `content_sha256`, with the paired-NULL CHECK and a partial unique index.
   - `document_entries`: `external_id`, so mirrored notes can be updated.
   - New tables: `import_runs`, `import_items`, `import_staging`, `paperless_documents` (the sync ledger), `paperless_taxonomy` (the taxonomy map) and `paperless_sync_state`.
-  - The `source_kind` CHECKs on `ingest_outcomes` and `source_health` gain `paperless`.
+  - The `source_kind` CHECKs on `ingest_outcomes` and `source_health` gain `paperless`, and a partial unique index allows one live `paperless` source per vault.
   - Existing rows keep NULL in the new columns, and nothing is backfilled.
 - **Depends on** `typed-document-metadata` persistence, which is already merged.
 - **Security:**
-  - The API token is write-only in API responses, like the email password, and can come from a file.
+  - The API token is redacted like the email password. `token_file` is accepted only in `config.toml`. A URL change requires the token again. Redirects to another origin aren't followed.
+  - Every operation on a `paperless` source, including test and restore, requires an instance admin who owns the vault.
+  - A mirror never trashes from an incomplete or empty listing, pauses above a trash threshold until an admin confirms, and refuses to sync a library that doesn't match the vault's recorded one.
   - Export folders contain password hashes and possibly plaintext mail credentials, and the readers never deserialize those records.
   - Only instance admins can create Paperless sources or start imports, because both read server files or reach arbitrary URLs.

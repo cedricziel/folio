@@ -61,11 +61,12 @@ The record types are identical for both adapters. Anything adapter-specific (man
 
 **REST adapter** (`folio-infra::import::paperless_http`, `reqwest`):
 - It sends `Authorization: Token …` and `Accept: application/json; version=9`. Version 9 is supported from 2.16 through 3.x. When the server rejects version 9, `/test` reports `unsupported_version`.
+- It is a `reqwest` client with redirects limited to the same origin (`redirect::Policy::custom`). A cross-origin redirect is reported as `redirected`. Errors map to the fixed reasons `unreachable`, `unauthorized`, `unsupported_version`, `redirected` and `upstream_error`; no raw error text goes to callers.
 - Listing:
-  - `/api/documents/?page_size=100&ordering=modified&modified__gt=<cursor>&fields=…` with `full_perms=false`.
+  - Incremental listing uses keyset paging: `/api/documents/?page_size=100&ordering=modified,id&modified__gte=<last seen>` with `fields=…`. Each next page starts from the last `(modified, id)` seen, so documents modified mid-listing aren't skipped.
   - The list response includes notes and custom fields, so each document needs one metadata request (`/api/documents/{id}/metadata/` for the checksum and size) and one download (`/download/?original=true`).
   - Taxonomy comes from `/api/tags|correspondents|document_types|custom_fields/`, paginated.
-  - `list_document_ids()` uses `/api/documents/?fields=id&page_size=1000`.
+  - `list_document_ids()` uses `/api/documents/?fields=id&page_size=1000` and returns a `CompleteIdSet` only when every page succeeded and the ID count equals the `count` of the first response. Otherwise it returns an error. Trash decisions take only a `CompleteIdSet` (§3).
 - Trash detection: `/api/trash/` (2.10 or later).
 - One request at a time per source. 429 and 5xx responses are retried with exponential backoff (1, 2, 4, 8 s, then the item fails with `upstream_error`).
 - The token comes from `token` or `token_file`, and the HTTP client never logs it. The URL must be http(s).
@@ -74,7 +75,11 @@ Both adapters choose the checksum algorithm by its length: 32 hex characters mea
 
 ### 2. One Paperless library per vault, and the ledger as the state of record
 
-The external reference stored on documents is `('paperless', <paperless_id>)`. A vault holds at most one Paperless library, which is what lets an export import be continued by a connection. The `paperless_documents` ledger is the authority on what has been done:
+The external reference stored on documents is `('paperless', <paperless_id>)`. A vault holds at most one Paperless library, which is what lets an export import be continued by a connection.
+
+**Library identity.** On first contact, `paperless_sync_state.library_sample` records `(paperless_id, added)` for the 20 lowest live Paperless IDs. Every later run, before its plan phase, compares the sample against the reader. If more than half of the sampled IDs that are still present have a different `added`, the run fails with `library_mismatch`. `POST /imports`, and a source update that changes the URL, run the same check and return 409. This catches a re-pointed source, a replaced instance and an export from another library, without needing a Paperless instance ID, which Paperless doesn't have.
+
+The `paperless_documents` ledger is the authority on what has been done:
 
 | Column | Meaning |
 |---|---|
@@ -82,8 +87,10 @@ The external reference stored on documents is `('paperless', <paperless_id>)`. A
 | `document_id` | Folio ID, UUIDv5 |
 | `paperless_modified` | Paperless `modified` at the last sync |
 | `checksum` | Original's checksum at the last sync |
-| `fingerprint` | SHA-256 over the canonical JSON of the mapped metadata: title, dates, correspondent, type, tags, values, ASN, notes and inbox flag |
+| `fingerprint` | SHA-256 over canonical JSON (`fingerprint_version` 1) of the Paperless-side state: title, SHA-256 of the content, created, correspondent, type and tag Paperless IDs (sorted), custom-field instances by field ID (sorted, raw values), ASN, notes by note ID (sorted; body and created only) and inbox flag. It uses Paperless IDs, not names, so renaming a tag doesn't change every document's fingerprint |
+| `needs_reapply` | Set when the last apply dropped a value with a warning, so the next sync applies the document again even if its fingerprint is unchanged |
 | `trashed_in_paperless` | Whether Paperless had it in the trash at the last sync |
+| `folio_state` | `live`, `trashed_by_user` or `purged_in_folio`. It is updated by the trash, restore and purge paths for documents that have a ledger row. Sync skips every action for a document that isn't `live`, except recording Paperless-side state |
 | `last_synced_at`, `last_run_id` | When and by which run it was last applied |
 
 Each sync cycle computes items as the difference between the reader's records and the ledger:
@@ -91,9 +98,9 @@ Each sync cycle computes items as the difference between the reader's records an
 | Condition | Action |
 |---|---|
 | No ledger row | `create` |
-| Fingerprint differs | `update` (only in `mirror` mode) |
-| Checksum differs | `update` with file replacement (only in `mirror` mode) |
-| ID missing from Paperless, or trashed there | `trash` (only in `mirror` mode) |
+| Fingerprint differs or `needs_reapply` | `update` (only in `mirror` mode) |
+| Checksum differs | `update` with file replacement (only in `mirror` mode). Checksums are fetched from `/metadata/` only for documents whose `modified` changed, because Paperless bumps `modified` when the file changes |
+| ID missing from a `CompleteIdSet`, or trashed in Paperless | `trash` (only in `mirror` mode) |
 | Trashed in the ledger but live in Paperless | `restore` (only in `mirror` mode) |
 
 `new_only` keeps `create` only.
@@ -102,19 +109,28 @@ The ledger row is written in the same transaction as the document change. A cras
 
 The `paperless_taxonomy` table maps `(vault_id, kind, paperless_id)` to a Folio entity ID and the last-synced name. Mapping happens on first sight: an existing live entity with the same name, otherwise a new one. In `mirror` mode, a Paperless rename renames the mapped Folio entity, unless another live Folio entity already has the new name; then the rename is skipped with a warning. Paperless tag, correspondent or type deletions only remove the entity from documents, through the document updates. The Folio entity stays.
 
-The `paperless_sync_state` table holds per-source `cursor_modified`, `last_poll_at` and `last_full_reconcile_at`.
+The `paperless_sync_state` table holds per vault: `source_id`, `library_sample`, `cursor_modified` (the highest `modified` the last finished run fully processed, stored on the run as `cursor_after` and copied when the run ends `completed` or `completed_with_errors`), `last_poll_at`, `last_full_reconcile_at`, `once_done` and `retry_ids` (failed Paperless IDs with a poll count; included in the next five polls' candidates, then moved to `parked_ids`). Dry runs never move the cursor.
+
+**Trash safety.** Trash items are computed only from a `CompleteIdSet`, and never when the set is empty while the ledger has live rows (health `empty_listing`). Before applying any trash item, the run compares the trash count against `max(50, 10% of live ledger rows)`. Above that threshold, every trash item is failed with `trash_threshold_exceeded` and the rest of the run proceeds. `POST …/retry {"confirm_trash": true}` resets those items and lifts the threshold for that run only.
 
 ### 3. Polling through the existing scheduler
 
 `SourceConfig::Paperless(PaperlessConfig { url, token, token_file, sync_mode, poll_interval_secs })` gets `kind()` = `SourceKind::Paperless`. It is registered with `IngestScheduler` like the folder and email sources, so health, `/test`, config-defined sources and enable/disable all come for free.
 
 Its `poll()` doesn't push items through `IngestSink`. Instead it:
-1. Returns early if the vault has an active run. This is the one-active-run rule: the changes wait for the next poll.
+1. Returns early if the vault has an active run (the one-active-run rule: the changes wait for the next poll), or if the source is `once` and `once_done` is set.
 2. Fetches `modified_since(cursor - 60 s)` (the 60 s overlap absorbs clock skew), plus `list_document_ids()` and trash in `mirror` mode. Every 24 h, instead of the incremental fetch, it does a full scan and compares fingerprints, which catches note edits that don't bump `modified`.
 3. Computes the difference against the ledger without writing anything.
-4. If the difference is empty, records a successful poll and advances the cursor. Otherwise it creates an `import_runs` row (`kind = paperless_source`, `trigger = schedule`) and enqueues its driver. The cursor advances only when that run completes.
+4. If the difference is empty, records a successful poll and advances the cursor. Otherwise it creates an `import_runs` row (`kind = paperless_source`, `trigger = schedule`, or `initial` for the first one) and enqueues its driver.
 
-Creating a source in `once`, `new_only` or `mirror` mode queues the first full run immediately (`trigger = source_created`). A `once` source doesn't poll after that. `POST /api/vaults/{vault_id}/imports` with `{"kind": "paperless_source"}` starts a run on demand.
+The scheduler's first poll, which runs immediately when a source is created or the app starts (`services/ingest.rs:686`), is the only trigger for the first run. The create route queues nothing, so the two can't race. An active run during a poll is a normal "skip", not a `Conflict` in health. `POST /api/vaults/{vault_id}/imports` with `{"kind": "paperless_source"}` starts a run on demand.
+
+**Source rules.**
+- A partial unique index allows one live `paperless` source per vault on `ingestion_sources_lifecycle`.
+- `[ingest.paperless.*]` requires `vault`; startup fails without it. A config-defined source wins over a managed one, so managed create returns 409.
+- `token_file` is accepted only from config, matching how `password_file` is handled today (`routes/sources.rs:161-170`).
+- On PUT, the redacted placeholder keeps the stored token only when the URL is unchanged. Otherwise the request is 400.
+- Every `paperless` operation in `routes/sources.rs` and `routes/source_pages.rs` (create, update, toggle, delete, restore, test, try-connection) goes through the admin-plus-owner guard.
 
 The `source_kind` CHECKs on `ingest_outcomes` and `source_health` gain `paperless`. Per-document outcomes for this kind live in `import_items`, not `ingest_outcomes`.
 
@@ -153,9 +169,11 @@ The document ID is `Uuid::new_v5(FOLIO_IMPORT_NAMESPACE, "{vault_id}/paperless/{
 - `apply_mirror_update` overwrites the title, dates, correspondent, type, tag set, metadata values (full replace of the values set by imports) and content.
 - It upserts notes by `external_id`, and soft-deletes imported notes that are gone in Paperless. Folio-native notes are untouched.
 - It updates the ledger, all in one transaction with `EventOrigin::Import` events.
-- **File replacement** goes to a staging key, `documents/{id}/original.incoming`. After verification, a copy to the main key and a delete of the staging key happen before the transaction. Thumbnail and embedding jobs are re-enqueued after commit. If verification fails, the main key is untouched.
+- **File replacement** writes the new bytes to a versioned key, `documents/{id}/original-{sha256[..16]}`, and verifies them. `file_path` is switched inside the transaction (the existing `set_file_path` semantics, in the same transaction). After commit, the old object is deleted and thumbnail and embedding jobs are re-enqueued. A crash or a failed transaction leaves the old `file_path` and the old object in place. The new object is deleted on permanent failure, or overwritten by the retry.
 
-**trash and restore** (mirror only): the existing trash and restore repository methods, with the ledger update in the same transaction and origin `Import`.
+**trash and restore** (mirror only): new repository methods that trash or restore and update the ledger in one transaction, with origin `Import`. The existing methods take no transaction (`ports/repository.rs:79,97`). Restore is skipped when a purge was requested.
+
+**Notes.** Notes are upserted by `external_id`. An imported note that a Folio user deleted keeps its soft-deleted row and is not resurrected; the upsert matches deleted rows too and leaves them deleted.
 
 **Failure paths:**
 - A unique conflict on the external reference during create means another attempt finished the item: it is marked `skipped/unchanged`.
@@ -165,13 +183,13 @@ The document ID is `Uuid::new_v5(FOLIO_IMPORT_NAMESPACE, "{vault_id}/paperless/{
 
 ### 6. Workflows
 
-`EventOrigin::Import` is skipped next to `EventOrigin::Workflow` in `WorkflowEngine::consume`. The workflow dispatcher also skips `document.processed` occurrences whose `EventSnapshot.source` is `import`. This is the workflow-triggers delta.
+`EventOrigin::Import` is skipped next to `EventOrigin::Workflow` in `WorkflowEngine::consume`. Processing jobs queued by an import carry `origin: import` in their payload, and the worker emits that job's `Processed` event with `EventOrigin::Import`. A user-started reprocess emits it with the normal origin. This is the workflow-triggers delta, and it needs no source-kind check.
 
 Documents carry the source `import`. The `paperless` source kind names the connection, not the document's origin. `SourceKind::Import` is added to the OpenAPI enum. The Apple client has no closed enum for it.
 
 ### 7. Item claims instead of a single driver
 
-`JobType::ImportRun { run_id }` processes one batch, then enqueues its continuation with `scheduled_at` set to the batch's start time, so that `dequeue` picks it before the processing jobs the batch queued. A batch stops at the first of: 100 items, 60 s, or one file over 64 MB.
+`JobType::ImportRun { run_id }` belongs to a new `JobClass::Import`. That class has its own worker loop with concurrency 1, the same way workflow runs have their own (`queue/mod.rs:130-150`). Imports therefore never hold the processing loop, and user uploads keep being processed during an import. The thumbnail and embedding jobs that an import queues are ordinary processing jobs. The driver processes one batch, then enqueues its continuation. A batch stops at the first of: 100 items, 60 s, or one file over 64 MB.
 
 Each item is claimed with a conditional update:
 
@@ -188,7 +206,7 @@ Every later item write is conditional on the claim.
 - **Crash loops.** An item claimed with `attempts >= 3` is marked `failed/attempts_exhausted` instead of being processed.
 - **Counts.** They are computed with `GROUP BY`, so they always match the items.
 - **Finishing.** It is a conditional `UPDATE … WHERE status = 'running'`, so it is idempotent.
-- **Actor.** The driver runs under `with_actor(run.created_by)`. For scheduled syncs, `created_by` is the admin who created the source; config-defined sources have no actor.
+- **Actor.** The driver runs under `with_actor(run.created_by)`. For scheduled syncs, `created_by` is the admin who created the source. Config-defined sources run with no actor, so their notes have `created_by` NULL.
 
 **Recovery:**
 - A hook where an `ImportRun` job becomes `failed` marks the run `failed`.
@@ -230,7 +248,7 @@ Migration `20261107120000_paperless_import.sql`, the same version in `migrations
 - **`documents`:** `external_source`, `external_id`, `content_sha256`, the paired-NULL CHECK, and `UNIQUE (vault_id, external_source, external_id) WHERE external_source IS NOT NULL`. The index covers trashed rows.
 - **`document_entries`:** `external_id TEXT NULL`, with `UNIQUE (document_id, external_id) WHERE external_id IS NOT NULL`.
 - **`import_runs`:**
-  - `id`, `vault_id`, `kind`, `trigger`, `source_id`, `source_path`, `dry_run`, `status`
+  - `id`, `vault_id`, `kind`, `trigger`, `source_id`, `source_path`, `dry_run`, `status`, `cursor_after`, `confirm_trash`
   - `plan_complete`, `cancel_requested`, `driver_restarts`
   - `params JSON`, `summary JSON`, `error`
   - `created_by`, `created_at`, `started_at`, `finished_at`
@@ -248,9 +266,12 @@ Existing rows keep NULL in the new columns.
 
 ### 10. API, MCP and config
 
+**Permissions.** `folio-core` gets a `Caller { user_id, is_admin, is_owner }` value. The API resolves it from folio-auth (`routes/settings.rs:37-42` logic), and MCP resolves it from the token's subject through a new `CallerResolver` port implemented in folio-infra. `ImportService` and the Paperless-source paths of the source service check `is_admin || is_owner` plus vault ownership in core, so the API and MCP can't diverge. With `auth.required = false`, the resolver reports an admin, the same as the settings guard.
+
 **JSON API.**
 - Routes in `crates/folio-api/src/routes/imports.rs` under the vault router, with a guard that requires `owner()` plus `is_admin || is_owner`. `POST` takes either `{"kind": "paperless_export", "path", "dry_run", "default_currency"}` or `{"kind": "paperless_source", "source_id"?, "dry_run"}`. When `source_id` is omitted, the vault's Paperless source is used.
-- `/api/sources` accepts `type: "paperless"`. Create, update and delete for that kind need the admin guard, and the response redacts the token as `has_token`.
+- `/api/sources` accepts `type: "paperless"`. The token is redacted with the existing `REDACTED` placeholder convention. `SourceTestResult` gains the optional fields `version`, `document_count`, `superuser` and `reason`. These are additive in OpenAPI and the Swift client.
+- `SourceKind` gains `import` and `paperless` in the OpenAPI enum. It is shared between the document source and the source kind. The Apple client has no closed enum for it.
 - The HTML source form gets a Paperless variant: URL, token, sync mode and interval.
 - utoipa schemas and paths go in the same commit as the routes, so `tests/openapi.rs` stays green. The Swift client is regenerated afterwards.
 
@@ -270,7 +291,8 @@ Existing rows keep NULL in the new columns.
 - **Mirror overwrites Folio edits.** This is what the user chose: Paperless is the master. Overwrites only happen when the Paperless side changes, or at the daily reconcile when the fingerprint differs. Folio-native notes are kept. The admin guide says so prominently.
 - **Paperless `modified` doesn't move for some changes** → The daily full reconcile with fingerprints closes the gap. Sync lag for those changes is up to 24 h.
 - **Load on Paperless** → One request at a time with backoff. The first sync of 5k documents is about 10k requests. Incremental polls cost a few list requests, and mirror adds one ID listing per poll.
-- **Thumbnail and embedding backlog after a large import** → Processing runs one job at a time. Text search works immediately; processing concurrency is a follow-up.
+- **Thumbnail and embedding backlog after a large import** → Imports have their own lane, but the thumbnails and embeddings they queue share the single processing loop with user uploads, in FIFO order. A large import delays new uploads' processing by however long its own backlog takes. Text search works immediately; processing concurrency is a follow-up.
+- **Swapped renames** (A→B and B→A in one sync) hit the collision guard and are skipped with warnings. Child tags named `<parent>/<name>` don't follow a parent rename.
 - **Large originals are buffered in memory** → One file at a time, the size cap, and the batch cut-off.
 - **Secrets** → Export secrets are never deserialized. The token is write-only, file-capable and never logged. Only admins can create sources.
 - **SSRF through the source URL** → Admin-only, http(s) only. Admins can already point email sources at arbitrary hosts.
@@ -279,7 +301,7 @@ Existing rows keep NULL in the new columns.
 
 ## Migration Plan
 
-1. Deploy the release with the migration. It is additive, so rollback is the previous image.
+1. Deploy the release with the migration. It is **forward-only**: the previous binary can't decode outbox rows with origin `import` or documents with source `import`, because `EventOrigin` and `SourceKind` deserialize strictly. Take a database backup before upgrading; rolling back means restoring it.
 2. Either add the Paperless source in the vault's Sources settings (URL and token, mode `mirror`), or, for a very large library, first mount an export read-only, set `import.allowed_roots`, dry-run and import it, then add the source.
 3. Watch the first run, retry failures, and keep Paperless running for as long as the mirror is wanted. Switching the source to `new_only` or deleting it ends the mirroring.
 
