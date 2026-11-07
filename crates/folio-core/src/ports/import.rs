@@ -42,8 +42,9 @@ pub trait PaperlessReader: Send + Sync {
     async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError>;
 }
 
-/// Document IDs from a listing that succeeded on every page
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Document IDs from a listing that succeeded on every page; there is no
+/// `Default`, since an empty set would claim the source holds nothing
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompleteIdSet(BTreeSet<i64>);
 
 impl CompleteIdSet {
@@ -69,8 +70,10 @@ pub struct OriginalFile {
 }
 
 /// Failures that stop a whole read; a single unreadable document arrives as
-/// [`PaperlessRecord::InvalidDocument`] instead. Messages never carry text
-/// from the source, so they are safe to show callers.
+/// [`PaperlessRecord::InvalidDocument`] instead. `Malformed` and `Source`
+/// messages never carry text from the source. `Missing`, `UnsafePath` and
+/// `Io` name the path they were asked for, which may come from a manifest,
+/// so callers showing them to users treat that path as untrusted.
 #[derive(Debug, thiserror::Error)]
 pub enum PaperlessReadError {
     #[error("{what} is missing")]
