@@ -578,14 +578,17 @@ extension JSONDecoder {
         #expect(model.state == .failed("Sign-in was cancelled or denied."))
     }
 
-    @Test func unreachableServerIsNotPersisted() async {
+    @Test func aSignedInServerIsPersistedEvenWhenItIsUnreachable() async {
         let store = MemoryServerConfigStore()
         let service = MockFolioService()
         await service.setFailure(.unreachable)
-        let model = OnboardingViewModel(store: store, makeService: { _ in service }) { _ in }
+        var connected: URL?
+        let model = OnboardingViewModel(store: store, makeService: { _ in service }) { connected = $0 }
         model.address = "folio.local"
         await model.connect()
-        #expect(store.url == nil)
+        // The saved credentials now belong to this server, so the saved address must too.
+        #expect(store.url?.absoluteString == "https://folio.local")
+        #expect(connected == nil)
         #expect(model.state == .failed("Couldn't reach the server."))
     }
 

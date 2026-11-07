@@ -21,7 +21,7 @@ public enum SharedConfiguration {
     public static func makeService(
         for url: URL, session: URLSession? = nil, downloadDirectory: URL? = nil
     ) -> LiveFolioService {
-        let provider = tokenProvider()
+        let provider = tokenProvider(for: url)
         FolioTelemetry.shared.start(baseURL: url, tokenProvider: provider)
         return LiveFolioService(
             baseURL: url, tokenProvider: provider, session: session, telemetry: .shared,
@@ -40,6 +40,11 @@ public enum SharedConfiguration {
 
     /// One session per process, so concurrent requests share a single refresh.
     public static func tokenProvider() -> OAuthSession { sharedOAuth }
+
+    /// The shared session's tokens, withheld from any server other than the one that issued them.
+    public static func tokenProvider(for server: URL) -> ServerBoundTokenProvider {
+        ServerBoundTokenProvider(session: sharedOAuth, server: server)
+    }
 
     public static var container: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)

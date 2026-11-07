@@ -35,8 +35,9 @@ public final class OnboardingViewModel {
         do {
             let url = try ServerAddress.parse(address)
             try await signIn(url)
-            try await makeService(url).ping()
+            // The saved credentials now belong to this server; extensions must not pair them with an older address.
             store.save(url)
+            try await makeService(url).ping()
             state = .idle
             onConnected(url)
         } catch {

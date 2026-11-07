@@ -24,8 +24,12 @@ public actor OAuthSession: BearerTokenProvider {
     }
 
     public func token() async throws -> String? {
+        try await token(boundTo: nil)
+    }
+
+    private func token(boundTo server: URL?) async throws -> String? {
         guard !signingOut else { return nil }
-        if pendingSave != nil { return try await refresh(rejecting: nil) }
+        if pendingSave != nil { return try await refresh(rejecting: nil, boundTo: server) }
         let credentials: OAuthCredentials?
         do { credentials = try store.load() } catch {
             changed()
@@ -36,24 +40,54 @@ public actor OAuthSession: BearerTokenProvider {
             return nil
         }
         if let token = usableToken(credentials) { return token }
-        return try await refresh(rejecting: credentials.tokens.accessToken)
+        return try await refresh(rejecting: credentials.tokens.accessToken, boundTo: server)
     }
 
     public func refresh(rejecting token: String?) async throws -> String? {
+        try await refresh(rejecting: token, boundTo: nil)
+    }
+
+    private func refresh(rejecting token: String?, boundTo server: URL?) async throws -> String? {
         guard !signingOut else { return nil }
         let generation = signOuts
-        let refreshed = try await sharedRefresh(rejecting: token)
+        let refreshed = try await sharedRefresh(rejecting: token, boundTo: server)
         // A sign-out that began while the refresh ran must not hand its token to the caller.
         return generation == signOuts ? refreshed : nil
     }
 
-    private func sharedRefresh(rejecting token: String?) async throws -> String? {
+    /// Like `token()`, but nil unless the credentials were issued by `server`.
+    public func token(for server: URL) async throws -> String? {
+        try await bound(to: server) { try await token(boundTo: server) }
+    }
+
+    /// Like `refresh(rejecting:)`, but nil unless the credentials were issued by `server`.
+    public func refresh(rejecting token: String?, for server: URL) async throws -> String? {
+        try await bound(to: server) { try await refresh(rejecting: token, boundTo: server) }
+    }
+
+    /// Checks before, so another server can't trigger a refresh, and after, in case a sign-in replaced the credentials.
+    private func bound(to server: URL, _ body: () async throws -> String?) async throws -> String? {
+        guard try isBound(to: server) else { return nil }
+        let token = try await body()
+        return try isBound(to: server) ? token : nil
+    }
+
+    /// A pending save counts only while the store still holds the credentials it was meant to replace.
+    private func isBound(to server: URL) throws -> Bool {
+        let stored = try store.load()
+        let current = pendingSave.flatMap { stored == pendingBaseline ? $0 : nil } ?? stored
+        return current?.serverURL == server
+    }
+
+    private func sharedRefresh(rejecting token: String?, boundTo server: URL?) async throws -> String? {
         if let inFlight { return try await inFlight.value }
         let task = Task {
             if let refreshLock {
-                return try await refreshLock.withLock { try await self.performRefresh(rejecting: token) }
+                return try await refreshLock.withLock {
+                    try await self.performRefresh(rejecting: token, boundTo: server)
+                }
             }
-            return try await self.performRefresh(rejecting: token)
+            return try await self.performRefresh(rejecting: token, boundTo: server)
         }
         inFlight = task
         defer { inFlight = nil }
@@ -110,7 +144,9 @@ public actor OAuthSession: BearerTokenProvider {
         }
     }
 
-    private func performRefresh(rejecting token: String?, retryOnly: Bool = false) async throws -> String? {
+    private func performRefresh(
+        rejecting token: String?, boundTo server: URL? = nil, retryOnly: Bool = false
+    ) async throws -> String? {
         if let pendingSave {
             switch try persist(pendingSave, replacing: pendingBaseline) {
             case .saved:
@@ -122,6 +158,8 @@ public actor OAuthSession: BearerTokenProvider {
         }
         if retryOnly { return nil }
         guard let credentials = try store.load(), credentials.isSignedIn else { return nil }
+        // A sign-in to another server may have landed while this waited for the lock.
+        if let server, credentials.serverURL != server { return nil }
         guard credentials.refreshPending != true else { throw FolioError.signInRequired }
         // Re-read after acquiring the process lock: an extension may have rotated the token.
         if let token, credentials.tokens.accessToken != token, let rotated = usableToken(credentials) {
@@ -186,5 +224,24 @@ public actor OAuthSession: BearerTokenProvider {
 
     private func changed() {
         NotificationCenter.default.post(name: Notification.Name("FolioSessionChanged"), object: nil)
+    }
+}
+
+/// Hands out an `OAuthSession`'s tokens only to the server that issued them.
+public struct ServerBoundTokenProvider: BearerTokenProvider {
+    private let session: OAuthSession
+    private let server: URL
+
+    public init(session: OAuthSession, server: URL) {
+        self.session = session
+        self.server = server
+    }
+
+    public func token() async throws -> String? {
+        try await session.token(for: server)
+    }
+
+    public func refresh(rejecting token: String?) async throws -> String? {
+        try await session.refresh(rejecting: token, for: server)
     }
 }
