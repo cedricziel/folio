@@ -3068,7 +3068,7 @@
           "sources"
         ],
         "summary": "Create an ingestion source",
-        "description": "Passwords are stored unencrypted in the database until Folio has a secret key.",
+        "description": "Passwords are stored unencrypted in the database until Folio has a secret key.\nEvery operation on a Paperless source needs an instance admin who owns the vault.",
         "operationId": "createSource",
         "parameters": [
           {
@@ -3122,7 +3122,7 @@
             "description": "The vault or resource is not visible"
           },
           "409": {
-            "description": "An active source already uses this name"
+            "description": "An active source already uses this name, or the vault already has a Paperless source"
           },
           "500": {
             "description": "Unexpected server error",
@@ -3296,7 +3296,7 @@
             }
           },
           "409": {
-            "description": "An active source already uses this name"
+            "description": "An active source already uses this name, or the vault already has a Paperless source"
           },
           "500": {
             "description": "Unexpected server error",
@@ -3561,7 +3561,7 @@
             }
           },
           "409": {
-            "description": "An active source already uses this name"
+            "description": "An active source already uses this name, or the vault already has a Paperless source"
           },
           "500": {
             "description": "Unexpected server error",
@@ -7295,6 +7295,13 @@
           "error"
         ],
         "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable machine-readable reason, such as `forbidden`, where one is defined"
+          },
           "details": {
             "type": [
               "string",

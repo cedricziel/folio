@@ -18,7 +18,8 @@ use folio_core::models::{
 };
 
 use super::sources::{
-    all_sources, find, find_retained, prepare_input, require_managed, run_test, SourceListQuery,
+    all_sources, claim_paperless_slot, find, find_retained, guard_paperless, prepare_input,
+    require_managed, require_paperless_admin, run_test, SourceListQuery,
 };
 use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
@@ -146,6 +147,7 @@ async fn test_saved(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     let result = run_test(&state, &def).await;
     render(ListTemplate {
         deleted: false,
@@ -380,6 +382,9 @@ async fn new_page(
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<NewQuery>,
 ) -> ApiResult<Html<String>> {
+    if q.kind.as_deref() == Some("paperless") {
+        require_paperless_admin(&state).await?;
+    }
     form(
         vault,
         &state,
@@ -396,6 +401,7 @@ async fn edit_page(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     require_managed(&def)?;
     form(
         vault,
@@ -441,6 +447,9 @@ async fn create(
     State(state): State<AppState>,
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
+    if values.kind == "paperless" {
+        require_paperless_admin(&state).await?;
+    }
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), None).await;
         return Ok(form(vault, &state, None, values, notice)
@@ -449,12 +458,11 @@ async fn create(
     }
     let saved = match values.clone().into_input() {
         Ok(mut input) => match prepare_input(&mut input, None) {
-            Ok(()) => state
-                .ingestion
-                .managed
-                .create(vault, input)
-                .await
-                .map_err(|e| e.to_string()),
+            Ok(()) => match claim_paperless_slot(&state, vault, &input.config, None).await {
+                Ok(()) => state.ingestion.managed.create(vault, input).await,
+                Err(e) => Err(e),
+            }
+            .map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),
         },
         Err(message) => Err(message),
@@ -474,6 +482,10 @@ async fn update(
     Form(values): Form<FormValues>,
 ) -> ApiResult<Response> {
     let existing = find(vault, &state, id).await?;
+    guard_paperless(&state, [&existing.config]).await?;
+    if values.kind == "paperless" {
+        require_paperless_admin(&state).await?;
+    }
     require_managed(&existing)?;
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), Some(&existing)).await;
@@ -483,12 +495,11 @@ async fn update(
     }
     let saved = match values.clone().into_input() {
         Ok(mut input) => match prepare_input(&mut input, Some(&existing)) {
-            Ok(()) => state
-                .ingestion
-                .managed
-                .update(vault, id, input)
-                .await
-                .map_err(|e| e.to_string()),
+            Ok(()) => match claim_paperless_slot(&state, vault, &input.config, Some(id)).await {
+                Ok(()) => state.ingestion.managed.update(vault, id, input).await,
+                Err(e) => Err(e),
+            }
+            .map_err(|e| e.to_string()),
             Err(e) => Err(e.to_string()),
         },
         Err(message) => Err(message),
@@ -509,6 +520,7 @@ async fn toggle(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     require_managed(&def)?;
     state
         .ingestion
@@ -532,6 +544,7 @@ async fn delete(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
     let def = find_retained(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     require_managed(&def)?;
     state.ingestion.managed.delete(vault, id).await?;
     Ok(Redirect::to("/settings/sources"))
@@ -542,7 +555,7 @@ async fn restore(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
-    state.ingestion.managed.restore(vault, id).await?;
+    super::sources::restore(&state, vault, id).await?;
     Ok(Redirect::to("/settings/sources"))
 }
 

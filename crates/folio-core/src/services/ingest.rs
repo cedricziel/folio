@@ -639,6 +639,7 @@ fn failure_reason(error: &Error) -> &'static str {
         Error::NotFound { .. } => "The source location was not found",
         Error::Storage(_) => "The source could not be reached or read",
         Error::Conflict(_) => "The source is busy",
+        Error::Forbidden(_) => "The source is not allowed to run",
         Error::Repository(_) | Error::AiService(_) => "Folio could not process this source run",
     }
 }

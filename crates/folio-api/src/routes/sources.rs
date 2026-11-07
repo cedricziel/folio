@@ -21,7 +21,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
-use crate::vault::DefaultVault;
+use crate::vault::{DefaultVault, CURRENT_VAULT};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -158,6 +158,50 @@ pub(crate) fn require_managed(def: &IngestionSourceDef) -> ApiResult<()> {
     Ok(())
 }
 
+/// Paperless sources need an instance admin who owns the vault
+pub(crate) async fn require_paperless_admin(state: &AppState) -> ApiResult<()> {
+    let (user, role) = CURRENT_VAULT
+        .try_with(|ctx| (ctx.user.clone(), Some(ctx.role)))
+        .unwrap_or((None, None));
+    let caller = state.callers.resolve(user.as_ref()).await?;
+    folio_core::services::authorize_paperless(&caller, role)?;
+    Ok(())
+}
+
+fn is_paperless(config: &SourceConfig) -> bool {
+    matches!(config, SourceConfig::Paperless(_))
+}
+
+/// Applies [`require_paperless_admin`] when any of `configs` is a Paperless source
+pub(crate) async fn guard_paperless<'a>(
+    state: &AppState,
+    configs: impl IntoIterator<Item = &'a SourceConfig>,
+) -> ApiResult<()> {
+    if configs.into_iter().any(is_paperless) {
+        require_paperless_admin(state).await?;
+    }
+    Ok(())
+}
+
+/// Refuses a second live Paperless source in the vault; `except` keeps its own slot
+pub(crate) async fn claim_paperless_slot(
+    state: &AppState,
+    vault: VaultId,
+    config: &SourceConfig,
+    except: Option<Id>,
+) -> Result<(), DomainError> {
+    if !is_paperless(config) {
+        return Ok(());
+    }
+    folio_core::services::ensure_paperless_slot(
+        state.ingestion.managed.as_ref(),
+        &state.ingestion.configured,
+        vault,
+        except,
+    )
+    .await
+}
+
 /// Replace a masked secret by the stored one and refuse server-side secret files
 ///
 /// A password or token file would let a UI user make the server read any file
@@ -270,6 +314,7 @@ pub(crate) async fn get_source(
 /// Create an ingestion source
 ///
 /// Passwords are stored unencrypted in the database until Folio has a secret key.
+/// Every operation on a Paperless source needs an instance admin who owns the vault.
 #[utoipa::path(
     post,
     path = "/api/sources",
@@ -278,7 +323,7 @@ pub(crate) async fn get_source(
     request_body = IngestionSourceInput,
     responses(
         (status = 201, description = "The created source", body = SourceView),
-        (status = 409, description = "An active source already uses this name"),
+        (status = 409, description = "An active source already uses this name, or the vault already has a Paperless source"),
         BadRequest,
         InternalError,
     )
@@ -288,7 +333,9 @@ pub(crate) async fn create_source(
     State(state): State<AppState>,
     ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<(StatusCode, Json<SourceView>)> {
+    guard_paperless(&state, [&input.config]).await?;
     prepare_input(&mut input, None)?;
+    claim_paperless_slot(&state, vault, &input.config, None).await?;
     let def = state.ingestion.managed.create(vault, input).await?;
     Ok((
         StatusCode::CREATED,
@@ -308,7 +355,7 @@ pub(crate) async fn create_source(
     request_body = IngestionSourceInput,
     responses(
         (status = 200, description = "The updated source", body = SourceView),
-        (status = 409, description = "An active source already uses this name"),
+        (status = 409, description = "An active source already uses this name, or the vault already has a Paperless source"),
         BadRequest,
         NotFound,
         InternalError,
@@ -321,8 +368,10 @@ pub(crate) async fn update_source(
     ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<Json<SourceView>> {
     let existing = find(vault, &state, id).await?;
+    guard_paperless(&state, [&existing.config, &input.config]).await?;
     require_managed(&existing)?;
     prepare_input(&mut input, Some(&existing))?;
+    claim_paperless_slot(&state, vault, &input.config, Some(id)).await?;
     let def = state.ingestion.managed.update(vault, id, input).await?;
     Ok(Json(view(DefaultVault(vault), &state, def).await?))
 }
@@ -347,6 +396,7 @@ pub(crate) async fn delete_source(
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
     let existing = find_retained(vault, &state, id).await?;
+    guard_paperless(&state, [&existing.config]).await?;
     require_managed(&existing)?;
     state.ingestion.managed.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -361,7 +411,7 @@ pub(crate) async fn delete_source(
     params(("id" = Uuid, Path, description = "Source ID")),
     responses(
         (status = 200, description = "The restored source", body = SourceView),
-        (status = 409, description = "An active source already uses this name"),
+        (status = 409, description = "An active source already uses this name, or the vault already has a Paperless source"),
         NotFound,
         InternalError,
     )
@@ -371,8 +421,21 @@ pub(crate) async fn restore_source(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceView>> {
-    let restored = state.ingestion.managed.restore(vault, id).await?;
+    let restored = restore(&state, vault, id).await?;
     Ok(Json(view(DefaultVault(vault), &state, restored).await?))
+}
+
+/// Restore a retained source, applying the Paperless rules first
+pub(crate) async fn restore(
+    state: &AppState,
+    vault: VaultId,
+    id: Id,
+) -> ApiResult<IngestionSourceDef> {
+    if let Some(retained) = state.ingestion.managed.find_deleted(vault, id).await? {
+        guard_paperless(state, [&retained.config]).await?;
+        claim_paperless_slot(state, vault, &retained.config, Some(id)).await?;
+    }
+    Ok(state.ingestion.managed.restore(vault, id).await?)
 }
 
 /// Outcome of checking a source
@@ -384,6 +447,12 @@ pub struct SourceTestResult {
 }
 
 pub(crate) async fn run_test(state: &AppState, def: &IngestionSourceDef) -> SourceTestResult {
+    if is_paperless(&def.config) {
+        return SourceTestResult {
+            ok: false,
+            message: "unsupported".to_string(),
+        };
+    }
     let outcome = match state.ingestion.factory.build(def) {
         Ok(source) => source.test().await,
         Err(e) => Err(e),
@@ -419,6 +488,7 @@ pub(crate) async fn test_source(
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceTestResult>> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     Ok(Json(run_test(&state, &def).await))
 }
 
