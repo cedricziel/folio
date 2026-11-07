@@ -25,9 +25,9 @@ pub use health::HealthCheck;
 pub use import::{
     digest_original, ChecksumAlgorithm, CompleteIdSet, FileDigests, OriginalFile,
     PaperlessChecksum, PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessDocument,
-    PaperlessFieldColumns, PaperlessFieldType, PaperlessFieldValue, PaperlessNamed, PaperlessNote,
-    PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessSelectOption,
-    PaperlessSourceInfo, PaperlessTag, PaperlessVersion, PaperlessVersionInfo, RecordStream,
+    PaperlessFieldType, PaperlessFieldValue, PaperlessNamed, PaperlessNote, PaperlessReadError,
+    PaperlessReader, PaperlessRecord, PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag,
+    PaperlessVersion, PaperlessVersionInfo, RecordStream,
 };
 pub use ingest::{
     DocumentImporter, IngestLedger, IngestOutcomeReader, IngestOutcomeRepository, IngestSink,

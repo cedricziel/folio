@@ -1,5 +1,6 @@
 //! Path checks for import sources
 
+use std::fs::Metadata;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -30,11 +31,15 @@ pub fn resolve_import_dir(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, Out
 }
 
 /// Resolves a manifest path under the canonical export directory without
-/// opening anything. Absolute paths, `.` or `..` components, symlinks on any
-/// component and anything but a regular file are refused.
-pub fn resolve_original(export_dir: &Path, relative: &str) -> Result<PathBuf, PaperlessReadError> {
+/// opening anything, returning the file's metadata. Absolute paths, `.` or
+/// `..` components, symlinks on any component and anything but a regular
+/// file are refused.
+pub fn resolve_original(
+    export_dir: &Path,
+    relative: &str,
+) -> Result<(PathBuf, Metadata), PaperlessReadError> {
     let unsafe_path = || PaperlessReadError::UnsafePath {
-        path: relative.to_owned(),
+        what: relative.to_owned(),
     };
     let components = Path::new(relative).components();
     if relative.is_empty()
@@ -46,25 +51,30 @@ pub fn resolve_original(export_dir: &Path, relative: &str) -> Result<PathBuf, Pa
     }
 
     let mut resolved = export_dir.to_path_buf();
-    let mut metadata = None;
+    let mut last = None;
     for component in components {
         resolved.push(component);
-        let meta = std::fs::symlink_metadata(&resolved).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => PaperlessReadError::Missing {
-                file: relative.to_owned(),
-            },
-            _ => PaperlessReadError::Io {
-                file: relative.to_owned(),
-                source: e,
-            },
-        })?;
+        let meta = std::fs::symlink_metadata(&resolved).map_err(|e| io_error(relative, e))?;
         if meta.file_type().is_symlink() {
             return Err(unsafe_path());
         }
-        metadata = Some(meta);
+        last = Some(meta);
     }
-    match metadata {
-        Some(meta) if meta.is_file() => Ok(resolved),
+    match last {
+        Some(meta) if meta.is_file() => Ok((resolved, meta)),
         _ => Err(unsafe_path()),
+    }
+}
+
+pub(super) fn io_error(what: &str, source: io::Error) -> PaperlessReadError {
+    if source.kind() == io::ErrorKind::NotFound {
+        PaperlessReadError::Missing {
+            what: what.to_owned(),
+        }
+    } else {
+        PaperlessReadError::Io {
+            what: what.to_owned(),
+            source,
+        }
     }
 }

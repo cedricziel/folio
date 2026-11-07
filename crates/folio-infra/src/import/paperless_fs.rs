@@ -6,7 +6,7 @@
 //! social tokens and authenticators, are skipped with [`IgnoredAny`] and never
 //! materialized.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
@@ -16,19 +16,20 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use folio_core::ports::{
-    OriginalFile, PaperlessChecksum, PaperlessCustomField, PaperlessCustomFieldInstance,
-    PaperlessDocument, PaperlessFieldColumns, PaperlessFieldType, PaperlessNamed, PaperlessNote,
-    PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessSelectOption,
-    PaperlessSourceInfo, PaperlessTag, PaperlessVersion, PaperlessVersionInfo, RecordStream,
+    CompleteIdSet, OriginalFile, PaperlessChecksum, PaperlessCustomField,
+    PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldType, PaperlessFieldValue,
+    PaperlessNamed, PaperlessNote, PaperlessReadError, PaperlessReader, PaperlessRecord,
+    PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
+    PaperlessVersionInfo, RecordStream,
 };
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::paths::resolve_original;
+use super::paths::{io_error, resolve_original};
 
 const MANIFEST: &str = "manifest.json";
 const METADATA: &str = "metadata.json";
-const SPLIT_SUFFIX: &str = "-manifest.json";
+const SPLIT_SUFFIX: &[u8] = b"-manifest.json";
 /// `--use-folder-prefix` directories that hold files, not manifests
 const FILE_DIRS: [&str; 3] = ["originals", "archive", "thumbnails"];
 const CHANNEL_DEPTH: usize = 256;
@@ -44,7 +45,7 @@ impl PaperlessFsReader {
     /// Opens an export directory; the caller checks it against the allowed roots first
     pub fn open(dir: &Path) -> Result<Self, PaperlessReadError> {
         let missing = || PaperlessReadError::Missing {
-            file: dir.display().to_string(),
+            what: dir.display().to_string(),
         };
         let dir = dir.canonicalize().map_err(|_| missing())?;
         if !dir.is_dir() {
@@ -54,6 +55,15 @@ impl PaperlessFsReader {
             dir,
             skipped: Arc::default(),
         })
+    }
+
+    /// Records of models the import doesn't use, by Django model label,
+    /// counted during the last scan that ran to the end
+    pub fn skipped_models(&self) -> BTreeMap<String, u64> {
+        self.skipped
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -66,24 +76,26 @@ impl PaperlessReader for PaperlessFsReader {
 
     async fn scan(&self) -> Result<RecordStream, PaperlessReadError> {
         let dir = self.dir.clone();
-        let mut records = blocking(move || ManifestRecords::open(dir)).await?;
+        let mut records = blocking(move || ManifestRecords::open(dir, Mode::Full)).await?;
         let skipped = Arc::clone(&self.skipped);
         let (tx, rx) = tokio::sync::mpsc::channel(CHANNEL_DEPTH);
         tokio::task::spawn_blocking(move || {
             let mut counts = BTreeMap::new();
-            for item in records.by_ref() {
-                let sent = match item {
-                    Ok(Item::Skipped(model)) => {
-                        *counts.entry(model).or_default() += 1;
-                        continue;
+            while let Some(item) = records.next_item() {
+                match item {
+                    Ok(Item::Record(record)) => {
+                        if tx.blocking_send(Ok(record)).is_err() {
+                            return;
+                        }
                     }
-                    Ok(Item::Record(record)) => tx.blocking_send(Ok(record)),
+                    Ok(Item::Skipped(model)) => *counts.entry(model).or_default() += 1,
+                    Ok(Item::Omitted | Item::DocumentId(_)) => {}
                     Err(e) => {
                         let _ = tx.blocking_send(Err(e));
                         return;
                     }
-                };
-                if sent.is_err() {
+                }
+                if tx.is_closed() {
                     return;
                 }
             }
@@ -94,6 +106,21 @@ impl PaperlessReader for PaperlessFsReader {
         })))
     }
 
+    async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError> {
+        let dir = self.dir.clone();
+        blocking(move || {
+            let mut records = ManifestRecords::open(dir, Mode::DocumentIds)?;
+            let mut ids = BTreeSet::new();
+            while let Some(item) = records.next_item() {
+                if let Item::DocumentId(id) = item? {
+                    ids.insert(id);
+                }
+            }
+            Ok(CompleteIdSet::from_complete_listing(ids))
+        })
+        .await
+    }
+
     async fn open_original(
         &self,
         document: &PaperlessDocument,
@@ -101,22 +128,15 @@ impl PaperlessReader for PaperlessFsReader {
         let dir = self.dir.clone();
         let handle = document.original_handle.clone();
         let (file, size) = blocking(move || {
-            let file = open_in_export(&dir, &handle)?;
-            let size = file.metadata().map_err(|e| io_error(&handle, e))?.len();
-            Ok((file, size))
+            let (path, meta) = resolve_original(&dir, &handle)?;
+            let file = File::open(path).map_err(|e| io_error(&handle, e))?;
+            Ok((file, meta.len()))
         })
         .await?;
         Ok(OriginalFile {
             size: Some(size),
             reader: Box::new(tokio::fs::File::from_std(file)),
         })
-    }
-
-    fn skipped_models(&self) -> BTreeMap<String, u64> {
-        self.skipped
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
     }
 }
 
@@ -126,13 +146,13 @@ async fn blocking<T: Send + 'static>(
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| PaperlessReadError::Io {
-            file: "export".to_owned(),
+            what: "export".to_owned(),
             source: io::Error::other(e),
         })?
 }
 
 fn open_in_export(dir: &Path, relative: &str) -> Result<File, PaperlessReadError> {
-    let path = resolve_original(dir, relative)?;
+    let (path, _) = resolve_original(dir, relative)?;
     File::open(path).map_err(|e| io_error(relative, e))
 }
 
@@ -150,6 +170,7 @@ fn read_metadata(dir: &Path) -> Result<PaperlessSourceInfo, PaperlessReadError> 
     Ok(PaperlessSourceInfo { version })
 }
 
+/// `--split-manifest` files, in path order; symlinks are never followed
 fn split_manifests(dir: &Path) -> Result<Vec<String>, PaperlessReadError> {
     let mut found = Vec::new();
     let mut pending = vec![PathBuf::new()];
@@ -159,18 +180,15 @@ fn split_manifests(dir: &Path) -> Result<Vec<String>, PaperlessReadError> {
         for entry in entries {
             let entry = entry.map_err(|e| io_error(&label, e))?;
             let file_type = entry.file_type().map_err(|e| io_error(&label, e))?;
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let path = relative.join(&name);
+            let name = entry.file_name();
             if file_type.is_dir() {
-                let holds_files =
-                    relative.as_os_str().is_empty() && FILE_DIRS.contains(&name.as_str());
+                let holds_files = relative.as_os_str().is_empty()
+                    && FILE_DIRS.iter().any(|d| name.as_os_str() == *d);
                 if !holds_files {
-                    pending.push(path);
+                    pending.push(relative.join(&name));
                 }
-            } else if file_type.is_file() && name.ends_with(SPLIT_SUFFIX) {
-                if let Some(path) = path.to_str() {
+            } else if file_type.is_file() && name.as_encoded_bytes().ends_with(SPLIT_SUFFIX) {
+                if let Some(path) = relative.join(&name).to_str() {
                     found.push(path.to_owned());
                 }
             }
@@ -180,33 +198,61 @@ fn split_manifests(dir: &Path) -> Result<Vec<String>, PaperlessReadError> {
     Ok(found)
 }
 
-enum Item {
-    Record(PaperlessRecord),
-    Skipped(String),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Full,
+    DocumentIds,
 }
 
-/// `manifest.json` first, then each `--split-manifest` file in path order
+enum Item {
+    Record(PaperlessRecord),
+    DocumentId(i64),
+    Skipped(String),
+    /// Read but not passed on: deleted field values, or anything but
+    /// documents when only IDs are wanted
+    Omitted,
+}
+
+/// `manifest.json` first, then each `--split-manifest` file. Custom fields
+/// always precede their values, so their types are known by then.
 struct ManifestRecords {
     dir: PathBuf,
     current: Option<ManifestStream>,
     pending: VecDeque<String>,
+    context: Context,
+}
+
+struct Context {
+    mode: Mode,
+    field_types: HashMap<i64, PaperlessFieldType>,
 }
 
 impl ManifestRecords {
-    fn open(dir: PathBuf) -> Result<Self, PaperlessReadError> {
+    fn open(dir: PathBuf, mode: Mode) -> Result<Self, PaperlessReadError> {
         let main = ManifestStream::new(MANIFEST.to_owned(), open_in_export(&dir, MANIFEST)?);
         let pending = split_manifests(&dir)?.into();
         Ok(Self {
             dir,
             current: Some(main),
             pending,
+            context: Context {
+                mode,
+                field_types: HashMap::new(),
+            },
         })
     }
 
+    /// Callers stop at the first error
     fn next_item(&mut self) -> Option<Result<Item, PaperlessReadError>> {
         loop {
             if let Some(stream) = self.current.as_mut() {
-                match stream.next_record() {
+                match stream.next(&mut self.context) {
+                    Some(Ok(Item::Record(PaperlessRecord::Document(mut doc)))) => {
+                        doc.size = resolve_original(&self.dir, &doc.original_handle)
+                            .ok()
+                            .map(|(_, meta)| meta.len());
+                        return Some(Ok(Item::Record(PaperlessRecord::Document(doc))));
+                    }
                     Some(item) => return Some(item),
                     None => self.current = None,
                 }
@@ -220,34 +266,11 @@ impl ManifestRecords {
     }
 }
 
-impl Iterator for ManifestRecords {
-    type Item = Result<Item, PaperlessReadError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut item = self.next_item();
-        match &mut item {
-            Some(Ok(Item::Record(PaperlessRecord::Document(doc)))) => {
-                doc.size = resolve_original(&self.dir, &doc.original_handle)
-                    .and_then(|path| std::fs::metadata(path).map_err(|e| io_error("", e)))
-                    .ok()
-                    .map(|meta| meta.len());
-            }
-            Some(Err(_)) => {
-                self.current = None;
-                self.pending.clear();
-            }
-            _ => {}
-        }
-        item
-    }
-}
-
 #[derive(Clone, Copy)]
 enum Position {
     BeforeArray,
     FirstElement,
     AfterElement,
-    Done,
 }
 
 /// Walks the array framing by hand and hands each element to serde_json
@@ -266,22 +289,11 @@ impl ManifestStream {
         }
     }
 
-    fn next_record(&mut self) -> Option<Result<Item, PaperlessReadError>> {
-        let result = self.advance();
-        if !matches!(result, Some(Ok(_))) {
-            self.position = Position::Done;
-        }
-        result
-    }
-
-    fn advance(&mut self) -> Option<Result<Item, PaperlessReadError>> {
+    fn next(&mut self, context: &mut Context) -> Option<Result<Item, PaperlessReadError>> {
         loop {
-            let byte = match self.position {
-                Position::Done => return None,
-                _ => match self.peek_non_whitespace() {
-                    Ok(byte) => byte,
-                    Err(e) => return Some(Err(e)),
-                },
+            let byte = match self.peek_non_whitespace() {
+                Ok(byte) => byte,
+                Err(e) => return Some(Err(e)),
             };
             match (self.position, byte) {
                 (Position::BeforeArray, Some(b'[')) => {
@@ -302,7 +314,7 @@ impl ManifestStream {
                 }
                 (Position::FirstElement, Some(_)) => {
                     self.position = Position::AfterElement;
-                    return Some(self.read_element());
+                    return Some(self.read_element(context));
                 }
                 (Position::BeforeArray, _) => {
                     return Some(Err(self.malformed("expected a JSON array of records")))
@@ -314,9 +326,9 @@ impl ManifestStream {
     }
 
     /// Reads one object; serde_json stops right after its closing brace
-    fn read_element(&mut self) -> Result<Item, PaperlessReadError> {
+    fn read_element(&mut self, context: &mut Context) -> Result<Item, PaperlessReadError> {
         let mut de = serde_json::Deserializer::from_reader(&mut self.reader);
-        RecordSeed
+        RecordSeed(context)
             .deserialize(&mut de)
             .map_err(|e| json_error(&self.label, e))
     }
@@ -343,31 +355,18 @@ impl ManifestStream {
     }
 }
 
-fn malformed(file: &str, message: String) -> PaperlessReadError {
+fn malformed(what: &str, message: String) -> PaperlessReadError {
     PaperlessReadError::Malformed {
-        file: file.to_owned(),
+        what: what.to_owned(),
         message,
     }
 }
 
-fn io_error(file: &str, source: io::Error) -> PaperlessReadError {
-    if source.kind() == io::ErrorKind::NotFound {
-        PaperlessReadError::Missing {
-            file: file.to_owned(),
-        }
-    } else {
-        PaperlessReadError::Io {
-            file: file.to_owned(),
-            source,
-        }
-    }
-}
-
-fn json_error(file: &str, error: serde_json::Error) -> PaperlessReadError {
+fn json_error(what: &str, error: serde_json::Error) -> PaperlessReadError {
     if error.is_io() {
-        io_error(file, error.into())
+        io_error(what, error.into())
     } else {
-        malformed(file, error.to_string())
+        malformed(what, error.to_string())
     }
 }
 
@@ -397,29 +396,31 @@ impl Model {
     }
 }
 
-enum Fields {
-    Correspondent(NamedFields),
-    DocumentType(NamedFields),
-    Tag(TagFields),
-    CustomField(CustomFieldFields),
-    CustomFieldInstance(InstanceFields),
-    Note(NoteFields),
-    Document(Box<DocumentFields>),
+#[derive(Deserialize)]
+#[serde(field_identifier, rename_all = "snake_case")]
+enum Key {
+    Model,
+    Pk,
+    Fields,
+    #[serde(rename = "__exported_file_name__")]
+    ExportedFileName,
+    #[serde(other)]
+    Other,
 }
 
-struct RecordSeed;
+struct RecordSeed<'a>(&'a mut Context);
 
-impl<'de> DeserializeSeed<'de> for RecordSeed {
+impl<'de> DeserializeSeed<'de> for RecordSeed<'_> {
     type Value = Item;
 
     fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Item, D::Error> {
-        deserializer.deserialize_map(RecordVisitor)
+        deserializer.deserialize_map(self)
     }
 }
 
-struct RecordVisitor;
-
-impl<'de> Visitor<'de> for RecordVisitor {
+/// Paperless writes `model`, `pk`, `fields`, then any exporter keys; the
+/// model must be known before `fields` so unused records are never read
+impl<'de> Visitor<'de> for RecordSeed<'_> {
     type Value = Item;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -427,31 +428,32 @@ impl<'de> Visitor<'de> for RecordVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Item, A::Error> {
-        let mut label: Option<String> = None;
-        let mut model = None;
+        let context = self.0;
+        let mut kind: Option<Result<Model, String>> = None;
         let mut pk: Option<i64> = None;
-        let mut fields = None;
-        let mut original_path: Option<String> = None;
+        let mut item = None;
+        let mut original_handle: Option<String> = None;
 
-        while let Some(key) = map.next_key::<String>()? {
-            match key.as_str() {
-                "model" => {
-                    let value: String = map.next_value()?;
-                    model = Model::from_label(&value);
-                    label = Some(value);
+        while let Some(key) = map.next_key::<Key>()? {
+            match key {
+                Key::Model => {
+                    let label: String = map.next_value()?;
+                    kind = Some(Model::from_label(&label).ok_or(label));
                 }
-                "pk" if model.is_some() => pk = Some(map.next_value()?),
-                "fields" => match (&label, model) {
-                    (None, _) => {
-                        return Err(de::Error::custom("record fields come before its model"))
-                    }
-                    (Some(_), None) => {
+                Key::Pk if matches!(kind, Some(Ok(_))) => pk = Some(map.next_value()?),
+                Key::Fields => match &kind {
+                    None => return Err(de::Error::custom("record fields come before its model")),
+                    Some(Err(_)) => {
                         map.next_value::<IgnoredAny>()?;
                     }
-                    (Some(_), Some(model)) => fields = Some(read_fields(model, &mut map)?),
+                    Some(Ok(model)) => {
+                        let id = pk
+                            .ok_or_else(|| de::Error::custom("record fields come before its pk"))?;
+                        item = Some(read_fields(*model, id, context, &mut map)?);
+                    }
                 },
-                "__exported_file_name__" if model == Some(Model::Document) => {
-                    original_path = Some(map.next_value()?)
+                Key::ExportedFileName if kind == Some(Ok(Model::Document)) => {
+                    original_handle = Some(map.next_value()?)
                 }
                 _ => {
                     map.next_value::<IgnoredAny>()?;
@@ -459,56 +461,87 @@ impl<'de> Visitor<'de> for RecordVisitor {
             }
         }
 
-        let label = label.ok_or_else(|| de::Error::missing_field("model"))?;
-        if model.is_none() {
-            return Ok(Item::Skipped(label));
+        match kind {
+            None => Err(de::Error::missing_field("model")),
+            Some(Err(label)) => Ok(Item::Skipped(label)),
+            Some(Ok(_)) => match item.ok_or_else(|| de::Error::missing_field("fields"))? {
+                Item::Record(PaperlessRecord::Document(mut doc)) => {
+                    doc.original_handle = original_handle
+                        .ok_or_else(|| de::Error::missing_field("__exported_file_name__"))?;
+                    Ok(Item::Record(PaperlessRecord::Document(doc)))
+                }
+                item => Ok(item),
+            },
         }
-        let id = pk.ok_or_else(|| de::Error::missing_field("pk"))?;
-        let fields = fields.ok_or_else(|| de::Error::missing_field("fields"))?;
-        Ok(Item::Record(match fields {
-            Fields::Correspondent(f) => {
-                PaperlessRecord::Correspondent(PaperlessNamed { id, name: f.name })
-            }
-            Fields::DocumentType(f) => {
-                PaperlessRecord::DocumentType(PaperlessNamed { id, name: f.name })
-            }
-            Fields::Tag(f) => PaperlessRecord::Tag(PaperlessTag {
+    }
+}
+
+fn read_fields<'de, A: MapAccess<'de>>(
+    model: Model,
+    id: i64,
+    context: &mut Context,
+    map: &mut A,
+) -> Result<Item, A::Error> {
+    if context.mode == Mode::DocumentIds {
+        map.next_value::<IgnoredAny>()?;
+        return Ok(match model {
+            Model::Document => Item::DocumentId(id),
+            _ => Item::Omitted,
+        });
+    }
+    let record = match model {
+        Model::Correspondent => {
+            let NamedFields { name } = map.next_value()?;
+            PaperlessRecord::Correspondent(PaperlessNamed { id, name })
+        }
+        Model::DocumentType => {
+            let NamedFields { name } = map.next_value()?;
+            PaperlessRecord::DocumentType(PaperlessNamed { id, name })
+        }
+        Model::Tag => {
+            let f: TagFields = map.next_value()?;
+            PaperlessRecord::Tag(PaperlessTag {
                 id,
                 name: f.name,
                 color: f.color,
                 is_inbox_tag: f.is_inbox_tag,
                 parent: f.tn_parent,
-            }),
-            Fields::CustomField(f) => PaperlessRecord::CustomField(f.into_record(id)?),
-            Fields::CustomFieldInstance(f) => {
-                PaperlessRecord::CustomFieldInstance(f.into_record(id))
+            })
+        }
+        Model::CustomField => {
+            let field = map.next_value::<CustomFieldFields>()?.into_record(id);
+            context.field_types.insert(id, field.data_type);
+            PaperlessRecord::CustomField(field)
+        }
+        Model::CustomFieldInstance => {
+            let f: InstanceFields = map.next_value()?;
+            if f.deleted_at.is_some() {
+                return Ok(Item::Omitted);
             }
-            Fields::Note(f) => PaperlessRecord::Note(PaperlessNote {
+            let data_type = *context.field_types.get(&f.field).ok_or_else(|| {
+                de::Error::custom(format!("value for unknown custom field {}", f.field))
+            })?;
+            PaperlessRecord::CustomFieldInstance(PaperlessCustomFieldInstance {
+                document: f.document,
+                field: f.field,
+                value: f.into_value(data_type),
+            })
+        }
+        Model::Note => {
+            let f: NoteFields = map.next_value()?;
+            PaperlessRecord::Note(PaperlessNote {
                 id,
                 document: f.document,
                 body: f.note,
                 created: f.created,
                 deleted: f.deleted_at.is_some(),
-            }),
-            Fields::Document(f) => {
-                let original_path = original_path
-                    .ok_or_else(|| de::Error::missing_field("__exported_file_name__"))?;
-                PaperlessRecord::Document(f.into_record(id, original_path)?)
-            }
-        }))
-    }
-}
-
-fn read_fields<'de, A: MapAccess<'de>>(model: Model, map: &mut A) -> Result<Fields, A::Error> {
-    Ok(match model {
-        Model::Correspondent => Fields::Correspondent(map.next_value()?),
-        Model::DocumentType => Fields::DocumentType(map.next_value()?),
-        Model::Tag => Fields::Tag(map.next_value()?),
-        Model::CustomField => Fields::CustomField(map.next_value()?),
-        Model::CustomFieldInstance => Fields::CustomFieldInstance(map.next_value()?),
-        Model::Note => Fields::Note(map.next_value()?),
-        Model::Document => Fields::Document(Box::new(map.next_value()?)),
-    })
+            })
+        }
+        Model::Document => PaperlessRecord::Document(Box::new(
+            map.next_value::<DocumentFields>()?.into_record(id)?,
+        )),
+    };
+    Ok(Item::Record(record))
 }
 
 #[derive(Deserialize)]
@@ -522,23 +555,19 @@ struct TagFields {
     color: String,
     #[serde(default)]
     is_inbox_tag: bool,
-    #[serde(default)]
     tn_parent: Option<i64>,
 }
 
 #[derive(Deserialize)]
 struct CustomFieldFields {
     name: String,
-    data_type: String,
-    #[serde(default)]
+    data_type: PaperlessFieldType,
     extra_data: Option<CustomFieldExtra>,
 }
 
 #[derive(Deserialize, Default)]
 struct CustomFieldExtra {
-    #[serde(default)]
     select_options: Option<Vec<SelectOption>>,
-    #[serde(default)]
     default_currency: Option<String>,
 }
 
@@ -551,18 +580,12 @@ enum SelectOption {
 }
 
 impl CustomFieldFields {
-    fn into_record<E: de::Error>(self, id: i64) -> Result<PaperlessCustomField, E> {
-        let data_type = PaperlessFieldType::from_paperless(&self.data_type).ok_or_else(|| {
-            E::custom(format!(
-                "unknown custom field data type {:?}",
-                self.data_type
-            ))
-        })?;
+    fn into_record(self, id: i64) -> PaperlessCustomField {
         let extra = self.extra_data.unwrap_or_default();
-        Ok(PaperlessCustomField {
+        PaperlessCustomField {
             id,
             name: self.name,
-            data_type,
+            data_type: self.data_type,
             select_options: extra
                 .select_options
                 .unwrap_or_default()
@@ -576,7 +599,7 @@ impl CustomFieldFields {
                 })
                 .collect(),
             default_currency: extra.default_currency.filter(|c| !c.is_empty()),
-        })
+        }
     }
 }
 
@@ -588,56 +611,44 @@ enum SelectValue {
     Index(i64),
 }
 
+/// Paperless keeps one column per value type; the field's type picks the column
 #[derive(Deserialize)]
 struct InstanceFields {
     document: i64,
     field: i64,
-    #[serde(default)]
     deleted_at: Option<String>,
-    #[serde(default)]
     value_text: Option<String>,
-    #[serde(default)]
     value_long_text: Option<String>,
-    #[serde(default)]
     value_url: Option<String>,
-    #[serde(default)]
     value_date: Option<NaiveDate>,
-    #[serde(default)]
     value_bool: Option<bool>,
-    #[serde(default)]
     value_int: Option<i64>,
-    #[serde(default)]
     value_float: Option<f64>,
-    #[serde(default)]
     value_monetary: Option<String>,
-    #[serde(default)]
     value_select: Option<SelectValue>,
-    #[serde(default)]
     value_document_ids: Option<Vec<i64>>,
 }
 
 impl InstanceFields {
-    fn into_record(self, id: i64) -> PaperlessCustomFieldInstance {
-        PaperlessCustomFieldInstance {
-            id,
-            document: self.document,
-            field: self.field,
-            deleted: self.deleted_at.is_some(),
-            values: PaperlessFieldColumns {
-                text: self.value_text,
-                long_text: self.value_long_text,
-                url: self.value_url,
-                date: self.value_date,
-                boolean: self.value_bool,
-                integer: self.value_int,
-                float: self.value_float,
-                monetary: self.value_monetary,
-                select: self.value_select.map(|v| match v {
+    fn into_value(self, data_type: PaperlessFieldType) -> Option<PaperlessFieldValue> {
+        use PaperlessFieldType as T;
+        use PaperlessFieldValue as V;
+        match data_type {
+            T::String => self.value_text.map(V::Text),
+            T::LongText => self.value_long_text.map(V::LongText),
+            T::Url => self.value_url.map(V::Url),
+            T::Date => self.value_date.map(V::Date),
+            T::Boolean => self.value_bool.map(V::Boolean),
+            T::Integer => self.value_int.map(V::Integer),
+            T::Float => self.value_float.map(V::Float),
+            T::Monetary => self.value_monetary.map(V::Monetary),
+            T::Select => self.value_select.map(|v| {
+                V::Select(match v {
                     SelectValue::Id(id) => id,
                     SelectValue::Index(index) => index.to_string(),
-                }),
-                document_ids: self.value_document_ids,
-            },
+                })
+            }),
+            T::DocumentLink => self.value_document_ids.map(V::DocumentLink),
         }
     }
 }
@@ -647,7 +658,6 @@ struct NoteFields {
     note: String,
     created: DateTime<Utc>,
     document: i64,
-    #[serde(default)]
     deleted_at: Option<String>,
 }
 
@@ -662,32 +672,21 @@ struct DocumentFields {
     created: NaiveDate,
     added: DateTime<Utc>,
     modified: DateTime<Utc>,
-    #[serde(default)]
     correspondent: Option<i64>,
-    #[serde(default)]
     document_type: Option<i64>,
     #[serde(default)]
     tags: Vec<i64>,
-    #[serde(default)]
     archive_serial_number: Option<i64>,
-    #[serde(default)]
     original_filename: Option<String>,
-    #[serde(default)]
     deleted_at: Option<String>,
-    #[serde(default)]
     root_document: Option<i64>,
-    #[serde(default)]
     version_index: Option<i64>,
-    #[serde(default)]
     version_label: Option<String>,
 }
 
 impl DocumentFields {
-    fn into_record<E: de::Error>(
-        self,
-        id: i64,
-        original_path: String,
-    ) -> Result<PaperlessDocument, E> {
+    /// The handle is set once `__exported_file_name__`, which follows the fields, is read
+    fn into_record<E: de::Error>(self, id: i64) -> Result<PaperlessDocument, E> {
         let checksum = PaperlessChecksum::parse(&self.checksum)
             .ok_or_else(|| E::custom(format!("document {id} has an unrecognized checksum")))?;
         Ok(PaperlessDocument {
@@ -695,6 +694,7 @@ impl DocumentFields {
             title: self.title,
             content: self.content,
             mime_type: self.mime_type,
+            original_filename: self.original_filename,
             checksum,
             size: None,
             created: self.created,
@@ -704,7 +704,6 @@ impl DocumentFields {
             document_type: self.document_type,
             tags: self.tags,
             archive_serial_number: self.archive_serial_number,
-            original_filename: self.original_filename,
             trashed: self.deleted_at.is_some(),
             version_of: self
                 .root_document
@@ -713,7 +712,7 @@ impl DocumentFields {
                     index: self.version_index,
                     label: self.version_label,
                 }),
-            original_handle: original_path,
+            original_handle: String::new(),
         })
     }
 }

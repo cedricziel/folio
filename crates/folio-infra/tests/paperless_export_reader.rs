@@ -29,7 +29,7 @@ fn documents(records: &[PaperlessRecord]) -> Vec<&PaperlessDocument> {
     records
         .iter()
         .filter_map(|r| match r {
-            PaperlessRecord::Document(d) => Some(d),
+            PaperlessRecord::Document(d) => Some(d.as_ref()),
             _ => None,
         })
         .collect()
@@ -137,10 +137,7 @@ async fn v2_export_yields_typed_records() {
         .filter_map(|r| match r {
             PaperlessRecord::CustomFieldInstance(i) if i.document == 1 => {
                 let field = fields.iter().find(|f| f.id == i.field).unwrap();
-                Some((
-                    field.name.as_str(),
-                    i.values.value(field.data_type).unwrap(),
-                ))
+                Some((field.name.as_str(), i.value.clone().unwrap()))
             }
             _ => None,
         })
@@ -299,6 +296,32 @@ async fn modified_since_returns_everything_from_an_export() {
 }
 
 #[tokio::test]
+async fn omits_deleted_custom_field_values() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("manifest.json"),
+        r#"[
+          {"model": "documents.customfield", "pk": 1, "fields": {"name": "Ref", "data_type": "string", "extra_data": null}},
+          {"model": "documents.customfieldinstance", "pk": 1, "fields": {"document": 1, "field": 1, "deleted_at": null, "value_text": "live"}},
+          {"model": "documents.customfieldinstance", "pk": 2, "fields": {"document": 2, "field": 1, "deleted_at": "2025-01-01T00:00:00Z", "value_text": "gone"}}
+        ]"#,
+    )
+    .unwrap();
+    let records = scan_with(&PaperlessFsReader::open(dir.path()).unwrap()).await;
+    let values: Vec<_> = records
+        .iter()
+        .filter_map(|r| match r {
+            PaperlessRecord::CustomFieldInstance(i) => Some((i.document, i.value.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        values,
+        [(1, Some(PaperlessFieldValue::Text("live".into())))]
+    );
+}
+
+#[tokio::test]
 async fn lists_every_document_id() {
     let reader = PaperlessFsReader::open(&fixture("v3_4_split")).unwrap();
     let ids = reader.list_document_ids().await.unwrap();
@@ -342,7 +365,7 @@ async fn originals_match_their_checksums() {
             let digests = digest_original(original.reader, doc.checksum.algorithm)
                 .await
                 .unwrap();
-            assert_eq!(digests.source, doc.checksum.value, "{name}: doc {}", doc.id);
+            assert!(digests.matches(&doc.checksum), "{name}: doc {}", doc.id);
             assert_eq!(size, Some(digests.size));
             assert_eq!(doc.size, Some(digests.size));
         }

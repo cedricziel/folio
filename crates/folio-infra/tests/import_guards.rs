@@ -3,7 +3,7 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 
 use folio_core::ports::{PaperlessReadError, PaperlessReader, PaperlessRecord};
-use folio_infra::import::{resolve_original, PaperlessFsReader};
+use folio_infra::import::{resolve_import_dir, resolve_original, PaperlessFsReader};
 use futures::TryStreamExt;
 
 struct Layout {
@@ -26,6 +26,57 @@ impl Layout {
     fn path(&self, relative: &str) -> PathBuf {
         self.base.join(relative)
     }
+
+    /// An unreadable file outside the root, so a guard that opened it would fail differently
+    fn outside_secret(&self) -> PathBuf {
+        let secret = self.path("outside/secret.pdf");
+        fs::write(&secret, b"secret").unwrap();
+        fs::set_permissions(&secret, fs::Permissions::from_mode(0o000)).unwrap();
+        secret
+    }
+
+    fn roots(&self) -> Vec<PathBuf> {
+        vec![self.path("imports")]
+    }
+}
+
+#[test]
+fn root_guard_accepts_paths_inside_a_root() {
+    let layout = Layout::new();
+    let roots = layout.roots();
+    assert_eq!(
+        resolve_import_dir(&layout.path("imports/export"), &roots).unwrap(),
+        layout.path("imports/export")
+    );
+    assert_eq!(
+        resolve_import_dir(&layout.path("imports/alias"), &roots).unwrap(),
+        layout.path("imports/export")
+    );
+}
+
+#[test]
+fn root_guard_rejects_escapes_siblings_and_missing_paths_alike() {
+    let layout = Layout::new();
+    let roots = layout.roots();
+    let errors: Vec<_> = [
+        layout.path("imports/../outside"),
+        layout.path("imports/escape"),
+        layout.path("imports-x/export"),
+        layout.path("imports/missing"),
+        layout.path("outside/missing"),
+        PathBuf::from("imports/export"),
+    ]
+    .iter()
+    .map(|path| resolve_import_dir(path, &roots).unwrap_err().to_string())
+    .collect();
+    assert!(errors.iter().all(|e| *e == errors[0]), "{errors:?}");
+    assert!(!errors[0].contains(layout.base.to_str().unwrap()));
+}
+
+#[test]
+fn root_guard_with_no_roots_rejects_everything() {
+    let layout = Layout::new();
+    assert!(resolve_import_dir(&layout.path("imports/export"), &[]).is_err());
 }
 
 fn assert_unsafe(result: Result<impl Sized, PaperlessReadError>) {
@@ -55,9 +106,7 @@ fn original_guard_refuses_symlinks_without_opening_them() {
     let layout = Layout::new();
     let export = layout.path("imports/export");
 
-    let secret = layout.path("outside/secret.pdf");
-    fs::write(&secret, b"secret").unwrap();
-    fs::set_permissions(&secret, fs::Permissions::from_mode(0o000)).unwrap();
+    let secret = layout.outside_secret();
     symlink(&secret, export.join("linked.pdf")).unwrap();
     symlink(layout.path("outside"), export.join("dir")).unwrap();
     fs::write(export.join("inner.pdf"), b"inner").unwrap();
@@ -76,7 +125,9 @@ fn original_guard_resolves_plain_files_and_reports_missing_ones() {
     fs::write(export.join("originals/2024/a b.pdf"), b"pdf").unwrap();
 
     assert_eq!(
-        resolve_original(&export, "originals/2024/a b.pdf").unwrap(),
+        resolve_original(&export, "originals/2024/a b.pdf")
+            .unwrap()
+            .0,
         export.join("originals/2024/a b.pdf")
     );
     assert!(matches!(
@@ -107,9 +158,7 @@ fn manifest_with_originals(handles: &[&str]) -> String {
 async fn reader_refuses_unsafe_manifest_paths_without_opening_them() {
     let layout = Layout::new();
     let export = layout.path("imports/export");
-    let secret = layout.path("outside/secret.pdf");
-    fs::write(&secret, b"secret").unwrap();
-    fs::set_permissions(&secret, fs::Permissions::from_mode(0o000)).unwrap();
+    let secret = layout.outside_secret();
     symlink(&secret, export.join("linked.pdf")).unwrap();
     fs::write(
         export.join("manifest.json"),

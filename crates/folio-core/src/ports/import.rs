@@ -1,12 +1,11 @@
 //! Port for reading a Paperless-ngx library, from an export or a live instance
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use futures::stream::BoxStream;
-use futures::TryStreamExt;
 use md5::Md5;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,28 +36,9 @@ pub trait PaperlessReader: Send + Sync {
     }
 
     /// IDs of every document the source holds, trashed ones and file versions
-    /// included. Only a listing that read everything is returned, since mirror
-    /// sync trashes whatever is missing from it.
-    async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError> {
-        let ids = self
-            .scan()
-            .await?
-            .try_filter_map(|record| async move {
-                Ok(match record {
-                    PaperlessRecord::Document(doc) => Some(doc.id),
-                    _ => None,
-                })
-            })
-            .try_collect()
-            .await?;
-        Ok(CompleteIdSet::from_complete_listing(ids))
-    }
-
-    /// Records of models the import doesn't use, by model name, counted
-    /// during the last completed scan
-    fn skipped_models(&self) -> BTreeMap<String, u64> {
-        BTreeMap::new()
-    }
+    /// included. Only a listing that read everything may be returned, since
+    /// mirror sync trashes whatever is missing from it.
+    async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError>;
 }
 
 /// Document IDs from a listing that succeeded on every page
@@ -89,15 +69,15 @@ pub struct OriginalFile {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaperlessReadError {
-    #[error("{file} is missing")]
-    Missing { file: String },
-    #[error("{file} is not valid Paperless data: {message}")]
-    Malformed { file: String, message: String },
-    #[error("unsafe path: {path}")]
-    UnsafePath { path: String },
-    #[error("could not read {file}: {source}")]
+    #[error("{what} is missing")]
+    Missing { what: String },
+    #[error("{what} is not valid Paperless data: {message}")]
+    Malformed { what: String, message: String },
+    #[error("unsafe path: {what}")]
+    UnsafePath { what: String },
+    #[error("could not read {what}: {source}")]
     Io {
-        file: String,
+        what: String,
         #[source]
         source: io::Error,
     },
@@ -160,7 +140,7 @@ pub enum PaperlessRecord {
     CustomField(PaperlessCustomField),
     CustomFieldInstance(PaperlessCustomFieldInstance),
     Note(PaperlessNote),
-    Document(PaperlessDocument),
+    Document(Box<PaperlessDocument>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,25 +173,6 @@ pub enum PaperlessFieldType {
     DocumentLink,
 }
 
-impl PaperlessFieldType {
-    /// Parses Paperless's `data_type` value
-    pub fn from_paperless(raw: &str) -> Option<Self> {
-        Some(match raw {
-            "string" => Self::String,
-            "longtext" => Self::LongText,
-            "url" => Self::Url,
-            "date" => Self::Date,
-            "boolean" => Self::Boolean,
-            "integer" => Self::Integer,
-            "float" => Self::Float,
-            "monetary" => Self::Monetary,
-            "select" => Self::Select,
-            "documentlink" => Self::DocumentLink,
-            _ => return None,
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaperlessCustomField {
     pub id: i64,
@@ -231,30 +192,13 @@ pub struct PaperlessSelectOption {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaperlessCustomFieldInstance {
-    pub id: i64,
     pub document: i64,
     pub field: i64,
-    pub values: PaperlessFieldColumns,
-    pub deleted: bool,
+    /// `None` when the field is set on the document but empty
+    pub value: Option<PaperlessFieldValue>,
 }
 
-/// Paperless keeps one column per value type; the field's type picks the column
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct PaperlessFieldColumns {
-    pub text: Option<String>,
-    pub long_text: Option<String>,
-    pub url: Option<String>,
-    pub date: Option<NaiveDate>,
-    pub boolean: Option<bool>,
-    pub integer: Option<i64>,
-    pub float: Option<f64>,
-    /// Raw Paperless form: an optional ISO currency code, then the amount, as in `EUR123.45`
-    pub monetary: Option<String>,
-    /// Option ID, or the option index before options had IDs
-    pub select: Option<String>,
-    pub document_ids: Option<Vec<i64>>,
-}
-
+/// A value in its raw Paperless form; the engine maps it to a Folio value
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PaperlessFieldValue {
     Text(String),
@@ -264,29 +208,11 @@ pub enum PaperlessFieldValue {
     Boolean(bool),
     Integer(i64),
     Float(f64),
+    /// An optional ISO currency code, then the amount, as in `EUR123.45`
     Monetary(String),
+    /// Option ID, or the option index before options had IDs
     Select(String),
     DocumentLink(Vec<i64>),
-}
-
-impl PaperlessFieldColumns {
-    /// The value in the column for `data_type`, if set
-    pub fn value(&self, data_type: PaperlessFieldType) -> Option<PaperlessFieldValue> {
-        use PaperlessFieldType as T;
-        use PaperlessFieldValue as V;
-        match data_type {
-            T::String => self.text.clone().map(V::Text),
-            T::LongText => self.long_text.clone().map(V::LongText),
-            T::Url => self.url.clone().map(V::Url),
-            T::Date => self.date.map(V::Date),
-            T::Boolean => self.boolean.map(V::Boolean),
-            T::Integer => self.integer.map(V::Integer),
-            T::Float => self.float.map(V::Float),
-            T::Monetary => self.monetary.clone().map(V::Monetary),
-            T::Select => self.select.clone().map(V::Select),
-            T::DocumentLink => self.document_ids.clone().map(V::DocumentLink),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,10 +291,19 @@ pub enum ChecksumAlgorithm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileDigests {
-    /// Lowercase hex digest in the source's algorithm
-    pub source: String,
+    /// Lowercase hex, computed only for MD5 sources
+    pub md5: Option<String>,
     pub sha256: String,
     pub size: u64,
+}
+
+impl FileDigests {
+    pub fn matches(&self, checksum: &PaperlessChecksum) -> bool {
+        match checksum.algorithm {
+            ChecksumAlgorithm::Md5 => self.md5.as_deref() == Some(checksum.value.as_str()),
+            ChecksumAlgorithm::Sha256 => self.sha256 == checksum.value,
+        }
+    }
 }
 
 /// Hashes `reader` with `algorithm` and SHA-256 in one pass
@@ -391,14 +326,9 @@ pub async fn digest_original(
         }
         size += n as u64;
     }
-    let sha256 = hex::encode(sha256.finalize());
-    let source = match md5 {
-        Some(md5) => hex::encode(md5.finalize()),
-        None => sha256.clone(),
-    };
     Ok(FileDigests {
-        source,
-        sha256,
+        md5: md5.map(|md5| hex::encode(md5.finalize())),
+        sha256: hex::encode(sha256.finalize()),
         size,
     })
 }
@@ -440,38 +370,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn digest_computes_source_algorithm_and_sha256_in_one_pass() {
+    async fn digest_computes_md5_and_sha256_in_one_pass() {
         let md5 = digest_original(&b"abc"[..], ChecksumAlgorithm::Md5)
             .await
             .unwrap();
-        assert_eq!(md5.source, "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(md5.md5.as_deref(), Some("900150983cd24fb0d6963f7d28e17f72"));
         assert_eq!(
             md5.sha256,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(md5.size, 3);
+        assert!(md5.matches(&PaperlessChecksum::parse("900150983CD24FB0D6963F7D28E17F72").unwrap()));
 
         let sha = digest_original(&b"abc"[..], ChecksumAlgorithm::Sha256)
             .await
             .unwrap();
-        assert_eq!(sha.source, sha.sha256);
+        assert_eq!(sha.md5, None);
+        assert!(sha.matches(&PaperlessChecksum::parse(&sha.sha256).unwrap()));
+        assert!(!sha.matches(&PaperlessChecksum::parse(&"0".repeat(64)).unwrap()));
     }
 
     #[test]
-    fn field_columns_pick_the_column_for_the_type() {
-        let cols = PaperlessFieldColumns {
-            monetary: Some("EUR12.50".into()),
-            document_ids: Some(vec![3, 4]),
-            ..Default::default()
-        };
+    fn field_types_use_paperless_names() {
+        let parsed: Vec<PaperlessFieldType> =
+            serde_json::from_str(r#"["longtext", "documentlink", "monetary"]"#).unwrap();
         assert_eq!(
-            cols.value(PaperlessFieldType::Monetary),
-            Some(PaperlessFieldValue::Monetary("EUR12.50".into()))
+            parsed,
+            [
+                PaperlessFieldType::LongText,
+                PaperlessFieldType::DocumentLink,
+                PaperlessFieldType::Monetary
+            ]
         );
-        assert_eq!(
-            cols.value(PaperlessFieldType::DocumentLink),
-            Some(PaperlessFieldValue::DocumentLink(vec![3, 4]))
-        );
-        assert_eq!(cols.value(PaperlessFieldType::String), None);
     }
 }
