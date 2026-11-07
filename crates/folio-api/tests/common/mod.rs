@@ -20,6 +20,7 @@ use folio_infra::{
 pub struct Harness {
     _directory: tempfile::TempDir,
     pub app: Router,
+    pub database: Database,
     pub state: AppState,
     pub vault: folio_core::models::VaultId,
     pub members: Arc<dyn folio_core::ports::MembershipRepository>,
@@ -72,10 +73,10 @@ pub async fn harness_with(
     let auth_store = repos.auth.clone();
     let members = repos.members.clone();
     let vault_repository = repos.vaults.clone();
-    let vaults = Arc::new(folio_core::services::VaultService::new(
-        repos.vaults.clone(),
-        repos.members,
-    ));
+    let vaults = Arc::new(
+        folio_core::services::VaultService::new(repos.vaults.clone(), repos.members)
+            .with_audit(repos.audit),
+    );
     let auth = make_auth(repos.auth.clone());
 
     let ai = folio_infra::config::AiConfig {
@@ -87,7 +88,12 @@ pub async fn harness_with(
     let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
-    let ingestion = IngestionState::new(repos.sources, repos.ledger, configured);
+    let ingestion = IngestionState::new(
+        repos.sources,
+        repos.ledger,
+        repos.ingest_outcomes,
+        configured,
+    );
     let state = AppState::new(
         repos.saved_views,
         repos.documents,
@@ -114,6 +120,7 @@ pub async fn harness_with(
     );
     Harness {
         _directory: directory,
+        database,
         app: create_router(state.clone(), auth),
         state,
         vault,

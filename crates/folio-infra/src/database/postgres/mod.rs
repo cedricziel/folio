@@ -5,6 +5,10 @@ pub use metadata_option_repo::PostgresMetadataOptionRepository;
 mod metadata_repo;
 pub use metadata_repo::PostgresMetadataFieldRepository;
 
+mod metadata_value_repo;
+pub use metadata_value_repo::PostgresMetadataValueRepository;
+pub(crate) use metadata_value_repo::{clear_incoming_links, prepare_move};
+
 mod auth_repo;
 mod document_entries;
 mod document_repo;
@@ -29,6 +33,7 @@ pub use document_repo::{
 };
 pub use ingest_outcomes::PostgresIngestOutcomeRepository;
 pub use ingest_repo::{PostgresIngestLedger, PostgresSourceRepository};
+pub(crate) use outbox::capture_document;
 pub use outbox::{
     insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,
     PostgresOutboxStore,

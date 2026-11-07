@@ -98,6 +98,25 @@ impl WorkflowRunner {
         let skip = run.completed_actions as usize;
         let actions = run.actions.clone();
         for (index, action) in actions.iter().enumerate().skip(skip) {
+            let Some(stored) = self.workflows.find_run(run.id).await? else {
+                return Ok(RunOutcome::Failed);
+            };
+            if stored.status.is_terminal() {
+                return Ok(if stored.status == RunStatus::Succeeded {
+                    RunOutcome::Succeeded
+                } else {
+                    RunOutcome::Failed
+                });
+            }
+            if self.workflows.locate(run.workflow_id).await? != Some(vault) {
+                self.finish(
+                    &mut run,
+                    RunStatus::Failed,
+                    Some("Workflow vault is no longer active".into()),
+                )
+                .await?;
+                return Ok(RunOutcome::Failed);
+            }
             if run.event != WorkflowTrigger::DocumentDeleted {
                 if let Some(document_id) = run.document_id {
                     if self.documents.locate(document_id).await? != Some(vault) {
@@ -120,7 +139,9 @@ impl WorkflowRunner {
                 Ok(response_status) => {
                     run.completed_actions = index as u32 + 1;
                     run.response_status = response_status.or(run.response_status);
-                    self.workflows.update_run(&run).await?;
+                    if !self.save(&run).await? {
+                        return Ok(RunOutcome::Failed);
+                    }
                 }
                 Err(failure) => {
                     run.response_status = failure.response_status;
@@ -131,7 +152,9 @@ impl WorkflowRunner {
                         return Ok(RunOutcome::Failed);
                     }
                     run.last_error = Some(failure.message);
-                    self.workflows.update_run(&run).await?;
+                    if !self.save(&run).await? {
+                        return Ok(RunOutcome::Failed);
+                    }
                     return Ok(RunOutcome::Retry);
                 }
             }
@@ -167,7 +190,16 @@ impl WorkflowRunner {
         run.status = status;
         run.last_error = error;
         run.finished_at = Some(Utc::now());
-        self.workflows.update_run(run).await
+        self.save(run).await.map(|_| ())
+    }
+
+    /// Persists progress; false when the run was stopped elsewhere, such as by deleting its workflow
+    async fn save(&self, run: &WorkflowRun) -> folio_core::Result<bool> {
+        match self.workflows.update_run(run).await {
+            Ok(()) => Ok(true),
+            Err(folio_core::Error::Conflict(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 
     /// Returns the webhook's HTTP status when the action was a webhook

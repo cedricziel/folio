@@ -192,6 +192,7 @@ impl LibraryService {
             search_query: None,
             created_after: query.created_after,
             created_before: query.created_before,
+            ..Default::default()
         };
 
         let mut hits: Vec<(Document, Option<f32>)> = Vec::new();
@@ -387,6 +388,7 @@ impl LibraryService {
                     vault,
                     id,
                     UpdateDocument {
+                        document_date: None,
                         title: update.title.map(|t| t.trim().to_string()),
                         content: None,
                         correspondent_id,
@@ -429,11 +431,13 @@ impl LibraryService {
         id: Id,
         names: &[String],
     ) -> Result<DocumentDetail> {
-        self.require_document(vault, id).await?;
-        for name in names {
-            if let Some(tag) = self.lookup_tag(vault, name).await? {
-                self.documents.remove_tag(vault, id, tag.id).await?;
-            }
+        let current = self.get_document(vault, id).await?;
+        for tag in current.tags.iter().filter(|tag| {
+            names
+                .iter()
+                .any(|name| tag.name.eq_ignore_ascii_case(name.trim()))
+        }) {
+            self.documents.remove_tag(vault, id, tag.id).await?;
         }
         self.get_document(vault, id).await
     }

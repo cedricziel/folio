@@ -66,6 +66,7 @@
                     <dd>
                         <form action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">
                             <select name="correspondent_id" class="select" aria-label="From" {% if !(document|can_edit_document) %}disabled{% endif %} data-hotkey="edit" onchange="this.form.requestSubmit()">
+                                {% match correspondent %}{% when Some with (corr) %}{% if corr.deleted_at.is_some() %}<option value="{{ corr.id }}" selected disabled>{{ corr.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
                                 {% for c in all_correspondents %}
                                 <option value="{{ c.id }}" {% match correspondent %}{% when Some with (corr) %}{% if c.id == corr.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ c.name }}</option>
@@ -78,6 +79,7 @@
                     <dd>
                         <form action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">
                             <select name="document_type_id" class="select" aria-label="Type" {% if !(document|can_edit_document) %}disabled{% endif %} onchange="this.form.requestSubmit()">
+                                {% match document_type %}{% when Some with (dtype) %}{% if dtype.deleted_at.is_some() %}<option value="{{ dtype.id }}" selected disabled>{{ dtype.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
                                 {% for dt in all_document_types %}
                                 <option value="{{ dt.id }}" {% match document_type %}{% when Some with (dtype) %}{% if dt.id == dtype.id %}selected{% endif %}{% when None %}{% endmatch %}>{{ dt.name }}</option>
@@ -86,7 +88,38 @@
                         </form>
                     </dd>
 
-                    <dt>Added</dt>
+                    <dt>Document date</dt>
+                    <dd>
+                        {% if document|can_edit_document %}
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">
+                            <input type="date" name="document_date" class="input" aria-label="Document date" min="0001-01-01" max="9999-12-31" value="{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}{% endmatch %}">
+                            <button type="submit" class="f-btn f-btn-quiet">Save date</button>
+                            <button type="submit" class="f-btn f-btn-quiet" name="clear" value="true">Clear date</button>
+                        </form>
+                        {% else %}
+                        <span class="f-meta">{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}Not set{% endmatch %}</span>
+                        {% endif %}
+                    </dd>
+                    <dt>Review</dt>
+                    <dd>
+                        {% match document.reviewed_at %}
+                        {% when Some with (reviewed_at) %}
+                        <span class="f-meta">Reviewed {{ reviewed_at.format("%Y-%m-%d") }}
+                            {% match document.review_origin %}{% when Some with (origin) %}
+                            {% if origin.as_str() == "legacy_classification" %}(legacy classification){% else if origin.as_str() == "system" %}(system){% endif %}
+                            {% match document.reviewed_by %}{% when Some with (reviewer) %}by {{ reviewer }}{% when None %}{% endmatch %}
+                            {% when None %}{% endmatch %}
+                        </span>
+                        {% when None %}<span class="f-meta">Not reviewed</span>{% endmatch %}
+                        {% if document|can_edit_document %}
+                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/review" method="post" data-turbo="false" data-controller="document-review" data-action="submit->document-review#submit">
+                            <input type="hidden" name="reviewed" value="{{ document.reviewed_at.is_none() }}">
+                            <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">{% if document.reviewed_at.is_some() %}Mark unreviewed{% else %}Mark reviewed{% endif %}</button>
+                            <p role="alert" data-document-review-target="error" hidden></p>
+                        </form>
+                        {% endif %}
+                    </dd>
+                    <dt>Imported</dt>
                     <dd><span class="f-meta">{{ document.created_at.format("%Y-%m-%d") }}</span></dd>
 
                     {% match document.original_filename %}
@@ -149,17 +182,19 @@
                         {% endif %}
                     </dd>
                 </dl>
+                {% include "partials/document_history.html" %}
             </section>
 
+            {% include "partials/document_processing.html" %}
             <section class="panel">
                 <h2 class="heading">Text Folio read</h2>
                 {% match document.content %}
                 {% when Some with (content) %}
                 <pre class="ocr">{{ content }}</pre>
                 {% when None %}
-                {% if failed %}
+                {% if document.ocr_status.as_str() == "failed" %}
                 <div class="f-notice f-notice-danger" role="status">
-                    <p>Folio couldn't read this file. It may be damaged or in a format Folio doesn't know. Read it again, or move it to Trash.</p>
+                    <p>Text extraction did not finish. The original file is unchanged. Read it again, or move it to Trash.</p>
                 </div>
                 {% else %}
                 <p><span class="f-status f-status-pending">{{ reading }}</span></p>

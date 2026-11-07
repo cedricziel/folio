@@ -1,15 +1,34 @@
 use std::collections::BTreeSet;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use crate::events::{document_event_envelope, DocumentEvent, EventSnapshot};
-use crate::models::{Document, Id};
+use crate::models::{Document, DocumentDate, Id, ReviewOrigin, UserId};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event_type")]
 pub enum DocumentChange {
+    #[serde(rename = "document.reviewed")]
+    Reviewed {
+        reviewed_at: DateTime<Utc>,
+        reviewed_by: Option<UserId>,
+        review_origin: Option<ReviewOrigin>,
+    },
+    #[serde(rename = "document.unreviewed")]
+    Unreviewed {
+        previous_reviewed_at: DateTime<Utc>,
+        previous_reviewed_by: Option<UserId>,
+        previous_review_origin: Option<ReviewOrigin>,
+        reason: String,
+    },
+    #[serde(rename = "document.date_changed")]
+    DateChanged {
+        previous_document_date: Option<DocumentDate>,
+        document_date: Option<DocumentDate>,
+    },
     #[serde(rename = "document.title_changed")]
     TitleChanged { before: String, after: String },
     #[serde(rename = "document.correspondent_changed")]
@@ -41,12 +60,20 @@ pub fn document_changes(
 ) -> Vec<DocumentChange> {
     compare_metadata(
         Metadata {
+            document_date: before.document_date,
+            reviewed_at: before.reviewed_at,
+            reviewed_by: before.reviewed_by.as_ref(),
+            review_origin: before.review_origin,
             title: &before.title,
             correspondent_id: before.correspondent_id,
             document_type_id: before.document_type_id,
         },
         before_tags,
         Metadata {
+            document_date: after.document_date,
+            reviewed_at: after.reviewed_at,
+            reviewed_by: after.reviewed_by.as_ref(),
+            review_origin: after.review_origin,
             title: &after.title,
             correspondent_id: after.correspondent_id,
             document_type_id: after.document_type_id,
@@ -56,6 +83,10 @@ pub fn document_changes(
 }
 
 struct Metadata<'a> {
+    reviewed_at: Option<DateTime<Utc>>,
+    reviewed_by: Option<&'a UserId>,
+    review_origin: Option<ReviewOrigin>,
+    document_date: Option<DocumentDate>,
     title: &'a str,
     correspondent_id: Option<Id>,
     document_type_id: Option<Id>,
@@ -68,6 +99,31 @@ fn compare_metadata(
     after_tags: &[Id],
 ) -> Vec<DocumentChange> {
     let mut changes = Vec::new();
+    match (before.reviewed_at, after.reviewed_at) {
+        (None, Some(reviewed_at)) => changes.push(DocumentChange::Reviewed {
+            reviewed_at,
+            reviewed_by: after.reviewed_by.cloned(),
+            review_origin: after.review_origin,
+        }),
+        (Some(previous_reviewed_at), None) => changes.push(DocumentChange::Unreviewed {
+            previous_reviewed_at,
+            previous_reviewed_by: before.reviewed_by.cloned(),
+            previous_review_origin: before.review_origin,
+            reason: if crate::mutation::current_actor().is_some() {
+                "user"
+            } else {
+                "system"
+            }
+            .into(),
+        }),
+        _ => {}
+    }
+    if before.document_date != after.document_date {
+        changes.push(DocumentChange::DateChanged {
+            previous_document_date: before.document_date,
+            document_date: after.document_date,
+        });
+    }
     if before.title != after.title {
         changes.push(DocumentChange::TitleChanged {
             before: before.title.to_owned(),
@@ -122,12 +178,20 @@ pub fn metadata_envelopes(
     let after_tags: Vec<Id> = after.tags.iter().map(|tag| tag.id).collect();
     let changes = compare_metadata(
         Metadata {
+            document_date: before.document_date,
+            reviewed_at: before.reviewed_at,
+            reviewed_by: before.reviewed_by.as_ref(),
+            review_origin: before.review_origin,
             title: &before.title,
             correspondent_id: before.correspondent_id,
             document_type_id: before.document_type_id,
         },
         &before_tags,
         Metadata {
+            document_date: after.document_date,
+            reviewed_at: after.reviewed_at,
+            reviewed_by: after.reviewed_by.as_ref(),
+            review_origin: after.review_origin,
             title: &after.title,
             correspondent_id: after.correspondent_id,
             document_type_id: after.document_type_id,

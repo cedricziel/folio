@@ -1,7 +1,7 @@
 import Foundation
 
 /// Everything the app needs from a Folio server. View models depend on this, not on the generated client.
-public protocol FolioService: Sendable {
+public protocol FolioService: DocumentEntryService {
     func vaults() async throws -> VaultCatalog
     func savedViews(after: UUID?) async throws -> [SavedView]
     func savedView(id: UUID) async throws -> SavedView
@@ -12,6 +12,8 @@ public protocol FolioService: Sendable {
     func scoped(to vaultID: UUID) -> any FolioService
     func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage
     func document(id: Document.ID) async throws -> Document
+    func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document
+    func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document
     func ping() async throws
     func documents(matching query: String) async throws -> [Document]
     /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.
@@ -24,6 +26,10 @@ public protocol FolioService: Sendable {
     /// Returns a bounded JPEG preview, or nil when the document or thumbnail is unavailable.
     func thumbnail(id: Document.ID) async throws -> Data?
     func upload(_ file: UploadFile) async throws -> Document
+    func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry]
+    func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws
+    func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws
+    func restoreTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws
     func tags() async throws -> [Tag]
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws
     func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws
@@ -76,5 +82,27 @@ public struct NoToken: BearerTokenProvider {
     public init() {}
     public func token() async throws -> String? {
         nil
+    }
+}
+
+public extension FolioService {
+    func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry] {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func restoreTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws {
+        throw FolioError.server(status: 501, message: "Classification management is unavailable.")
+    }
+    func setDocumentReview(_ reviewed: Bool, for id: Document.ID) async throws -> Document {
+        throw FolioError.server(status: 501, message: "This server does not support document review.")
+    }
+
+    func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
+        throw FolioError.server(status: 501, message: "This server does not support document date editing.")
     }
 }

@@ -157,7 +157,7 @@ async fn tags_contract(r: &Repositories) {
 
     r.tags.delete(vault, tag.id).await.unwrap();
     assert!(r.tags.find_by_id(vault, tag.id).await.unwrap().is_none());
-    assert!(is_not_found(r.tags.delete(vault, tag.id).await));
+    r.tags.delete(vault, tag.id).await.unwrap();
 }
 
 async fn correspondents_contract(r: &Repositories) {
@@ -247,7 +247,7 @@ async fn correspondents_contract(r: &Repositories) {
     ));
 
     r.correspondents.delete(vault, c.id).await.unwrap();
-    assert!(is_not_found(r.correspondents.delete(vault, c.id).await));
+    r.correspondents.delete(vault, c.id).await.unwrap();
 }
 
 async fn document_types_contract(r: &Repositories) {
@@ -320,7 +320,7 @@ async fn document_types_contract(r: &Repositories) {
     ));
 
     r.document_types.delete(vault, t.id).await.unwrap();
-    assert!(is_not_found(r.document_types.delete(vault, t.id).await));
+    r.document_types.delete(vault, t.id).await.unwrap();
 }
 
 async fn documents_contract(r: &Repositories) {
@@ -418,6 +418,7 @@ async fn documents_contract(r: &Repositories) {
             vault,
             second.id,
             UpdateDocument {
+                document_date: None,
                 title: Some("renamed".into()),
                 content: Some("extracted text".into()),
                 correspondent_id: Some(None),
@@ -517,14 +518,10 @@ async fn documents_contract(r: &Repositories) {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].id, b.id);
 
-    // Deleting a tag cleans up its associations
     r.tags.delete(vault, b.id).await.unwrap();
-    assert!(r
-        .documents
-        .get_tags(vault, first.id)
-        .await
-        .unwrap()
-        .is_empty());
+    let retained = r.documents.get_tags(vault, first.id).await.unwrap();
+    assert_eq!(retained[0].id, b.id);
+    assert!(retained[0].deleted_at.is_some());
     r.documents
         .set_tags(vault, first.id, &[a.id])
         .await
@@ -539,7 +536,6 @@ async fn documents_contract(r: &Repositories) {
     r.documents.delete(vault, first.id).await.unwrap();
     assert!(r.tags.find_by_id(vault, a.id).await.unwrap().is_some());
 
-    // Deleting a correspondent keeps the document and clears the link
     let mut linked = new_document("linked");
     linked.correspondent_id = Some(corr.id);
     let linked = r.documents.create(vault, linked).await.unwrap();
@@ -551,7 +547,7 @@ async fn documents_contract(r: &Repositories) {
             .unwrap()
             .unwrap()
             .correspondent_id,
-        None
+        Some(corr.id)
     );
 }
 
@@ -1239,10 +1235,10 @@ async fn workflows_contract(r: &Repositories) {
     );
     assert!(runs.windows(2).all(|w| w[0].created_at >= w[1].created_at));
 
-    // Deleting a workflow removes its runs
     r.workflows.delete(vault, off.id).await.unwrap();
-    assert!(r.workflows.find_run(run.id).await.unwrap().is_none());
-    assert!(is_not_found(r.workflows.delete(vault, off.id).await));
+    let retained = r.workflows.find_run(run.id).await.unwrap().unwrap();
+    assert_eq!(retained.status, folio_core::models::RunStatus::Failed);
+    r.workflows.delete(vault, off.id).await.unwrap();
 }
 
 async fn ingestion_contract(r: &Repositories) {
@@ -1341,8 +1337,8 @@ async fn ingestion_contract(r: &Repositories) {
     );
     r.sources.delete(vault, created.id).await.unwrap();
     assert!(r.sources.find(vault, created.id).await.unwrap().is_none());
-    assert!(r.sources.status(created.id).await.unwrap().is_none());
-    assert!(is_not_found(r.sources.delete(vault, created.id).await));
+    assert_eq!(r.sources.status(created.id).await.unwrap(), Some(saved));
+    r.sources.delete(vault, created.id).await.unwrap();
 
     // Ledger: the first insert wins, later ones report false
     let entry = LedgerEntry {
@@ -1913,7 +1909,7 @@ async fn auth_contract(r: &Repositories) {
 
 async fn mfa_contract(r: &Repositories) {
     use folio_auth::{
-        AccessToken, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
+        AccessToken, AuthCode, AuthError, OAuthClient, PasskeyRecord, RefreshToken, Session, User,
     };
     let auth = &r.auth;
     let make = |name: &str| User {
@@ -2125,12 +2121,36 @@ async fn mfa_contract(r: &Repositories) {
         (clients[0].client_id.as_str(), clients[0].expires_at),
         ("mfa-c1", 900)
     );
+    let code = |hash: &str, client: &str, user: &User| AuthCode {
+        code_hash: hash.into(),
+        client_id: client.into(),
+        user_id: user.id.clone(),
+        redirect_uri: "app:/cb".into(),
+        code_challenge: "challenge".into(),
+        scopes: vec![],
+        audience: "a".into(),
+        expires_at: i64::MAX,
+        grant_id: "mfa-g".into(),
+    };
+    for (hash, client, user) in [
+        ("mc1", "mfa-c1", &ada),
+        ("mc2", "mfa-c2", &ada),
+        ("mc3", "mfa-c1", &bob),
+    ] {
+        auth.insert_code(code(hash, client, user)).await.unwrap();
+    }
     auth.revoke_client_tokens(&ada.id, "mfa-c1").await.unwrap();
     assert!(auth
         .list_connected_clients(&ada.id, 100)
         .await
         .unwrap()
         .is_empty());
+    assert!(
+        auth.take_code("mc1").await.unwrap().is_none(),
+        "disconnecting revokes the client's pending codes"
+    );
+    assert!(auth.take_code("mc2").await.unwrap().is_some());
+    assert!(auth.take_code("mc3").await.unwrap().is_some());
     assert_eq!(
         auth.list_connected_clients(&bob.id, 100)
             .await
@@ -2173,9 +2193,19 @@ async fn flush_outbox(r: &Repositories) -> Vec<OutboxEvent> {
         }
         for event in batch {
             r.outbox.mark_dispatched(event.id).await.unwrap();
-            all.push(event);
+            if event.event.is_some() {
+                all.push(event);
+            }
         }
     }
+}
+
+async fn flush_document_outbox(r: &Repositories) -> Vec<OutboxEvent> {
+    flush_outbox(r)
+        .await
+        .into_iter()
+        .filter(|event| event.event.is_some())
+        .collect()
 }
 
 fn dispatcher(r: &Repositories, consumer: Arc<Recorder>, batch_size: u32) -> OutboxDispatcher {
@@ -2263,7 +2293,7 @@ async fn event_context_contract(db: &Database) {
         )
         .await
         .unwrap();
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     let source = DocumentSource::folder(
         "captured folder",
         folio_core::models::FolderOrigin {
@@ -2289,12 +2319,12 @@ async fn event_context_contract(db: &Database) {
         )
         .await
         .unwrap();
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     r.documents
         .finalize_upload(vault, doc.id, "immutable/original")
         .await
         .unwrap();
-    let created = flush_outbox(&r).await.pop().unwrap();
+    let created = flush_document_outbox(&r).await.pop().unwrap();
     let original = created.context.as_ref().unwrap();
     assert_eq!(original.document_id, doc.id);
     assert_eq!(original.vault_id, vault);
@@ -2401,7 +2431,7 @@ async fn event_context_contract(db: &Database) {
             .title,
         "Original title"
     );
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     r.workflow_documents
         .update(
             vault,
@@ -2414,7 +2444,7 @@ async fn event_context_contract(db: &Database) {
         )
         .await
         .unwrap();
-    let updated = flush_outbox(&r).await.pop().unwrap();
+    let updated = flush_document_outbox(&r).await.pop().unwrap();
     assert_eq!(updated.origin, EventOrigin::Workflow);
     let later = updated.context.as_ref().unwrap();
     assert_eq!(later.title, "Later title");
@@ -2448,45 +2478,53 @@ async fn event_context_contract(db: &Database) {
         )
         .await
         .is_err());
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     r.outbox
         .append_document(vault, &progress, EventOrigin::User)
         .await
         .unwrap();
     assert_eq!(
-        flush_outbox(&r).await[0].context.as_ref().unwrap().title,
+        flush_document_outbox(&r).await[0]
+            .context
+            .as_ref()
+            .unwrap()
+            .title,
         "Later title"
     );
     r.documents
         .move_to(doc.id, vault, outside, None)
         .await
         .unwrap();
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     assert!(r
         .outbox
         .append_document(vault, &progress, EventOrigin::User)
         .await
         .is_err());
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     r.outbox
         .append_document(outside, &progress, EventOrigin::User)
         .await
         .unwrap();
     assert_eq!(
-        flush_outbox(&r).await[0].context.as_ref().unwrap().vault_id,
+        flush_document_outbox(&r).await[0]
+            .context
+            .as_ref()
+            .unwrap()
+            .vault_id,
         outside
     );
     r.documents.delete(outside, doc.id).await.unwrap();
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     assert!(r
         .outbox
         .append_document(outside, &progress, EventOrigin::User)
         .await
         .is_err());
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     r.documents.request_purge(outside, doc.id).await.unwrap();
     r.documents.finalize_purge(outside, doc.id).await.unwrap();
-    let deleted = flush_outbox(&r).await.pop().unwrap();
+    let deleted = flush_document_outbox(&r).await.pop().unwrap();
     assert_eq!(deleted.context.as_ref().unwrap().vault_id, outside);
     assert_eq!(deleted.context.as_ref().unwrap().title, "Later title");
     let DocumentEvent::Deleted {
@@ -2516,20 +2554,20 @@ async fn upload_finalization_contract(db: &Database) {
         .await
         .unwrap()
         .id;
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     let pending = r
         .documents
         .create_for_upload(vault, new_document("pending upload"))
         .await
         .unwrap();
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     let outside = r.vaults.instance_default().await.unwrap();
     assert!(r
         .documents
         .finalize_upload(outside, pending.id, "wrong")
         .await
         .is_err());
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
     exec(db,
         &["CREATE TRIGGER refuse_upload_event BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT, 'refused'); END"],
         &["CREATE FUNCTION refuse_upload_event() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql",
@@ -2563,7 +2601,7 @@ async fn upload_finalization_contract(db: &Database) {
     );
     first.unwrap();
     concurrent.unwrap();
-    let created = flush_outbox(&r).await;
+    let created = flush_document_outbox(&r).await;
     assert_eq!(created.len(), 1);
     assert!(
         matches!(created[0].event, Some(DocumentEvent::Created { document_id }) if document_id == pending.id)
@@ -2587,7 +2625,7 @@ async fn upload_finalization_contract(db: &Database) {
         .await
         .unwrap();
     assert!(
-        flush_outbox(&r).await.is_empty(),
+        flush_document_outbox(&r).await.is_empty(),
         "finalization remains idempotent after outbox pruning"
     );
     let direct = r
@@ -2595,7 +2633,7 @@ async fn upload_finalization_contract(db: &Database) {
         .create(vault, new_document("direct creation"))
         .await
         .unwrap();
-    let events = flush_outbox(&r).await;
+    let events = flush_document_outbox(&r).await;
     assert_eq!(events.len(), 1);
     assert!(
         matches!(events[0].event, Some(DocumentEvent::Created { document_id }) if document_id == direct.id)
@@ -2605,7 +2643,7 @@ async fn upload_finalization_contract(db: &Database) {
         .await
         .unwrap();
     assert!(
-        flush_outbox(&r).await.is_empty(),
+        flush_document_outbox(&r).await.is_empty(),
         "already-announced records never emit another Created"
     );
 }
@@ -2710,7 +2748,7 @@ async fn ocr_completion_contract(db: &Database) {
 async fn outbox_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
 
     // Lifecycle changes leave their event in the transaction that made them.
     let doc = r
@@ -2736,6 +2774,7 @@ async fn outbox_contract(db: &Database) {
             vault,
             doc.id,
             UpdateDocument {
+                document_date: None,
                 title: Some("renamed".into()),
                 ..Default::default()
             },
@@ -2765,7 +2804,7 @@ async fn outbox_contract(db: &Database) {
     assert!(is_not_found(r.documents.delete(vault, Id::new_v4()).await));
     r.documents.delete(vault, doc.id).await.unwrap();
 
-    let events = flush_outbox(&r).await;
+    let events = flush_document_outbox(&r).await;
     let seen: Vec<_> = events
         .iter()
         .filter_map(|e| e.event.as_ref().map(|event| (event.event_type(), e.origin)))
@@ -2792,7 +2831,7 @@ async fn outbox_contract(db: &Database) {
     ));
     r.documents.request_purge(vault, doc.id).await.unwrap();
     r.documents.finalize_purge(vault, doc.id).await.unwrap();
-    let deleted = flush_outbox(&r).await;
+    let deleted = flush_document_outbox(&r).await;
     assert_eq!(
         deleted
             .iter()
@@ -2811,7 +2850,7 @@ async fn outbox_contract(db: &Database) {
         .create(vault, new_document("metadata"))
         .await
         .unwrap();
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     r.documents
         .update(
             vault,
@@ -2825,11 +2864,7 @@ async fn outbox_contract(db: &Database) {
         .await
         .unwrap();
     assert_eq!(
-        flush_outbox(&r)
-            .await
-            .iter()
-            .filter(|event| event.event.is_some())
-            .count(),
+        flush_document_outbox(&r).await.len(),
         1,
         "one metadata save emits one compatibility projection"
     );
@@ -2849,7 +2884,7 @@ async fn outbox_contract(db: &Database) {
         .await
         .unwrap();
     assert!(
-        flush_outbox(&r).await.is_empty(),
+        flush_document_outbox(&r).await.is_empty(),
         "unchanged metadata emits no event"
     );
     assert!(r
@@ -2878,7 +2913,7 @@ async fn outbox_contract(db: &Database) {
         r.documents.get_tags(vault, atomic.id).await.unwrap()[0].id,
         tag.id
     );
-    assert!(flush_outbox(&r).await.is_empty());
+    assert!(flush_document_outbox(&r).await.is_empty());
 
     // A change whose event cannot be written does not happen either.
     let survivor = r
@@ -2886,7 +2921,7 @@ async fn outbox_contract(db: &Database) {
         .create(vault, new_document("survivor"))
         .await
         .unwrap();
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     exec(
         db,
         &["CREATE TRIGGER refuse_outbox BEFORE INSERT ON outbox_events
@@ -2943,7 +2978,7 @@ async fn outbox_contract(db: &Database) {
         .unwrap();
     assert_eq!(kept.title, "survivor", "the update was rolled back");
     assert!(
-        flush_outbox(&r).await.is_empty(),
+        flush_document_outbox(&r).await.is_empty(),
         "no event for a rolled back change"
     );
 
@@ -2986,7 +3021,7 @@ async fn outbox_contract(db: &Database) {
     assert_eq!(recorder.ids(), [first[0].id]);
 
     // Several dispatchers at once never deliver an event twice.
-    flush_outbox(&r).await;
+    flush_document_outbox(&r).await;
     for i in 0..40 {
         r.documents
             .create(vault, new_document(&format!("burst-{i}")))
@@ -3750,10 +3785,12 @@ async fn trash_contract(db: &Database, r: &Repositories) {
     assert!(r.documents.list_trash(vault).await.unwrap()[0]
         .deleted_at
         .is_some());
-    assert!(matches!(
-        r.vaults.delete(vault).await,
-        Err(Error::Conflict(_))
-    ));
+    r.vaults.delete(vault).await.unwrap();
+    assert_eq!(
+        r.documents.locate_retained(document.id).await.unwrap(),
+        Some(vault)
+    );
+    r.vaults.restore(vault).await.unwrap();
 
     let restored = r.documents.restore(vault, document.id).await.unwrap();
     assert_eq!(restored.id, document.id);
@@ -4225,7 +4262,8 @@ async fn postgres_scoped_capture_after_lock_wait_sees_one_complete_metadata_vers
         .replay(id - 1, Utc::now() - Duration::days(1), 10)
         .await
         .unwrap();
-    let snapshot = events[0].context.as_ref().unwrap();
+    let event = events.iter().find(|event| event.id == id).unwrap();
+    let snapshot = event.context.as_ref().unwrap();
     assert_eq!(snapshot.title, "after");
     assert_eq!(
         snapshot.tags,

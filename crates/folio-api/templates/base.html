@@ -130,6 +130,35 @@ const escapeHtml = (text) => {
   return div.innerHTML;
 };
 
+Stimulus.register("document-review", class extends Controller {
+  static targets = ["button", "error"];
+
+  async submit(event) {
+    event.preventDefault();
+    if (this.saving) return;
+    this.saving = true;
+    const label = this.buttonTarget.textContent;
+    this.buttonTarget.disabled = true;
+    this.buttonTarget.textContent = "Saving review…";
+    this.errorTarget.hidden = true;
+    try {
+      const response = await fetch(this.element.action, {
+        method: "POST", credentials: "same-origin",
+        body: new URLSearchParams(new FormData(this.element)),
+      });
+      if (!response.ok) throw new Error("Review rejected");
+      window.location.reload();
+    } catch (_) {
+      this.errorTarget.textContent = "Could not save review. Try again.";
+      this.errorTarget.hidden = false;
+    } finally {
+      this.saving = false;
+      this.buttonTarget.disabled = false;
+      this.buttonTarget.textContent = label;
+    }
+  }
+});
+
 // Upload Controller
 Stimulus.register(
   "upload",
@@ -1068,6 +1097,7 @@ Stimulus.register(
   "sse",
   class extends Controller {
     connect() {
+      if (!document.body.dataset.vaultId) return;
       this.source = new EventSource(vaultURL("/events"));
       Turbo.connectStreamSource(this.source);
       for (const name of ["trashed", "restored", "purge_requested", "deleted"]) {
@@ -1087,6 +1117,7 @@ Stimulus.register(
 
     disconnect() {
       clearTimeout(this.refreshTimeout);
+      if (!this.source) return;
       Turbo.disconnectStreamSource(this.source);
       this.source.close();
     }
@@ -1627,7 +1658,7 @@ Stimulus.register("integrations", class extends Controller {
     </script>
   </head>
   <body
-    data-vault-id="{{ sidebar.vault_id }}"
+    {% if !sidebar.vaults.is_empty() %}data-vault-id="{{ sidebar.vault_id }}"{% endif %}
     data-controller="dropzone sse toast upload-modal command-palette nav theme hotkeys vault-picker"
     data-action="dragenter->dropzone#dragenter dragleave->dropzone#dragleave dragover->dropzone#dragover drop->dropzone#drop"
   >

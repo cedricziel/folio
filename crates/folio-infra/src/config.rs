@@ -92,6 +92,7 @@ impl IngestConfig {
     /// The configured sources as read-only definitions
     pub fn definitions(&self) -> Vec<IngestionSourceDef> {
         let folders = self.folders.iter().map(|(name, c)| IngestionSourceDef {
+            lifecycle: None,
             id: config_source_id("folder", name),
             name: name.clone(),
             enabled: c.enabled,
@@ -100,6 +101,7 @@ impl IngestConfig {
             vault_id: None,
         });
         let mailboxes = self.email.iter().map(|(name, c)| IngestionSourceDef {
+            lifecycle: None,
             id: config_source_id("email", name),
             name: name.clone(),
             enabled: c.enabled,

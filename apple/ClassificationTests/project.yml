@@ -1,0 +1,46 @@
+name: ClassificationPreview
+options:
+  deploymentTarget:
+    iOS: '18.0'
+    macOS: '15.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    CODE_SIGNING_ALLOWED: 'NO'
+packages:
+  FolioKit:
+    path: ../FolioKit
+targets:
+  Fixture:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Fixture
+      - ../Folio/Sources/TaxonomyView.swift
+    dependencies:
+      - package: FolioKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.folio.tests.classificationfixture
+        GENERATE_INFOPLIST_FILE: 'YES'
+        INFOPLIST_KEY_UILaunchScreen_Generation: 'YES'
+  ClassificationUITests:
+    type: bundle.ui-testing
+    supportedDestinations: [iOS, macOS]
+    sources:
+      - Tests
+    dependencies:
+      - target: Fixture
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.folio.tests.classificationuitests
+        GENERATE_INFOPLIST_FILE: 'YES'
+schemes:
+  Fixture:
+    build:
+      targets:
+        Fixture: all
+        ClassificationUITests: test
+    test:
+      targets:
+        - ClassificationUITests

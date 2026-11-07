@@ -63,6 +63,7 @@ private struct FixedToken: BearerTokenProvider {
 private let documentJSON = """
     {"id": "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f", "title": "Jahresabrechnung 2025",
      "vault_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "uploaded_by": "fixture-user",
+     "created_by": "archive-creator", "updated_by": "archive-editor",
      "content": "Rechnungsnummer 2025-00318", "original_filename": "bill.pdf",
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
      "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
@@ -73,6 +74,77 @@ private let documentJSON = """
     """
 
 @Suite(.serialized) struct LiveFolioServiceTests {
+    @Test func reviewMutationUsesSelectedVaultAndMapsExplicitState() async throws {
+        let vault = UUID()
+        let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "PUT")
+            #expect(request.url?.path == "/api/documents/\(id.uuidString.lowercased())/review")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let payload = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(payload?["reviewed"] as? Bool == true)
+            #expect(payload?.count == 1)
+            let json = documentJSON.replacingOccurrences(
+                of: "\"title\":",
+                with:
+                    "\"reviewed\":true,\"can_review_document\":true,\"review_origin\":\"human\",\"reviewed_by\":\"reviewer\",\"title\":"
+            )
+            return .init(body: Data(json.utf8))
+        }
+        let doc = try await makeService().scoped(to: vault).setDocumentReview(true, for: id)
+        #expect(doc.reviewed == true)
+        #expect(doc.canReviewDocument)
+        #expect(doc.reviewedBy == "reviewer")
+        #expect(doc.reviewOrigin == "human")
+    }
+
+    @Test func oldServerDoesNotGrantReviewControlsOrSilentlyBroadenFilters() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(documentJSON.utf8)) }
+        let doc = try await makeService().document(id: UUID())
+        #expect(doc.reviewed == nil)
+        #expect(!doc.canReviewDocument)
+        StubURLProtocol.handler = { _, _ in
+            .init(body: Data("{\"documents\":[],\"count\":0}".utf8))
+        }
+        await #expect(throws: FolioError.self) {
+            try await makeService().documents(filter: DocumentFilter(reviewed: false))
+        }
+    }
+
+    @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {
+        let vault = UUID()
+        let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
+        StubURLProtocol.handler = { request, body in
+            #expect(request.httpMethod == "PATCH")
+            #expect(
+                request.url?.path
+                    == "/api/documents/\(id.uuidString.lowercased())")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            #expect(json?["document_date"] is NSNull)
+            return .init(body: Data(documentJSON.utf8))
+        }
+        let document = try await makeService().scoped(to: vault).setDocumentDate(nil, for: id)
+        #expect(document.documentDate == nil)
+    }
+
+    @Test func dateResponsePreservesHistoricalDayAndEditCapability() async throws {
+        StubURLProtocol.handler = { _, _ in
+            let json = documentJSON.replacingOccurrences(
+                of: "\"title\":", with: "\"document_date\":\"1582-10-10\",\"can_edit_document_date\":true,\"title\":")
+            return .init(body: Data(json.utf8))
+        }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.documentDate?.rawValue == "1582-10-10")
+        #expect(document.canEditDocumentDate)
+    }
+
+    @Test func oldServerDoesNotGrantDateEditingCapability() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(documentJSON.utf8)) }
+        let document = try await makeService().document(id: UUID())
+        #expect(!document.canEditDocumentDate)
+    }
+
     private let baseURL = URL(string: "https://folio.example.com")!
 
     private let savedViewJSON = """
@@ -227,6 +299,53 @@ private let documentJSON = """
         await #expect(throws: FolioError.unreadableResponse) { try await makeService().thumbnail(id: UUID()) }
     }
 
+    @Test func sourceActivityKeepsVaultAndOmitsPrivateDiagnostics() async throws {
+        let vault = UUID(), source = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/sources")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(
+                body: Data(
+                    """
+                    [{"id":"\(source)","vault_id":"\(vault)","name":"Mailbox","enabled":true,
+                      "origin":"config","config":{"password":"private"},
+                      "status":{"last_error":"password=private","last_run_at":"2026-11-02T10:00:00Z",
+                                "last_imported":0,"last_skipped":0,"last_failed":0}}]
+                    """.utf8))
+        }
+        let sources = try await makeService().sourceActivity(vaultID: vault)
+        #expect(sources.count == 1)
+        #expect(sources[0].health == .unavailable)
+        #expect(sources[0].lastCheckedAt != nil)
+        #expect(!String(describing: sources[0]).contains("private"))
+    }
+
+    @Test func sourceOutcomesRetainVaultAndDecodeBoundedResults() async throws {
+        let vault = UUID(), source = UUID(), item = UUID(), attempt = UUID(), event = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/sources/\(source.uuidString.lowercased())/outcomes")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            #expect(query.first { $0.name == "before" }?.value == "8")
+            #expect(query.first { $0.name == "limit" }?.value == "50")
+            return .init(
+                body: Data(
+                    """
+                    {"vault_id":"\(vault)","source_id":"\(source)","next_before":null,"outcomes":[
+                      {"id":7,"vault_id":"\(vault)","source_id":"\(source)","item_id":"\(item)",
+                       "attempt_id":"\(attempt)","event_id":"\(event)","occurred_at":"2026-11-02T10:00:00Z",
+                       "outcome":"failed","document_id":null}
+                    ]}
+                    """.utf8))
+        }
+        let page = try await makeService().sourceOutcomes(vaultID: vault, sourceID: source, before: 8)
+        #expect(page.vaultID == vault)
+        #expect(page.sourceID == source)
+        #expect(page.outcomes.first?.outcome == .failed)
+        #expect(page.outcomes.first?.attemptID == attempt)
+        #expect(page.outcomes.first?.documentID == nil)
+    }
+
     @Test func browseSendsTextFiltersCursorAndImmutableVault() async throws {
         let vault = UUID(), tag = UUID(), correspondent = UUID()
         let query = DocumentBrowseQuery(
@@ -316,7 +435,7 @@ private let documentJSON = """
             return .init(
                 body: Data(
                     """
-                    [{"id":"\(UUID())","vault_id":"\(vault)","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z"}]
+                    [{"id":"\(UUID())","vault_id":"\(vault)","name":"\(vault)","color":null,"created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-14T10:15:30Z"}]
                     """.utf8))
         }
 
@@ -358,6 +477,72 @@ private let documentJSON = """
         )
     }
 
+    @Test func taxonomyTrashUsesVaultScopeAndDecodesAuditMetadata() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/tags/trash")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            return .init(
+                body: Data(
+                    """
+                    [{"id":"99999999-8888-4777-8666-555555555555","vault_id":"\(vault)",
+                    "name":"Retained","created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-15T10:15:30.123Z",
+                    "deleted_at":"2025-03-15T10:15:30.123Z","created_by":"alice","updated_by":"bob"}]
+                    """.utf8))
+        }
+        let entries = try await makeService().scoped(to: vault).taxonomy(.tags, deleted: true)
+        #expect(entries.count == 1)
+        #expect(entries[0].vaultID == vault)
+        #expect(entries[0].deletedAt != nil)
+        #expect(entries[0].createdBy == "alice")
+        #expect(entries[0].updatedBy == "bob")
+    }
+
+    @Test func taxonomyRestoreConflictKeepsTheRetainedEntryVisible() async throws {
+        let vault = UUID(), entryID = UUID()
+        let body = Data(
+            """
+            [{"id":"\(entryID)","vault_id":"\(vault)","name":"Retained",
+            "created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-15T10:15:30Z",
+            "deleted_at":"2025-03-15T10:15:30Z"}]
+            """.utf8)
+        StubURLProtocol.handler = { request, _ in
+            if request.httpMethod == "POST" {
+                #expect(request.url?.path == "/api/tags/\(entryID.uuidString.lowercased())/restore")
+                return .init(status: 409)
+            }
+            return .init(body: request.url?.path.hasSuffix("trash") == true ? body : Data("[]".utf8))
+        }
+        let model = await TaxonomyViewModel(service: makeService().scoped(to: vault), kind: .tags)
+        await model.load()
+        let entry = try #require(await model.trash.first)
+        await model.restore(entry)
+        #expect(await model.trash.first?.id == entryID)
+        #expect(await model.error == "Restore failed. An active entry already uses this name.")
+    }
+
+    @Test func taxonomyDecodeFailureIsUnreadable() async throws {
+        StubURLProtocol.handler = { _, _ in .init(body: Data(#"[{"id":"not-a-uuid"}]"#.utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) {
+            _ = try await makeService().scoped(to: UUID()).taxonomy(.tags, deleted: false)
+        }
+    }
+
+    @Test func taxonomySaveTrimsTheName() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, body in
+            if request.httpMethod == "POST" {
+                let sent = try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any]
+                #expect(sent?["name"] as? String == "Insurance")
+                return .init(body: Data("{}".utf8))
+            }
+            return .init(body: Data("[]".utf8))
+        }
+        let model = await TaxonomyViewModel(service: makeService().scoped(to: vault), kind: .tags)
+        await model.save(name: "  Insurance \n")
+        #expect(await model.error == nil)
+    }
+
     @Test func listsDocumentsAndMapsFields() async throws {
         StubURLProtocol.handler = { request, _ in
             #expect(request.url?.path == "/api/documents")
@@ -372,6 +557,19 @@ private let documentJSON = """
         #expect(document.createdAt.timeIntervalSince1970 > 1_741_000_000)
         #expect(document.tags.map(\.name) == ["Taxes"])
         #expect(document.tags.first?.color == "#ff5733")
+        #expect(document.createdBy == "archive-creator")
+        #expect(document.updatedBy == "archive-editor")
+    }
+
+    @Test func legacyDocumentWithoutActorMetadataKeepsUnknownAttribution() async throws {
+        var payload = try #require(try JSONSerialization.jsonObject(with: Data(documentJSON.utf8)) as? [String: Any])
+        payload.removeValue(forKey: "created_by")
+        payload.removeValue(forKey: "updated_by")
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        StubURLProtocol.handler = { _, _ in .init(body: body) }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.createdBy == nil)
+        #expect(document.updatedBy == nil)
     }
 
     @Test func completedOcrWithoutTextDoesNotKeepReading() async throws {
@@ -504,6 +702,73 @@ private let documentJSON = """
         }
 
         try await makeService().scoped(to: vault).addTag(tag, to: document)
+    }
+
+    @Test func entryRequestsRetainVaultRetryKeyAndLiteralText() async throws {
+        let vault = UUID()
+        let document = UUID()
+        let entry = UUID()
+        let key = UUID()
+        let body = "<script>literal</script>\nsecond line"
+        let response = try JSONSerialization.data(withJSONObject: [
+            "id": entry.uuidString, "document_id": document.uuidString, "vault_id": vault.uuidString,
+            "kind": "note", "body": body, "created_at": "2026-11-03T01:02:03.123456Z",
+            "updated_at": "2026-11-03T01:02:03Z", "created_by": "author",
+            "can_edit": true, "can_delete": true,
+        ])
+        StubURLProtocol.handler = { request, data in
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+            #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == key.uuidString.lowercased())
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer entry-token")
+            let json = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: String]
+            #expect(json == ["kind": "note", "body": body])
+            return .init(status: 201, body: response)
+        }
+        let result = try await makeService(token: FixedToken(value: "entry-token")).scoped(to: vault).createEntry(
+            documentID: document, kind: .note, body: body, key: key)
+        #expect(result.body == body)
+        #expect(result.canEdit)
+        #expect(result.vaultID == vault)
+    }
+
+    @Test func entryPagingEscapesCursorAndRetainsCapabilities() async throws {
+        let cursor = "opaque+continuation/="
+        StubURLProtocol.handler = { request, _ in
+            let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems
+            #expect(query?.first(where: { $0.name == "cursor" })?.value == cursor)
+            #expect(query?.first(where: { $0.name == "kind" })?.value == "comment")
+            return .init(body: Data("{\"entries\":[],\"next_cursor\":null,\"can_create\":false}".utf8))
+        }
+        let page = try await makeService().entryPage(documentID: UUID(), kind: .comment, cursor: cursor)
+        #expect(!page.canCreate)
+        #expect(page.nextCursor == nil)
+    }
+
+    @Test func entryEditDeleteAndAccessErrors() async throws {
+        let document = UUID()
+        let entry = UUID()
+        StubURLProtocol.handler = { request, data in
+            #expect(request.httpMethod == "PATCH")
+            #expect(
+                request.url?.path.lowercased()
+                    == "/api/documents/\(document.uuidString.lowercased())/entries/\(entry.uuidString.lowercased())")
+            let json = try? JSONSerialization.jsonObject(with: data ?? Data()) as? [String: String]
+            #expect(json == ["body": "Updated"])
+            return .init(status: 403, body: Data("{\"error\":\"Access revoked\"}".utf8))
+        }
+        await #expect(throws: FolioError.server(status: 403, message: "Access revoked")) {
+            _ = try await makeService().updateEntry(documentID: document, entryID: entry, body: "Updated")
+        }
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.httpMethod == "DELETE")
+            return .init(status: 204)
+        }
+        try await makeService().deleteEntry(documentID: document, entryID: entry)
+        StubURLProtocol.handler = { _, _ in .init(body: Data("{}".utf8)) }
+        await #expect(throws: FolioError.unreadableResponse) {
+            _ = try await makeService().entryPage(documentID: document, kind: .note, cursor: nil)
+        }
     }
 
     @Test func surfacesServerErrorMessage() async throws {

@@ -22,3 +22,17 @@
 - [ ] Run project-local verify in disposable environments and update covered behavior.
 - [ ] Run make format, make lint, and make test.
 - [ ] Archive completed specifications, merge reviewable PRs, and verify their merged status.
+
+
+## 6. Classification delivery
+- [x] Implement and verify taxonomy lifecycle metadata and retained references on SQLite and PostgreSQL.
+- [x] Verify web trash, name reuse, restore conflicts, vault isolation, and viewer restrictions in a disposable browser instance.
+- [x] Regenerate OpenAPI and verify native tag compatibility with the Swift package suite.
+- [ ] Deliver native classification management after its isolated UI verification.
+
+## Vault increment
+- [ ] Verify both database migrations, scoped metadata, atomic owner creation, retained references, no-op/rollback suppression, and permanent vault/membership audit facts.
+- [ ] Verify protected defaults, current-owner recovery, viewer/admin isolation, workflow cancellation/fencing, and managed/configured source activity checks.
+- [ ] Verify usable web owner controls and desktop/mobile lifecycle regression coverage.
+- [ ] Regenerate API/client contracts and implement Apple metadata, owner management, recovery, and isolated native regressions before completing the full lifecycle change.
+- [ ] Limit owner lifecycle history to vault and membership facts so document activity cannot push them out of the 100-event window.

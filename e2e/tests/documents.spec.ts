@@ -56,6 +56,10 @@ test.describe("document lifecycle", () => {
     await page.getByRole("link", { name: new RegExp(title) }).click();
     await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}$/);
     await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
+    const processing = page.getByRole("region", { name: "Processing", exact: true });
+    await expect(processing).toBeVisible();
+    await expect(processing.getByText("Text extraction", { exact: true })).toBeVisible();
+    await expect(processing.getByText("Search indexing", { exact: true })).toBeVisible();
   });
 
   test("search finds the document by title", async ({ page }) => {
@@ -103,4 +107,59 @@ test.describe("JSON API", () => {
 
     await request.delete(`/api/documents/${listed.id}`);
   });
+});
+
+test("document date can be saved and cleared without changing import time", async ({ page, request }, testInfo) => {
+  const title = uniqueTitle("document-date");
+  await uploadViaUi(page, title);
+  const response = await request.get("/api/documents");
+  const { documents } = await response.json();
+  const original = documents.find((document: { title: string }) => document.title === title);
+  expect(original).toBeDefined();
+  try {
+    await page.goto(`/documents/${original.id}`);
+    await page.getByLabel("Document date", { exact: true }).fill("2000-02-29");
+    await Promise.all([
+      page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith(`/documents/${original.id}/date`)),
+      page.getByRole("button", { name: "Save date", exact: true }).click(),
+    ]);
+    await expect(page.getByLabel("Document date", { exact: true })).toHaveValue("2000-02-29");
+    const dated = await (await request.get(`/api/documents/${original.id}`)).json();
+    expect(dated.document_date).toBe("2000-02-29");
+    expect(dated.created_at).toBe(original.created_at);
+    await page.screenshot({ path: testInfo.outputPath("document-date.png") });
+    await page.getByRole("button", { name: "Clear date", exact: true }).click();
+    await expect(page.getByLabel("Document date", { exact: true })).toHaveValue("");
+    const cleared = await (await request.get(`/api/documents/${original.id}`)).json();
+    expect(cleared.document_date).toBeNull();
+    expect(cleared.created_at).toBe(original.created_at);
+  } finally {
+    await request.delete(`/api/documents/${original.id}`);
+  }
+});
+
+test("review can retry a failed write and keeps the selected document", async ({ page, request }) => {
+  const title = uniqueTitle("review-retry");
+  await uploadViaUi(page, title);
+  const { documents } = await (await request.get("/api/documents")).json();
+  const original = documents.find((document: { title: string }) => document.title === title);
+  const reviewPath = `**/documents/${original.id}/review`;
+  try {
+    await page.goto(`/documents/${original.id}`);
+    await page.route(reviewPath, route => route.abort());
+    await page.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Could not save review");
+    expect((await (await request.get(`/api/documents/${original.id}`)).json()).reviewed).toBe(false);
+    await page.unroute(reviewPath);
+    await page.getByRole("button", { name: "Mark reviewed", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Mark unreviewed", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/documents/${original.id}$`));
+    const reviewed = await (await request.get(`/api/documents/${original.id}`)).json();
+    expect(reviewed.reviewed).toBe(true);
+    expect(reviewed.created_at).toBe(original.created_at);
+    await page.getByRole("button", { name: "Mark unreviewed", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Mark reviewed", exact: true })).toBeVisible();
+  } finally {
+    await request.delete(`/api/documents/${original.id}`);
+  }
 });

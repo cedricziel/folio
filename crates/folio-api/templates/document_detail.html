@@ -2,7 +2,9 @@
     <div class="panel">
         <h2 class="heading">{{ document.title }}</h2>
         <dl class="f-meta-list">
-            <dt>Added</dt>
+            <dt>Document date</dt>
+            <dd><span class="f-meta">{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}Not set{% endmatch %}</span></dd>
+            <dt>Imported</dt>
             <dd><span class="f-meta">{{ document.created_at }}</span></dd>
             {% match document.original_filename %}
             {% when Some with (filename) %}
@@ -13,6 +15,7 @@
             <dt>Source</dt>
             <dd><span class="f-meta">{{ document.source.describe() }}</span></dd>
         </dl>
+        {% include "partials/document_history.html" %}
         {% match document.content %}
         {% when Some with (content) %}
         <pre class="ocr">{{ content }}</pre>

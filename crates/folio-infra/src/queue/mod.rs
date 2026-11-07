@@ -1,7 +1,10 @@
 //! Job queue for background processing (SQLite or PostgreSQL)
 
 mod postgres;
+mod processing_scope;
+mod recovery;
 mod sqlite;
+pub mod stages;
 mod worker;
 
 pub(crate) use postgres::insert_job as insert_job_postgres;
@@ -135,6 +138,12 @@ pub enum FailOutcome {
     LostLease,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobContext {
+    pub vault_id: Option<folio_core::models::VaultId>,
+    pub lineage: folio_core::mutation::MutationLineage,
+}
+
 /// A job in the queue
 #[derive(Debug, Clone)]
 pub struct Job {
@@ -230,9 +239,55 @@ impl JobQueue {
         dispatch!(self, fail(job, error, retry))
     }
 
+    pub async fn fail_with_reason(
+        &self,
+        job: &Job,
+        error: &str,
+        retry: bool,
+        reason: folio_core::processing_events::ProcessingReason,
+    ) -> Result<FailOutcome> {
+        dispatch!(self, fail_with_reason(job, error, retry, reason))
+    }
+
+    pub async fn start_ocr(&self, job: &Job) -> Result<Option<stages::OcrStageFence>> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::start_ocr(queue.pool(), job).await,
+            Self::Postgres(queue) => stages::postgres::start_ocr(queue.pool(), job).await,
+        }
+    }
+
+    /// `embed` false skips embedding with `provider_disabled` instead of queueing it.
+    pub async fn complete_ocr(
+        &self,
+        fence: &stages::OcrStageFence,
+        content: &str,
+        embed: bool,
+    ) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => {
+                stages::sqlite::complete_ocr(queue.pool(), fence, content, embed).await
+            }
+            Self::Postgres(queue) => {
+                stages::postgres::complete_ocr(queue.pool(), fence, content, embed).await
+            }
+        }
+    }
+
+    pub async fn skip_ocr(&self, fence: &stages::OcrStageFence, embed: bool) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::skip_ocr(queue.pool(), fence, embed).await,
+            Self::Postgres(queue) => stages::postgres::skip_ocr(queue.pool(), fence, embed).await,
+        }
+    }
+
     /// Renew only the current, unexpired claim. An expired claim cannot be revived.
     pub async fn renew(&self, job: &Job) -> Result<bool> {
         dispatch!(self, renew(job))
+    }
+
+    /// Returns the enqueue-time scope, or None for jobs created before context persistence.
+    pub async fn context(&self, job_id: Uuid) -> Result<Option<JobContext>> {
+        dispatch!(self, context(job_id))
     }
 
     /// Get count of pending jobs

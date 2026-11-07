@@ -167,7 +167,7 @@
             {% match workflow_id %}
             {% when Some with (id) %}
             <button type="submit" class="f-btn" formaction="{{ "/workflows"|vault_url }}/{{ id }}/test" formnovalidate>Send test</button>
-            <button type="submit" class="f-btn f-btn-quiet f-btn-danger push-end" formaction="{{ "/workflows"|vault_url }}/{{ id }}/delete" formnovalidate>Delete workflow</button>
+            <button type="submit" class="f-btn f-btn-quiet f-btn-danger push-end" formaction="{{ "/workflows"|vault_url }}/{{ id }}/delete" formnovalidate>Move to trash</button>
             {% when None %}
             {% endmatch %}
         </div>

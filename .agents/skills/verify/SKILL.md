@@ -22,6 +22,10 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
 ```
 
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
+`ProcessingSummaryTests` checks distinct text-extraction and search-indexing states,
+empty OCR completion, skipped work, and last-attempt failure labels. The API
+`routes` suite checks the corresponding rendered detail, and the document lifecycle
+E2E test checks both stage labels in the Processing section.
 `DocumentImportTests` covers mixed PDF and image imports, unsupported files, directories, missing files, and remote URL rejection using temporary files. File-type resolution requires access to macOS type services. For a manual drop check, use an isolated account or simulator and a throwaway server, then drop multiple PDFs and images into the document list, including when it is empty. Check the hover indicator, upload progress, and refreshed list.
 `e2e/tests/documents.spec.ts` covers dropping two files onto the web page, the hover indicator, and completion of both uploads. Run it only against the disposable instance started by the E2E setup.
 `WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
@@ -384,6 +388,13 @@ packages so stale artifacts from the other checkout cannot satisfy a check.
 
 ## Verify worker leases
 
+Run `cargo test -p folio-infra --test processing_job_context` for enqueue-time vault
+and trusted lineage retention through retry and vault move in both databases.
+Worker `processing_claim` tests cover restored source lineage, system attribution,
+and rejection before work starts in a different vault. This preflight check does
+not establish transactional result fencing for moves during provider execution.
+
+
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test queue_leases`
 against disposable SQLite and PostgreSQL fixtures. The shared contract covers
 renewal of long-running work, expired-owner recovery, stale renewal and completion,
@@ -480,46 +491,70 @@ forged input, optional authentication, concurrent requests, cancellation, and
 system task isolation. HTTP/MCP fixtures use temporary databases, test identities,
 and local transports; they do not access user sessions or credentials.
 
+
 The core suite also covers trusted event lineage: nested clearing and restoration,
 cancellation, concurrent scopes, detached tasks, actor independence, and envelope
 validation. Workflow actions must scope server-owned correlation and causation
 before repository mutations; request bodies cannot establish this context.
 
+## Verify workflow configuration lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_lifecycle --test workflows --test repository_contract`
+with disposable SQLite and PostgreSQL fixtures. The lifecycle contract covers
+server actors, no-op timestamps, retained configuration and run history, deletion
+rollback, terminal-state fencing, inactive queue admission, and legacy upgrades.
+Restore must preserve failed pending runs rather than replay their queued jobs.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test workflows --test vaults` for
+management controls, deleted-workflow history, secret masking, and vault access.
+Regenerate OpenAPI after response or route changes. Never verify workflow delivery
+against an existing webhook receiver or user archive.
+
+## Verify managed source lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test source_lifecycle`
+with disposable SQLite and PostgreSQL fixtures. The shared contract covers actor
+metadata, retained import ledger and status, disabled scheduling after deletion,
+claim fencing, active-name reuse, restore conflicts, no-op suppression, and atomic
+source/outbox rollback. Configured sources remain outside managed lifecycle storage.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test sources --test vaults` for the
+existing management page, deleted-source listing, restore controls, masked credentials,
+and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite
+above when changing source response fields. Never poll an existing folder or mailbox
+while verifying source management.
+
+## Verify classification lifecycle
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test taxonomy_lifecycle --test repository_contract`
+for SQLite/PostgreSQL soft deletion, stable identity, retained document references,
+name reuse, restore conflicts, actor metadata, and transactional lifecycle events.
+Run `cargo test -p folio-api --test routes --test web --test openapi` for scoped
+JSON and management routes, then regenerate OpenAPI and run the isolated Apple
+package suite above. Native tests cover scoped taxonomy requests and restore
+conflicts that preserve the displayed trash entry.
+
+Build `folio-app`, then run `npx playwright test classification-lifecycle.spec.ts`
+from `e2e/` against its disposable setup instance. The suite covers all three
+classification types, retained labels, restore conflicts, vault isolation, and
+viewer restrictions. Inspect its active/trash screenshot attachments. Use the
+isolated Classifications fixture to check large text, loading errors, and Retry.
+The fixture shows the screen in a window, so check macOS sheet sizing by opening
+Classifications from the WorkspaceView sidebar; package tests do not verify layout.
+
+## Verify retained vaults and owner grants
+
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test vault_lifecycle` against disposable SQLite and PostgreSQL fixtures. It covers scoped actor/lineage metadata, atomic initial ownership, no-op and rollback suppression, protected defaults, retained references, owner-only recovery, permanent audit history after outbox pruning, and cancellation/fencing of pending workflow runs.
+Run `RUSTC_WRAPPER= cargo test -p folio-api --test vault_lifecycle --test vaults` for owner, viewer, and unrelated-admin boundaries, forged lifecycle fields, deleted-vault scoping, and management controls. Existing document-focused drains must acknowledge every event while returning only document projections; dedicated lifecycle contracts inspect all envelopes.
+Run the existing repository, workflow, vault-isolation, and ingestion contracts after changes to parent-vault activity checks. A retained vault must not start workflow runs or source polls while deleted; restoring it must not reopen terminal runs.
+Build the disposable E2E fixture and run `npx playwright test vault_lifecycle.spec.ts vaults.spec.ts` from `e2e/` for desktop/mobile creation, deletion, restoration, and existing vault isolation. Do not point these tests at an existing archive. The Apple catalog and destination picker do not implement lifecycle management; native metadata, owner controls, recovery, and isolated native regressions remain required follow-up work.
+
 ## Verify document notes and comments
 
-Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_entries --test document_entry_schema --test domain_events --test repository_contract`.
-These disposable SQLite and PostgreSQL 17 suites cover scoped entry persistence,
-creation receipts, concurrent retries, event rollback, no-op mutations, all six
-body-free transitions, actor/lineage attribution, moves, and receipt purge.
+Run the [document entry checks](references/document-entries.md).
 
-Run `RUSTC_WRAPPER= cargo test -p folio-api --test document_entries --test entry_pages --test mutation_actor --test personal_tokens`.
-The request fixtures cover contributor access to another member's document,
-author editing, moderation, revoked roles, personal-token scopes, scoped cursors,
-deleted creation retries, escaped HTML, and retained failed forms.
-Regenerate the linked native API schema with
-`RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`.
-
-Build `folio-app`, then run `npx playwright test discussion.spec.ts` from `e2e/`
-with the disposable setup and teardown. Both viewport cases commit a creation
-while dropping its response, retry the retained key/body, then edit and delete.
-They also verify separate sections and run scoped accessibility checks. Never
-set `E2E_BASE_URL` to an existing archive.
 ## Verify document metadata transitions
 
-Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_transitions --test repository_contract --test workflows`
-with a task-owned temporary target directory. These suites use temporary SQLite
-databases, disposable PostgreSQL containers, and loopback webhook fixtures.
-They cover exact title, classification, and tag deltas, no-ops, rollback,
-server-derived actors, shared mutation identities, and compatibility updates.
-Move contracts check source/destination snapshot isolation, rejected vault moves,
-and same-vault no-ops on both databases.
-Domain-only outbox rows have no legacy document projection; assertions about
-compatibility updates must select that projection explicitly.
-
-Run `cargo test -p folio-api --test routes classification_form` for the HTML
-and API form entry points and malformed-ID preservation. Run
-`cargo test -p folio-mcp --test tools update_document_changes_fields` for MCP
-metadata edits and the persisted title delta. Both use isolated fixtures.
+For date edits, metadata events, moves, and their API/MCP entry points, run the
+[document metadata checks](references/document-metadata.md).
 
 ## Verify saved-view web controls
 
@@ -537,6 +572,9 @@ Shared navigation changes also require the Linux `visual.spec.ts` suite.
 Inspect its image diffs and update affected baselines before merging.
 
 ## Verify typed metadata fields and options
+
+Run `cargo test -p folio-core --lib --features openapi` for complete long-text event
+snapshots, exact serialized-byte limits, and audience/target validation on decode.
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_fields --test metadata_options`
 with task-owned build storage, at most two jobs, incremental compilation disabled,

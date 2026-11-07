@@ -59,6 +59,7 @@ public final class DocumentListViewModel {
     /// A failed action such as delete; shown transiently, the list stays as it was.
     public private(set) var actionError: String?
 
+    public private(set) var supportsReviewFilters = false
     public var filter = DocumentFilter()
     public var sort = DocumentBrowseQuery.Sort.newest
     public private(set) var isLoadingMore = false
@@ -234,6 +235,7 @@ public final class DocumentListViewModel {
             let page = try await readPage(request, cursor: nil, ticket: ticket, knownIDs: [])
             guard isCurrent(ticket) else { return }
             let previousIDs = Set(rows.map(\.id))
+            supportsReviewFilters = page.supportsReviewFilters
             documents = page.documents
             nextCursor = page.nextCursor
             loadedVaultID = page.vaultID
@@ -264,30 +266,54 @@ public final class DocumentListViewModel {
             if let next = page.nextCursor, seen.contains(next) { throw FolioError.unreadableResponse }
             var ids = knownIDs
             let fresh = page.documents.filter {
-                (scope == .all || $0.status != .filed) && ids.insert($0.id).inserted
+                (showsFiled(request.filter) || $0.status != .filed) && ids.insert($0.id).inserted
             }
             if !fresh.isEmpty || page.nextCursor == nil {
-                return DocumentPage(vaultID: page.vaultID, documents: fresh, nextCursor: page.nextCursor)
+                return DocumentPage(
+                    vaultID: page.vaultID, documents: fresh, nextCursor: page.nextCursor,
+                    supportsReviewFilters: page.supportsReviewFilters)
             }
             cursor = page.nextCursor
         }
     }
 
+    /// Reloads correspondent and type names, for example after classifications were renamed or trashed.
+    public func reloadLookups() async {
+        await loadLookups()
+        rebuildRows()
+    }
+
     private func loadLookups() async {
         async let people = try? service.correspondents()
         async let types = try? service.documentTypes()
+        async let trashedPeople = try? service.taxonomy(.correspondents, deleted: true)
+        async let trashedTypes = try? service.taxonomy(.documentTypes, deleted: true)
         let (loadedPeople, loadedTypes) = await (people, types)
+        let (retainedPeople, retainedTypes) = await (trashedPeople, trashedTypes)
         lookupsLoaded = loadedPeople != nil && loadedTypes != nil
         if let loadedPeople {
-            correspondents = Dictionary(uniqueKeysWithValues: loadedPeople.map { ($0.id, $0.name) })
+            correspondents = Self.names(active: loadedPeople.map { ($0.id, $0.name) }, retained: retainedPeople)
         }
         if let loadedTypes {
-            documentTypes = Dictionary(uniqueKeysWithValues: loadedTypes.map { ($0.id, $0.name) })
+            documentTypes = Self.names(active: loadedTypes.map { ($0.id, $0.name) }, retained: retainedTypes)
         }
     }
 
+    /// Documents keep trashed classifications, so their names stay readable with a deleted marker.
+    private static func names(active: [(UUID, String)], retained: [TaxonomyEntry]?) -> [UUID: String] {
+        var names = Dictionary(active, uniquingKeysWith: { first, _ in first })
+        for entry in retained ?? [] where names[entry.id] == nil {
+            names[entry.id] = "\(entry.name) (deleted)"
+        }
+        return names
+    }
+
+    private func showsFiled(_ filter: DocumentFilter) -> Bool {
+        scope == .all || filter.reviewed != nil
+    }
+
     private func rebuildRows() {
-        let shown = scope == .inbox ? documents.filter { $0.status != .filed } : documents
+        let shown = showsFiled(filter) ? documents : documents.filter { $0.status != .filed }
         rows = shown.map { document in
             DocumentRow(
                 document: document,

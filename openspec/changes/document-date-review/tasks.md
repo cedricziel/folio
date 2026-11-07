@@ -1,10 +1,10 @@
 ## 1. Contract and dependency
 - [x] 1.1 Inspect existing workspace review, import, storage, and UI contracts.
-- [ ] 1.2 Validate this proposal and reconcile the foundation's merged actor context before schema/API edits.
+- [x] 1.2 Validate this proposal and reconcile the foundation's merged actor context before schema/API edits.
 
 ## 2. Date and review behavior
 - [x] 2.0 Add failing pure-domain date and review regression tests, then implement strict dates and idempotent review decisions without shared schema changes.
-- [ ] 2.1 Write failing shared repository tests for leap dates, null/omission, legacy backfill, idempotent review attribution, and processing independence; implement additive migrations and ports.
+- [x] 2.1 Write failing shared repository tests for leap dates, null/omission, legacy backfill, idempotent review attribution, and processing independence; implement additive migrations and ports.
 - [ ] 2.2 Write failing route tests for review/date edits, actor spoofing, trash, role and vault denial; implement JSON and HTML actions plus OpenAPI.
 - [ ] 2.3 Write failing repository and route tests for combined review/date filters, null dates, and changed cursors; implement filtering.
 
@@ -20,6 +20,6 @@
 - [ ] 4.3 Open reviewable PRs, resolve checks/reviews/conflicts, and verify merge before starting dependent revision integration.
 
 ## 6. Workflow events
-- [ ] 6.1 Reconcile the foundation event envelope and shared workflow trigger registry before integration.
+- [x] 6.1 Reconcile the foundation event envelope and shared workflow trigger registry before integration.
 - [ ] 6.2 Write failing SQLite/PostgreSQL outbox tests for committed transitions, rollback, no-op, retries, actor/correlation, and moved/deleted subjects; implement event definitions and transactional emission.
 - [ ] 6.3 Write failing workflow integration tests for the new trigger conditions and recursion protection; verify understandable selectors and condition fields in web and Apple with the workflow slice.

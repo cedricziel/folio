@@ -13,6 +13,7 @@ mod ingest_identity;
 mod ingest_outcome;
 mod metadata;
 mod metadata_field;
+mod metadata_value;
 mod processing_attempt;
 mod saved_view;
 mod settings;
@@ -40,7 +41,7 @@ pub use file_identity::FileIdentity;
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
-    SourceConfig, SourceOrigin, SourceStatus, REDACTED,
+    SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{
@@ -49,6 +50,7 @@ pub use ingest_outcome::{
 };
 pub use metadata::{MetadataKind, MetadataValue};
 pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
+pub use metadata_value::{DocumentMetadata, DocumentMetadataValue, MetadataChange};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{

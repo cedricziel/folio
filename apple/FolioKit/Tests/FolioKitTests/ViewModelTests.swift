@@ -203,9 +203,98 @@ struct DocumentStatusTests {
         await model.search("")
         #expect(model.correspondents[person.id] == "Stadtwerke")
     }
+
+    @Test func lookupsKeepTrashedNamesAndReloadAfterChanges() async throws {
+        let person = Correspondent(name: "Stadtwerke")
+        let trashedID = UUID()
+        let trashed = try JSONDecoder.taxonomy.decode(
+            TaxonomyEntry.self,
+            from: Data(
+                """
+                {"id":"\(trashedID)","vault_id":"\(UUID())","name":"Old landlord",
+                "created_at":"2025-03-14T10:15:30Z","updated_at":"2025-03-15T10:15:30Z",
+                "deleted_at":"2025-03-15T10:15:30Z"}
+                """.utf8))
+        let service = MockFolioService(documents: [Document(title: "A")], correspondents: [person])
+        await service.setTrashedTaxonomy([trashed], kind: .correspondents)
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
+        await model.search("")
+        #expect(model.correspondents[trashedID] == "Old landlord (deleted)")
+        await service.setCorrespondents([Correspondent(id: person.id, name: "City utilities")])
+        await model.reloadLookups()
+        #expect(model.correspondents[person.id] == "City utilities")
+    }
+}
+
+extension JSONDecoder {
+    static var taxonomy: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
 }
 
 @MainActor struct DocumentDetailViewModelTests {
+    @Test func historyShowsImmutableCreatorSystemUpdatesAndDeletion() {
+        let model = DocumentDetailViewModel(
+            document: Document(
+                title: "Retained history", createdBy: "archive-creator", updatedBy: nil,
+                deletedAt: Date(timeIntervalSince1970: 1_741_950_000)),
+            correspondent: nil, type: nil, service: MockFolioService()
+        )
+        let history = Dictionary(uniqueKeysWithValues: model.history.map { ($0.label, $0) })
+        #expect(history["Created by"]?.value == "archive-creator")
+        #expect(history["Updated by"]?.value == "System or unknown")
+        #expect(history["Created"]?.isRecord == true)
+        #expect(history["Updated"]?.isRecord == true)
+        #expect(history["Deleted"]?.isRecord == true)
+    }
+
+    @Test func reopeningDetailsRefreshesTheSavedDocumentDate() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter")
+        var saved = original
+        saved.documentDate = try #require(DocumentDate(rawValue: "2026-11-02"))
+        await service.setDocuments([saved])
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        await model.refreshMetadata()
+        #expect(model.document.documentDate == saved.documentDate)
+        #expect(model.metadataFailure == nil)
+    }
+
+    @Test func aSlowRefreshDoesNotRevertASavedDocumentDate() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter", canEditDocumentDate: true)
+        await service.setDocuments([original])
+        await service.suspendDocumentReads()
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let refresh = Task { await model.refreshMetadata() }
+        await service.waitForDocumentRead()
+        let date = try #require(DocumentDate(rawValue: "2024-01-05"))
+        try await model.saveDocumentDate(date)
+        await service.releaseDocumentReads()
+        await refresh.value
+        #expect(model.document.documentDate == date)
+        #expect(model.metadata.first { $0.label == "Document date" }?.value == "2024-01-05")
+    }
+
+    @Test func documentDateSaveAndFailurePreserveImportTime() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter", canEditDocumentDate: true, createdAt: Date(timeIntervalSince1970: 0))
+        await service.setDocuments([original])
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let date = try #require(DocumentDate(rawValue: "1582-10-10"))
+        try await model.saveDocumentDate(date)
+        #expect(model.document.documentDate == date)
+        #expect(model.document.createdAt == original.createdAt)
+        await service.setFailure(.unreachable)
+        await #expect(throws: FolioError.self) { try await model.saveDocumentDate(nil) }
+        #expect(model.document.documentDate == date)
+        await service.setFailure(nil)
+        try await model.saveDocumentDate(nil)
+        #expect(model.document.documentDate == nil)
+    }
+
     @Test func metadataListsRecordsInMono() {
         let model = DocumentDetailViewModel(
             document: Document(

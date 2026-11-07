@@ -1,13 +1,13 @@
 //! Ingestion source API routes
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use folio_core::models::VaultId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -31,6 +31,8 @@ pub fn router() -> Router<AppState> {
             get(get_source).put(update_source).delete(delete_source),
         )
         .route("/{id}/test", post(test_source))
+        .route("/{id}/restore", post(restore_source))
+        .route("/{id}/outcomes", get(list_source_outcomes))
 }
 
 /// A source with its latest run
@@ -47,6 +49,14 @@ pub struct SourceView {
     /// Passwords are masked
     pub config: SourceConfig,
     pub status: Option<SourceStatus>,
+    /// Configured sources have no persisted lifecycle metadata.
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[schema(value_type = Option<String>)]
+    pub created_by: Option<folio_core::models::UserId>,
+    #[schema(value_type = Option<String>)]
+    pub updated_by: Option<folio_core::models::UserId>,
 }
 
 pub(crate) async fn view(
@@ -67,6 +77,11 @@ pub(crate) async fn view(
         origin: def.origin,
         config: def.config.redacted(),
         status,
+        created_at: def.lifecycle.as_ref().map(|m| m.created_at),
+        updated_at: def.lifecycle.as_ref().map(|m| m.updated_at),
+        deleted_at: def.lifecycle.as_ref().and_then(|m| m.deleted_at),
+        created_by: def.lifecycle.as_ref().and_then(|m| m.created_by.clone()),
+        updated_by: def.lifecycle.as_ref().and_then(|m| m.updated_by.clone()),
     })
 }
 
@@ -106,6 +121,32 @@ pub(crate) async fn find(
         .into_iter()
         .find(|d| d.id == id)
         .ok_or_else(|| ApiError::not_found("Source not found"))
+}
+
+pub(crate) async fn find_retained(
+    vault: VaultId,
+    state: &AppState,
+    id: Id,
+) -> ApiResult<IngestionSourceDef> {
+    if let Some(def) = all_sources(DefaultVault(vault), state)
+        .await?
+        .into_iter()
+        .find(|d| d.id == id)
+    {
+        return Ok(def);
+    }
+    state
+        .ingestion
+        .managed
+        .find_deleted(vault, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Source not found"))
+}
+
+#[derive(Default, Deserialize)]
+pub(crate) struct SourceListQuery {
+    #[serde(default)]
+    pub deleted: bool,
 }
 
 pub(crate) fn require_managed(def: &IngestionSourceDef) -> ApiResult<()> {
@@ -150,6 +191,7 @@ pub(crate) fn prepare_input(
     path = "/api/sources",
     operation_id = "listSources",
     tag = "sources",
+    params(("deleted" = Option<bool>, Query, description = "List deleted managed sources instead of active sources")),
     responses(
         (status = 200, description = "Configured and managed sources with their latest run", body = Vec<SourceView>),
         InternalError,
@@ -158,9 +200,15 @@ pub(crate) fn prepare_input(
 pub(crate) async fn list_sources(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
+    Query(query): Query<SourceListQuery>,
 ) -> ApiResult<Json<Vec<SourceView>>> {
     let mut views = Vec::new();
-    for def in all_sources(DefaultVault(vault), &state).await? {
+    let definitions = if query.deleted {
+        state.ingestion.managed.list_deleted(vault).await?
+    } else {
+        all_sources(DefaultVault(vault), &state).await?
+    };
+    for def in definitions {
         views.push(view(DefaultVault(vault), &state, def).await?);
     }
     Ok(Json(views))
@@ -199,6 +247,7 @@ pub(crate) async fn get_source(
     request_body = IngestionSourceInput,
     responses(
         (status = 201, description = "The created source", body = SourceView),
+        (status = 409, description = "An active source already uses this name"),
         BadRequest,
         InternalError,
     )
@@ -228,6 +277,7 @@ pub(crate) async fn create_source(
     request_body = IngestionSourceInput,
     responses(
         (status = 200, description = "The updated source", body = SourceView),
+        (status = 409, description = "An active source already uses this name"),
         BadRequest,
         NotFound,
         InternalError,
@@ -246,7 +296,7 @@ pub(crate) async fn update_source(
     Ok(Json(view(DefaultVault(vault), &state, def).await?))
 }
 
-/// Delete an ingestion source
+/// Move a managed source to trash, retaining its settings and import history
 #[utoipa::path(
     delete,
     path = "/api/sources/{id}",
@@ -254,7 +304,7 @@ pub(crate) async fn update_source(
     tag = "sources",
     params(("id" = Uuid, Path, description = "Source ID")),
     responses(
-        (status = 204, description = "The source was deleted"),
+        (status = 204, description = "The source is in trash"),
         BadRequest,
         NotFound,
         InternalError,
@@ -265,10 +315,33 @@ pub(crate) async fn delete_source(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let existing = find(vault, &state, id).await?;
+    let existing = find_retained(vault, &state, id).await?;
     require_managed(&existing)?;
     state.ingestion.managed.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Restore a managed source with its previous settings.
+#[utoipa::path(
+    post,
+    path = "/api/sources/{id}/restore",
+    operation_id = "restoreSource",
+    tag = "sources",
+    params(("id" = Uuid, Path, description = "Source ID")),
+    responses(
+        (status = 200, description = "The restored source", body = SourceView),
+        (status = 409, description = "An active source already uses this name"),
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn restore_source(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+) -> ApiResult<Json<SourceView>> {
+    let restored = state.ingestion.managed.restore(vault, id).await?;
+    Ok(Json(view(DefaultVault(vault), &state, restored).await?))
 }
 
 /// Outcome of checking a source
@@ -316,4 +389,70 @@ pub(crate) async fn test_source(
 ) -> ApiResult<Json<SourceTestResult>> {
     let def = find(vault, &state, id).await?;
     Ok(Json(run_test(&state, &def).await))
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OutcomeQuery {
+    pub before: Option<i64>,
+    #[serde(default = "default_outcome_limit")]
+    pub limit: u32,
+}
+
+fn default_outcome_limit() -> u32 {
+    50
+}
+
+pub(crate) async fn outcome_page(
+    state: &AppState,
+    vault: VaultId,
+    source_id: Id,
+    query: OutcomeQuery,
+) -> ApiResult<folio_core::models::IngestOutcomePage> {
+    let mut page = state
+        .ingestion
+        .outcomes
+        .page(vault, source_id, query.before, query.limit)
+        .await?;
+    for outcome in &mut page.outcomes {
+        if let Some(document_id) = outcome.document_id {
+            if state
+                .document_repo
+                .find_by_id(vault, document_id)
+                .await?
+                .is_none()
+            {
+                outcome.document_id = None;
+            }
+        }
+    }
+    Ok(page)
+}
+
+/// Read committed item outcomes for an ingestion source.
+#[utoipa::path(
+    get,
+    path = "/api/sources/{id}/outcomes",
+    operation_id = "listSourceOutcomes",
+    tag = "sources",
+    params(
+        ("id" = Uuid, Path, description = "Source ID"),
+        ("before" = Option<i64>, Query, minimum = 1, description = "Return outcomes older than this positive outcome ID"),
+        ("limit" = Option<u32>, Query, minimum = 1, maximum = 100, description = "Page size, from 1 to 100; defaults to 50"),
+    ),
+    responses(
+        (status = 200, description = "Recent source outcomes", body = folio_core::models::IngestOutcomePage),
+        BadRequest,
+        NotFound,
+        InternalError,
+    )
+)]
+pub(crate) async fn list_source_outcomes(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<Uuid>,
+    crate::extract::ApiQuery(query): crate::extract::ApiQuery<OutcomeQuery>,
+) -> ApiResult<Json<folio_core::models::IngestOutcomePage>> {
+    find(vault, &state, id).await?;
+    Ok(Json(outcome_page(&state, vault, id, query).await?))
 }

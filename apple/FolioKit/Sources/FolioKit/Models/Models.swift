@@ -13,8 +13,19 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var embedStatus: ProcessingStatus
     /// Only the list and get endpoints report tags; search results and uploads come back without them.
     public var tags: [Tag]
+    public var documentDate: DocumentDate?
+    public var canEditDocumentDate: Bool
+    /// Nil identifies servers that predate explicit review.
+    public var reviewed: Bool?
+    public var reviewedAt: Date?
+    public var reviewedBy: String?
+    public var reviewOrigin: String?
+    public var canReviewDocument: Bool
     public var createdAt: Date
     public var updatedAt: Date
+    public var createdBy: String?
+    public var updatedBy: String?
+    public var deletedAt: Date?
 
     public init(
         id: UUID = UUID(),
@@ -28,8 +39,18 @@ public struct Document: Identifiable, Hashable, Sendable {
         ocrStatus: ProcessingStatus = .pending,
         embedStatus: ProcessingStatus = .pending,
         tags: [Tag] = [],
+        documentDate: DocumentDate? = nil,
+        canEditDocumentDate: Bool = false,
+        reviewed: Bool? = nil,
+        reviewedAt: Date? = nil,
+        reviewedBy: String? = nil,
+        reviewOrigin: String? = nil,
+        canReviewDocument: Bool = false,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        createdBy: String? = nil,
+        updatedBy: String? = nil,
+        deletedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -42,8 +63,18 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.ocrStatus = ocrStatus
         self.embedStatus = embedStatus
         self.tags = tags
+        self.documentDate = documentDate
+        self.canEditDocumentDate = canEditDocumentDate
+        self.reviewed = reviewed
+        self.reviewedAt = reviewedAt
+        self.reviewedBy = reviewedBy
+        self.reviewOrigin = reviewOrigin
+        self.canReviewDocument = canReviewDocument
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.createdBy = createdBy
+        self.updatedBy = updatedBy
+        self.deletedAt = deletedAt
     }
 }
 
@@ -66,6 +97,7 @@ public extension Document {
     }
 
     var status: Status {
+        if reviewed != nil && (ocrStatus == .failed || embedStatus == .failed) { return .failed }
         if ocrStatus.isActive {
             return .reading(pages: pageCount)
         }
@@ -78,6 +110,9 @@ public extension Document {
         if embedStatus == .failed {
             return .failed
         }
+        if let reviewed {
+            return reviewed ? .filed : .needsReview
+        }
         if correspondentID == nil && documentTypeID == nil {
             return .needsReview
         }
@@ -89,11 +124,15 @@ public struct Tag: Identifiable, Hashable, Sendable {
     public let id: UUID
     public var name: String
     public var color: String?
+    public var deletedAt: Date?
 
-    public init(id: UUID = UUID(), name: String, color: String? = nil) {
+    public var displayName: String { deletedAt == nil ? name : "\(name) (deleted)" }
+
+    public init(id: UUID = UUID(), name: String, color: String? = nil, deletedAt: Date? = nil) {
         self.id = id
         self.name = name
         self.color = color
+        self.deletedAt = deletedAt
     }
 }
 
@@ -119,6 +158,11 @@ public struct DocumentType: Identifiable, Hashable, Sendable {
 
 /// What the list endpoint can narrow by. Empty fields do not filter.
 public struct DocumentFilter: Equatable, Sendable {
+    public var reviewed: Bool?
+    public var documentDateFrom: DocumentDate?
+    public var documentDateTo: DocumentDate?
+    public var requiresReviewSupport: Bool { reviewed != nil || documentDateFrom != nil || documentDateTo != nil }
+
     public var tagIDs: [Tag.ID]
     public var correspondentID: Correspondent.ID?
     public var documentTypeID: DocumentType.ID?
@@ -129,13 +173,17 @@ public struct DocumentFilter: Equatable, Sendable {
 
     public init(
         tagIDs: [Tag.ID] = [], correspondentID: Correspondent.ID? = nil, documentTypeID: DocumentType.ID? = nil,
-        createdAfter: Date? = nil, createdBefore: Date? = nil
+        createdAfter: Date? = nil, createdBefore: Date? = nil,
+        reviewed: Bool? = nil, documentDateFrom: DocumentDate? = nil, documentDateTo: DocumentDate? = nil
     ) {
         self.tagIDs = tagIDs
         self.correspondentID = correspondentID
         self.documentTypeID = documentTypeID
         self.createdAfter = createdAfter
         self.createdBefore = createdBefore
+        self.reviewed = reviewed
+        self.documentDateFrom = documentDateFrom
+        self.documentDateTo = documentDateTo
     }
 }
 

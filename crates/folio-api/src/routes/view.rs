@@ -110,6 +110,26 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
+    /// Empty navigation for account recovery, without establishing a request vault.
+    pub fn without_vault(nav: Nav) -> Self {
+        Self {
+            show_counts: false,
+            vault_id: VaultId(uuid::Uuid::nil()),
+            vault_name: "No active vault".into(),
+            vault_role: "No access",
+            vaults: Vec::new(),
+            upload_vaults: Vec::new(),
+            can_upload: false,
+            user: CURRENT_USER.try_with(Clone::clone).ok(),
+            active: nav.as_str(),
+            inbox_count: 0,
+            total_count: 0,
+            correspondents: Vec::new(),
+            document_types: Vec::new(),
+            tags: Vec::new(),
+        }
+    }
+
     pub async fn load(state: &AppState, vault: VaultId, nav: Nav) -> ApiResult<Self> {
         let documents = state.document_repo.list(vault, None).await?;
         Self::build(state, vault, nav, &documents).await
@@ -259,7 +279,11 @@ impl From<&Tag> for TagView {
     fn from(tag: &Tag) -> Self {
         Self {
             id: tag.id,
-            name: tag.name.clone(),
+            name: if tag.deleted_at.is_some() {
+                format!("{} (deleted)", tag.name)
+            } else {
+                tag.name.clone()
+            },
             tone: tag.tone(),
         }
     }
@@ -321,14 +345,14 @@ pub async fn rows(
     state: &AppState,
     documents: Vec<Document>,
 ) -> ApiResult<Vec<DocumentRow>> {
-    let correspondents: HashMap<Id, String> = state
+    let mut correspondents: HashMap<Id, String> = state
         .correspondent_repo
         .list(vault)
         .await?
         .into_iter()
         .map(|c| (c.id, c.name))
         .collect();
-    let types: HashMap<Id, String> = state
+    let mut types: HashMap<Id, String> = state
         .document_type_repo
         .list(vault)
         .await?
@@ -336,12 +360,19 @@ pub async fn rows(
         .map(|t| (t.id, t.name))
         .collect();
 
+    for entry in state.correspondent_repo.list_trash(vault).await? {
+        correspondents.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
+    for entry in state.document_type_repo.list_trash(vault).await? {
+        types.insert(entry.id, format!("{} (deleted)", entry.name));
+    }
+    let ids: Vec<_> = documents.iter().map(|document| document.id).collect();
+    let mut document_tags = state.document_repo.tags_for_documents(vault, &ids).await?;
     let mut out = Vec::with_capacity(documents.len());
     for doc in documents {
-        let tags = state
-            .document_repo
-            .get_tags(vault, doc.id)
-            .await?
+        let tags = document_tags
+            .remove(&doc.id)
+            .unwrap_or_default()
             .iter()
             .map(TagView::from)
             .collect();
@@ -394,10 +425,13 @@ mod tests {
     #[test]
     fn counts_split_inbox_from_review() {
         let processing = Document::new(VaultId::new(), "a");
-        let review = Document::new(VaultId::new(), "b").with_content("x");
-        let filed = Document::new(VaultId::new(), "c")
+        let mut review = Document::new(VaultId::new(), "b").with_content("x");
+        review.embed_status = ProcessingStatus::Done;
+        let mut filed = Document::new(VaultId::new(), "c")
             .with_content("x")
             .with_document_type(Id::new_v4());
+        filed.embed_status = ProcessingStatus::Done;
+        filed.reviewed_at = Some(chrono::Utc::now());
         let mut unreadable = Document::new(VaultId::new(), "d");
         unreadable.ocr_status = ProcessingStatus::Failed;
         let review_id = review.id.to_string();

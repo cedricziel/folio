@@ -18,6 +18,13 @@ pub trait WorkflowRepository: Send + Sync {
 
     async fn list(&self, vault: VaultId) -> Result<Vec<Workflow>>;
 
+    /// Retained workflows excluded from matching and execution.
+    async fn list_deleted(&self, vault: VaultId) -> Result<Vec<Workflow>>;
+    async fn find_deleted(&self, vault: VaultId, id: Id) -> Result<Option<Workflow>>;
+
+    /// Restore the configuration without restarting its retained runs.
+    async fn restore(&self, vault: VaultId, id: Id) -> Result<Workflow>;
+
     /// Enabled workflows listening for `trigger`
     async fn list_enabled(&self, vault: VaultId, trigger: WorkflowTrigger)
         -> Result<Vec<Workflow>>;
@@ -27,7 +34,7 @@ pub trait WorkflowRepository: Send + Sync {
     /// Replace all fields of a workflow
     async fn update(&self, vault: VaultId, id: Id, input: WorkflowInput) -> Result<Workflow>;
 
-    /// Delete a workflow and its runs
+    /// Move to trash, retaining history and terminally stopping pending runs
     async fn delete(&self, vault: VaultId, id: Id) -> Result<()>;
 
     /// Insert a run and queue its execution job in one transaction

@@ -80,6 +80,7 @@ pub(crate) async fn challenge(auth: &AuthState, user: &User, next: &str) -> Opti
                 hash_token(&token),
                 MfaLogin {
                     user_id: user.id.clone(),
+                    password_hash: user.password_hash.clone(),
                     next: next.to_string(),
                     attempts: 0,
                 },
@@ -232,6 +233,13 @@ pub(crate) async fn code_submit(
         .await
         .ok()
         .flatten();
+    if user
+        .as_ref()
+        .is_some_and(|u| u.password_hash != pending.password_hash)
+    {
+        let clear = set_cookie(mfa_cookie_name(auth.secure()), "", 0, auth.secure());
+        return with_cookies(Redirect::to("/login").into_response(), [clear]);
+    }
     let ok = match &user {
         Some(user) => verify_second_factor(&auth, user, &form.code).await,
         None => false,

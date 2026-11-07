@@ -1,0 +1,12 @@
+<details>
+    <summary class="hint">History</summary>
+    <dl class="f-meta-list">
+        <dt>Created</dt><dd><span class="f-meta">{{ document.created_at }}</span></dd>
+        <dt>Created by</dt><dd>{% if let Some(actor) = document.created_by %}{{ actor }}{% else %}System or unknown{% endif %}</dd>
+        <dt>Updated</dt><dd><span class="f-meta">{{ document.updated_at }}</span></dd>
+        <dt>Updated by</dt><dd>{% if let Some(actor) = document.updated_by %}{{ actor }}{% else %}System or unknown{% endif %}</dd>
+        {% if let Some(deleted_at) = document.deleted_at %}
+        <dt>Deleted</dt><dd><span class="f-meta">{{ deleted_at }}</span></dd>
+        {% endif %}
+    </dl>
+</details>
