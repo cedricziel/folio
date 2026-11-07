@@ -163,7 +163,7 @@ The document ID is `Uuid::new_v5(FOLIO_IMPORT_NAMESPACE, "{vault_id}/paperless/{
    - tags, metadata values, and notes with `external_id` and their Paperless `created_at`
    - the ledger row and `import_items.status = 'done'`, conditional on the claim
    - the `created` outbox event with `EventOrigin::Import`
-7. After commit, enqueue `GenerateThumbnail` and `GenerateEmbedding`.
+7. Insert the `GenerateThumbnail` and `GenerateEmbedding { origin: Import }` jobs inside the same transaction (with `insert_job_sqlite`/`insert_job_postgres`, as `complete_embedding_plan` does). An imported document is never left embed-pending without a job, so the orphan-repair sweep can't re-queue it with a user origin.
 
 **update** (mirror only):
 - `apply_mirror_update` overwrites the title, dates, correspondent, type, tag set, metadata values (full replace of the values set by imports) and content.
