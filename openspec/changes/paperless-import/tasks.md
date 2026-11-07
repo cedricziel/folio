@@ -1,87 +1,129 @@
-## 1. Schema and document model
+Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paperless_*.sql` file, with the same version in `migrations/sqlite` and `migrations/postgres`, and never edits a merged one.
 
-- [ ] 1.1 Add migration `20261107120000_paperless_import.sql` to `migrations/sqlite` and `migrations/postgres`. It adds the `documents.external_source`, `external_id` and `content_sha256` columns, the paired-NULL CHECK, the `documents_external_ref` partial unique index, and the `import_runs`, `import_items` and `import_staging` tables. Failing test first: on both backends, a second document with the same `(vault_id, external_source, external_id)` is rejected even when the first one is trashed, and a row with only `external_id` set is rejected.
-- [ ] 1.2 Add `SourceKind::Import`, `ExternalRef`, `ImportedDocument` and `ImportedNote` to `folio-core`, plus `DocumentRepository::create_imported`. Implement it for SQLite and PostgreSQL. In one transaction it writes:
-  - the caller-supplied `id`, `created_at`, `updated_at`, `document_date` and `content_sha256`
-  - `ocr_status = done`, and the embed stage pending (or skipped when there is no text)
-  - the review state, tags and metadata values
-  - notes with their own `created_at`
-  - the `created` outbox event
+## 1. Document model
 
-  Failing test first: read back every field, including the original `created_at` and a note's original date, with status `filed`. A second call with the same external ref returns `Conflict` and leaves one row.
-- [ ] 1.3 Add `SourceKind::Import` to the OpenAPI `SourceKind` enum and regenerate `openapi/openapi.json`. Failing test first: `tests/openapi.rs` fails until the spec includes `import`.
-- [ ] 1.4 Make workflow dispatch skip `document.uploaded` and `document.processed` occurrences whose source is `import`. Failing tests first: enabled workflows on those two events produce no run for an imported document, and a `document.tags_changed` workflow still runs when a tag is added to it later.
+- [ ] 1.1 Migration for the `documents` external reference (columns, paired-NULL CHECK, partial unique index that includes trashed rows) and `document_entries.external_id` with its partial unique index. Failing test first, on SQLite and on testcontainers Postgres: a duplicate external reference is rejected even when the first document is trashed, and a row with only `external_id` set is rejected.
+- [ ] 1.2 Add `SourceKind::Import`, `EventOrigin::Import`, `ExternalRef`, `ImportedDocument`, `ImportedNote` and `DocumentRepository::create_imported` (SQLite and Postgres). It writes the following in one transaction:
+  - the caller-supplied ID and dates
+  - `ocr_status = done`, and the embed stage pending or skipped
+  - the review state, tags, metadata values, and notes with `external_id`
+  - the `created` outbox event with origin `Import`
 
-## 2. Import run storage
+  Failing test first: read back every field, with status `filed`. A second call returns `Conflict`.
+- [ ] 1.3 Add `SourceKind::Import` to the OpenAPI enum. Failing test first: `tests/openapi.rs` fails until it is there.
+- [ ] 1.4 Make the workflow engine skip `EventOrigin::Import`, give processing jobs an `origin` field, and have the worker emit `Processed` with the job's origin. Failing tests first: the four workflow-triggers scenarios, including a user-started reprocess that does trigger.
 
-- [ ] 2.1 Add `ImportRun`, `ImportItem`, their status enums, and the `ImportRunRepository` and `ImportItemRepository` ports in `folio-core`. Implement them for SQLite and PostgreSQL:
-  - `insert_items_ignore_existing`
-  - `claim_next(run, claim)`, the conditional claim with the 10-minute stale reclaim that increments `attempts`
-  - `finish_item(claim, status, reason, warnings)`, conditional on the claim
-  - `counts(run)`, computed with `GROUP BY`
-  - the one-active-run-per-vault constraint
+## 2. Run, ledger and sync storage
 
-  Failing test first: inserting the same item twice keeps one row, two concurrent claimers never get the same item, and a second `running` run in a vault returns `Conflict`.
-- [ ] 2.2 Mark already-imported items with one query that joins items to `documents` on the external ref. Failing test first: after one document with external ID `7` exists, planning an item with ID `7` marks it `skipped` with reason `already_imported`.
+- [ ] 2.1 Migration for `import_runs` (including `cursor_after` and `confirm_trash`), `import_items`, `import_staging`, `paperless_documents` (including `needs_reapply` and `folio_state`), `paperless_taxonomy` and `paperless_sync_state` (including `library_sample`, `once_done`, `retry_ids` and `parked_ids`). It also adds `paperless` to the `ingest_outcomes` and `source_health` CHECKs (a table rebuild on SQLite) and a partial unique index for one live `paperless` source per vault. Failing test first: on both backends, `source_health` accepts `paperless`, and a second live `paperless` source in a vault is rejected.
+- [ ] 2.2 Add the models and the `ImportRunRepository`, `ImportItemRepository` and `PaperlessLedgerRepository` ports in `crates/folio-core/src/ports/import_runs.rs`, with SQLite and Postgres adapters:
+  - the claim, finish, counts and one-active-run rule
+  - the ledger, the taxonomy map and the sync state with the cursor, retry and park sets
 
-## 3. Export reader and path safety
+  Failing test first:
+  - two concurrent claimers never share an item
+  - a second active run returns `Conflict`
+  - the cursor, `retry_ids` and `library_sample` round-trip
+- [ ] 2.3 Add `apply_mirror_update` (versioned file-key switch, note upsert that keeps notes deleted in Folio deleted), and trash and restore methods that update the ledger in one transaction with origin `Import`. Failing test first:
+  - an update replaces the title, tags and values, keeps a Folio-native note, and doesn't resurrect a note deleted in Folio
+  - a failed transaction leaves the old `file_path`
+  - trash and restore update the ledger
+- [ ] 2.4 Keep `folio_state` current when users trash, restore and purge documents that have a ledger row. Failing test first: a user trash sets `trashed_by_user`, and a purge sets `purged_in_folio`.
 
-- [ ] 3.1 Add the `PaperlessExportReader` port and the streaming `paperless_fs` adapter, with fixtures for 2.20 (MD5) and 3.x (SHA-256, file versions, a trashed document, a deleted note, an inbox tag, nested tags) under `crates/folio-infra/tests/fixtures/paperless/`. Failing test first: the reader yields the expected typed records and skipped-model counts, and a fixture with a user record containing a password hash never produces that hash in any yielded record.
-- [ ] 3.2 Add the root guard: canonicalize the path, then require a component-wise prefix match against `import.allowed_roots`. Failing test first: rejects `..` escapes, symlinks pointing outside the root, a sibling `/imports-x` for root `/imports`, and missing paths, all with the same error.
-- [ ] 3.3 Add the original-file guard: resolve each manifest path under the canonical export directory, and refuse absolute paths, `..` components and symlinks on any component. Failing test first: manifest entries `../etc/passwd`, `/etc/passwd`, and a symlinked original each yield `unsafe_path`, and the file is never opened.
+## 3. Readers
 
-## 4. Plan phase
+- [ ] 3.1 Add the `PaperlessReader` port and the streaming export adapter, with the 2.20 and 3.x fixtures. Failing test first: the expected records, and a password hash never appears in any record.
+- [ ] 3.2 Add the root guard. Failing test first: `..`, symlinks outside the root, `/imports-x`, and missing paths, all with the same error.
+- [ ] 3.3 Add the original-file guard. Failing test first: `../etc/passwd`, `/etc/passwd` and a symlinked original yield `unsafe_path` without being opened.
+- [ ] 3.4 REST adapter, part 1: client with token auth, API version 9, a same-origin redirect policy and fixed error reasons, plus paginated taxonomy and document records. Failing test first, against `wiremock`: the records equal the export fixture's for the same library, and a cross-origin redirect yields `redirected` without sending the token.
+- [ ] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
+  - a page failure or a count mismatch yields an error, not a set
+  - a document modified mid-listing isn't skipped
+  - a 429 followed by a 200 succeeds
+- [ ] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
 
-- [ ] 4.1 Validate custom field kinds against the vault before any write. Failing test first: an export whose `Amount` field is monetary, imported into a vault where `Amount` is text, ends `failed` with both kinds named, and the vault's tag, correspondent, type and field counts are unchanged.
-- [ ] 4.2 Resolve taxonomy:
-  - tags flattened, with `<parent>/<name>` renames in Paperless ID order
-  - inbox tags excluded
-  - correspondents and types by name
-  - fields and select options by name and label
-  - the `ASN` field
+## 4. Paperless source
 
-  Failing test first: two runs over the nested-tag fixture produce the same names, and re-planning creates no second tag.
-- [ ] 4.3 Build item payloads through `import_staging`. Each payload holds the deterministic UUIDv5 document ID, the mapped IDs and values, the notes minus deleted ones, the raw links and the version count. Trashed documents get `skipped`/`trashed`, and staging is dropped at the end. Failing test first: planning twice yields identical payloads and IDs, and the deleted note is absent.
-- [ ] 4.4 Pre-validate values and drop invalid ones with warnings: URL scheme, text and long-text length, note body, and an ASN that collides with an existing value. Failing test first: an `ftp://` URL, a 20 KB note and a duplicate ASN each produce a warning, and the document still imports.
+- [ ] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
+  - the validation errors
+  - a URL change with the placeholder fails
+  - config without `vault` fails at load
+  - the drift test passes
+- [ ] 4.2 Add the `Caller` value and the `CallerResolver` port. Implement them in folio-infra from folio-auth, with `auth.required = false` mapping to an admin. Failing test first: an admin, a non-admin owner, and auth disabled each resolve as expected.
+- [ ] 4.3 Apply the admin-plus-owner guard to every `paperless` source operation, JSON and HTML: create, update, toggle, delete, restore, test and try-connection. Add 409 for a second source, with config winning. Failing tests first: 403 for each operation by a non-admin owner, with no outbound request made (wiremock records none), and 409 cases.
+- [ ] 4.4 Extend `/test` with the version, the document count, `superuser` and the reason. Update `SourceTestResult` in OpenAPI and regenerate. Failing test first: each reason, and `superuser: false` for a limited token.
+- [ ] 4.5 Add the Paperless variant of the HTML source form (URL, token, sync mode, interval). Failing test first: a route test renders and submits it. Verify it with the screen tour.
+- [ ] 4.6 Register the Paperless source with `IngestScheduler`:
+  - the first poll is the only first-run trigger, and `once_done` is respected
+  - an active run skips the poll without reporting `Conflict`
+  - the plan diff against the ledger
+  - the cursor and `cursor_after`
+  - `retry_ids` and parking after five polls
+  - the daily reconcile
 
-## 5. Import phase
+  Failing test first:
+  - an empty diff creates no run
+  - a new document creates a run
+  - the `mirror` and `new_only` item sets
+  - a note added without a `modified` bump is found by the reconcile
+  - a persistently failing document is parked after five polls while the cursor advances
+- [ ] 4.7 Check the library identity: record the sample on first contact, compare it on every run, and return 409 on POST and on a URL change. Failing test first: pointing the source at a second fake Paperless fails `library_mismatch` with zero document changes.
+- [ ] 4.8 Make trashing safe: only from a `CompleteIdSet`, never from an empty listing, and stop at the threshold, which `confirm_trash` lifts. Failing test first:
+  - a failed page creates no trash items
+  - an empty listing creates none and reports `empty_listing` health
+  - 400 of 1,000 missing fails those items with `trash_threshold_exceeded`, and a retry with `confirm_trash` applies them
 
-- [ ] 5.1 Import one item: claim it, check size, hash while reading, verify the checksum, put the file to `documents/{id}/original`, call `create_imported`, then enqueue thumbnail and embedding jobs. Failing test first: the fully tagged fixture document matches title, dates, taxonomy, metadata, ASN, content, note, creator and status, and the queue holds no `ExtractText` or `ProcessDocument` job for it.
-- [ ] 5.2 Handle checksum and missing-file failures. Failing test first: a corrupted original ends `failed`/`checksum_mismatch`, a missing one ends `file_missing`, no document is created, and the run continues.
-- [ ] 5.3 Clean up orphans. Failing test first: a fault-injecting store that fails `create_imported` permanently after `put` leaves no object at that key once the item ends `failed`.
-- [ ] 5.4 Make the import crash-safe and idempotent. Failing test first: a crash injected between `put` and the transaction, followed by a resume, creates exactly one document and one object. A second run over the same export creates no documents and calls `put` zero times.
-- [ ] 5.5 Enforce the file size limit. Failing test first: a file over `max_file_bytes` ends `file_too_large`.
-- [ ] 5.6 Stop crash loops. Failing test first: an item already at three attempts is marked `attempts_exhausted` at claim time without being opened.
-- [ ] 5.7 Resolve document links in the final pass, through external refs across runs. Failing test first: a link to a document imported by an earlier run resolves, a second link in the same value becomes a warning, and a link to an unknown ID becomes a warning.
-- [ ] 5.8 Add `JobType::ImportRun { run_id }` and its handler:
-  - It runs under `with_actor(run.created_by)` and checks the root guard again at start.
-  - A batch ends at 100 items, 60 s, or after one file over 64 MB.
-  - It enqueues the continuation with `scheduled_at` set to the batch start, checks for cancel before each item, and finishes idempotently.
+## 5. Plan phase
 
-  Failing test first: a run over 250 fixture items completes across three driver jobs, and each continuation is dequeued before the thumbnail jobs its batch queued.
+- [ ] 5.1 Validate field kinds before any write. Failing test first: a kind conflict fails the run and leaves the taxonomy unchanged.
+- [ ] 5.2 Map taxonomy through `paperless_taxonomy`, with deterministic renames and the mirror rename collision guard. Failing test first: two plans produce the same names, and a Paperless rename renames the Folio tag.
+- [ ] 5.3 Build payloads through staging, with deterministic IDs, fingerprint v1, `skipped/unchanged`, `skipped/trashed`, `needs_reapply`, and skipping documents whose `folio_state` isn't `live`. Failing test first:
+  - identical payloads on a re-plan
+  - a tag rename doesn't change fingerprints
+  - a document with a dropped value is re-planned
+  - a purged document is never re-created
+- [ ] 5.4 Pre-validate values and drop invalid ones with warnings. Failing test first: an `ftp://` URL, a 20 KB note and a duplicate ASN each produce a warning.
 
-## 6. Recovery, retry and cancel
+## 6. Apply phase and driver
 
-- [ ] 6.1 Add a hook where an `ImportRun` job becomes `failed` after its last attempt, which marks the run `failed` with the job's error. Failing test first: a driver that fails every attempt (export directory removed) leaves the run `failed`, and a new run in the vault can be created.
-- [ ] 6.2 Add a repair-loop step that re-enqueues a driver for a `running` run with no active `ImportRun` job, up to 3 times, then marks the run `failed`. Failing test first: deleting the run's job row and running repair re-enqueues it, and the fourth time marks the run `failed`.
-- [ ] 6.3 Retry: reset failed items to `pending` with zero attempts, restart the plan phase when `plan_complete` is false, and enqueue a driver. Failing test first: a run with two failed and three imported items re-processes only the two, and a run that failed during planning plans again.
-- [ ] 6.4 Cancel: set `cancel_requested`, and move straight to `cancelled` when no driver job is active. Failing test first: cancelling a `queued` run and a run whose job is waiting on backoff both end `cancelled`, and cancelling mid-batch stops after the current item.
-- [ ] 6.5 Make concurrent drivers safe. Failing test first: two drivers started for the same run finish with each item processed once, and counts equal the items grouped by status.
+- [ ] 6.1 Apply `create`. Failing test first: every field of the fully tagged fixture, status `filed`, and no OCR job.
+- [ ] 6.2 Apply `update` (including file replacement), `trash` and `restore`. Failing test first:
+  - a bad replacement checksum keeps the old file
+  - a good one switches the file and re-thumbnails
+  - trash and restore round-trip
+- [ ] 6.3 Fail items on checksum mismatch, missing files and oversized files. Failing test first: each reason, with the run continuing.
+- [ ] 6.4 Clean up orphans on permanent create failures. Failing test first: no object is left behind.
+- [ ] 6.5 Make applying crash-safe. Failing test first: a crash between `put` and the transaction, then a resume, creates one document and one object, and the ledger matches.
+- [ ] 6.6 Stop crash loops. Failing test first: an item at three attempts becomes `attempts_exhausted` without being opened.
+- [ ] 6.7 Resolve links through the ledger. Failing test first: links to documents from earlier runs resolve, and extra links become warnings.
+- [ ] 6.8 Add `JobClass::Import` with its own worker loop, plus `JobType::ImportRun` and its handler (actor, guard re-check, batch limits, cancel check, idempotent finish). Failing test first: user uploads are thumbnailed while a 250-item import runs, and the import completes across three driver jobs.
 
-## 7. Dry run
+## 7. Recovery, retry, cancel, dry run
 
-- [ ] 7.1 Make a dry run plan without creating taxonomy, then open and verify every file without writing: items end `would_import`, `skipped` or `failed`. Failing test first: after a dry run over a fixture with one corrupted file, that item is `failed`/`checksum_mismatch`, the others are `would_import`, and the vault's documents, taxonomy, fields and storage are unchanged.
+- [ ] 7.1 Add the hook that marks the run `failed` when its job gives up. Failing test first: a run whose driver always fails ends `failed`.
+- [ ] 7.2 Add the repair step for a `running` run with no job. Failing test first: re-enqueue up to 3 times, then `failed`.
+- [ ] 7.3 Retry, including `confirm_trash` and the 409 while another run is active. Failing test first: only failed items are re-processed, a run that failed during planning plans again, and a retry while another run is active returns 409.
+- [ ] 7.4 Cancel. Failing test first: a queued run, a run in backoff and a mid-batch run all end `cancelled`.
+- [ ] 7.5 Make concurrent drivers safe. Failing test first: each item is processed once, and the counts match.
+- [ ] 7.6 Dry run for both kinds. Failing test first: `would_*` statuses, a corrupted file `failed`, and nothing changed, including the cursor.
 
-## 8. API and config
+## 8. API and MCP
 
-- [ ] 8.1 Add the `[import]` config section (`allowed_roots`, `max_file_bytes`) with `FOLIO_IMPORT__*` overrides, `SETTINGS` entries and `docs/configuration.md`. Failing test first: the env override parses into the list, an empty list disables imports, and the settings drift test passes only once the docs list both keys.
-- [ ] 8.2 Add the JSON routes under `/api/vaults/{vault_id}/imports` (create, list, get, items, retry, cancel) with the admin-plus-owner guard, their utoipa schemas and the regenerated `openapi/openapi.json` in the same commit, then regenerate the Swift client. Failing tests first: one per spec scenario, covering 202, 400 (outside root and missing path giving identical bodies), 401, 403 `imports_disabled`, 403 `forbidden` for a vault owner who isn't an admin, 404, 409 and 422.
+- [ ] 8.1 Add the `[import]` config section with env overrides, `SETTINGS` entries and docs. Failing test first: the env override parses, an empty list disables export imports, and the drift test passes.
+- [ ] 8.2 Add the JSON routes under `/api/vaults/{vault_id}/imports` with the guard, plus the utoipa schemas and `openapi/openapi.json` in the same commit. Failing tests first: one per spec scenario (202, 400 with identical bodies, 401, 403 `imports_disabled` and `forbidden`, 404, 409 including `library_mismatch`, 422).
+- [ ] 8.3 Regenerate the Swift client from the updated spec. Failing test first: the Apple CI lane's generated-client check fails until it is regenerated.
+- [ ] 8.4 Add the MCP tools with the read and write scopes, resolving the `Caller` through `CallerResolver`. Failing tests first: the four MCP scenarios.
 
 ## 9. Docs and verification
 
-- [ ] 9.1 Write the admin guide in `docs/`: how to export from Paperless (`document_exporter` with `--passphrase`), mount the export read-only, dry run, import, retry, cancel, and delete the export afterwards. Delegate the writing to the technical-writer agent.
+- [ ] 9.1 Write the admin guide: connecting Paperless, the sync modes and what `mirror` overwrites, the trash threshold and `confirm_trash`, the forward-only upgrade with a backup first, export imports, dry runs, retry, cancel, MCP, and deleting exports. Delegate the writing to the technical-writer agent.
 - [ ] 9.2 Verify end to end with the `verify` skill:
-  - Start an ephemeral instance with a fixture export mounted.
-  - Do a dry run, then import, kill the server mid-run, restart, and retry.
-  - Confirm the counts, that there are no duplicates, and that no storage objects are orphaned.
+  - Start an ephemeral Folio and a testcontainers Paperless.
+  - Use `mirror` mode and import, then kill Folio mid-run and resume.
+  - Edit, delete and restore in Paperless, and check that the next sync mirrors them.
+  - Remove the token's view permission on part of the library and check that the threshold holds.
+  - Point the source at a second Paperless and check that `library_mismatch` stops it.
+  - Re-run an export of the same library and check that nothing changes.
+  - Check that a user upload is processed during a large import.
+  - Confirm there are no duplicates and no orphaned objects.
 - [ ] 9.3 Run `make format`, `make lint` and `make test`.
