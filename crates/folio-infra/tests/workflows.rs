@@ -2227,3 +2227,112 @@ async fn deleting_a_workflow_stops_its_inflight_run_after_the_current_action() {
     assert_eq!(stopped.status, RunStatus::Failed);
     assert_eq!(stopped.last_error.as_deref(), Some("Workflow was deleted"));
 }
+
+async fn workflow_runs(h: &Harness, workflow: &Workflow) -> usize {
+    h.workflows
+        .list_runs(h.vault, workflow.id, 10)
+        .await
+        .unwrap()
+        .len()
+}
+
+async fn consume_pending(h: &Harness) {
+    for event in h.pending_events().await {
+        h.engine.consume(&event).await.unwrap();
+        h.outbox.mark_dispatched(event.id).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
+    use folio_core::models::{ExternalRef, ImportSource, ImportedDocument};
+
+    let h = Harness::new().await;
+    let synced_tag = h.tag("synced").await;
+    let user_tag = h.tag("mine").await;
+    let uploaded = h
+        .workflow(
+            WorkflowTrigger::DocumentUploaded,
+            WorkflowConditions::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let processed = h
+        .workflow(
+            WorkflowTrigger::DocumentProcessed,
+            WorkflowConditions::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let tags_changed = h
+        .workflow(
+            WorkflowTrigger::DocumentTagsChanged,
+            WorkflowConditions::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let now = chrono::Utc::now();
+    let doc = h
+        .documents
+        .create_imported(
+            h.vault,
+            ImportedDocument {
+                id: Uuid::new_v4(),
+                external_ref: ExternalRef {
+                    source: ImportSource::Paperless,
+                    id: "7".into(),
+                },
+                title: "Imported".into(),
+                content: Some("text".into()),
+                original_filename: Some("a.pdf".into()),
+                mime_type: Some("application/pdf".into()),
+                file_path: "documents/a/original".into(),
+                content_sha256: "ab".repeat(32),
+                document_date: None,
+                created_at: now,
+                updated_at: now,
+                correspondent_id: None,
+                document_type_id: None,
+                tag_ids: Vec::new(),
+                metadata: BTreeMap::new(),
+                notes: Vec::new(),
+                in_inbox: false,
+            },
+        )
+        .await
+        .unwrap();
+    folio_infra::SqliteDocumentRepository::new(h.pool.clone())
+        .with_origin(EventOrigin::Import)
+        .add_tag(h.vault, doc.id, synced_tag)
+        .await
+        .unwrap();
+    h.outbox
+        .append_document(
+            h.vault,
+            &DocumentEvent::Processed {
+                document_id: doc.id,
+            },
+            EventOrigin::Import,
+        )
+        .await
+        .unwrap();
+    consume_pending(&h).await;
+    assert_eq!(workflow_runs(&h, &uploaded).await, 0);
+    assert_eq!(workflow_runs(&h, &processed).await, 0);
+    assert_eq!(workflow_runs(&h, &tags_changed).await, 0);
+
+    h.documents.add_tag(h.vault, doc.id, user_tag).await.unwrap();
+    h.outbox
+        .append_document(
+            h.vault,
+            &DocumentEvent::Processed {
+                document_id: doc.id,
+            },
+            EventOrigin::User,
+        )
+        .await
+        .unwrap();
+    consume_pending(&h).await;
+    assert_eq!(workflow_runs(&h, &tags_changed).await, 1);
+    assert_eq!(workflow_runs(&h, &processed).await, 1);
+}

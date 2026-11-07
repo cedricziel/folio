@@ -915,7 +915,7 @@ async fn jobs_contract(db: &Database, r: &Repositories) {
         .unwrap();
     let delayed = jobs
         .enqueue_delayed(
-            JobType::GenerateEmbedding { document_id: doc },
+            JobType::generate_embedding(doc),
             Utc::now() + Duration::hours(1),
         )
         .await
@@ -1016,7 +1016,7 @@ async fn processing_recovery_contract(r: &Repositories) {
     );
     let unrelated = r
         .jobs
-        .enqueue(JobType::GenerateEmbedding { document_id: id })
+        .enqueue(JobType::generate_embedding(id))
         .await
         .unwrap();
     let unrelated_claim = r.jobs.dequeue().await.unwrap().unwrap();

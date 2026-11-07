@@ -21,6 +21,7 @@ use uuid::Uuid;
 use async_trait::async_trait;
 
 use folio_core::error::Result;
+use folio_core::events::EventOrigin;
 use folio_core::ports::{ProcessingQueue, ProcessingStatus};
 
 /// Job status
@@ -68,8 +69,12 @@ pub enum JobType {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         force: bool,
     },
-    /// Generate embedding for search
-    GenerateEmbedding { document_id: Uuid },
+    /// Generate embedding for search; its `processed` event carries `origin`
+    GenerateEmbedding {
+        document_id: Uuid,
+        #[serde(default, skip_serializing_if = "is_user")]
+        origin: EventOrigin,
+    },
     /// Process a newly uploaded document (all steps); `force` is passed on to OCR
     ProcessDocument {
         document_id: Uuid,
@@ -88,7 +93,18 @@ pub enum JobType {
     ExecuteWorkflowRun { run_id: Uuid },
 }
 
+fn is_user(origin: &EventOrigin) -> bool {
+    *origin == EventOrigin::User
+}
+
 impl JobType {
+    pub fn generate_embedding(document_id: Uuid) -> Self {
+        JobType::GenerateEmbedding {
+            document_id,
+            origin: EventOrigin::User,
+        }
+    }
+
     pub fn process_document(document_id: Uuid) -> Self {
         JobType::ProcessDocument {
             document_id,
@@ -108,7 +124,7 @@ impl JobType {
         match self {
             JobType::GenerateThumbnail { document_id }
             | JobType::ExtractText { document_id, .. }
-            | JobType::GenerateEmbedding { document_id }
+            | JobType::GenerateEmbedding { document_id, .. }
             | JobType::PurgeDocument { document_id, .. }
             | JobType::ProcessDocument { document_id, .. } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
