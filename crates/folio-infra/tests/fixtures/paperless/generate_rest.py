@@ -222,7 +222,8 @@ def build(name, *, version, v3):
         return body
 
     recording = [
-        entry("/api/", {}, {"documents": f"{BASE}/api/documents/"}, headers={"X-Version": version, "X-Api-Version": "10" if v3 else "9"}),
+        # `/api/` redirects to the HTML schema viewer, so the version comes from here
+        entry("/api/documents/", {"page": "1", "page_size": "1"}, {**page([{"id": roots[0]["pk"]}]), "count": len(roots), "next": f"{BASE}/api/documents/?fields=id&page=2&page_size=1", "all": [r["pk"] for r in roots]}, headers={"X-Version": version, "X-Api-Version": "10" if v3 else "9"}),
         entry("/api/correspondents/", {"page": "1", "page_size": str(PAGE_SIZE), "ordering": "id"}, page([
             {**matching(r["pk"], r["fields"], count_docs(lambda d: d["correspondent"] == r["pk"])), "last_correspondence": None}
             for r in sorted(by_model["documents.correspondent"], key=lambda r: r["pk"])

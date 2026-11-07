@@ -88,14 +88,21 @@ impl PaperlessHttpReader {
 #[async_trait]
 impl PaperlessReader for PaperlessHttpReader {
     async fn source_info(&self) -> Result<PaperlessSourceInfo, PaperlessReadError> {
-        let response = self.api.get("api/", &[]).await?;
+        // `/api/` redirects to the HTML schema viewer, which refuses JSON
+        let response = self
+            .api
+            .get(
+                "api/documents/",
+                &[("page", "1"), ("page_size", "1"), ("fields", "id")],
+            )
+            .await?;
         response
             .headers()
             .get("x-version")
             .and_then(|v| v.to_str().ok())
             .and_then(PaperlessVersion::parse)
             .map(|version| PaperlessSourceInfo { version })
-            .ok_or_else(|| malformed(MalformedKind::InvalidVersion, "api/"))
+            .ok_or_else(|| malformed(MalformedKind::InvalidVersion, "api/documents/"))
     }
 
     async fn scan(&self) -> Result<RecordStream, PaperlessReadError> {

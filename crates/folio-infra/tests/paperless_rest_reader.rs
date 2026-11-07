@@ -144,7 +144,7 @@ async fn reads_the_version_from_the_api_root() {
 #[tokio::test]
 async fn a_path_prefix_is_kept() {
     let server = MockServer::start().await;
-    Mock::given(path("/paperless/api/"))
+    Mock::given(path("/paperless/api/documents/"))
         .respond_with(ResponseTemplate::new(200).insert_header("X-Version", "2.20.15"))
         .mount(&server)
         .await;
@@ -163,7 +163,7 @@ fn source_failure<T: std::fmt::Debug>(result: Result<T, PaperlessReadError>) -> 
 async fn a_cross_origin_redirect_is_refused_without_sending_the_token() {
     let elsewhere = MockServer::start().await;
     let server = MockServer::start().await;
-    Mock::given(path("/api/"))
+    Mock::given(path("/api/documents/"))
         .respond_with(
             ResponseTemplate::new(302)
                 .insert_header("Location", format!("{}/api/", elsewhere.uri())),
@@ -179,7 +179,7 @@ async fn a_cross_origin_redirect_is_refused_without_sending_the_token() {
 #[tokio::test]
 async fn a_same_origin_redirect_is_followed_with_the_token() {
     let server = MockServer::start().await;
-    Mock::given(path("/api/"))
+    Mock::given(path("/api/documents/"))
         .respond_with(ResponseTemplate::new(301).insert_header("Location", "/new/api/"))
         .mount(&server)
         .await;
@@ -201,7 +201,7 @@ async fn failures_map_to_fixed_reasons() {
         (500, SourceFailure::UpstreamError),
     ] {
         let server = MockServer::start().await;
-        Mock::given(path("/api/"))
+        Mock::given(path("/api/documents/"))
             .respond_with(ResponseTemplate::new(status).set_body_string("upstream detail"))
             .mount(&server)
             .await;
@@ -526,12 +526,12 @@ fn retrying_reader(server: &MockServer) -> PaperlessHttpReader {
 #[tokio::test]
 async fn a_429_then_a_200_succeeds() {
     let server = MockServer::start().await;
-    Mock::given(path("/api/"))
+    Mock::given(path("/api/documents/"))
         .respond_with(ResponseTemplate::new(429))
         .up_to_n_times(1)
         .mount(&server)
         .await;
-    Mock::given(path("/api/"))
+    Mock::given(path("/api/documents/"))
         .respond_with(ResponseTemplate::new(200).insert_header("X-Version", "2.20.15"))
         .mount(&server)
         .await;
@@ -542,7 +542,7 @@ async fn a_429_then_a_200_succeeds() {
 #[tokio::test]
 async fn retries_run_out_with_an_upstream_error() {
     let server = MockServer::start().await;
-    Mock::given(path("/api/"))
+    Mock::given(path("/api/documents/"))
         .respond_with(ResponseTemplate::new(503))
         .mount(&server)
         .await;

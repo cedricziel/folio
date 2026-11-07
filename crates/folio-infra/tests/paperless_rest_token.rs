@@ -26,7 +26,7 @@ impl std::io::Write for Captured {
 
 async fn responding(response: ResponseTemplate) -> MockServer {
     let server = MockServer::start().await;
-    Mock::given(path("/api/"))
+    Mock::given(path("/api/documents/"))
         .respond_with(response)
         .mount(&server)
         .await;

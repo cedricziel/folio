@@ -1,15 +1,29 @@
 [
   {
     "method": "GET",
-    "path": "/api/",
-    "query": {},
+    "path": "/api/documents/",
+    "query": {
+      "page": "1",
+      "page_size": "1"
+    },
     "status": 200,
     "headers": {
       "X-Version": "2.20.15",
       "X-Api-Version": "9"
     },
     "body": {
-      "documents": "http://paperless.test/api/documents/"
+      "count": 2,
+      "next": "http://paperless.test/api/documents/?fields=id&page=2&page_size=1",
+      "previous": null,
+      "all": [
+        1,
+        2
+      ],
+      "results": [
+        {
+          "id": 1
+        }
+      ]
     }
   },
   {
