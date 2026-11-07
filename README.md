@@ -29,7 +29,6 @@ For a real deployment, with a reverse proxy, upgrades and backups, read
 - [Configuration](docs/configuration.md)
 - [Authentication](docs/auth.md)
 - [Vault selection](docs/vaults.md)
-- [Importing from Paperless-ngx](docs/paperless-import.md)
 - [Database](docs/database.md) and [storage](docs/storage.md)
 - [Observability](docs/observability.md)
 - [Keyboard shortcuts](docs/shortcuts.md)

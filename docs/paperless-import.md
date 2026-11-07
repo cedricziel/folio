@@ -1,17 +1,20 @@
 # Importing from Paperless-ngx
 
+> [!NOTE]
+> This feature is being built under `openspec/changes/paperless-import`. The routes, source type and MCP tools described here don't exist yet.
+
 Folio can move a Paperless-ngx library into a vault and keep that vault in sync while Paperless is still in use. It keeps titles, dates, correspondents, document types, tags, custom fields, ASNs, notes and the OCR text.
 
 There are two ways in:
 
-- **Connect Paperless** as a vault source, with its URL and an API token. Folio polls it and imports or syncs changes. Use this by default.
+- **Connect Paperless** as a vault source, with its URL and an API token. Folio polls it and imports or syncs changes. Start here.
 - **Import an export folder** made with Paperless's `document_exporter`. Use this for very large libraries or when Folio can't reach Paperless. You can add the connection afterwards: it matches the exported documents by Paperless ID and doesn't create them again.
 
 Each import or sync that finds changes is an import run. Runs resume after a restart and never create a document twice, so re-running one is safe. You start and follow runs through the JSON API or MCP. Apart from the source form, there are no web pages for runs yet.
 
 ## Before you start
 
-- Paperless-ngx 2.16 or later. In 2.16 `created` became a date. Older versions fail the connection test with `unsupported_version`, and Folio rejects their exports with `422`. Upgrade Paperless first.
+- Paperless-ngx 2.16 or later. Older versions fail the connection test with `unsupported_version`, and Folio rejects their exports with `422`. Upgrade Paperless first.
 - A Folio account that is an instance admin (`is_admin`, or the instance owner) and an owner of the target vault. A vault owner who isn't an instance admin gets `403` `forbidden`.
 - For API calls, a Folio API token with `documents:write` (`documents:read` is enough for `GET`). See [auth](auth.md).
 - A vault holds one Paperless library. Once a vault has seen a library, a source or export from a different Paperless instance fails with `library_mismatch`.
@@ -62,6 +65,7 @@ Rules for the source:
 - Changing the URL needs the token again. A `PUT` with a new `url` and the redacted token returns `400`, and Folio never sends the stored token to the new URL.
 - An invalid URL, a poll interval under 60, or `token_file` in the request returns `400` naming the field.
 - Deleting the source stops polling. The imported documents stay.
+- A vault stays bound to the first Paperless library it saw, even after you delete the source. Pointing the source at another Paperless instance, or adding a source or export from one, fails with `library_mismatch`: `409` on the request, or the run fails before it changes anything. To import another library, use a new vault.
 
 ### In `config.toml`
 
@@ -211,12 +215,14 @@ For a very large library or an offline move, import an export first and add the 
 ### Export from Paperless
 
 ```sh
-docker compose exec webserver document_exporter ../export --passphrase <passphrase>
+docker compose exec -T webserver document_exporter ../export --passphrase <passphrase>
 ```
 
-Always pass `--passphrase`. Without it the export holds your mail account credentials in plaintext.
+Always pass `--passphrase`. Without it the export may hold your mail account credentials in plaintext. A passphrase given on the command line ends up in your shell history, so clear it afterwards.
 
-Folio reads a single `manifest.json` and exports made with `--split-manifest` or `--use-folder-prefix`. It can't read zipped exports, so unzip one first. GPG-encrypted (v2) libraries need nothing extra: the exporter writes decrypted files. Paperless 3 includes trashed documents in the export; Folio skips them.
+To make the export smaller, you can add `--no-archive --no-thumbnail`: Folio imports neither archive PDFs nor thumbnails.
+
+Folio reads a single `manifest.json` and exports made with `--split-manifest` or `--use-folder-prefix`. It can't import exports made with `--data-only` (they have no files) or `--zip`; unzip a zipped export first. Trashed documents in the export are skipped on the first import.
 
 ### Make the export visible to Folio
 
@@ -270,7 +276,7 @@ For a config-defined source, set `default_currency` in its section.
 ### Delete the export
 
 > [!WARNING]
-> Delete the export directory once the import is done and checked. It contains the password hashes of your Paperless users and, if you exported without `--passphrase`, your mail credentials in plaintext.
+> Delete the export directory once the import is done and checked. It contains the password hashes of your Paperless users. If you exported without `--passphrase`, it may also hold your mail credentials in plaintext.
 
 Then remove the volume mount and the `allowed_roots` entry, and restart Folio, so export imports are off again.
 
@@ -323,7 +329,7 @@ All routes are under `/api/vaults/{vault_id}/imports`.
 | `failed` | The run itself failed, for example on `library_mismatch`, a field kind conflict or an unreadable manifest. |
 | `cancelled` | Stopped on request. |
 
-A run never stays `queued` or `running` with nothing working on it. Within 5 minutes Folio picks it up again or marks it `failed`.
+A run never stays `running` with nothing working on it. Within 5 minutes Folio picks it up again or marks it `failed`.
 
 ### Reasons
 
@@ -336,6 +342,7 @@ A run never stays `queued` or `running` with nothing working on it. Within 5 min
 | `unsafe_path` | `failed` | The manifest names the file by an absolute path, through `..` or through a symlink. Folio doesn't read it. |
 | `file_too_large` | `failed` | The file is larger than `import.max_file_bytes`. |
 | `attempts_exhausted` | `failed` | The item crashed the server three times in a row. |
+| `upstream_error` | `failed` | Paperless kept returning `429` or `5xx` after retries. |
 | `trash_threshold_exceeded` | `failed` | The run would trash too many documents. See [Deletions are guarded](#deletions-are-guarded). |
 
 ### Warnings
