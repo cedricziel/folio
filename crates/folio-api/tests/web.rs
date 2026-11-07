@@ -479,3 +479,48 @@ async fn manage_trash_restores_entries_and_retains_conflicting_rows() {
         .deleted_at
         .is_some());
 }
+
+#[tokio::test]
+async fn read_again_queues_forced_processing() {
+    let h = harness().await;
+    let document = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Scan".into(),
+                content: Some("old text".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .set_file_path(h.vault, document.id, "originals/scan.png")
+        .await
+        .unwrap();
+
+    let response = h
+        .app
+        .clone()
+        .oneshot(form_post(
+            &format!("/documents/{}/reprocess", document.id),
+            "",
+        ))
+        .await
+        .unwrap();
+
+    assert!(response.status().is_redirection());
+    let jobs = h
+        .state
+        .job_queue
+        .find_active_jobs_for_document(document.id)
+        .await
+        .unwrap();
+    assert!(jobs.iter().any(|job| matches!(
+        job.job_type,
+        folio_infra::JobType::ProcessDocument { force: true, .. }
+    )));
+}
