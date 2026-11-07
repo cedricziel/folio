@@ -25,7 +25,7 @@ use folio_core::ports::{
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::paths::{io_error, open_original_file, resolve_original};
+use super::paths::{io_error, open_original_file};
 
 const MANIFEST: &str = "manifest.json";
 const METADATA: &str = "metadata.json";
@@ -242,9 +242,9 @@ impl ManifestRecords {
             if let Some(stream) = self.current.as_mut() {
                 match stream.next(&mut self.context) {
                     Some(Ok(Item::Record(PaperlessRecord::Document(mut doc)))) => {
-                        doc.size = resolve_original(&self.dir, &doc.original_handle)
+                        doc.size = open_original_file(&self.dir, &doc.original_handle)
                             .ok()
-                            .map(|(_, meta)| meta.len());
+                            .map(|(_, size)| size);
                         return Some(Ok(Item::Record(PaperlessRecord::Document(doc))));
                     }
                     Some(item) => return Some(item),

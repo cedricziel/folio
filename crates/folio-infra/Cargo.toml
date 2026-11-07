@@ -60,6 +60,9 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
+# Symlink-free opens under an import directory
+rustix = { version = "1", features = ["fs"] }
+
 # Consume folder watching
 notify = "8"
 

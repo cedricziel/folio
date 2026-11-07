@@ -1,11 +1,13 @@
 //! Path checks for import sources
 
-use std::fs::{File, Metadata};
+use std::ffi::OsStr;
+use std::fs::File;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use folio_core::ports::PaperlessReadError;
+use rustix::fs::{openat, Mode, OFlags};
+use rustix::io::Errno;
 
 /// One error for paths outside every root and for paths that don't exist, so
 /// callers can't probe which server paths exist
@@ -31,57 +33,63 @@ pub fn resolve_import_dir(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, Out
     }
 }
 
-/// Resolves a manifest path under the canonical export directory without
-/// opening anything, returning the file's metadata. Absolute paths, `.` or
-/// `..` components, symlinks on any component and anything but a regular
-/// file are refused.
-pub fn resolve_original(
-    export_dir: &Path,
-    relative: &str,
-) -> Result<(PathBuf, Metadata), PaperlessReadError> {
-    let unsafe_path = || PaperlessReadError::UnsafePath {
-        what: relative.to_owned(),
-    };
-    let components = Path::new(relative).components();
-    if relative.is_empty()
-        || !components
-            .clone()
-            .all(|c| matches!(c, Component::Normal(_)))
-    {
-        return Err(unsafe_path());
-    }
-
-    let mut resolved = export_dir.to_path_buf();
-    let mut last = None;
-    for component in components {
-        resolved.push(component);
-        let meta = std::fs::symlink_metadata(&resolved).map_err(|e| io_error(relative, e))?;
-        if meta.file_type().is_symlink() {
-            return Err(unsafe_path());
-        }
-        last = Some(meta);
-    }
-    match last {
-        Some(meta) if meta.is_file() => Ok((resolved, meta)),
-        _ => Err(unsafe_path()),
-    }
-}
-
-/// Opens a file checked by [`resolve_original`], refusing it when the path
-/// was swapped between the check and the open. Returns the opened file's size.
+/// Opens a manifest path under the export directory one component at a time,
+/// each relative to the directory opened before it and none followed if it is
+/// a symlink, so swapping a component mid-walk can't redirect the open.
+/// Returns the opened file and its size.
 pub fn open_original_file(
     export_dir: &Path,
     relative: &str,
 ) -> Result<(File, u64), PaperlessReadError> {
-    let (path, checked) = resolve_original(export_dir, relative)?;
-    let file = File::open(path).map_err(|e| io_error(relative, e))?;
-    let opened = file.metadata().map_err(|e| io_error(relative, e))?;
-    if !opened.is_file() || opened.dev() != checked.dev() || opened.ino() != checked.ino() {
-        return Err(PaperlessReadError::UnsafePath {
+    let unsafe_path = || PaperlessReadError::UnsafePath {
+        what: relative.to_owned(),
+    };
+    let components = normal_components(relative).ok_or_else(unsafe_path)?;
+    let open_error = |errno: Errno| match errno {
+        Errno::NOENT => PaperlessReadError::Missing {
             what: relative.to_owned(),
-        });
+        },
+        Errno::LOOP | Errno::NOTDIR | Errno::MLINK => unsafe_path(),
+        errno => io_error(relative, errno.into()),
+    };
+
+    let (last, parents) = components.split_last().ok_or_else(unsafe_path)?;
+    let mut dir = File::open(export_dir).map_err(|e| io_error(relative, e))?;
+    for name in parents {
+        let fd = openat(
+            &dir,
+            *name,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(open_error)?;
+        dir = File::from(fd);
     }
-    Ok((file, opened.len()))
+    // Non-blocking so a FIFO planted in the export can't stall the open
+    let fd = openat(
+        &dir,
+        *last,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(open_error)?;
+    let file = File::from(fd);
+    let meta = file.metadata().map_err(|e| io_error(relative, e))?;
+    if !meta.is_file() {
+        return Err(unsafe_path());
+    }
+    Ok((file, meta.len()))
+}
+
+fn normal_components(relative: &str) -> Option<Vec<&OsStr>> {
+    let mut names = Vec::new();
+    for component in Path::new(relative).components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            _ => return None,
+        }
+    }
+    (!names.is_empty()).then_some(names)
 }
 
 pub(super) fn io_error(what: &str, source: io::Error) -> PaperlessReadError {
