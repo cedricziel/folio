@@ -10,7 +10,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
   - the `created` outbox event with origin `Import`
 
   Failing test first: read back every field, with status `filed`. A second call returns `Conflict`.
-- [ ] 1.3 Add `SourceKind::Import` to the OpenAPI enum. Failing test first: `tests/openapi.rs` fails until it is there.
+- [x] 1.3 Add `SourceKind::Import` to the OpenAPI enum. Failing test first: `tests/openapi.rs` fails until it is there.
 - [ ] 1.4 Make the workflow engine skip `EventOrigin::Import`, give processing jobs an `origin` field, and have the worker emit `Processed` with the job's origin. Failing tests first: the four workflow-triggers scenarios, including a user-started reprocess that does trigger.
 
 ## 2. Run, ledger and sync storage
