@@ -28,3 +28,10 @@ provider = "openai"
 # enabled = true
 # Extra Host headers to accept besides loopback, e.g. ["folio.example.com"]
 allowed_hosts = []
+
+[import]
+# Server directories a Paperless import may read from. Empty turns imports off.
+# See docs/paperless-import.md.
+allowed_roots = []
+# Largest original file an import accepts, in bytes (512 MB).
+max_file_bytes = 536870912
