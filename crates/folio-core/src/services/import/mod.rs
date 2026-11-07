@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 
 pub use diff::{FolioState, ItemAction, LedgerEntry, SkipReason};
 pub use fields::{
-    field_conflicts, plan_fields, ExistingField, FieldConflict, FieldConflictReason, FieldPlan,
-    FieldTarget, NewField, ASN_FIELD_NAME,
+    plan_fields, ExistingField, FieldConflict, FieldConflictReason, FieldPlan, FieldTarget,
+    NewField, ASN_FIELD_NAME,
 };
 pub use fingerprint::{
     document_id, fingerprint, DocumentRecords, FINGERPRINT_VERSION, IMPORT_NAMESPACE,
@@ -30,7 +30,6 @@ pub use payload::{
 pub use taxonomy::{
     plan_named, plan_tags, ExistingEntity, FlattenedTag, KindPlan, MappedEntity, NewEntity, Rename,
     TagPlan, Target, TaxonomyKind, TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
-    MAX_FLATTENED_NAME,
 };
 pub use trash::{TrashGate, TrashHealth, TrashPlan, TRASH_MAX_COUNT, TRASH_MAX_PERCENT};
 pub use values::{

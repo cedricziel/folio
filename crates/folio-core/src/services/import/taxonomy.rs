@@ -12,7 +12,6 @@ use serde::Serialize;
 use super::SyncMode;
 use crate::models::Id;
 use crate::ports::{PaperlessNamed, PaperlessTag};
-use crate::services::library::non_empty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,16 +19,6 @@ pub enum TaxonomyKind {
     Tag,
     Correspondent,
     DocumentType,
-}
-
-impl TaxonomyKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Tag => "tag",
-            Self::Correspondent => "correspondent",
-            Self::DocumentType => "document type",
-        }
-    }
 }
 
 /// A live tag, correspondent or type already in the vault
@@ -194,11 +183,8 @@ pub fn plan_tags(tags: &[PaperlessTag], vault: VaultTaxonomy<'_>, mode: SyncMode
         wanted.push((tag.id, chosen, Some(tag.color.clone())));
     }
 
-    let mut plan = plan_kind(TaxonomyKind::Tag, wanted, vault, mode);
-    warnings.append(&mut plan.warnings);
-    plan.warnings = warnings;
     TagPlan {
-        plan,
+        plan: plan_kind(TaxonomyKind::Tag, wanted, vault, mode, warnings),
         inbox_tags,
         flattened,
     }
@@ -221,13 +207,10 @@ pub fn plan_named(
             Some((e.id, name.to_owned(), None))
         })
         .collect();
-    let mut plan = plan_kind(kind, wanted, vault, mode);
-    warnings.append(&mut plan.warnings);
-    plan.warnings = warnings;
-    plan
+    plan_kind(kind, wanted, vault, mode, warnings)
 }
 
-/// The trimmed name, validated like names entered in Folio; an invalid one
+/// The trimmed name; a blank one, which Folio rejects for entered names too,
 /// leaves the entity unmapped, so documents import without it
 fn valid_name<'n>(
     kind: TaxonomyKind,
@@ -235,13 +218,12 @@ fn valid_name<'n>(
     name: &'n str,
     warnings: &mut Vec<TaxonomyWarning>,
 ) -> Option<&'n str> {
-    match non_empty(name, kind.label()) {
-        Ok(name) => Some(name),
-        Err(_) => {
-            warnings.push(TaxonomyWarning::InvalidName { kind, paperless_id });
-            None
-        }
+    let name = name.trim();
+    if name.is_empty() {
+        warnings.push(TaxonomyWarning::InvalidName { kind, paperless_id });
+        return None;
     }
+    Some(name)
 }
 
 fn plan_kind(
@@ -249,6 +231,7 @@ fn plan_kind(
     wanted: Vec<(i64, String, Option<String>)>,
     vault: VaultTaxonomy<'_>,
     mode: SyncMode,
+    warnings: Vec<TaxonomyWarning>,
 ) -> KindPlan {
     let mappings: HashMap<i64, &TaxonomyMapping> =
         vault.mappings.iter().map(|m| (m.paperless_id, m)).collect();
@@ -264,7 +247,10 @@ fn plan_kind(
         .map(|e| (e.id, e.name.as_str()))
         .collect();
 
-    let mut plan = KindPlan::default();
+    let mut plan = KindPlan {
+        warnings,
+        ..KindPlan::default()
+    };
     for (paperless_id, name, color) in wanted {
         let mapped = mappings
             .get(&paperless_id)

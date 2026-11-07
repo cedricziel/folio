@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::fields::{folio_kind, valid_option_label};
@@ -47,8 +47,10 @@ pub enum ItemWarning {
         field_id: i64,
         field: String,
         reason: String,
-        /// The drop may not happen again, e.g. once the field is known
-        retryable: bool,
+    },
+    /// The value's field isn't among the run's fields; a later run may know it
+    UnknownField {
+        field_id: i64,
     },
     NoteDropped {
         note_id: i64,
@@ -59,11 +61,6 @@ pub enum ItemWarning {
         asn: i64,
         reason: String,
     },
-    /// A linked document the vault doesn't hold yet; a later sync may
-    LinkDropped {
-        field_id: i64,
-        paperless_id: i64,
-    },
 }
 
 impl ItemWarning {
@@ -71,9 +68,8 @@ impl ItemWarning {
     /// changes in Paperless; such drops set `needs_reapply` on the ledger
     pub fn retryable(&self) -> bool {
         match self {
-            Self::ValueDropped { retryable, .. } => *retryable,
-            Self::NoteDropped { .. } => false,
-            Self::AsnDropped { .. } | Self::LinkDropped { .. } => true,
+            Self::ValueDropped { .. } | Self::NoteDropped { .. } => false,
+            Self::UnknownField { .. } | Self::AsnDropped { .. } => true,
         }
     }
 }
@@ -107,29 +103,24 @@ pub fn plan_values(
     ctx: &ValueContext<'_>,
 ) -> PlannedValues {
     let mut planned = PlannedValues::default();
-    let mut by_field: BTreeMap<i64, Vec<&PaperlessCustomFieldInstance>> = BTreeMap::new();
-    for instance in instances {
-        by_field.entry(instance.field).or_default().push(instance);
-    }
+    let mut sorted: Vec<&PaperlessCustomFieldInstance> = instances.iter().collect();
+    sorted.sort_by_key(|instance| instance.field);
 
-    for (field_id, instances) in by_field {
+    for instances in sorted.chunk_by(|a, b| a.field == b.field) {
+        let field_id = instances[0].field;
         let Some(field) = ctx.fields.get(&field_id) else {
-            planned.warnings.push(ItemWarning::ValueDropped {
-                field_id,
-                field: format!("#{field_id}"),
-                reason: "Unknown custom field".into(),
-                retryable: true,
-            });
+            planned
+                .warnings
+                .push(ItemWarning::UnknownField { field_id });
             continue;
         };
         let dropped = |reason: String| ItemWarning::ValueDropped {
             field_id,
             field: field.name.clone(),
             reason,
-            retryable: false,
         };
         // No order-independent way to pick one
-        let [instance] = instances[..] else {
+        let [instance] = instances else {
             planned
                 .warnings
                 .push(dropped("The field has more than one value".into()));
@@ -162,7 +153,8 @@ pub fn plan_values(
             Ok(body) => planned.notes.push(PlannedNote {
                 external_id: note.id.to_string(),
                 body: body.into_inner(),
-                created: note.created,
+                // As the fingerprint counts it, so both readers plan the same
+                created: note.created.trunc_subsecs(0),
             }),
             Err(error) => planned.warnings.push(ItemWarning::NoteDropped {
                 note_id: note.id,
@@ -570,10 +562,7 @@ mod tests {
         assert!(first.values.is_empty());
         assert!(matches!(
             &first.warnings[..],
-            [ItemWarning::ValueDropped {
-                retryable: false,
-                ..
-            }]
+            [ItemWarning::ValueDropped { .. }]
         ));
     }
 

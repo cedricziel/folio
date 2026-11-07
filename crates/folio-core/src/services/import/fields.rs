@@ -81,7 +81,7 @@ fn name_key(name: &str) -> String {
 }
 
 /// Every reason the Paperless fields can't be imported into this vault
-pub fn field_conflicts(
+fn field_conflicts(
     paperless: &[PaperlessCustomField],
     existing: &[ExistingField],
 ) -> Vec<FieldConflict> {
@@ -100,7 +100,7 @@ pub fn field_conflicts(
             paperless_id: Some(field.id),
             reason,
         };
-        if valid_field_name(&field.name, kind).is_none() {
+        if !valid_field_name(&field.name, kind) {
             conflicts.push(conflict(FieldConflictReason::InvalidName));
             continue;
         }
@@ -118,21 +118,24 @@ pub fn field_conflicts(
                 other_kind: first_kind,
             }));
         }
-        let reason = match existing.get(&key) {
-            Some(found) if found.kind != kind => Some(FieldConflictReason::KindMismatch {
+        let Some(found) = existing.get(&key) else {
+            continue;
+        };
+        let reason = if found.kind != kind {
+            FieldConflictReason::KindMismatch {
                 existing: found.kind,
                 required: kind,
-            }),
-            Some(found) if found.unique => Some(FieldConflictReason::UniqueField),
-            _ => None,
+            }
+        } else if found.unique {
+            FieldConflictReason::UniqueField
+        } else {
+            continue;
         };
-        if let Some(reason) = reason {
-            conflicts.push(FieldConflict {
-                field: existing[&key].name.clone(),
-                paperless_id: Some(field.id),
-                reason,
-            });
-        }
+        conflicts.push(FieldConflict {
+            field: found.name.clone(),
+            paperless_id: Some(field.id),
+            reason,
+        });
     }
     if let Some(asn) = existing.get(&asn_key) {
         let reason = if asn.kind != MetadataKind::Integer {
@@ -156,14 +159,14 @@ pub fn field_conflicts(
     conflicts
 }
 
-fn valid_field_name(name: &str, kind: MetadataKind) -> Option<String> {
+fn valid_field_name(name: &str, kind: MetadataKind) -> bool {
     let input = MetadataFieldInput {
         name: name.to_owned(),
         kind,
         required: false,
         unique: false,
     };
-    input.validate().ok().map(|input| input.name)
+    input.validate().is_ok()
 }
 
 /// Trimmed and validated like options entered in Folio; invalid labels are
@@ -202,8 +205,15 @@ pub struct NewField {
 }
 
 /// Maps each field onto an existing field with the same name key, or a new
-/// one. Run only once [`field_conflicts`] came back empty.
-pub fn plan_fields(paperless: &[PaperlessCustomField], existing: &[ExistingField]) -> FieldPlan {
+/// one. Any conflict fails the run before anything is written.
+pub fn plan_fields(
+    paperless: &[PaperlessCustomField],
+    existing: &[ExistingField],
+) -> Result<FieldPlan, Vec<FieldConflict>> {
+    let conflicts = field_conflicts(paperless, existing);
+    if !conflicts.is_empty() {
+        return Err(conflicts);
+    }
     let mut sorted: Vec<&PaperlessCustomField> = paperless.iter().collect();
     sorted.sort_by_key(|f| f.id);
     let existing_by_id: HashMap<Id, &ExistingField> = existing.iter().map(|f| (f.id, f)).collect();
@@ -245,7 +255,7 @@ pub fn plan_fields(paperless: &[PaperlessCustomField], existing: &[ExistingField
         }
     }
     plan.missing_options.retain(|_, labels| !labels.is_empty());
-    plan
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -413,7 +423,8 @@ mod tests {
                 paperless(3, "due", PaperlessFieldType::Date),
             ],
             std::slice::from_ref(&amount),
-        );
+        )
+        .unwrap();
 
         assert_eq!(plan.fields[&2].target, Target::Existing(amount.id));
         assert_eq!(plan.fields[&1].target, Target::New(0));
@@ -440,13 +451,24 @@ mod tests {
                 select(3, "priority", &["Low", "Urgent"]),
             ],
             std::slice::from_ref(&status),
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             plan.missing_options,
             BTreeMap::from([(status.id, vec!["Paid".to_string(), "Overdue".to_string()])])
         );
         assert_eq!(plan.creates[0].options, vec!["High", "Low", "Urgent"]);
+    }
+
+    #[test]
+    fn plan_fields_refuses_to_plan_with_conflicts() {
+        let conflicts = plan_fields(
+            &[paperless(7, "Amount", PaperlessFieldType::Monetary)],
+            &[existing("Amount", MetadataKind::Text)],
+        )
+        .unwrap_err();
+        assert_eq!(conflicts.len(), 1);
     }
 
     #[test]
