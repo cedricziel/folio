@@ -12,6 +12,7 @@ pub(crate) use metadata_value_repo::{clear_incoming_links, prepare_move};
 mod auth_repo;
 mod document_entries;
 mod document_repo;
+mod import_runs;
 mod ingest_outcomes;
 mod ingest_repo;
 mod outbox;
@@ -31,6 +32,7 @@ pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
 };
+pub use import_runs::{record_import_applied, upsert_paperless_document, SqliteImportRepository};
 pub use ingest_outcomes::SqliteIngestOutcomeRepository;
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
 pub(crate) use outbox::capture_document;

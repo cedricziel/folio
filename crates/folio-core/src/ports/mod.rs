@@ -7,6 +7,7 @@ mod ai;
 mod document_entries;
 mod health;
 mod import;
+mod import_runs;
 mod ingest;
 mod metadata;
 mod outbox;
@@ -30,6 +31,7 @@ pub use import::{
     PaperlessRecord, PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
     PaperlessVersionInfo, RecordStream, SourceFailure, SourceLocation,
 };
+pub use import_runs::{ImportItemRepository, ImportRunRepository, PaperlessLedgerRepository};
 pub use ingest::{
     DocumentImporter, IngestLedger, IngestOutcomeReader, IngestOutcomeRepository, IngestSink,
     IngestionSource, IngestionSourceFactory, SourceRepository, VaultIngest,

@@ -16,7 +16,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 ## 2. Run, ledger and sync storage
 
 - [x] 2.1 Migration for `import_runs` (including `cursor_after` and `confirm_trash`), `import_items`, `import_staging`, `paperless_documents` (including `needs_reapply` and `folio_state`), `paperless_taxonomy` and `paperless_sync_state` (including `library_sample`, `once_done`, `retry_ids` and `parked_ids`). It also adds `paperless` to the `ingest_outcomes` and `source_health` CHECKs (a table rebuild on SQLite) and a partial unique index for one live `paperless` source per vault. Failing test first: on both backends, `source_health` accepts `paperless`, and a second live `paperless` source in a vault is rejected.
-- [ ] 2.2 Add the models and the `ImportRunRepository`, `ImportItemRepository` and `PaperlessLedgerRepository` ports in `crates/folio-core/src/ports/import_runs.rs`, with SQLite and Postgres adapters:
+- [x] 2.2 Add the models and the `ImportRunRepository`, `ImportItemRepository` and `PaperlessLedgerRepository` ports in `crates/folio-core/src/ports/import_runs.rs`, with SQLite and Postgres adapters:
   - the claim, finish, counts and one-active-run rule
   - the ledger, the taxonomy map and the sync state with the cursor, retry and park sets
 
