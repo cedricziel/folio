@@ -183,7 +183,11 @@ mod tests {
             }
         }
 
-        fn plan(&self, records: &DocumentRecords, ledger: Option<&LedgerEntry>) -> Option<PlannedItem> {
+        fn plan(
+            &self,
+            records: &DocumentRecords,
+            ledger: Option<&LedgerEntry>,
+        ) -> Option<PlannedItem> {
             let ctx = PlanContext {
                 vault: VAULT,
                 mode: SyncMode::Mirror,
@@ -253,7 +257,9 @@ mod tests {
     fn a_synced_document_is_skipped_as_unchanged() {
         let fixture = Fixture::new();
         let created = fixture.plan(&records(), None).unwrap();
-        let again = fixture.plan(&records(), Some(&ledger_after(&created))).unwrap();
+        let again = fixture
+            .plan(&records(), Some(&ledger_after(&created)))
+            .unwrap();
         assert_eq!(again.outcome, ItemOutcome::Skipped(SkipReason::Unchanged));
         assert_eq!(again.payload, None);
     }
@@ -327,7 +333,10 @@ mod tests {
 
         let item = fixture.plan(&changed, Some(&purged)).unwrap();
 
-        assert_eq!(item.outcome, ItemOutcome::Skipped(SkipReason::PurgedInFolio));
+        assert_eq!(
+            item.outcome,
+            ItemOutcome::Skipped(SkipReason::PurgedInFolio)
+        );
         assert_eq!(item.payload, None);
     }
 

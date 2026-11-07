@@ -21,9 +21,13 @@ pub const DEFAULT_CURRENCY: &str = "EUR";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PlannedValue {
-    Value { value: MetadataValue },
+    Value {
+        value: MetadataValue,
+    },
     /// Select values carry the option label; apply resolves the option
-    Option { label: String },
+    Option {
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,7 +389,10 @@ mod tests {
         );
 
         let fallback = fixture.plan(
-            &[(1, PaperlessFieldValue::Monetary("99999999999999999999.99".into()))],
+            &[(
+                1,
+                PaperlessFieldValue::Monetary("99999999999999999999.99".into()),
+            )],
             &[],
             None,
         );
@@ -401,10 +408,18 @@ mod tests {
     #[test]
     fn empty_monetary_values_are_skipped_and_garbage_warns() {
         let fixture = Fixture::new(vec![field(1, "Amount", PaperlessFieldType::Monetary)]);
-        let empty = fixture.plan(&[(1, PaperlessFieldValue::Monetary(String::new()))], &[], None);
+        let empty = fixture.plan(
+            &[(1, PaperlessFieldValue::Monetary(String::new()))],
+            &[],
+            None,
+        );
         assert!(empty.values.is_empty() && empty.warnings.is_empty());
 
-        let garbage = fixture.plan(&[(1, PaperlessFieldValue::Monetary("EUR1e5".into()))], &[], None);
+        let garbage = fixture.plan(
+            &[(1, PaperlessFieldValue::Monetary("EUR1e5".into()))],
+            &[],
+            None,
+        );
         assert_eq!(garbage.warnings.len(), 1);
     }
 
@@ -412,7 +427,10 @@ mod tests {
     fn floats_use_the_shortest_round_trip_form() {
         let fixture = Fixture::new(vec![field(1, "Rate", PaperlessFieldType::Float)]);
         let planned = fixture.plan(&[(1, PaperlessFieldValue::Float(0.1))], &[], None);
-        assert_eq!(value(&planned, 1), Some(&MetadataValue::Decimal("0.1".into())));
+        assert_eq!(
+            value(&planned, 1),
+            Some(&MetadataValue::Decimal("0.1".into()))
+        );
 
         let nan = fixture.plan(&[(1, PaperlessFieldValue::Float(f64::NAN))], &[], None);
         assert_eq!(nan.warnings.len(), 1);

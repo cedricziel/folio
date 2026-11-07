@@ -60,7 +60,8 @@ pub fn missing_from_listing<'a>(
 /// 10% of the live ledger, unless the run was retried with `confirm_trash`
 pub fn trash_held(trash_items: usize, live_ledger_rows: usize, confirm_trash: bool) -> bool {
     !confirm_trash
-        && (trash_items > TRASH_MAX_COUNT || trash_items * 100 > live_ledger_rows * TRASH_MAX_PERCENT)
+        && (trash_items > TRASH_MAX_COUNT
+            || trash_items * 100 > live_ledger_rows * TRASH_MAX_PERCENT)
 }
 
 /// Counts the rows [`trash_held`] measures against
@@ -183,7 +184,10 @@ mod tests {
 
         let live = live_ledger_rows(&ledger);
         let mut items = vec![];
-        assert_eq!(apply_trash_safety(&mut items, Ok(missing.clone()), live, false), None);
+        assert_eq!(
+            apply_trash_safety(&mut items, Ok(missing.clone()), live, false),
+            None
+        );
         assert_eq!(items.len(), 400);
         assert!(items
             .iter()
@@ -208,7 +212,10 @@ mod tests {
 
     #[test]
     fn an_empty_listing_drops_every_trash_item_and_reports_it() {
-        let mut items = vec![pending(1, ItemAction::Trash), pending(2, ItemAction::Create)];
+        let mut items = vec![
+            pending(1, ItemAction::Trash),
+            pending(2, ItemAction::Create),
+        ];
         let health = apply_trash_safety(&mut items, Err(TrashHealth::EmptyListing), 10, true);
         assert_eq!(health, Some(TrashHealth::EmptyListing));
         assert_eq!(items, vec![pending(2, ItemAction::Create)]);

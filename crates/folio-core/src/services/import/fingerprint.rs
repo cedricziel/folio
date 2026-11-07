@@ -55,12 +55,7 @@ impl DocumentRecords {
     pub fn original(&self) -> &PaperlessDocument {
         self.versions
             .iter()
-            .max_by_key(|v| {
-                (
-                    v.version_of.as_ref().and_then(|info| info.index),
-                    v.id,
-                )
-            })
+            .max_by_key(|v| (v.version_of.as_ref().and_then(|info| info.index), v.id))
             .unwrap_or(&self.document)
     }
 
@@ -231,7 +226,10 @@ pub(crate) mod tests {
         b.notes.reverse();
         b.fields.reverse();
         b.document.tags.reverse();
-        assert_eq!(fingerprint(&a, &BTreeSet::new()), fingerprint(&b, &BTreeSet::new()));
+        assert_eq!(
+            fingerprint(&a, &BTreeSet::new()),
+            fingerprint(&b, &BTreeSet::new())
+        );
     }
 
     #[test]

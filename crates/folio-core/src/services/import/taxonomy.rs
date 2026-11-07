@@ -580,7 +580,7 @@ mod tests {
                 field(1, "Due", P::Date),
                 field(3, "due", P::Date),
             ],
-            &[amount.clone()],
+            std::slice::from_ref(&amount),
         );
 
         assert_eq!(plan.fields[&2].target, Target::Existing(amount.id));
