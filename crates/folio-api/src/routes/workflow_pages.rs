@@ -772,7 +772,14 @@ async fn test(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let workflow = find(vault, &*state.workflow_repo, id).await?;
-    let notice = match send_test(&state.webhook_client, &workflow, &state.public_url).await {
+    let notice = match send_test(
+        &state.webhook_client,
+        workflow.trigger,
+        &workflow.actions,
+        &state.public_url,
+    )
+    .await
+    {
         Ok(result) => Notice {
             danger: result.deliveries.iter().any(|d| !d.success),
             lines: result
