@@ -1,6 +1,5 @@
 [
   {
-    "method": "GET",
     "path": "/api/documents/",
     "query": {
       "page": "1",
@@ -27,7 +26,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/correspondents/",
     "query": {
       "page": "1",
@@ -72,7 +70,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/document_types/",
     "query": {
       "page": "1",
@@ -115,7 +112,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/tags/",
     "query": {
       "page": "1",
@@ -253,7 +249,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/custom_fields/",
     "query": {
       "page": "1",
@@ -391,7 +386,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/",
     "query": {
       "page": "1",
@@ -514,7 +508,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/",
     "query": {
       "page": "1",
@@ -541,7 +534,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/trash/",
     "query": {
       "page": "1",
@@ -557,9 +549,10 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/1/metadata/",
-    "query": {},
+    "query": {
+      "version": "1"
+    },
     "status": 200,
     "body": {
       "original_checksum": "44c7c495ded6a86bc3f5b67cd883b961",
@@ -577,18 +570,19 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/1/download/",
     "query": {
-      "original": "true"
+      "original": "true",
+      "version": "1"
     },
     "status": 200,
     "body_file": "v2_20/2024-01-15 ACME Corp Invoice 42.pdf"
   },
   {
-    "method": "GET",
     "path": "/api/documents/2/metadata/",
-    "query": {},
+    "query": {
+      "version": "2"
+    },
     "status": 200,
     "body": {
       "original_checksum": "570750b6aa3cbe53566f215203794c0d",
@@ -606,10 +600,10 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/2/download/",
     "query": {
-      "original": "true"
+      "original": "true",
+      "version": "2"
     },
     "status": 200,
     "body_file": "v2_20/2024-02-01 City Utilities Water bill.pdf"

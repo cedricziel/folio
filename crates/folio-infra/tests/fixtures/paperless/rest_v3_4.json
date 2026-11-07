@@ -1,6 +1,5 @@
 [
   {
-    "method": "GET",
     "path": "/api/documents/",
     "query": {
       "page": "1",
@@ -28,7 +27,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/correspondents/",
     "query": {
       "page": "1",
@@ -73,7 +71,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/document_types/",
     "query": {
       "page": "1",
@@ -116,7 +113,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/tags/",
     "query": {
       "page": "1",
@@ -224,7 +220,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/custom_fields/",
     "query": {
       "page": "1",
@@ -362,7 +357,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/",
     "query": {
       "page": "1",
@@ -552,7 +546,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/",
     "query": {
       "page": "1",
@@ -583,7 +576,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/trash/",
     "query": {
       "page": "1",
@@ -637,9 +629,10 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/1/metadata/",
-    "query": {},
+    "query": {
+      "version": "1"
+    },
     "status": 200,
     "body": {
       "original_checksum": "d3293c805b3c2abbbc3c548e1b54a4c6a88a5c4e8a2622467420f7eac83b3838",
@@ -657,18 +650,19 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/1/download/",
     "query": {
-      "original": "true"
+      "original": "true",
+      "version": "1"
     },
     "status": 200,
     "body_file": "v3_4/2024-01-15 ACME Corp Invoice 42.pdf"
   },
   {
-    "method": "GET",
     "path": "/api/documents/2/metadata/",
-    "query": {},
+    "query": {
+      "version": "2"
+    },
     "status": 200,
     "body": {
       "original_checksum": "e4ce1169f8ca61ff34117e2d34af3b78da7fda4838b29c51bdc3865785cece8d",
@@ -686,34 +680,34 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/2/download/",
     "query": {
-      "original": "true"
+      "original": "true",
+      "version": "2"
     },
     "status": 200,
     "body_file": "v3_4/2024-02-01 City Utilities Water bill.pdf"
   },
   {
-    "method": "GET",
     "path": "/api/documents/3/metadata/",
-    "query": {},
+    "query": {
+      "version": "3"
+    },
     "status": 404,
     "body": {
       "detail": "No Document matches the given query."
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/3/download/",
     "query": {
-      "original": "true"
+      "original": "true",
+      "version": "3"
     },
     "status": 200,
     "body_file": "v3_4/2023-11-30 Old flyer.pdf"
   },
   {
-    "method": "GET",
     "path": "/api/documents/4/metadata/",
     "query": {
       "version": "4"
@@ -735,7 +729,6 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/4/download/",
     "query": {
       "original": "true",
@@ -745,7 +738,6 @@
     "body_file": "v3_4/2024-03-10 Lease.pdf"
   },
   {
-    "method": "GET",
     "path": "/api/documents/4/",
     "query": {
       "version": "4",
@@ -757,9 +749,10 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/5/metadata/",
-    "query": {},
+    "query": {
+      "version": "5"
+    },
     "status": 200,
     "body": {
       "original_checksum": "dc57a0290a0c1f4f0f96c737661bb8277d1d714b54785b1891938281723ae3b3",
@@ -777,16 +770,15 @@
     }
   },
   {
-    "method": "GET",
     "path": "/api/documents/5/download/",
     "query": {
-      "original": "true"
+      "original": "true",
+      "version": "5"
     },
     "status": 200,
     "body_file": "v3_4/2024-03-10 Lease_01.pdf"
   },
   {
-    "method": "GET",
     "path": "/api/documents/4/",
     "query": {
       "version": "5",

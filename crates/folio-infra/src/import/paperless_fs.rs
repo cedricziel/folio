@@ -414,12 +414,12 @@ impl ManifestStream {
     }
 }
 
-fn malformed(kind: MalformedKind, location: SourceLocation) -> PaperlessReadError {
+pub(super) fn malformed(kind: MalformedKind, location: SourceLocation) -> PaperlessReadError {
     PaperlessReadError::Malformed { kind, location }
 }
 
 /// Keeps serde's message out: it can quote source data
-fn json_error(error: serde_json::Error, location: SourceLocation) -> PaperlessReadError {
+pub(super) fn json_error(error: serde_json::Error, location: SourceLocation) -> PaperlessReadError {
     let kind = match error.classify() {
         Category::Io => return io_error(&location.to_string(), error.into()),
         Category::Eof => MalformedKind::UnexpectedEnd,

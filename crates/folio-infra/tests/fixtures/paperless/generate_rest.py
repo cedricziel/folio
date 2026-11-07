@@ -56,7 +56,7 @@ def page(results, all_ids=None):
 
 
 def entry(path, query, body, status=200, body_file=None, headers=None):
-    out = {"method": "GET", "path": path, "query": query, "status": status}
+    out = {"path": path, "query": query, "status": status}
     if headers:
         out["headers"] = headers
     if body_file is not None:
@@ -101,7 +101,7 @@ def build(name, *, version, v3):
     def tag_json(r):
         f = r["fields"]
         children = [t for t in by_model["documents.tag"] if t["fields"]["tn_parent"] == r["pk"]]
-        body = {
+        return {
             **matching(r["pk"], f, count_docs(lambda d: r["pk"] in d["tags"])),
             "color": f["color"],
             "text_color": "#ffffff",
@@ -110,7 +110,6 @@ def build(name, *, version, v3):
             # v2 nests child tags, v3 lists their IDs
             "children": [c["pk"] for c in children] if v3 else [tag_json(c) for c in children],
         }
-        return body
 
     def versions_of(root):
         if not v3:
@@ -257,29 +256,22 @@ def build(name, *, version, v3):
         ])),
     ]
 
+    # The reader names every file it asks for with ?version=, which
+    # Paperless 2 ignores and Paperless 3 needs to serve a root's own file
     for d in docs:
         f = d["fields"]
-        root = f.get("root_document")
+        version = {"version": str(d["pk"])}
+        original = f"{name}/{d['__exported_file_name__']}"
         if f["deleted_at"] is not None:
             # Trashed documents: /metadata/ 404s, /download/ still serves them
-            recording.append(entry(f"/api/documents/{d['pk']}/metadata/", {}, {"detail": "No Document matches the given query."}, status=404))
-            recording.append(entry(f"/api/documents/{d['pk']}/download/", {"original": "true"}, None, body_file=f"{name}/{d['__exported_file_name__']}"))
+            recording.append(entry(f"/api/documents/{d['pk']}/metadata/", version, {"detail": "No Document matches the given query."}, status=404))
+            recording.append(entry(f"/api/documents/{d['pk']}/download/", {"original": "true", **version}, None, body_file=original))
             continue
-        has_versions = v3 and root is None and len(versions_of(d)) > 1
-        if root is not None:
-            # A version: /metadata/ and /download/ on its own ID serve it
-            recording.append(entry(f"/api/documents/{d['pk']}/metadata/", {}, metadata(d)))
-            recording.append(entry(f"/api/documents/{d['pk']}/download/", {"original": "true"}, None, body_file=f"{name}/{d['__exported_file_name__']}"))
-            recording.append(entry(f"/api/documents/{root}/", {"version": str(d["pk"]), "fields": "content"}, {"content": f["content"]}))
-        elif has_versions:
-            # A root with versions: without ?version= the newest version answers
-            version = {"version": str(d["pk"])}
-            recording.append(entry(f"/api/documents/{d['pk']}/metadata/", version, metadata(d)))
-            recording.append(entry(f"/api/documents/{d['pk']}/download/", {"original": "true", **version}, None, body_file=f"{name}/{d['__exported_file_name__']}"))
-            recording.append(entry(f"/api/documents/{d['pk']}/", {**version, "fields": "content"}, {"content": f["content"]}))
-        else:
-            recording.append(entry(f"/api/documents/{d['pk']}/metadata/", {}, metadata(d)))
-            recording.append(entry(f"/api/documents/{d['pk']}/download/", {"original": "true"}, None, body_file=f"{name}/{d['__exported_file_name__']}"))
+        recording.append(entry(f"/api/documents/{d['pk']}/metadata/", version, metadata(d)))
+        recording.append(entry(f"/api/documents/{d['pk']}/download/", {"original": "true", **version}, None, body_file=original))
+        root = f.get("root_document")
+        if root is not None or (v3 and len(versions_of(d)) > 1):
+            recording.append(entry(f"/api/documents/{root or d['pk']}/", {**version, "fields": "content"}, {"content": f["content"]}))
 
     out = HERE / f"rest_{name}.json"
     out.write_text(json.dumps(recording, indent=2, ensure_ascii=False) + "\n")

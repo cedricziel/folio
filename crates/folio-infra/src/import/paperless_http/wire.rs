@@ -6,59 +6,26 @@ use std::collections::HashMap;
 use chrono::{DateTime, NaiveDate, Utc};
 use folio_core::ports::{
     PaperlessChecksum, PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldType,
-    PaperlessFieldValue, PaperlessNamed, PaperlessNote, PaperlessRecord, PaperlessTag,
-    PaperlessVersionInfo,
+    PaperlessFieldValue, PaperlessNote, PaperlessRecord, PaperlessVersionInfo,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::import::paperless_fs::CustomFieldFields;
 
-/// `StandardPagination`
+/// `StandardPagination`, without the `all` list of every ID
 #[derive(Deserialize)]
 pub(super) struct Page<T> {
     pub count: u64,
     pub next: Option<String>,
-    /// Every matching ID; API versions before 10 send it
-    pub all: Option<Vec<i64>>,
     pub results: Vec<T>,
 }
 
+/// The first page of the ID listing; API versions before 10 add `all`
 #[derive(Deserialize)]
-pub(super) struct Named {
-    id: i64,
-    name: String,
-}
-
-impl Named {
-    pub fn into_named(self) -> PaperlessNamed {
-        PaperlessNamed {
-            id: self.id,
-            name: self.name,
-        }
-    }
-}
-
-#[derive(Deserialize)]
-pub(super) struct Tag {
-    id: i64,
-    name: String,
-    color: String,
-    #[serde(default)]
-    is_inbox_tag: bool,
-    parent: Option<i64>,
-}
-
-impl Tag {
-    pub fn into_record(self) -> PaperlessRecord {
-        PaperlessRecord::Tag(PaperlessTag {
-            id: self.id,
-            name: self.name,
-            color: self.color,
-            is_inbox_tag: self.is_inbox_tag,
-            parent: self.parent,
-        })
-    }
+pub(super) struct IdPage {
+    pub count: u64,
+    pub all: Option<Vec<i64>>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +38,19 @@ pub(super) struct CustomField {
 #[derive(Deserialize)]
 pub(super) struct Id {
     pub id: i64,
+}
+
+/// What a listing needs from a document before reading the rest of it
+#[derive(Deserialize)]
+pub(super) struct Key {
+    pub id: i64,
+    modified: Option<String>,
+}
+
+impl Key {
+    pub fn modified(&self) -> Option<DateTime<Utc>> {
+        self.modified.as_deref()?.parse().ok()
+    }
 }
 
 #[derive(Deserialize)]
@@ -125,56 +105,16 @@ pub(super) struct Version {
 /// `/api/documents/{id}/metadata/`
 #[derive(Deserialize)]
 pub(super) struct Metadata {
-    original_checksum: String,
-    original_size: Option<u64>,
+    pub original_checksum: String,
+    pub original_size: Option<u64>,
     original_mime_type: Option<String>,
     original_filename: Option<String>,
-}
-
-impl Metadata {
-    /// For a trashed document, whose `/metadata/` Paperless won't serve
-    pub fn of_file(checksum: String, size: u64) -> Self {
-        Self {
-            original_checksum: checksum,
-            original_size: Some(size),
-            original_mime_type: None,
-            original_filename: None,
-        }
-    }
 }
 
 /// `GET /api/documents/{id}/?fields=content`
 #[derive(Deserialize)]
 pub(super) struct Content {
     pub content: String,
-}
-
-/// Where a document's original is downloaded from
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Handle {
-    pub id: i64,
-    /// Paperless 3 serves a root's newest version unless told otherwise
-    pub version: Option<i64>,
-}
-
-impl Handle {
-    pub fn encode(self) -> String {
-        match self.version {
-            Some(version) => format!("{}@{version}", self.id),
-            None => self.id.to_string(),
-        }
-    }
-
-    pub fn decode(raw: &str) -> Option<Self> {
-        let (id, version) = match raw.split_once('@') {
-            Some((id, version)) => (id, Some(version.parse().ok()?)),
-            None => (raw, None),
-        };
-        Some(Self {
-            id: id.parse().ok()?,
-            version,
-        })
-    }
 }
 
 /// The records of one document: the document, then its notes and values
@@ -190,13 +130,6 @@ impl Document {
         self.versions.len() > 1
     }
 
-    pub fn handle(&self) -> Handle {
-        Handle {
-            id: self.id,
-            version: self.has_versions().then_some(self.id),
-        }
-    }
-
     /// The checksum Paperless 3 lists for the document's own file
     pub fn listed_checksum(&self) -> Option<&str> {
         self.versions
@@ -205,15 +138,16 @@ impl Document {
             .and_then(|v| v.checksum.as_deref())
     }
 
-    /// `None` when a value doesn't fit its field's type, or names no field
+    /// `None` when the checksum isn't one, or a value doesn't fit its
+    /// field's type or names no field
     pub fn into_records(
         self,
-        file: Metadata,
+        checksum: &str,
+        size: Option<u64>,
         field_types: &HashMap<i64, PaperlessFieldType>,
     ) -> Option<DocumentRecords> {
         let id = self.id;
-        let handle = self.handle();
-        let checksum = PaperlessChecksum::parse(&file.original_checksum)?;
+        let checksum = PaperlessChecksum::parse(checksum)?;
         let mut rest = Vec::with_capacity(self.notes.len() + self.custom_fields.len());
         rest.extend(self.notes.into_iter().map(|note| {
             PaperlessRecord::Note(PaperlessNote {
@@ -241,7 +175,7 @@ impl Document {
             mime_type: self.mime_type,
             original_filename: self.original_file_name,
             checksum,
-            size: file.original_size,
+            size,
             created: self.created,
             added: self.added,
             modified: self.modified,
@@ -251,7 +185,7 @@ impl Document {
             archive_serial_number: self.archive_serial_number,
             trashed: self.deleted_at.is_some(),
             version_of: None,
-            original_handle: handle.encode(),
+            original_handle: id.to_string(),
         };
         Some(DocumentRecords {
             document,
@@ -292,11 +226,7 @@ pub(super) fn version_record(
             index: Some(index),
             label: version.version_label.clone(),
         }),
-        original_handle: Handle {
-            id: version.id,
-            version: None,
-        }
-        .encode(),
+        original_handle: version.id.to_string(),
     })
 }
 
@@ -333,25 +263,6 @@ fn field_value(data_type: PaperlessFieldType, value: Value) -> Option<Option<Pap
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn handles_round_trip_and_reject_anything_else() {
-        for handle in [
-            Handle {
-                id: 7,
-                version: None,
-            },
-            Handle {
-                id: 4,
-                version: Some(4),
-            },
-        ] {
-            assert_eq!(Handle::decode(&handle.encode()), Some(handle));
-        }
-        for raw in ["", "x", "1@", "../etc/passwd", "1@2@3", "1/download"] {
-            assert_eq!(Handle::decode(raw), None, "{raw}");
-        }
-    }
 
     #[test]
     fn values_follow_the_field_type() {

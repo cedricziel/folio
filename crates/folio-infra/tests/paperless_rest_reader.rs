@@ -35,6 +35,13 @@ struct Recorded {
 /// Matches the query exactly, except `fields`, which only trims the response
 struct QueryIs(BTreeMap<String, String>);
 
+impl QueryIs {
+    fn new(mut query: BTreeMap<String, String>) -> Self {
+        query.remove("fields");
+        Self(query)
+    }
+}
+
 impl wiremock::Match for QueryIs {
     fn matches(&self, request: &Request) -> bool {
         let actual: BTreeMap<String, String> = request
@@ -43,13 +50,7 @@ impl wiremock::Match for QueryIs {
             .filter(|(k, _)| k != "fields")
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
-        let expected: BTreeMap<_, _> = self
-            .0
-            .iter()
-            .filter(|(k, _)| *k != "fields")
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        actual == expected
+        actual == self.0
     }
 }
 
@@ -73,7 +74,7 @@ async fn serve(name: &str) -> MockServer {
         };
         Mock::given(method("GET"))
             .and(path(entry.path.as_str()))
-            .and(QueryIs(entry.query))
+            .and(QueryIs::new(entry.query))
             .and(header("authorization", format!("Token {TOKEN}").as_str()))
             .and(header("accept", "application/json; version=9"))
             .respond_with(response)
@@ -124,11 +125,20 @@ async fn v2_records_equal_the_export_of_the_same_library() {
 async fn v3_records_equal_the_export_of_the_same_library() {
     let server = serve("v3_4").await;
     let rest = canonical(rest_records(&rest_reader(&server)).await);
-    // The API never shows deleted notes
+    // The API never shows deleted notes, and the size of a trashed document
+    // only by downloading it
     let export = export_records("v3_4")
         .await
         .into_iter()
-        .filter(|r| !matches!(r, PaperlessRecord::Note(n) if n.deleted));
+        .filter(|r| !matches!(r, PaperlessRecord::Note(n) if n.deleted))
+        .map(|mut r| {
+            if let PaperlessRecord::Document(d) = &mut r {
+                if d.trashed {
+                    d.size = None;
+                }
+            }
+            r
+        });
     assert_eq!(rest, canonical(export));
 }
 
@@ -249,7 +259,9 @@ async fn originals_download_and_match_their_checksums() {
                 .unwrap();
             assert!(digests.matches(&doc.checksum), "{name}: doc {}", doc.id);
             assert_eq!(size, Some(digests.size));
-            assert_eq!(doc.size, Some(digests.size));
+            if !doc.trashed {
+                assert_eq!(doc.size, Some(digests.size));
+            }
         }
     }
 }
@@ -293,12 +305,21 @@ async fn id_listing(pages: Vec<ResponseTemplate>) -> Result<Vec<i64>, PaperlessR
 
 #[tokio::test]
 async fn an_id_listing_is_complete_or_an_error() {
-    let ok = id_listing(vec![
-        id_page(3, &[1, 2], true, Some(&[1, 2, 7])),
+    // API version 9 lists every ID on the first page
+    let listed = id_listing(vec![id_page(3, &[1, 2], true, Some(&[1, 2, 7]))]).await;
+    assert_eq!(listed.unwrap(), [1, 2, 7]);
+    let short = id_listing(vec![id_page(3, &[1, 2], true, Some(&[1, 2]))]).await;
+    assert_eq!(source_failure(short), SourceFailure::UpstreamError);
+    let repeated = id_listing(vec![id_page(3, &[1, 2], true, Some(&[1, 2, 2]))]).await;
+    assert_eq!(source_failure(repeated), SourceFailure::UpstreamError);
+
+    // Without that list, every page is read
+    let paged = id_listing(vec![
+        id_page(3, &[1, 2], true, None),
         id_page(3, &[7], false, None),
     ])
     .await;
-    assert_eq!(ok.unwrap(), [1, 2, 7]);
+    assert_eq!(paged.unwrap(), [1, 2, 7]);
 
     let failed_page = id_listing(vec![
         id_page(3, &[1, 2], true, None),
@@ -309,10 +330,6 @@ async fn an_id_listing_is_complete_or_an_error() {
 
     let short = id_listing(vec![id_page(3, &[1, 2], false, None)]).await;
     assert_eq!(source_failure(short), SourceFailure::UpstreamError);
-
-    // One document deleted and another added mid-listing keeps the count
-    let shifted = id_listing(vec![id_page(2, &[1, 2], false, Some(&[1, 3]))]).await;
-    assert_eq!(source_failure(shifted), SourceFailure::UpstreamError);
 
     let repeated = id_listing(vec![
         id_page(2, &[1], true, None),
@@ -392,7 +409,7 @@ async fn listing_page(server: &MockServer, query: &[(&str, String)], page: Respo
     .collect();
     expected.extend(query.iter().map(|(k, v)| ((*k).to_owned(), v.clone())));
     Mock::given(path("/api/documents/"))
-        .and(QueryIs(expected))
+        .and(QueryIs::new(expected))
         .respond_with(page)
         .mount(server)
         .await;

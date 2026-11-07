@@ -480,7 +480,10 @@ async fn contract(version: &str, algorithm: ChecksumAlgorithm) {
         assert_eq!(document.checksum.algorithm, algorithm, "doc {id}");
         let expected = digest_original(bytes, algorithm).await.unwrap();
         assert!(expected.matches(&document.checksum), "doc {id}");
-        assert_eq!(document.size, Some(bytes.len() as u64), "doc {id}");
+        // Paperless 3 lists a trashed document's checksum, so it isn't downloaded for its size
+        if !(document.trashed && algorithm == ChecksumAlgorithm::Sha256) {
+            assert_eq!(document.size, Some(bytes.len() as u64), "doc {id}");
+        }
 
         let original = reader.open_original(document).await.unwrap();
         let read = digest_original(original.reader, algorithm).await.unwrap();
