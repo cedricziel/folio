@@ -41,7 +41,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
   - a page failure or a count mismatch yields an error, not a set
   - a document modified mid-listing isn't skipped
   - a 429 followed by a 200 succeeds
-- [ ] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
+- [x] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
 
 ## 4. Paperless source
 

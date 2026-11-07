@@ -86,5 +86,6 @@ axum = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 wiremock = "0.6"
+reqwest = { workspace = true, features = ["form", "multipart"] }
 hmac = "0.13"
 sha2 = "0.11"
