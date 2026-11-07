@@ -1,0 +1,284 @@
+//! Document identity: deterministic Folio IDs and the fingerprint of the
+//! Paperless-side state the ledger compares against
+
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, NaiveDate, Utc};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+use crate::models::{Id, VaultId};
+use crate::ports::{
+    PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldValue, PaperlessNote,
+};
+
+/// Bumped whenever the canonical form changes; a row with another version
+/// counts as changed
+pub const FINGERPRINT_VERSION: u32 = 1;
+
+/// Namespace for imported document IDs; never change it, or re-imports
+/// would stop finding their documents
+pub const IMPORT_NAMESPACE: Uuid = Uuid::from_u128(0x6f0c_1d2e_8a4b_5c3d_9e7f_a1b2_c3d4_e5f6);
+
+/// The Folio ID of a Paperless document in a vault, the same on every run
+pub fn document_id(vault: VaultId, paperless_id: i64) -> Id {
+    Uuid::new_v5(
+        &IMPORT_NAMESPACE,
+        format!("{}/paperless/{paperless_id}", vault.0).as_bytes(),
+    )
+}
+
+/// One Paperless document with everything joined to it
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentRecords {
+    /// The root document
+    pub document: PaperlessDocument,
+    /// Paperless 3 file versions of the root, in any order
+    pub versions: Vec<PaperlessDocument>,
+    pub notes: Vec<PaperlessNote>,
+    pub fields: Vec<PaperlessCustomFieldInstance>,
+}
+
+impl DocumentRecords {
+    pub fn new(document: PaperlessDocument) -> Self {
+        Self {
+            document,
+            versions: Vec::new(),
+            notes: Vec::new(),
+            fields: Vec::new(),
+        }
+    }
+
+    /// The file whose bytes and text Folio keeps: the version with the
+    /// highest index, else the root
+    pub fn original(&self) -> &PaperlessDocument {
+        self.versions
+            .iter()
+            .max_by_key(|v| {
+                (
+                    v.version_of.as_ref().and_then(|info| info.index),
+                    v.id,
+                )
+            })
+            .unwrap_or(&self.document)
+    }
+
+    /// Older files left behind by [`Self::original`]
+    pub fn skipped_versions(&self) -> usize {
+        self.versions.len()
+    }
+
+    /// Notes that still exist in Paperless, by ID
+    pub fn live_notes(&self) -> Vec<&PaperlessNote> {
+        let mut notes: Vec<_> = self.notes.iter().filter(|n| !n.deleted).collect();
+        notes.sort_by_key(|n| n.id);
+        notes
+    }
+}
+
+pub fn sha256_hex(text: &str) -> String {
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+#[derive(Serialize)]
+struct CanonicalV1<'a> {
+    fingerprint_version: u32,
+    title: &'a str,
+    content_sha256: String,
+    created: NaiveDate,
+    correspondent: Option<i64>,
+    document_type: Option<i64>,
+    tags: BTreeSet<i64>,
+    custom_fields: Vec<CanonicalField<'a>>,
+    asn: Option<i64>,
+    notes: Vec<CanonicalNote<'a>>,
+    inbox: bool,
+}
+
+#[derive(Serialize)]
+struct CanonicalField<'a> {
+    field: i64,
+    value: Option<&'a PaperlessFieldValue>,
+}
+
+#[derive(Serialize)]
+struct CanonicalNote<'a> {
+    id: i64,
+    body: &'a str,
+    created: DateTime<Utc>,
+}
+
+/// SHA-256 over the canonical JSON of what the sync mirrors. It uses
+/// Paperless IDs, not names, so renaming a tag changes no fingerprint.
+pub fn fingerprint(records: &DocumentRecords, inbox_tags: &BTreeSet<i64>) -> String {
+    let document = &records.document;
+    let tags: BTreeSet<i64> = document.tags.iter().copied().collect();
+    let mut custom_fields: Vec<CanonicalField> = records
+        .fields
+        .iter()
+        .map(|f| CanonicalField {
+            field: f.field,
+            value: f.value.as_ref(),
+        })
+        .collect();
+    custom_fields.sort_by_key(|f| f.field);
+    let canonical = CanonicalV1 {
+        fingerprint_version: FINGERPRINT_VERSION,
+        title: &document.title,
+        content_sha256: sha256_hex(&records.original().content),
+        created: document.created,
+        correspondent: document.correspondent,
+        document_type: document.document_type,
+        inbox: !tags.is_disjoint(inbox_tags),
+        tags,
+        custom_fields,
+        asn: document.archive_serial_number,
+        notes: records
+            .live_notes()
+            .into_iter()
+            .map(|n| CanonicalNote {
+                id: n.id,
+                body: &n.body,
+                created: n.created,
+            })
+            .collect(),
+    };
+    let json = serde_json::to_vec(&canonical).expect("canonical fingerprint serializes");
+    hex::encode(Sha256::digest(json))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::ports::{ChecksumAlgorithm, PaperlessChecksum, PaperlessVersionInfo};
+
+    pub(crate) fn document(id: i64) -> PaperlessDocument {
+        PaperlessDocument {
+            id,
+            title: format!("Document {id}"),
+            content: "Some text".into(),
+            mime_type: "application/pdf".into(),
+            original_filename: Some(format!("{id}.pdf")),
+            checksum: PaperlessChecksum {
+                value: "0".repeat(32),
+                algorithm: ChecksumAlgorithm::Md5,
+            },
+            size: Some(1024),
+            created: NaiveDate::from_ymd_opt(2024, 3, 1).unwrap(),
+            added: "2024-03-02T10:00:00Z".parse().unwrap(),
+            modified: "2024-03-03T10:00:00Z".parse().unwrap(),
+            correspondent: Some(1),
+            document_type: Some(2),
+            tags: vec![3, 4],
+            archive_serial_number: Some(17),
+            trashed: false,
+            version_of: None,
+            original_handle: format!("originals/{id}.pdf"),
+        }
+    }
+
+    pub(crate) fn note(id: i64, document: i64, body: &str) -> PaperlessNote {
+        PaperlessNote {
+            id,
+            document,
+            body: body.into(),
+            created: "2024-03-04T10:00:00Z".parse().unwrap(),
+            deleted: false,
+        }
+    }
+
+    fn records() -> DocumentRecords {
+        let mut records = DocumentRecords::new(document(1));
+        records.notes = vec![note(2, 1, "second"), note(1, 1, "first")];
+        records.fields = vec![
+            PaperlessCustomFieldInstance {
+                document: 1,
+                field: 9,
+                value: Some(PaperlessFieldValue::Monetary("EUR12.50".into())),
+            },
+            PaperlessCustomFieldInstance {
+                document: 1,
+                field: 3,
+                value: Some(PaperlessFieldValue::Float(0.1)),
+            },
+        ];
+        records
+    }
+
+    #[test]
+    fn document_ids_are_derived_from_vault_and_paperless_id() {
+        let vault = VaultId(Uuid::from_u128(1));
+        assert_eq!(document_id(vault, 42), document_id(vault, 42));
+        assert_ne!(document_id(vault, 42), document_id(vault, 43));
+        assert_ne!(
+            document_id(vault, 42),
+            document_id(VaultId(Uuid::from_u128(2)), 42)
+        );
+        assert_eq!(
+            document_id(vault, 42),
+            Uuid::new_v5(
+                &IMPORT_NAMESPACE,
+                b"00000000-0000-0000-0000-000000000001/paperless/42"
+            )
+        );
+    }
+
+    #[test]
+    fn fingerprint_ignores_record_order() {
+        let a = records();
+        let mut b = records();
+        b.notes.reverse();
+        b.fields.reverse();
+        b.document.tags.reverse();
+        assert_eq!(fingerprint(&a, &BTreeSet::new()), fingerprint(&b, &BTreeSet::new()));
+    }
+
+    #[test]
+    fn fingerprint_tracks_mirrored_state() {
+        let base = fingerprint(&records(), &BTreeSet::new());
+        let changes: [fn(&mut DocumentRecords); 7] = [
+            |r| r.document.title.push('!'),
+            |r| r.document.content.push('!'),
+            |r| r.document.tags.push(5),
+            |r| r.document.archive_serial_number = None,
+            |r| r.notes[0].body.push('!'),
+            |r| r.notes[0].deleted = true,
+            |r| r.fields[0].value = None,
+        ];
+        for change in changes {
+            let mut changed = records();
+            change(&mut changed);
+            assert_ne!(fingerprint(&changed, &BTreeSet::new()), base);
+        }
+        assert_ne!(fingerprint(&records(), &BTreeSet::from([3])), base);
+    }
+
+    #[test]
+    fn fingerprint_ignores_what_is_compared_elsewhere() {
+        let base = fingerprint(&records(), &BTreeSet::new());
+        let mut changed = records();
+        changed.document.modified = Utc::now();
+        changed.document.checksum.value = "1".repeat(32);
+        changed.document.original_handle = "elsewhere".into();
+        assert_eq!(fingerprint(&changed, &BTreeSet::new()), base);
+    }
+
+    #[test]
+    fn the_highest_version_is_the_original() {
+        let mut records = records();
+        let version = |id, index| {
+            let mut v = document(id);
+            v.content = format!("version {index}");
+            v.version_of = Some(PaperlessVersionInfo {
+                root_document: 1,
+                index: Some(index),
+                label: None,
+            });
+            v
+        };
+        records.versions = vec![version(8, 2), version(7, 1)];
+        assert_eq!(records.original().id, 8);
+        assert_eq!(records.skipped_versions(), 2);
+    }
+}

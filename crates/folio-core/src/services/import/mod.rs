@@ -3,14 +3,20 @@
 //! Everything here is pure: callers pass in reader records and the vault's
 //! current state as values, and get plans back. Nothing touches a repository.
 
+pub mod diff;
 pub mod fields;
+pub mod fingerprint;
 pub mod taxonomy;
 
 use serde::{Deserialize, Serialize};
 
+pub use diff::{decide, Decision, FolioState, ItemAction, LedgerEntry, SkipReason};
 pub use fields::{
     field_kind_conflicts, folio_kind, ExistingField, FieldConflictReason, FieldKindConflict,
     ASN_FIELD_NAME,
+};
+pub use fingerprint::{
+    document_id, fingerprint, DocumentRecords, FINGERPRINT_VERSION, IMPORT_NAMESPACE,
 };
 pub use taxonomy::{
     plan_fields, plan_named, plan_tags, ExistingEntity, FieldPlan, KindPlan, TagPlan, Target,
