@@ -7,6 +7,7 @@ pub mod diff;
 pub mod fields;
 pub mod fingerprint;
 pub mod taxonomy;
+pub mod values;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,10 @@ pub use fingerprint::{
 pub use taxonomy::{
     plan_fields, plan_named, plan_tags, ExistingEntity, FieldPlan, KindPlan, TagPlan, Target,
     TaxonomyKind, TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
+};
+pub use values::{
+    plan_values, ItemWarning, PlannedNote, PlannedValue, PlannedValues, ValueContext,
+    DEFAULT_CURRENCY,
 };
 
 /// Which Paperless changes a run applies; a `once` source's first run plans
