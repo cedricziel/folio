@@ -79,6 +79,7 @@ optional = true
 
 [dev-dependencies]
 axum = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 hmac = "0.13"
 sha2 = "0.11"

@@ -59,7 +59,7 @@ pub fn instrument(router: Router<crate::AppState>) -> Router<crate::AppState> {
                 .make_span_with(make_span)
                 .on_response(|response: &Response, _latency: Duration, span: &Span| {
                     let status = response.status();
-                    span.record("http.response.status_code", status.as_u16());
+                    span.record("http.response.status_code", i64::from(status.as_u16()));
                     if status.is_server_error() {
                         span.record("otel.status_code", "ERROR");
                     }

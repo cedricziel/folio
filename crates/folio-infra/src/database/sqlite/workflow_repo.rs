@@ -427,7 +427,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         Ok(())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, limit), fields(limit = i64::from(limit)))]
     async fn list_runs(
         &self,
         vault: VaultId,

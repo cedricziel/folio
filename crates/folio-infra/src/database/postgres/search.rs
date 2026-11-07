@@ -272,7 +272,7 @@ impl SearchService for PostgresSearchService {
         Ok(count as u64)
     }
 
-    #[instrument(skip(self, query_embedding))]
+    #[instrument(skip(self, query_embedding, limit), fields(limit = limit as i64))]
     async fn search(
         &self,
         vault: VaultId,

@@ -246,7 +246,7 @@ impl ThumbnailService {
     }
 
     /// Generate a page thumbnail for a PDF on local disk and return its object key
-    #[instrument(skip(self))]
+    #[instrument(skip(self, page), fields(page = i64::from(page)))]
     pub async fn generate_page(&self, document_id: Uuid, pdf: &Path, page: u32) -> Result<String> {
         let thumbnail_data = match render_pdf_page(pdf, page, PAGE_WIDTH, PAGE_HEIGHT).await {
             Some(jpeg) => jpeg,
