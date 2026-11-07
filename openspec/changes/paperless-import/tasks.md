@@ -109,7 +109,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 8. API and MCP
 
-- [ ] 8.1 Add the `[import]` config section with env overrides, `SETTINGS` entries and docs. Failing test first: the env override parses, an empty list disables export imports, and the drift test passes.
+- [x] 8.1 Add the `[import]` config section with env overrides, `SETTINGS` entries and docs. Failing test first: the env override parses, an empty list disables export imports, and the drift test passes.
 - [ ] 8.2 Add the JSON routes under `/api/vaults/{vault_id}/imports` with the guard, plus the utoipa schemas and `openapi/openapi.json` in the same commit. Failing tests first: one per spec scenario (202, 400 with identical bodies, 401, 403 `imports_disabled` and `forbidden`, 404, 409 including `library_mismatch`, 422).
 - [ ] 8.3 Regenerate the Swift client from the updated spec. Failing test first: the Apple CI lane's generated-client check fails until it is regenerated.
 - [ ] 8.4 Add the MCP tools with the read and write scopes, resolving the `Caller` through `CallerResolver`. Failing tests first: the four MCP scenarios.

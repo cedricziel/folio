@@ -92,6 +92,8 @@ preserve existing database rows, including values seeded by earlier releases.
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |
 | `mcp.enabled` | `FOLIO_MCP__ENABLED` | follows `auth.required` | Serve the MCP endpoint at `/mcp`. On when `auth.required` is true, off otherwise because the endpoint is only protected by auth. The `mcp.enabled` database setting overrides it. See [mcp.md](mcp.md). |
 | `mcp.allowed_hosts` | `FOLIO_MCP__ALLOWED_HOSTS` | empty | Comma-separated extra `Host` headers `/mcp` accepts besides loopback. |
+| `import.allowed_roots` | `FOLIO_IMPORT__ALLOWED_ROOTS` | empty | Comma-separated server directories an import may read from. Empty turns imports off. Config only, not on `/settings`. See [paperless-import.md](paperless-import.md). |
+| `import.max_file_bytes` | `FOLIO_IMPORT__MAX_FILE_BYTES` | `536870912` (512 MB) | Largest original file an import accepts; bigger files fail with `file_too_large`. |
 
 Ingestion sources have names of your choosing, so they are not listed above:
 `FOLIO_INGEST__FOLDERS__<NAME>__<KEY>` and `FOLIO_INGEST__EMAIL__<NAME>__<KEY>`

@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 
 use figment::{
     providers::{Format, Serialized, Toml},
@@ -44,6 +45,7 @@ pub struct Config {
     pub ingest: IngestConfig,
     pub auth: AuthConfig,
     pub mcp: McpConfig,
+    pub import: ImportConfig,
 }
 
 /// Automatic ingestion, configured per named source
@@ -445,6 +447,32 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
 }
 
+/// Server directories an import may read, and the size limit for one file
+///
+/// Config-only: which server paths the app reads is a deployment decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImportConfig {
+    /// Empty disables imports.
+    pub allowed_roots: Vec<PathBuf>,
+    pub max_file_bytes: u64,
+}
+
+impl Default for ImportConfig {
+    fn default() -> Self {
+        Self {
+            allowed_roots: Vec::new(),
+            max_file_bytes: 512 * 1024 * 1024,
+        }
+    }
+}
+
+impl ImportConfig {
+    pub fn imports_enabled(&self) -> bool {
+        !self.allowed_roots.is_empty()
+    }
+}
+
 /// How an environment value is converted before it reaches the config tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueKind {
@@ -748,6 +776,16 @@ pub const SETTINGS: &[Setting] = &[
         key: "mcp.allowed_hosts",
         env: "FOLIO_MCP__ALLOWED_HOSTS",
         kind: ValueKind::List,
+    },
+    Setting {
+        key: "import.allowed_roots",
+        env: "FOLIO_IMPORT__ALLOWED_ROOTS",
+        kind: ValueKind::List,
+    },
+    Setting {
+        key: "import.max_file_bytes",
+        env: "FOLIO_IMPORT__MAX_FILE_BYTES",
+        kind: ValueKind::Int,
     },
 ];
 
@@ -1104,6 +1142,28 @@ mod tests {
             ("FOLIO_AUTH__REQUIRED", "false"),
         ])
         .is_ok());
+    }
+
+    #[test]
+    fn imports_are_disabled_until_a_root_is_configured() {
+        let config = load(&[]);
+        assert!(config.import.allowed_roots.is_empty());
+        assert!(!config.import.imports_enabled());
+        assert_eq!(config.import.max_file_bytes, 536_870_912);
+    }
+
+    #[test]
+    fn import_roots_and_size_limit_load_from_the_environment() {
+        let config = load(&[
+            ("FOLIO_IMPORT__ALLOWED_ROOTS", "/imports, /mnt/paperless"),
+            ("FOLIO_IMPORT__MAX_FILE_BYTES", "1048576"),
+        ]);
+        assert_eq!(
+            config.import.allowed_roots,
+            [PathBuf::from("/imports"), PathBuf::from("/mnt/paperless")]
+        );
+        assert!(config.import.imports_enabled());
+        assert_eq!(config.import.max_file_bytes, 1_048_576);
     }
 
     #[test]
