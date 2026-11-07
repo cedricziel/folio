@@ -190,9 +190,7 @@ async fn standalone_jobs_seed_only_their_planned_stages(db: &Database) {
         .unwrap();
     let embedding = f
         .queue
-        .enqueue(JobType::GenerateEmbedding {
-            document_id: f.document,
-        })
+        .enqueue(JobType::generate_embedding(f.document))
         .await
         .unwrap();
     assert_eq!(
@@ -250,17 +248,13 @@ async fn child_enqueue_assigns_once_across_queue_claims(db: &Database) {
     assert_eq!(child_scope.group_id, root.id);
     let embedding = with_scope(
         Some(child_scope),
-        f.queue.enqueue(JobType::GenerateEmbedding {
-            document_id: f.document,
-        }),
+        f.queue.enqueue(JobType::generate_embedding(f.document)),
     )
     .await
     .unwrap();
     let duplicate = with_scope(
         Some(child_scope),
-        f.queue.enqueue(JobType::GenerateEmbedding {
-            document_id: f.document,
-        }),
+        f.queue.enqueue(JobType::generate_embedding(f.document)),
     )
     .await
     .unwrap();
@@ -549,9 +543,7 @@ async fn partial_supersession_keeps_the_current_parent_stage_live(db: &Database)
     assert_eq!(job.id, id);
     let replacement_embedding = f
         .queue
-        .enqueue(JobType::GenerateEmbedding {
-            document_id: f.document,
-        })
+        .enqueue(JobType::generate_embedding(f.document))
         .await
         .unwrap();
     let scope = ready_scope(&f.queue, &job).await;
@@ -565,9 +557,7 @@ async fn partial_supersession_keeps_the_current_parent_stage_live(db: &Database)
     );
     assert!(with_scope(
         Some(scope),
-        f.queue.enqueue(JobType::GenerateEmbedding {
-            document_id: f.document
-        })
+        f.queue.enqueue(JobType::generate_embedding(f.document))
     )
     .await
     .is_err());
@@ -617,9 +607,7 @@ async fn legacy_claim_rejects_a_forged_in_memory_job_type(db: &Database) {
     f.legacy().await;
     let job = f.queue.dequeue().await.unwrap().unwrap();
     let mut forged = job.clone();
-    forged.job_type = JobType::GenerateEmbedding {
-        document_id: f.document,
-    };
+    forged.job_type = JobType::generate_embedding(f.document);
     assert!(matches!(
         prepare_claim(&f.queue, &forged).await.unwrap(),
         ClaimPreparation::Obsolete
@@ -638,9 +626,7 @@ async fn legacy_claim_rejects_disagreement_between_columns_and_payload(db: &Data
     )
     .await;
     let mut mismatched = job.clone();
-    mismatched.job_type = JobType::GenerateEmbedding {
-        document_id: f.document,
-    };
+    mismatched.job_type = JobType::generate_embedding(f.document);
     assert!(matches!(
         prepare_claim(&f.queue, &mismatched).await.unwrap(),
         ClaimPreparation::Obsolete

@@ -47,6 +47,26 @@ pub use sqlite::{
     SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
+/// The error for an import whose insert hit a unique index: `Conflict` when
+/// the document already exists, otherwise the database error
+async fn import_collision(
+    documents: &dyn DocumentRepository,
+    vault: folio_core::models::VaultId,
+    document: &folio_core::models::ImportedDocument,
+    error: sqlx::Error,
+) -> folio_core::Error {
+    let existing = documents
+        .find_by_external_ref(vault, &document.external_ref)
+        .await;
+    let id_taken = documents.locate_retained(document.id).await;
+    match (existing, id_taken) {
+        (Ok(Some(_)), _) | (_, Ok(Some(_))) => {
+            folio_core::Error::Conflict("Document was already imported".into())
+        }
+        _ => folio_core::Error::Repository(error.to_string()),
+    }
+}
+
 const CLEAR_PIPELINE_DEFAULTS: &str = "DELETE FROM settings WHERE key LIKE 'ocr.%' \
     OR key LIKE 'embeddings.%' OR key LIKE 'processing.%'";
 

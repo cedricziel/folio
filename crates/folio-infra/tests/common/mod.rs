@@ -113,3 +113,79 @@ pub async fn legacy_vault(db: &folio_infra::Database) -> folio_core::models::Vau
     }
     folio_core::models::VaultId(id)
 }
+
+/// A migrated SQLite database in a temporary directory; keep the directory alive.
+pub async fn sqlite_database() -> (tempfile::TempDir, folio_infra::Database) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = folio_infra::Database::connect(&format!(
+        "sqlite:{}?mode=rwc",
+        dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    db.migrate().await.unwrap();
+    (dir, db)
+}
+
+/// A migrated PostgreSQL database in a fresh container, or `None` when Docker
+/// is unavailable and not required; keep the container alive.
+pub async fn postgres_database(
+    what: &str,
+) -> Option<(
+    testcontainers_modules::testcontainers::ContainerAsync<
+        testcontainers_modules::postgres::Postgres,
+    >,
+    folio_infra::Database,
+)> {
+    use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
+    let container = container_or_skip(
+        what,
+        testcontainers_modules::postgres::Postgres::default()
+            .with_tag("17-alpine")
+            .start()
+            .await,
+    )?;
+    let host = container.get_host().await.unwrap();
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let db = folio_infra::Database::connect(&format!(
+        "postgres://postgres:postgres@{host}:{port}/postgres"
+    ))
+    .await
+    .unwrap();
+    db.migrate().await.unwrap();
+    Some((container, db))
+}
+
+/// A filed, text-bearing Paperless document with no taxonomy, keyed by `external_id`
+pub fn imported_document(
+    vault: folio_core::models::VaultId,
+    external_id: &str,
+    added: chrono::DateTime<chrono::Utc>,
+) -> folio_core::models::ImportedDocument {
+    use folio_core::models::{ExternalRef, Id, ImportSource, ImportedDocument};
+    ImportedDocument {
+        id: Id::new_v5(
+            &Id::NAMESPACE_URL,
+            format!("{vault}/{external_id}").as_bytes(),
+        ),
+        external_ref: ExternalRef {
+            source: ImportSource::Paperless,
+            id: external_id.into(),
+        },
+        title: "Electricity bill".into(),
+        content: Some("Total due 42.00".into()),
+        original_filename: Some("bill.pdf".into()),
+        mime_type: Some("application/pdf".into()),
+        file_path: format!("documents/{external_id}/original"),
+        content_sha256: "ab".repeat(32),
+        document_date: Some("2019-03-04".parse().unwrap()),
+        created_at: added,
+        updated_at: added + chrono::Duration::days(2),
+        correspondent_id: None,
+        document_type_id: None,
+        tag_ids: Vec::new(),
+        metadata: Default::default(),
+        notes: Vec::new(),
+        in_inbox: false,
+    }
+}

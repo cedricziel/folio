@@ -8,6 +8,7 @@ mod document_page;
 mod document_review;
 mod document_type;
 mod file_identity;
+mod imported_document;
 mod ingest;
 mod ingest_identity;
 mod ingest_outcome;
@@ -38,6 +39,7 @@ pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, Documen
 pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use file_identity::FileIdentity;
+pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,

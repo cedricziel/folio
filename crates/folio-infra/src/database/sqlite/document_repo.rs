@@ -1,7 +1,7 @@
 //! SQLite document repository implementation
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use std::sync::Arc;
 
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool, Transaction};
@@ -15,8 +15,9 @@ use folio_core::document_transitions::{metadata_envelopes, move_envelopes};
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, Id, ProcessingStage, ProcessingStatus, Tag,
-    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
+    DocumentFilter, DocumentSource, DocumentType, EntryKind, ExternalRef, Id, ImportedDocument,
+    ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, Tag, UpdateCorrespondent,
+    UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -56,12 +57,21 @@ impl SqliteDocumentRepository {
     }
 
     async fn emit_in(&self, tx: &mut Transaction<'_, Sqlite>, event: DocumentEvent) -> Result<()> {
+        self.emit_as(tx, event, self.origin).await
+    }
+
+    async fn emit_as(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        event: DocumentEvent,
+        origin: EventOrigin,
+    ) -> Result<()> {
         let context = capture_document(tx, event.document_id(), None)
             .await?
             .ok_or_else(|| {
                 Error::Repository("Document vanished before its event was captured".into())
             })?;
-        insert_event(tx, &event, self.origin, Some(&context))
+        insert_event(tx, &event, origin, Some(&context))
             .await
             .map(|_| ())
     }
@@ -747,6 +757,156 @@ impl DocumentRepository for SqliteDocumentRepository {
     async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document> {
         self.create_reserved(vault, Id::new_v4(), None, true, params)
             .await
+    }
+
+    async fn create_imported(
+        &self,
+        vault: VaultId,
+        document: ImportedDocument,
+    ) -> Result<Document> {
+        document.validate()?;
+        let actor = folio_core::mutation::current_actor();
+        let now = Utc::now().trunc_subsecs(6);
+        let id = document.id;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
+        if let Some(c) = document.correspondent_id {
+            require_entry(&mut tx, "correspondents", "Correspondent", vault, c).await?;
+        }
+        if let Some(t) = document.document_type_id {
+            require_entry(&mut tx, "document_types", "DocumentType", vault, t).await?;
+        }
+        for tag_id in &document.tag_ids {
+            require_entry(&mut tx, "tags", "Tag", vault, *tag_id).await?;
+        }
+        let review = (!document.in_inbox).then_some(ReviewOrigin::System);
+        let inserted = sqlx::query(
+            "INSERT INTO documents (id, vault_id, uploaded_by, created_by, updated_by, title, content,
+                 original_filename, file_path, mime_type, correspondent_id, document_type_id,
+                 ocr_status, embed_status, source_type, created_at, updated_at,
+                 document_date, reviewed_at, review_origin, external_source, external_id, content_sha256)
+             VALUES (?1, ?2, NULL, ?3, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                 ?16, ?17, ?18, ?19, ?20, ?21)",
+        )
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(actor.as_ref().map(UserId::as_str))
+        .bind(&document.title)
+        .bind(&document.content)
+        .bind(&document.original_filename)
+        .bind(&document.file_path)
+        .bind(&document.mime_type)
+        .bind(document.correspondent_id.map(|id| id.to_string()))
+        .bind(document.document_type_id.map(|id| id.to_string()))
+        .bind(ProcessingStatus::Done.as_str())
+        .bind(document.embed_status().as_str())
+        .bind(SourceKind::Import.as_str())
+        .bind(document.created_at.trunc_subsecs(6).to_rfc3339())
+        .bind(document.updated_at.trunc_subsecs(6).to_rfc3339())
+        .bind(document.document_date.map(|date| date.to_string()))
+        .bind(review.map(|_| now.to_rfc3339()))
+        .bind(review.map(ReviewOrigin::as_str))
+        .bind(document.external_ref.source.as_str())
+        .bind(&document.external_ref.id)
+        .bind(&document.content_sha256)
+        .execute(&mut *tx)
+        .await;
+        if let Err(error) = inserted {
+            if error
+                .as_database_error()
+                .is_some_and(|e| e.is_unique_violation())
+            {
+                tx.rollback().await.map_err(map_sqlx_error)?;
+                return Err(crate::database::import_collision(self, vault, &document, error).await);
+            }
+            return Err(map_sqlx_error(error));
+        }
+        for tag_id in &document.tag_ids {
+            sqlx::query(
+                "INSERT INTO document_tags (document_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            )
+            .bind(id.to_string())
+            .bind(tag_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        }
+        super::metadata_value_repo::insert_new_values(
+            &mut tx,
+            vault,
+            id,
+            &document.metadata,
+            actor.as_ref(),
+            now,
+        )
+        .await?;
+        for note in &document.notes {
+            sqlx::query(
+                "INSERT INTO document_entries (id, document_id, vault_id, kind, body, created_at,
+                     updated_at, created_by, updated_by, external_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?7, ?8)",
+            )
+            .bind(Id::new_v4().to_string())
+            .bind(id.to_string())
+            .bind(vault.to_string())
+            .bind(EntryKind::Note.as_str())
+            .bind(note.body.as_str())
+            .bind(note.created_at.trunc_subsecs(6).to_rfc3339())
+            .bind(actor.as_ref().map(UserId::as_str))
+            .bind(&note.external_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
+        }
+        if document.embed_status() == ProcessingStatus::Pending {
+            crate::queue::insert_job_sqlite(
+                &mut tx,
+                crate::queue::JobType::GenerateEmbedding {
+                    document_id: id,
+                    origin: EventOrigin::Import,
+                },
+                now,
+                crate::queue::DEFAULT_MAX_ATTEMPTS,
+            )
+            .await?;
+        }
+        self.emit_as(
+            &mut tx,
+            DocumentEvent::Created { document_id: id },
+            EventOrigin::Import,
+        )
+        .await?;
+        let row: DocumentRow = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {DOC_COLS} FROM documents WHERE id = ? AND vault_id = ?"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+        let created = row.try_into()?;
+        self.commit(tx).await?;
+        Ok(created)
+    }
+
+    async fn find_by_external_ref(
+        &self,
+        vault: VaultId,
+        external: &ExternalRef,
+    ) -> Result<Option<Id>> {
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM documents WHERE vault_id = ? AND external_source = ? AND external_id = ?",
+        )
+        .bind(vault.to_string())
+        .bind(external.source.as_str())
+        .bind(&external.id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        id.as_deref().map(parse_uuid).transpose()
     }
 
     async fn create_for_ingest(

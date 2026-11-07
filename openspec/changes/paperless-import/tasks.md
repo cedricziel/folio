@@ -2,16 +2,16 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 1. Document model
 
-- [ ] 1.1 Migration for the `documents` external reference (columns, paired-NULL CHECK, partial unique index that includes trashed rows) and `document_entries.external_id` with its partial unique index. Failing test first, on SQLite and on testcontainers Postgres: a duplicate external reference is rejected even when the first document is trashed, and a row with only `external_id` set is rejected.
-- [ ] 1.2 Add `SourceKind::Import`, `EventOrigin::Import`, `ExternalRef`, `ImportedDocument`, `ImportedNote` and `DocumentRepository::create_imported` (SQLite and Postgres). It writes the following in one transaction:
+- [x] 1.1 Migration for the `documents` external reference (columns, paired-NULL CHECK, partial unique index that includes trashed rows) and `document_entries.external_id` with its partial unique index. Failing test first, on SQLite and on testcontainers Postgres: a duplicate external reference is rejected even when the first document is trashed, and a row with only `external_id` set is rejected.
+- [x] 1.2 Add `SourceKind::Import`, `EventOrigin::Import`, `ExternalRef`, `ImportedDocument`, `ImportedNote` and `DocumentRepository::create_imported` (SQLite and Postgres). It writes the following in one transaction:
   - the caller-supplied ID and dates
   - `ocr_status = done`, and the embed stage pending or skipped
   - the review state, tags, metadata values, and notes with `external_id`
   - the `created` outbox event with origin `Import`
 
   Failing test first: read back every field, with status `filed`. A second call returns `Conflict`.
-- [ ] 1.3 Add `SourceKind::Import` to the OpenAPI enum. Failing test first: `tests/openapi.rs` fails until it is there.
-- [ ] 1.4 Make the workflow engine skip `EventOrigin::Import`, give processing jobs an `origin` field, and have the worker emit `Processed` with the job's origin. Failing tests first: the four workflow-triggers scenarios, including a user-started reprocess that does trigger.
+- [x] 1.3 Add `SourceKind::Import` to the OpenAPI enum. Failing test first: `tests/openapi.rs` fails until it is there.
+- [x] 1.4 Make the workflow engine skip `EventOrigin::Import`, give processing jobs an `origin` field, and have the worker emit `Processed` with the job's origin. Failing tests first: the four workflow-triggers scenarios, including a user-started reprocess that does trigger.
 
 ## 2. Run, ledger and sync storage
 

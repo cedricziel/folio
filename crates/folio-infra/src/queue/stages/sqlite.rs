@@ -281,9 +281,7 @@ async fn complete_embedding_plan(
                 with_scope(Some(fence.scope()), async {
                     insert_job_sqlite(
                         conn,
-                        JobType::GenerateEmbedding {
-                            document_id: fence.document_id,
-                        },
+                        JobType::generate_embedding(fence.document_id),
                         Utc::now(),
                         DEFAULT_MAX_ATTEMPTS,
                     )
