@@ -163,13 +163,13 @@ The document ID is `Uuid::new_v5(FOLIO_IMPORT_NAMESPACE, "{vault_id}/paperless/{
    - tags, metadata values, and notes with `external_id` and their Paperless `created_at`
    - the ledger row and `import_items.status = 'done'`, conditional on the claim
    - the `created` outbox event with `EventOrigin::Import`
-7. After commit, enqueue `GenerateThumbnail` and `GenerateEmbedding`.
+7. Insert the `GenerateThumbnail` and `GenerateEmbedding { origin: Import }` jobs inside the same transaction (with `insert_job_sqlite`/`insert_job_postgres`, as `complete_embedding_plan` does). An imported document is never left embed-pending without a job, so the orphan-repair sweep can't re-queue it with a user origin.
 
 **update** (mirror only):
 - `apply_mirror_update` overwrites the title, dates, correspondent, type, tag set, metadata values (full replace of the values set by imports) and content.
 - It upserts notes by `external_id`, and soft-deletes imported notes that are gone in Paperless. Folio-native notes are untouched.
 - It updates the ledger, all in one transaction with `EventOrigin::Import` events.
-- **File replacement** writes the new bytes to a versioned key, `documents/{id}/original-{sha256[..16]}`, and verifies them. `file_path` is switched inside the transaction (the existing `set_file_path` semantics, in the same transaction). After commit, the old object is deleted and thumbnail and embedding jobs are re-enqueued. A crash or a failed transaction leaves the old `file_path` and the old object in place. The new object is deleted on permanent failure, or overwritten by the retry.
+- **File replacement** writes the new bytes to a versioned key, `documents/{id}/original-{sha256[..16]}`, and verifies them. `file_path` is switched inside the transaction (the existing `set_file_path` semantics, in the same transaction). Thumbnail and embedding jobs with origin `Import` are inserted in the same transaction. After commit, the old object is deleted. A crash or a failed transaction leaves the old `file_path` and the old object in place. The new object is deleted on permanent failure, or overwritten by the retry.
 
 **trash and restore** (mirror only): new repository methods that trash or restore and update the ledger in one transaction, with origin `Import`. The existing methods take no transaction (`ports/repository.rs:79,97`). Restore is skipped when a purge was requested.
 
