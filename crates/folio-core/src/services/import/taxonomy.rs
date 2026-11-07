@@ -5,14 +5,13 @@
 //! dry run and a real run, or two runs over the same library, agree on every
 //! name.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use serde::Serialize;
 
-use super::fields::{folio_kind, name_key, ExistingField};
 use super::SyncMode;
-use crate::models::{Id, MetadataKind};
-use crate::ports::{PaperlessCustomField, PaperlessNamed, PaperlessTag};
+use crate::models::Id;
+use crate::ports::{PaperlessNamed, PaperlessTag};
 use crate::services::library::non_empty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -315,50 +314,6 @@ fn plan_kind(
     plan
 }
 
-/// Where each Paperless custom field lands: an existing field with the same
-/// name, or a new one. Run after [`super::field_kind_conflicts`] came back empty.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct FieldPlan {
-    /// Paperless field ID to target, in ID order
-    pub fields: BTreeMap<i64, FieldTarget>,
-    pub creates: Vec<NewField>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct FieldTarget {
-    pub kind: MetadataKind,
-    pub target: Target,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct NewField {
-    pub name: String,
-    pub kind: MetadataKind,
-}
-
-pub fn plan_fields(paperless: &[PaperlessCustomField], existing: &[ExistingField]) -> FieldPlan {
-    let mut sorted: Vec<&PaperlessCustomField> = paperless.iter().collect();
-    sorted.sort_by_key(|f| f.id);
-    let mut taken: HashMap<String, Target> = existing
-        .iter()
-        .map(|f| (name_key(&f.name), Target::Existing(f.id)))
-        .collect();
-
-    let mut plan = FieldPlan::default();
-    for field in sorted {
-        let kind = folio_kind(field.data_type);
-        let target = *taken.entry(name_key(&field.name)).or_insert_with(|| {
-            plan.creates.push(NewField {
-                name: field.name.trim().to_owned(),
-                kind,
-            });
-            Target::New(plan.creates.len() - 1)
-        });
-        plan.fields.insert(field.id, FieldTarget { kind, target });
-    }
-    plan
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,38 +559,6 @@ mod tests {
         };
         let plan = plan_tags(&[tag(1, "Bills", None)], vault, SyncMode::Mirror);
         assert_eq!(plan.plan.target(1), Some(Target::New(0)));
-    }
-
-    #[test]
-    fn fields_map_onto_existing_fields_by_name_key_or_are_created() {
-        let amount = ExistingField {
-            id: Id::new_v4(),
-            name: "Amount".into(),
-            kind: MetadataKind::Money,
-            unique: false,
-        };
-        let field = crate::services::import::test_support::custom_field;
-        use crate::ports::PaperlessFieldType as P;
-
-        let plan = plan_fields(
-            &[
-                field(2, "amount", P::Monetary),
-                field(1, "Due", P::Date),
-                field(3, "due", P::Date),
-            ],
-            std::slice::from_ref(&amount),
-        );
-
-        assert_eq!(plan.fields[&2].target, Target::Existing(amount.id));
-        assert_eq!(plan.fields[&1].target, Target::New(0));
-        assert_eq!(plan.fields[&3].target, Target::New(0));
-        assert_eq!(
-            plan.creates,
-            vec![NewField {
-                name: "Due".into(),
-                kind: MetadataKind::Date
-            }]
-        );
     }
 
     #[test]

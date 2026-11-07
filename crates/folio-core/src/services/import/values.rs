@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::fields::folio_kind;
+use super::fields::{folio_kind, valid_option_label};
 use crate::models::{EntryBody, Id, MetadataKind, MetadataValue};
 use crate::ports::{
     PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessFieldValue, PaperlessNote,
@@ -219,7 +219,9 @@ fn select_label(field: &PaperlessCustomField, raw: &str) -> Option<String> {
             .and_then(|index| field.select_options.get(index))
             .filter(|option| option.id.is_none())
     };
-    by_id.or_else(by_index).map(|option| option.label.clone())
+    by_id
+        .or_else(by_index)
+        .and_then(|option| valid_option_label(&option.label))
 }
 
 fn reason(error: Error) -> String {
