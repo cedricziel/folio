@@ -13,6 +13,7 @@ use super::fields::{folio_kind, name_key, ExistingField};
 use super::SyncMode;
 use crate::models::{Id, MetadataKind};
 use crate::ports::{PaperlessCustomField, PaperlessNamed, PaperlessTag};
+use crate::services::library::non_empty;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +21,16 @@ pub enum TaxonomyKind {
     Tag,
     Correspondent,
     DocumentType,
+}
+
+impl TaxonomyKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Tag => "tag",
+            Self::Correspondent => "correspondent",
+            Self::DocumentType => "document type",
+        }
+    }
 }
 
 /// A live tag, correspondent or type already in the vault
@@ -74,6 +85,11 @@ pub struct Rename {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaxonomyWarning {
+    /// The Paperless name is blank; the entity isn't imported
+    InvalidName {
+        kind: TaxonomyKind,
+        paperless_id: i64,
+    },
     /// The Paperless rename was skipped: another live entity has the new name
     RenameCollision {
         kind: TaxonomyKind,
@@ -84,7 +100,7 @@ pub enum TaxonomyWarning {
     },
 }
 
-/// A same-name tag under a different parent, imported as `<parent>/<name>`
+/// A same-name tag under a different parent, imported under another name
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FlattenedTag {
     pub paperless_id: i64,
@@ -127,41 +143,63 @@ pub struct VaultTaxonomy<'a> {
     pub mappings: &'a [TaxonomyMapping],
 }
 
+/// A flattened `<parent>/<name>` longer than this falls back to `<name> (#<id>)`
+pub const MAX_FLATTENED_NAME: usize = 128;
+
 /// Flattens tags and maps them. Inbox tags are left out.
+///
+/// The lowest Paperless ID keeps a name. A later tag with the same name under
+/// the same parent is the same tag to Folio; under another parent it becomes
+/// `<parent>/<name>`, or `<name> (#<id>)` when it has no parent, the parent
+/// is missing, or that name is taken or too long.
 pub fn plan_tags(tags: &[PaperlessTag], vault: VaultTaxonomy<'_>, mode: SyncMode) -> TagPlan {
     let mut sorted: Vec<&PaperlessTag> = tags.iter().collect();
     sorted.sort_by_key(|t| t.id);
     let by_id: HashMap<i64, &PaperlessTag> = sorted.iter().map(|t| (t.id, *t)).collect();
 
-    // Lowest ID first: the first parent seen for a name keeps it
-    let mut first_parent: HashMap<&str, Option<i64>> = HashMap::new();
+    // Chosen names, and the parent of the tag that first took each
+    let mut used: HashMap<String, Option<i64>> = HashMap::new();
     let mut flattened = Vec::new();
     let mut inbox_tags = Vec::new();
+    let mut warnings = Vec::new();
     let mut wanted = Vec::new();
     for tag in sorted {
         if tag.is_inbox_tag {
             inbox_tags.push(tag.id);
             continue;
         }
-        let keeper = *first_parent.entry(tag.name.as_str()).or_insert(tag.parent);
-        let parent = tag.parent.and_then(|id| by_id.get(&id));
-        let name = match parent {
-            Some(parent) if keeper != tag.parent => {
-                let imported_as = format!("{}/{}", parent.name, tag.name);
+        let Some(name) = valid_name(TaxonomyKind::Tag, tag.id, &tag.name, &mut warnings) else {
+            continue;
+        };
+        let chosen = match used.get(name) {
+            None => name.to_owned(),
+            Some(parent) if *parent == tag.parent => name.to_owned(),
+            Some(_) => {
+                let under_parent = tag
+                    .parent
+                    .and_then(|id| by_id.get(&id))
+                    .map(|parent| parent.name.trim())
+                    .filter(|parent| !parent.is_empty())
+                    .map(|parent| format!("{parent}/{name}"))
+                    .filter(|n| n.chars().count() <= MAX_FLATTENED_NAME && !used.contains_key(n));
+                let imported_as = under_parent.unwrap_or_else(|| format!("{name} (#{})", tag.id));
                 flattened.push(FlattenedTag {
                     paperless_id: tag.id,
-                    name: tag.name.clone(),
+                    name: name.to_owned(),
                     imported_as: imported_as.clone(),
                 });
                 imported_as
             }
-            _ => tag.name.clone(),
         };
-        wanted.push((tag.id, name, Some(tag.color.clone())));
+        used.entry(chosen.clone()).or_insert(tag.parent);
+        wanted.push((tag.id, chosen, Some(tag.color.clone())));
     }
 
+    let mut plan = plan_kind(TaxonomyKind::Tag, wanted, vault, mode);
+    warnings.append(&mut plan.warnings);
+    plan.warnings = warnings;
     TagPlan {
-        plan: plan_kind(TaxonomyKind::Tag, wanted, vault, mode),
+        plan,
         inbox_tags,
         flattened,
     }
@@ -174,12 +212,37 @@ pub fn plan_named(
     vault: VaultTaxonomy<'_>,
     mode: SyncMode,
 ) -> KindPlan {
-    let mut wanted: Vec<_> = entities
-        .iter()
-        .map(|e| (e.id, e.name.clone(), None))
+    let mut sorted: Vec<&PaperlessNamed> = entities.iter().collect();
+    sorted.sort_by_key(|e| e.id);
+    let mut warnings = Vec::new();
+    let wanted = sorted
+        .into_iter()
+        .filter_map(|e| {
+            let name = valid_name(kind, e.id, &e.name, &mut warnings)?;
+            Some((e.id, name.to_owned(), None))
+        })
         .collect();
-    wanted.sort_by_key(|(id, _, _)| *id);
-    plan_kind(kind, wanted, vault, mode)
+    let mut plan = plan_kind(kind, wanted, vault, mode);
+    warnings.append(&mut plan.warnings);
+    plan.warnings = warnings;
+    plan
+}
+
+/// The trimmed name, validated like names entered in Folio; an invalid one
+/// leaves the entity unmapped, so documents import without it
+fn valid_name<'n>(
+    kind: TaxonomyKind,
+    paperless_id: i64,
+    name: &'n str,
+    warnings: &mut Vec<TaxonomyWarning>,
+) -> Option<&'n str> {
+    match non_empty(name, kind.label()) {
+        Ok(name) => Some(name),
+        Err(_) => {
+            warnings.push(TaxonomyWarning::InvalidName { kind, paperless_id });
+            None
+        }
+    }
 }
 
 fn plan_kind(
@@ -573,5 +636,76 @@ mod tests {
                 kind: MetadataKind::Date
             }]
         );
+    }
+
+    #[test]
+    fn a_root_tag_after_a_same_name_child_keeps_its_own_entity() {
+        let tags = [
+            tag(2, "Home", None),
+            tag(3, "Taxes", Some(2)),
+            tag(5, "Taxes", None),
+        ];
+
+        let plan = plan_tags(&tags, EMPTY, SyncMode::Mirror);
+
+        assert_eq!(
+            names(&plan.plan),
+            vec![(2, "Home"), (3, "Taxes"), (5, "Taxes (#5)")]
+        );
+        assert_ne!(plan.plan.target(3), plan.plan.target(5));
+    }
+
+    #[test]
+    fn a_missing_parent_or_a_taken_or_long_flattened_name_falls_back_to_the_id() {
+        let long = "P".repeat(MAX_FLATTENED_NAME);
+        let tags = [
+            tag(1, "Home", None),
+            tag(2, long.as_str(), None),
+            tag(3, "Taxes", Some(1)),
+            tag(4, "Taxes", Some(99)),
+            tag(5, "Home/Taxes", None),
+            tag(6, "Taxes", Some(2)),
+            tag(7, "Taxes", Some(5)),
+        ];
+
+        let plan = plan_tags(&tags, EMPTY, SyncMode::Mirror);
+        let names = names(&plan.plan);
+
+        assert_eq!(names[3], (4, "Taxes (#4)"));
+        assert_eq!(names[5], (6, "Taxes (#6)"));
+        assert_eq!(names[6], (7, "Home/Taxes/Taxes"));
+        let distinct: std::collections::HashSet<_> = names.iter().map(|(_, n)| *n).collect();
+        assert_eq!(distinct.len(), names.len());
+    }
+
+    #[test]
+    fn names_are_trimmed_and_blank_names_are_skipped_with_a_warning() {
+        let bills = entity("Bills");
+        let existing = [bills.clone()];
+        let vault = VaultTaxonomy {
+            existing: &existing,
+            mappings: &[],
+        };
+
+        let plan = plan_named(
+            TaxonomyKind::Correspondent,
+            &[named(1, " Bills "), named(2, "   ")],
+            vault,
+            SyncMode::Mirror,
+        );
+
+        assert_eq!(plan.target(1), Some(Target::Existing(bills.id)));
+        assert_eq!(plan.target(2), None);
+        assert_eq!(
+            plan.warnings,
+            vec![TaxonomyWarning::InvalidName {
+                kind: TaxonomyKind::Correspondent,
+                paperless_id: 2
+            }]
+        );
+
+        let tags = plan_tags(&[tag(3, "", None)], EMPTY, SyncMode::Mirror);
+        assert!(tags.plan.entities.is_empty());
+        assert_eq!(tags.plan.warnings.len(), 1);
     }
 }

@@ -620,7 +620,7 @@ fn unknown(kind: &str, name: &str) -> Error {
     Error::Validation(format!("unknown {kind} '{name}'"))
 }
 
-fn non_empty<'a>(name: &'a str, kind: &str) -> Result<&'a str> {
+pub(crate) fn non_empty<'a>(name: &'a str, kind: &str) -> Result<&'a str> {
     let name = name.trim();
     if name.is_empty() {
         Err(Error::Validation(format!("{kind} name must not be empty")))
