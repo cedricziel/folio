@@ -24,12 +24,14 @@ pub use fields::{
 pub use fingerprint::{
     document_id, fingerprint, DocumentRecords, FINGERPRINT_VERSION, IMPORT_NAMESPACE,
 };
-pub use payload::{plan_document, FailReason, ItemOutcome, ItemPayload, PlanContext, PlannedItem};
+pub use payload::{
+    plan_document, DraftItem, FailReason, ItemOutcome, ItemPayload, PlanContext, PlannedItem,
+};
 pub use taxonomy::{
     plan_fields, plan_named, plan_tags, ExistingEntity, FieldPlan, KindPlan, TagPlan, Target,
     TaxonomyKind, TaxonomyMapping, TaxonomyWarning, VaultTaxonomy,
 };
-pub use trash::{apply_trash_safety, TrashHealth, TRASH_MAX_COUNT, TRASH_MAX_PERCENT};
+pub use trash::{TrashGate, TrashHealth, TrashPlan, TRASH_MAX_COUNT, TRASH_MAX_PERCENT};
 pub use values::{
     plan_values, ItemWarning, PlannedNote, PlannedValue, PlannedValues, ValueContext,
     DEFAULT_CURRENCY,

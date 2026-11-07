@@ -67,11 +67,17 @@ pub enum FailReason {
 pub struct PlannedItem {
     pub paperless_id: i64,
     pub document_id: Id,
-    pub title: String,
+    /// `None` for a trash item of a document the reader no longer lists
+    pub title: Option<String>,
     pub outcome: ItemOutcome,
-    /// Present for items that will be applied
+    /// Present for creates, updates and restores
     pub payload: Option<ItemPayload>,
 }
+
+/// A planned item that hasn't passed trash safety yet; only
+/// [`super::trash::TrashGate`] turns it into a [`PlannedItem`]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftItem(pub(super) PlannedItem);
 
 pub struct PlanContext<'a> {
     pub vault: VaultId,
@@ -85,7 +91,7 @@ pub fn plan_document(
     records: &DocumentRecords,
     ledger: Option<&LedgerEntry>,
     ctx: &PlanContext<'_>,
-) -> Option<PlannedItem> {
+) -> Option<DraftItem> {
     let root = &records.document;
     let original = records.original();
     let tags = records.tag_set();
@@ -97,6 +103,7 @@ pub fn plan_document(
     let (outcome, payload) = match decide(root, original, &fingerprint, ledger, ctx.mode) {
         Decision::Ignore => return None,
         Decision::Skip(reason) => (ItemOutcome::Skipped(reason), None),
+        Decision::Apply(ItemAction::Trash) => (ItemOutcome::Pending(ItemAction::Trash), None),
         Decision::Apply(action) => {
             let payload = ItemPayload {
                 fingerprint_version: FINGERPRINT_VERSION,
@@ -127,13 +134,13 @@ pub fn plan_document(
             (ItemOutcome::Pending(action), Some(payload))
         }
     };
-    Some(PlannedItem {
+    Some(DraftItem(PlannedItem {
         paperless_id: root.id,
         document_id,
-        title: root.title.clone(),
+        title: Some(root.title.clone()),
         outcome,
         payload,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -193,7 +200,7 @@ mod tests {
                     default_currency: DEFAULT_CURRENCY,
                 },
             };
-            plan_document(records, ledger, &ctx)
+            plan_document(records, ledger, &ctx).map(|draft| draft.0)
         }
     }
 
