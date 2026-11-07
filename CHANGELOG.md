@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.9.1](https://github.com/cedricziel/folio/compare/v0.9.0...v0.9.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **apple:** check download status before reading the error body ([c45feeb](https://github.com/cedricziel/folio/commit/c45feeb9225eda0e32bdfec90741b901d5da6753)), closes [#156](https://github.com/cedricziel/folio/issues/156)
+* **apple:** check download status before reading the error body ([#322](https://github.com/cedricziel/folio/issues/322)) ([8aac098](https://github.com/cedricziel/folio/commit/8aac0989f2d3f048296b624b4a322849e2178b90)), closes [#156](https://github.com/cedricziel/folio/issues/156)
+* **apple:** check the server again before a refresh changes credentials ([8724603](https://github.com/cedricziel/folio/commit/87246034e275f87cce8f032d62ddab91c714b1bb))
+* **apple:** keep credentials bound to the server that issued them ([#305](https://github.com/cedricziel/folio/issues/305)) ([e53c38b](https://github.com/cedricziel/folio/commit/e53c38bf0a0ca1716fb66cb68c5f73a66dea11a5))
+* **apple:** keep File Provider sibling names unique after sanitizing ([d15a22f](https://github.com/cedricziel/folio/commit/d15a22f2e72cc6b90811a26a5343cd1383e6cc99)), closes [#174](https://github.com/cedricziel/folio/issues/174)
+* **apple:** keep File Provider sibling names unique after sanitizing ([#324](https://github.com/cedricziel/folio/issues/324)) ([77208d6](https://github.com/cedricziel/folio/commit/77208d62f1bb20f98de54dc20b91b205a1e354bc)), closes [#174](https://github.com/cedricziel/folio/issues/174)
+* **apple:** name failed operation spans with error.type and status ([#301](https://github.com/cedricziel/folio/issues/301)) ([02a734b](https://github.com/cedricziel/folio/commit/02a734b5b51151fc2ae8b83ca17b6a8675e7dd61)), closes [#300](https://github.com/cedricziel/folio/issues/300)
+* **auth:** invalidate pending second-factor logins after a password change ([#304](https://github.com/cedricziel/folio/issues/304)) ([51f560b](https://github.com/cedricziel/folio/commit/51f560bd6b4a35f7aaa789c8672d3828dbc2067a)), closes [#164](https://github.com/cedricziel/folio/issues/164)
+* **web:** ask before moving a source or workflow to the trash ([0ecb1c7](https://github.com/cedricziel/folio/commit/0ecb1c739310729d36aa989fb7ac883213d39d25))
+* **web:** ask before moving a source or workflow to the trash ([#326](https://github.com/cedricziel/folio/issues/326)) ([17b2950](https://github.com/cedricziel/folio/commit/17b2950ab48812af0edd409df58279655480c850)), closes [#130](https://github.com/cedricziel/folio/issues/130)
+* **web:** force OCR when reading a document again ([090afa7](https://github.com/cedricziel/folio/commit/090afa79a03032253750efda9b094192336079ac)), closes [#160](https://github.com/cedricziel/folio/issues/160)
+* **web:** send the unsaved edits when testing a workflow ([acfedb5](https://github.com/cedricziel/folio/commit/acfedb55f7f6dd808f07d3bdf5f7f0030d63919a))
+* **web:** send the unsaved edits when testing a workflow ([#323](https://github.com/cedricziel/folio/issues/323)) ([352c705](https://github.com/cedricziel/folio/commit/352c7054f1bb1af33d3caeb09247e04f3016b9d9)), closes [#127](https://github.com/cedricziel/folio/issues/127)
+* **worker:** rerun OCR for forced processing jobs ([23c883d](https://github.com/cedricziel/folio/commit/23c883db5847ebf1ca7bd1943afb6d1b8804d26b)), closes [#160](https://github.com/cedricziel/folio/issues/160)
+* **worker:** rerun OCR when reading a document again ([#325](https://github.com/cedricziel/folio/issues/325)) ([7bf3cc0](https://github.com/cedricziel/folio/commit/7bf3cc02da09a307e97bd90344708fed5697d82a)), closes [#160](https://github.com/cedricziel/folio/issues/160)
+
 ## [0.9.0](https://github.com/cedricziel/folio/compare/v0.8.0...v0.9.0) (2026-11-03)
 
 
