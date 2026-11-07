@@ -25,7 +25,7 @@ use folio_core::ports::{
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::paths::{io_error, resolve_original};
+use super::paths::{io_error, open_original_file, resolve_original};
 
 const MANIFEST: &str = "manifest.json";
 const METADATA: &str = "metadata.json";
@@ -127,12 +127,7 @@ impl PaperlessReader for PaperlessFsReader {
     ) -> Result<OriginalFile, PaperlessReadError> {
         let dir = self.dir.clone();
         let handle = document.original_handle.clone();
-        let (file, size) = blocking(move || {
-            let (path, meta) = resolve_original(&dir, &handle)?;
-            let file = File::open(path).map_err(|e| io_error(&handle, e))?;
-            Ok((file, meta.len()))
-        })
-        .await?;
+        let (file, size) = blocking(move || open_original_file(&dir, &handle)).await?;
         Ok(OriginalFile {
             size: Some(size),
             reader: Box::new(tokio::fs::File::from_std(file)),
@@ -152,8 +147,7 @@ async fn blocking<T: Send + 'static>(
 }
 
 fn open_in_export(dir: &Path, relative: &str) -> Result<File, PaperlessReadError> {
-    let (path, _) = resolve_original(dir, relative)?;
-    File::open(path).map_err(|e| io_error(relative, e))
+    open_original_file(dir, relative).map(|(file, _)| file)
 }
 
 fn read_metadata(dir: &Path) -> Result<PaperlessSourceInfo, PaperlessReadError> {

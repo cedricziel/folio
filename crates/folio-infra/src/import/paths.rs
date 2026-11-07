@@ -1,7 +1,8 @@
 //! Path checks for import sources
 
-use std::fs::Metadata;
+use std::fs::{File, Metadata};
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
 use folio_core::ports::PaperlessReadError;
@@ -64,6 +65,23 @@ pub fn resolve_original(
         Some(meta) if meta.is_file() => Ok((resolved, meta)),
         _ => Err(unsafe_path()),
     }
+}
+
+/// Opens a file checked by [`resolve_original`], refusing it when the path
+/// was swapped between the check and the open. Returns the opened file's size.
+pub fn open_original_file(
+    export_dir: &Path,
+    relative: &str,
+) -> Result<(File, u64), PaperlessReadError> {
+    let (path, checked) = resolve_original(export_dir, relative)?;
+    let file = File::open(path).map_err(|e| io_error(relative, e))?;
+    let opened = file.metadata().map_err(|e| io_error(relative, e))?;
+    if !opened.is_file() || opened.dev() != checked.dev() || opened.ino() != checked.ino() {
+        return Err(PaperlessReadError::UnsafePath {
+            what: relative.to_owned(),
+        });
+    }
+    Ok((file, opened.len()))
 }
 
 pub(super) fn io_error(what: &str, source: io::Error) -> PaperlessReadError {

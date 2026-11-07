@@ -3,7 +3,9 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::PathBuf;
 
 use folio_core::ports::{PaperlessReadError, PaperlessReader, PaperlessRecord};
-use folio_infra::import::{resolve_import_dir, resolve_original, PaperlessFsReader};
+use folio_infra::import::{
+    open_original_file, resolve_import_dir, resolve_original, PaperlessFsReader,
+};
 use futures::TryStreamExt;
 
 struct Layout {
@@ -190,4 +192,16 @@ async fn reader_refuses_a_symlinked_manifest() {
     .unwrap();
     let reader = PaperlessFsReader::open(&export).unwrap();
     assert_unsafe(reader.scan().await.map(|_| ()));
+}
+
+#[test]
+fn opening_an_original_reports_the_opened_size_and_refuses_symlinks() {
+    let layout = Layout::new();
+    let export = layout.path("imports/export");
+    fs::write(export.join("plain.pdf"), b"12345").unwrap();
+    symlink(layout.outside_secret(), export.join("linked.pdf")).unwrap();
+
+    let (_, size) = open_original_file(&export, "plain.pdf").unwrap();
+    assert_eq!(size, 5);
+    assert_unsafe(open_original_file(&export, "linked.pdf").map(|_| ()));
 }
