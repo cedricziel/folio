@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use super::fields::{folio_kind, valid_option_label};
 use crate::models::{EntryBody, Id, MetadataKind, MetadataValue};
 use crate::ports::{
-    PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessFieldValue, PaperlessNote,
+    PaperlessCustomField, PaperlessCustomFieldInstance, PaperlessFieldType, PaperlessFieldValue,
+    PaperlessNote,
 };
 use crate::Error;
 
@@ -46,15 +47,35 @@ pub enum ItemWarning {
         field_id: i64,
         field: String,
         reason: String,
+        /// The drop may not happen again, e.g. once the field is known
+        retryable: bool,
     },
     NoteDropped {
         note_id: i64,
         reason: String,
     },
+    /// Another document holds the ASN; it may give it up
     AsnDropped {
         asn: i64,
         reason: String,
     },
+    /// A linked document the vault doesn't hold yet; a later sync may
+    LinkDropped {
+        field_id: i64,
+        paperless_id: i64,
+    },
+}
+
+impl ItemWarning {
+    /// Whether a later sync could apply what was dropped, even when nothing
+    /// changes in Paperless; such drops set `needs_reapply` on the ledger
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::ValueDropped { retryable, .. } => *retryable,
+            Self::NoteDropped { .. } => false,
+            Self::AsnDropped { .. } | Self::LinkDropped { .. } => true,
+        }
+    }
 }
 
 /// Values, notes and ASN that will be written, plus what was dropped
@@ -86,38 +107,53 @@ pub fn plan_values(
     ctx: &ValueContext<'_>,
 ) -> PlannedValues {
     let mut planned = PlannedValues::default();
-    let mut sorted: Vec<_> = instances.iter().collect();
-    sorted.sort_by_key(|instance| instance.field);
+    let mut by_field: BTreeMap<i64, Vec<&PaperlessCustomFieldInstance>> = BTreeMap::new();
+    for instance in instances {
+        by_field.entry(instance.field).or_default().push(instance);
+    }
 
-    for instance in sorted {
-        let field_id = instance.field;
-        let Some(value) = &instance.value else {
-            continue;
-        };
+    for (field_id, instances) in by_field {
         let Some(field) = ctx.fields.get(&field_id) else {
             planned.warnings.push(ItemWarning::ValueDropped {
                 field_id,
                 field: format!("#{field_id}"),
                 reason: "Unknown custom field".into(),
+                retryable: true,
             });
             continue;
         };
-        if let PaperlessFieldValue::DocumentLink(ids) = value {
-            if !ids.is_empty() {
-                planned.links.insert(field_id, ids.clone());
-            }
+        let dropped = |reason: String| ItemWarning::ValueDropped {
+            field_id,
+            field: field.name.clone(),
+            reason,
+            retryable: false,
+        };
+        // No order-independent way to pick one
+        let [instance] = instances[..] else {
+            planned
+                .warnings
+                .push(dropped("The field has more than one value".into()));
             continue;
-        }
-        match convert(field, value, ctx.default_currency) {
-            Ok(Some(value)) => {
-                planned.values.insert(field_id, value);
+        };
+        let Some(value) = &instance.value else {
+            continue;
+        };
+        match (value, field.data_type) {
+            (PaperlessFieldValue::DocumentLink(ids), PaperlessFieldType::DocumentLink) => {
+                if !ids.is_empty() {
+                    planned.links.insert(field_id, ids.clone());
+                }
             }
-            Ok(None) => {}
-            Err(reason) => planned.warnings.push(ItemWarning::ValueDropped {
-                field_id,
-                field: field.name.clone(),
-                reason,
-            }),
+            (PaperlessFieldValue::DocumentLink(_), _) => planned
+                .warnings
+                .push(dropped("Value kind does not match the field".into())),
+            (value, _) => match convert(field, value, ctx.default_currency) {
+                Ok(Some(value)) => {
+                    planned.values.insert(field_id, value);
+                }
+                Ok(None) => {}
+                Err(reason) => planned.warnings.push(dropped(reason)),
+            },
         }
     }
 
@@ -234,7 +270,7 @@ fn reason(error: Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ports::{PaperlessFieldType, PaperlessSelectOption};
+    use crate::ports::PaperlessSelectOption;
     use crate::services::import::test_support::{custom_field as field, note};
 
     struct Fixture {
@@ -519,5 +555,60 @@ mod tests {
         );
         assert_eq!(planned.links[&1], vec![4, 2]);
         assert!(planned.values.is_empty());
+    }
+
+    #[test]
+    fn duplicate_values_for_a_field_are_dropped_whatever_their_order() {
+        let fixture = Fixture::new(vec![field(1, "Name", PaperlessFieldType::String)]);
+        let a = PaperlessFieldValue::Text("a".into());
+        let b = PaperlessFieldValue::Text("b".into());
+
+        let first = fixture.plan(&[(1, a.clone()), (1, b.clone())], &[], None);
+        let second = fixture.plan(&[(1, b), (1, a)], &[], None);
+
+        assert_eq!(first, second);
+        assert!(first.values.is_empty());
+        assert!(matches!(
+            &first.warnings[..],
+            [ItemWarning::ValueDropped {
+                retryable: false,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn links_into_a_field_of_another_kind_are_dropped() {
+        let fixture = Fixture::new(vec![field(1, "Name", PaperlessFieldType::String)]);
+        let planned = fixture.plan(
+            &[(1, PaperlessFieldValue::DocumentLink(vec![2]))],
+            &[],
+            None,
+        );
+        assert!(planned.links.is_empty());
+        assert_eq!(planned.warnings.len(), 1);
+    }
+
+    #[test]
+    fn only_drops_a_later_sync_could_fix_are_retryable() {
+        let mut fixture = Fixture::new(vec![field(1, "Link", PaperlessFieldType::Url)]);
+        fixture.asn_owners.insert(17, Id::from_u128(2));
+
+        let planned = fixture.plan(
+            &[
+                (1, PaperlessFieldValue::Url("ftp://x".into())),
+                (9, PaperlessFieldValue::Integer(1)),
+            ],
+            &[note(1, 1, " ")],
+            Some(17),
+        );
+
+        let retryable: Vec<_> = planned
+            .warnings
+            .iter()
+            .map(ItemWarning::retryable)
+            .collect();
+        // Invalid URL, unknown field, blank note, taken ASN
+        assert_eq!(retryable, vec![false, true, false, true]);
     }
 }

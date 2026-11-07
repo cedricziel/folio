@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::diff::{decide, Decision, ItemAction, LedgerEntry, SkipReason};
 use super::fingerprint::{document_id, fingerprint_of, DocumentRecords, FINGERPRINT_VERSION};
-use super::values::{plan_values, PlannedValues, ValueContext};
+use super::values::{plan_values, ItemWarning, PlannedValues, ValueContext};
 use super::SyncMode;
 use crate::models::{Id, VaultId};
 use crate::ports::PaperlessChecksum;
@@ -41,10 +41,10 @@ pub struct ItemPayload {
 }
 
 impl ItemPayload {
-    /// Sets `needs_reapply` on the ledger row, so the next sync retries the
-    /// dropped values even if nothing changes in Paperless
-    pub fn drops_values(&self) -> bool {
-        !self.values.warnings.is_empty()
+    /// Sets `needs_reapply` on the ledger row, so the next sync retries
+    /// drops that may succeed later even if nothing changes in Paperless
+    pub fn needs_reapply(&self) -> bool {
+        self.values.warnings.iter().any(ItemWarning::retryable)
     }
 }
 
@@ -155,7 +155,7 @@ mod tests {
     use crate::services::import::diff::FolioState;
     use crate::services::import::taxonomy::{plan_tags, TaxonomyMapping, VaultTaxonomy};
     use crate::services::import::test_support::{custom_field, document, note};
-    use crate::services::import::values::{ItemWarning, DEFAULT_CURRENCY};
+    use crate::services::import::values::DEFAULT_CURRENCY;
     use crate::services::import::ExistingEntity;
 
     const VAULT: VaultId = VaultId(Id::from_u128(7));
@@ -224,7 +224,7 @@ mod tests {
             checksum: payload.checksum.value.clone(),
             fingerprint: payload.fingerprint.clone(),
             fingerprint_version: payload.fingerprint_version,
-            needs_reapply: payload.drops_values(),
+            needs_reapply: payload.needs_reapply(),
             trashed_in_paperless: payload.trashed,
             folio_state: FolioState::Live,
         }
@@ -299,26 +299,42 @@ mod tests {
     }
 
     #[test]
-    fn a_document_with_a_dropped_value_is_planned_again() {
-        let fixture = Fixture::new();
-        let mut bad = records();
-        bad.fields[0].value = Some(PaperlessFieldValue::Url("ftp://example.com".into()));
+    fn a_document_with_a_retryable_drop_is_planned_again() {
+        let mut fixture = Fixture::new();
+        fixture.asn_owners.insert(17, Id::from_u128(99));
 
-        let created = fixture.plan(&bad, None).unwrap();
+        let created = fixture.plan(&records(), None).unwrap();
         let payload = created.payload.as_ref().unwrap();
         assert!(matches!(
             payload.values.warnings[..],
-            [ItemWarning::ValueDropped { field_id: 1, .. }]
+            [ItemWarning::AsnDropped { asn: 17, .. }]
         ));
-        assert!(payload.drops_values());
+        assert!(payload.needs_reapply());
 
-        let next = fixture.plan(&bad, Some(&ledger_after(&created))).unwrap();
+        let next = fixture
+            .plan(&records(), Some(&ledger_after(&created)))
+            .unwrap();
         assert_eq!(
             next.outcome,
             ItemOutcome::Pending(ItemAction::Update {
                 replace_file: false
             })
         );
+    }
+
+    #[test]
+    fn a_value_that_can_never_be_held_is_not_retried() {
+        let fixture = Fixture::new();
+        let mut bad = records();
+        bad.fields[0].value = Some(PaperlessFieldValue::Url("ftp://example.com".into()));
+
+        let created = fixture.plan(&bad, None).unwrap();
+        let payload = created.payload.as_ref().unwrap();
+        assert_eq!(payload.values.warnings.len(), 1);
+        assert!(!payload.needs_reapply());
+
+        let next = fixture.plan(&bad, Some(&ledger_after(&created))).unwrap();
+        assert_eq!(next.outcome, ItemOutcome::Skipped(SkipReason::Unchanged));
     }
 
     #[test]
