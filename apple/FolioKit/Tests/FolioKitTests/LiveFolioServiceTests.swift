@@ -844,6 +844,26 @@ private let documentJSON = """
         #expect(try Data(contentsOf: second) == Data("%PDF-1.4".utf8))
     }
 
+    @Test func failedDownloadSurfacesTheServerMessage() async throws {
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 404, body: Data("{\"error\": \"Document not found\"}".utf8))
+        }
+        let document = Document(title: "Bill", originalFilename: "bill.pdf", mimeType: "application/pdf")
+        await #expect(throws: FolioError.server(status: 404, message: "Document not found")) {
+            _ = try await makeService().downloadFile(for: document)
+        }
+    }
+
+    @Test func errorBodyReadsOnlyABoundedPrefix() throws {
+        let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data(repeating: 0x61, count: 1_000).write(to: file)
+
+        #expect(LiveFolioService.prefix(of: file, upTo: 100)?.count == 100)
+        #expect(LiveFolioService.prefix(of: file, upTo: 5_000)?.count == 1_000)
+        #expect(LiveFolioService.prefix(of: file.appending(path: "missing"), upTo: 100) == nil)
+    }
+
     @Test func downloadKeepsTheFileExtensionForQuickLook() async throws {
         let vault = UUID()
         StubURLProtocol.handler = { request, _ in

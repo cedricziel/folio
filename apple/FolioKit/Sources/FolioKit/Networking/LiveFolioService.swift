@@ -529,7 +529,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let request = URLRequest(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
         let (temporary, response) = try await authorizedTransfer(request) { try await session.download(for: $0) }
         defer { try? FileManager.default.removeItem(at: temporary) }
-        try check(response, body: try? Data(contentsOf: temporary))
+        try check(response, body: Self.prefix(of: temporary, upTo: 65_536))
 
         let filename = Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
         let directory =
@@ -626,13 +626,19 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         return try await perform(signed(fresh))
     }
 
-    private func check(_ response: URLResponse, body: Data?) throws {
+    static func prefix(of file: URL, upTo limit: Int) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: limit)
+    }
+
+    private func check(_ response: URLResponse, body: @autoclosure () -> Data?) throws {
         guard let http = response as? HTTPURLResponse else { throw FolioError.unreadableResponse }
         if http.statusCode == 401 {
             throw FolioError.signInRequired
         }
         guard (200 ..< 300).contains(http.statusCode) else {
-            throw FolioError.server(status: http.statusCode, message: body.flatMap(ErrorMappingMiddleware.message))
+            throw FolioError.server(status: http.statusCode, message: body().flatMap(ErrorMappingMiddleware.message))
         }
     }
 
