@@ -1,26 +1,31 @@
 ## Context
 
-See proposal.md for motivation and specs/paperless-import/spec.md for the required behavior.
+See proposal.md for motivation and specs/ for the required behavior.
 
 Current state that shapes the approach:
 
-- **Jobs.** The `jobs` table gives leased, at-least-once delivery (300 s lease, 60 s heartbeat, `claim_id` fencing, `reset_stuck` re-queues expired leases). Jobs get 3 attempts with 20 s/40 s backoff and end as `failed` (`crates/folio-infra/src/queue/mod.rs`, `queue/recovery/`). The worker runs document jobs one at a time (`queue/worker.rs:228`) and workflow runs concurrently.
-- **Uploads.** `Importer::import` (`crates/folio-core/src/services/importer.rs`) inserts the row with `upload_pending`, puts the object, then finalizes. `upload_pending` only defers the `Created` event; it doesn't hide the row. `CreateDocument` (`crates/folio-core/src/models/document.rs:262`) already carries content, correspondent, type and tag IDs, but no date, creation time or external reference. `created_at` is always `now`.
-- **OCR skip.** The worker already skips OCR when `content` is non-empty and `force` is false (`queue/worker.rs:710`).
-- **Typed metadata.** `MetadataFieldRepository`, `MetadataOptionRepository` and `MetadataValueRepository` exist in `crates/folio-core/src/ports/metadata.rs` with SQLite and PostgreSQL adapters. Notes use `DocumentEntryRepository` (`ports/document_entries.rs`).
-- **Outcomes.** Ingestion sources record per-item outcomes in `ingest_outcomes`. That table's CHECKs limit it to `folder`/`email` sources, so the import gets its own tables, following the same pattern.
+- **Jobs.** The `jobs` table gives leased, at-least-once delivery (`crates/folio-infra/src/queue/mod.rs:188-190`: 300 s lease, 60 s heartbeat, `claim_id` fencing). `reset_stuck` re-queues expired leases, and a job that runs out of attempts becomes `failed` with no hook (`queue/recovery/mod.rs:180-210`). `dequeue` orders by `scheduled_at` (`queue/sqlite.rs:131-135`). Document jobs run one at a time (`queue/worker.rs:226`). Jobs run under `with_actor(None)` (`worker.rs:481`). The repair loop re-queues documents whose stages are pending, and closes only abandoned workflow runs (`worker.rs:361-438`).
+- **Uploads.** `Importer::import` (`crates/folio-core/src/services/importer.rs`) inserts the row with `upload_pending`, puts the object, then finalizes. `upload_pending` only defers the `Created` event; it doesn't hide the row. `CreateDocument` (`models/document.rs:262`) has no date, creation time, ID or external reference. The repository sets `ocr_status = done` only when content is `Some` (`database/sqlite/document_repo.rs:1994-1998`).
+- **Review.** A document with `reviewed_at` NULL and finished processing has status `needs_review` (`models/document.rs:248-256`).
+- **Storage.** `DocumentStore::put` (`ports/storage.rs:111-116`) replaces existing objects.
+- **Typed metadata.** `MetadataFieldRepository`, `MetadataOptionRepository` and `MetadataValueRepository` exist (`ports/metadata.rs`). `MetadataValue::DocumentLink` holds one UUID (`models/metadata.rs:39`). URLs must be http(s) (`metadata.rs:136-150`).
+- **Notes.** `DocumentEntryRepository::create` takes no timestamp and writes idempotency receipts and outbox rows (`ports/document_entries.rs:24-31`). `EntryBody::parse` rejects blank bodies and bodies over 16 KB (`models/document_entry.rs:30-35`).
+- **Events and workflows.** Lifecycle events are written to `outbox_events` in the changing transaction (realtime-events spec). `finish_embed_stage` emits `Processed` (`worker.rs:820-829`). Workflow matching sees the document's source through `EventSnapshot.source`.
+- **Authorization.** Any signed-in uploader can create a vault and becomes its owner (`routes/vaults.rs:209-220`). The owner check is `owner()` (`routes/vaults.rs:148`). Admin gating exists as middleware in `routes/settings.rs:37-42`.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- One import run survives restarts, worker crashes and repeated retries without duplicates or half-written documents.
-- Each document lands in one database transaction together with its tags, metadata values and notes.
+- A run survives restarts, worker crashes, concurrent drivers and repeated retries without duplicates, half-written documents or orphaned files.
+- A run always reaches a final status.
+- Each document lands in one database transaction together with its tags, metadata values, notes and review state.
 - Memory stays bounded for libraries with tens of thousands of documents.
 
 **Non-Goals:**
-- Faster processing of the thumbnails and embeddings that follow an import. They drain through the existing queue at its current pace. Processing concurrency and provider rate limiting are a separate change.
-- Importing from a live Paperless instance over its REST API. The manifest reader port leaves room for this later.
-- A web UI for imports. This change adds JSON routes only.
+- Faster processing of the thumbnails and embeddings that follow an import. Processing concurrency and provider rate limiting are a separate change.
+- Live import progress on `/events`. The realtime-events contract requires a `document_id` on every event. Clients read the run with `GET` instead.
+- Importing from a live Paperless instance over its REST API. The reader port leaves room for this later.
+- A web UI for imports.
 - Zipped exports. The admin unzips first.
 
 ## Decisions
@@ -29,137 +34,210 @@ Current state that shapes the approach:
 
 The exporter gives one consistent snapshot with Paperless IDs, notes, custom field instances and checksums. It needs no credentials or network access, and the server reads it from a mounted path. The REST API would need one or two requests per document, and its results depend on the token user's permissions.
 
-Supported layouts:
+**Supported layouts:**
 - a single `manifest.json`
-- `--split-manifest` (per-document `*-manifest.json` files next to the main one)
+- `--split-manifest`
 - `--use-folder-prefix`
 
-The reader parses `metadata.json` for the version. That version decides the checksum algorithm: 32 hex characters means MD5 (v2), 64 means SHA-256 (v3).
+POST reads only `metadata.json`, to gate on version 2.16 or later. In 2.16, `created` became a date.
 
-**Port:** `folio-core::ports::import::PaperlessExportReader`, with `taxonomy()` returning tags, correspondents, types and custom fields, `documents()` returning a streaming iterator of document records with their notes and field instances, and `open_original(record)`.
+**Port and adapter:**
+- **Port:** `folio-core::ports::import::PaperlessExportReader`, with `scan()` returning a streaming iterator of typed records and `open_original(relative_path)`.
+- **Adapter:** `folio-infra::import::paperless_fs`.
+  - It streams the manifest with `serde_json::Deserializer` over a buffered reader, so it never holds the whole manifest.
+  - It counts record models it doesn't import, and never deserializes the `auth.user`, `paperless_mail.mailaccount`, social-token or authenticator records.
 
-**Adapter:** `folio-infra::import::paperless_fs`. It streams the manifest with `serde_json::Deserializer` over a buffered reader, so it doesn't load a multi-hundred-MB manifest into memory. It skips record models it doesn't import, and counts them for the summary. It never deserializes the `auth.user`, `paperless_mail.mailaccount` or social-token records, so credentials and password hashes don't reach memory beyond the parser.
+**The checksum algorithm** is chosen by the length of the manifest's checksum: 32 hex characters means MD5, 64 means SHA-256. It is not chosen by version, because v3 exports of documents consumed under v2 may carry either.
 
-Alternative considered: requiring `--split-manifest` only. It's simpler to stream, but most existing exports don't use it.
+### 2. Plan phase persists a self-contained payload per item
 
-### 2. Two phases per run: plan, then import
+The import phase must not re-read the manifest, which can be several hundred MB, for every batch. The plan phase streams the manifest once and builds everything the import phase needs.
 
-- **Plan phase.** One pass over the manifest:
-  - Resolves the taxonomy against the vault: tags (flattened, with collision renames), correspondents, types, metadata fields and select options.
-  - Fails the run on kind conflicts before any document is written.
-  - Inserts one `import_items` row per document, keyed `UNIQUE (run_id, external_id)`.
-  - Pre-allocates a Folio document UUID for each item.
-  - Taxonomy is created in this phase, except in a dry run.
-  - The phase is idempotent: `INSERT … ON CONFLICT DO NOTHING`, and lookup by name before create.
-- **Import phase.** Processes `pending` items in batches of 25, ordered by `external_id`.
+**Steps, in order:**
+1. **Collect taxonomy records.** These are small: tags, correspondents, types, custom fields and options.
+2. **Validate field kinds against the vault.** Any conflict fails the run here, before anything is created.
+3. **Create or reuse taxonomy** (skipped in a dry run). Each lookup is by name before create, so the step is idempotent. Tag collision renames are decided in ascending Paperless ID order, so they are deterministic.
+4. **Write one `import_items` row per live document,** with `INSERT … ON CONFLICT (run_id, external_id) DO NOTHING`.
+   - Notes and custom-field instances are joined to their documents through a temporary per-run table, `import_staging`, keyed by Paperless document ID, so memory stays bounded.
+   - The payload is normalized JSON holding everything the import phase needs:
+     - the original's relative path, checksum and size
+     - title, content, the three dates and the mime type
+     - mapped Folio tag, correspondent and type IDs, and the inbox flag
+     - mapped metadata values and the ASN
+     - notes, raw link IDs, and the number of skipped versions
+   - Trashed documents get `skipped`/`trashed`.
+5. **Mark already-imported items.** One query joins items to `documents` on `(vault_id, 'paperless', external_id)` and marks matches `skipped`/`already_imported`. They never reach file I/O, which also makes dry runs accurate.
+6. **Drop the staging rows and set `plan_complete = true`.**
 
-Pre-allocating the UUID makes a crash between the file put and the database insert harmless: the retry writes the same storage key and inserts the same ID.
+If the plan phase crashes, the retry starts it again from the top. Every step is idempotent, so this is safe. Taxonomy created before a failure or cancel stays in the vault, and the summary lists it.
 
-Alternative considered: a single streaming pass. It would make taxonomy conflicts fail mid-run and leave a partial import.
+Alternative considered: a single streaming pass. Taxonomy conflicts would then fail mid-run, and notes and custom fields precede documents in the manifest, so they would need buffering anyway.
 
-### 3. File first, then one transaction
+### 3. Deterministic document IDs, file first, then one transaction
 
-For each item:
-1. Open the original and hash it while reading (MD5 or SHA-256 as the manifest needs, plus SHA-256 always).
-2. Compare with the manifest checksum, and fail the item on a mismatch.
-3. `put` to `documents/{preallocated_id}/original`.
-4. In one transaction:
-   - insert the document with `file_path` set and `upload_pending = false`
-   - insert its tags, metadata values and notes
-   - set `import_items.status = 'imported'` and `document_id`
-   - emit the `Created` event via the outbox with origin `import`
+**Document ID.** It is `Uuid::new_v5(FOLIO_IMPORT_NAMESPACE, "{vault_id}/paperless/{external_id}")`. Every run, retry and dry run therefore agrees on the ID and storage key, so a re-put overwrites the same object instead of orphaning a new one.
 
-`documents.content_sha256` stores the SHA-256. The `(vault_id, external_source, external_id)` unique index is the final guard: a conflict means another attempt already finished this item, so the item is marked `skipped`/`already_imported` and the stored object is left alone, because it belongs to the existing document.
+**Per item:**
+1. **Claim the item.** This is a committed write (§5).
+2. **Open the original.** The path is resolved under the canonical export directory. Absolute paths, `..` components and symlinks are refused (`unsafe_path`), checked with `symlink_metadata` on every component.
+3. **Check the size, then read and hash.** Hash with the manifest's algorithm, plus SHA-256 always.
+4. **Compare checksums.**
+5. **`put`** to `documents/{id}/original`.
+6. **`DocumentRepository::create_imported(ImportedDocument)` in one transaction:**
+   - insert the document with `file_path` set
+   - set `ocr_status = done` regardless of content, and the embed stage to pending (or skipped without text)
+   - set `reviewed_at`/`review_origin = system` unless the inbox flag is set
+   - write tags and metadata values
+   - write notes directly into `document_entries` with the Paperless `created_at` and `created_by` = run creator (not through `DocumentEntryRepository::create`, which can't take a timestamp)
+   - set the item `imported` with `WHERE status = 'in_progress' AND claim = $claim`
+   - write the `created` outbox event, as the realtime-events spec requires
 
-A new repository method, `DocumentRepository::create_imported(ImportedDocument)`, does the transaction. It doesn't reuse `Importer::import`, whose pending/finalize dance exists for HTTP uploads.
+   Values that fail validation (URL scheme, length, a note body, or an ASN that collides on `metadata_values_unique_value`) are pre-validated and dropped with item warnings before the transaction. This happens instead of failing the whole document.
+7. **After commit,** enqueue `GenerateThumbnail` and `GenerateEmbedding`.
 
-`ImportedDocument` extends `CreateDocument` with:
-- `id`
-- `external: ExternalRef { source, id }`
-- `document_date`
-- `created_at`
-- `content_sha256`
-- `metadata: Vec<MetadataValueInput>`
-- `notes: Vec<ImportedNote { body, created_at }>`
+**Failure paths:**
+- **Unique conflict on the external ref:** someone else finished this item, so mark it `skipped`/`already_imported`. The object at that key belongs to that document, because the IDs are equal.
+- **Permanent failure after the put:** the object is deleted when no document with that ID exists.
+- **Document links:** resolved in a final pass, after all items are done, by looking up `(vault_id, 'paperless', link_id)` in `documents`. This also covers documents imported by earlier runs. The pass writes the first resolvable link per value; the rest become warnings. It is idempotent, so a crash during it repeats it.
 
-Notes are written by the importing user, with `created_at` taken from Paperless.
-
-Document links are written in a second pass after all items are `imported`, because their targets must exist. Links whose target isn't in the run are dropped and recorded as warnings.
+Alternative considered: pre-allocating random IDs per run. A second run would then orphan one object per document.
 
 Alternative considered: making `upload_pending` hide documents. It touches every list and search query for a benefit only the import needs.
 
-### 4. Suppress workflows, keep processing
+### 4. Workflows and events
 
-`CreateDocument.source` gets a new `SourceKind::Import`. The workflow trigger evaluator ignores `document.uploaded` for that source. After commit, the importer enqueues `GenerateThumbnail` and `GenerateEmbedding`. It doesn't enqueue `ProcessDocument`, so OCR is never scheduled. The existing content check would skip OCR anyway; this saves the job.
+`SourceKind::Import` is a new source kind. It is added to the OpenAPI `SourceKind` enum. The Apple client has no closed enum for it, so older builds are unaffected.
 
-### 5. One driver job per run, resumable by state
+The workflow dispatcher skips `document.uploaded` and `document.processed` occurrences whose `EventSnapshot.source` is `import`; this is the workflow-triggers delta. No new `EventOrigin` is added.
 
-There is a new `JobType::ImportRun { run_id }`. It isn't one job per document: thousands of rows would crowd out normal processing, and the single sequential worker loop would interleave them anyway.
+The per-document `created` events still go through the outbox. Browsers will see a burst of `created` events during an import, which is acceptable for a one-off migration.
 
-- **Leasing.** The driver job runs under the existing lease. The heartbeat already covers long runs.
-- **Resuming.** The run's progress lives in `import_runs`/`import_items`, not in the job. Resuming means "process items still `pending`".
-- **Exhausted attempts.** If the job runs out of its 3 attempts on a systemic error (export directory unmounted), the run ends `failed`. `POST …/retry` enqueues a new driver job.
-- **Run-level errors.** An item error never fails the job. The job fails only on run-level errors such as an unreadable manifest or a storage outage.
-- **Item retries.** Each item has `attempts` and is retried up to 3 times within the run, then left as `failed`.
-- **Fairness.** To avoid starving normal document jobs in the single worker loop, the driver processes one batch and re-enqueues itself, with `scheduled_at` set to now, until no pending items remain. Each batch is a short job, so document jobs queued meanwhile interleave.
-- **Cancel.** Sets `import_runs.cancel_requested`. The driver checks it between items.
+### 5. Item claims instead of a single driver
+
+**Driver job.** `JobType::ImportRun { run_id }` processes one batch, then enqueues its continuation and completes.
+
+**Batch size.** A batch stops at the first of these limits:
+- 100 items
+- 60 s
+- one file over 64 MB
+
+**Continuation order.** The continuation is enqueued with `scheduled_at` set to the time the batch started. That is earlier than the processing jobs the batch just queued, so `dequeue` picks the continuation first. Imports don't wait behind their own thumbnails and embeddings, and normal uploads wait at most one batch.
+
+**Item claims.** Correctness doesn't depend on there being one driver. Each item is claimed with:
+
+```sql
+UPDATE import_items
+   SET status = 'in_progress', claim = $c, claimed_at = now(), attempts = attempts + 1
+ WHERE run_id = $r AND external_id = $e
+   AND (status = 'pending'
+        OR (status = 'in_progress' AND claimed_at < now() - interval '10 minutes'))
+```
+
+**How this covers the failure cases:**
+- **Two drivers.** If a race or lease expiry leaves two drivers, they share the remaining items without overlap. Every later item update is conditional on the claim.
+- **Crash loop.** An item claimed with `attempts >= 3` is marked `failed`/`attempts_exhausted` instead of being processed. A file that crashes the process three times is skipped.
+- **Counts.** Run counts are computed from `import_items` with `GROUP BY status`, not incremented. Duplicate drivers can't skew them.
+- **Finishing.** It is a conditional `UPDATE import_runs SET status = … WHERE status = 'running'`, so it is idempotent.
+- **Actor.** Jobs normally run with no actor. The driver runs under `with_actor(run.created_by)`, so `created_by` and `updated_by` on taxonomy, documents and notes name the admin.
+
+**Recovery.**
+- **Job gives up.** When an `ImportRun` job exhausts its attempts, a new hook in `queue/recovery`, called where the job becomes `failed`, marks the run `failed` with the job's last error.
+- **Repair loop.** A new step looks for `running` runs with no active `ImportRun` job. It re-enqueues a driver up to 3 times per run (`import_runs.driver_restarts`), then marks the run `failed`.
+- **Cancel.**
+  - `POST …/cancel` sets `cancel_requested`. The driver checks it before each item.
+  - If no driver job is active, which covers `queued` runs and jobs waiting on backoff, the route itself moves the run to `cancelled` in the same transaction.
+- **Retry.**
+  - `POST …/retry` resets `failed` items to `pending` with `attempts = 0`, and sets the run to `queued`.
+  - If the plan phase never completed (`plan_complete = false`), the run restarts it.
+  - The route then enqueues a driver.
 
 ### 6. Taxonomy mapping rules
 
-- **Tags.**
-  - Folio tags are flat; each Paperless tag becomes a tag with its own name and color.
-  - Documents in Paperless already carry their ancestor tags, so no hierarchy is lost from document membership.
-  - Same-name tags under different parents are renamed `<parent>/<name>`.
-  - `is_inbox_tag` is ignored and counted.
-  - Names are matched case-sensitively, the same as the vault's unique index.
-- **Correspondents and types.** Matched by name. Same-name entities owned by different Paperless users collapse into one.
-- **Custom fields.** Mapped to metadata fields by `name_key`:
-  - string → text
-  - longtext → long_text
-  - url → url
-  - date → date
-  - boolean → boolean
-  - integer → integer
-  - float → decimal (rendered with Rust's shortest round-trip formatting, then validated)
-  - monetary → money (currency from the value, or `extra_data.default_currency`, otherwise the run's `default_currency` parameter, which defaults to `EUR`)
-  - select → select (options by label, created in Paperless order)
-  - documentlink → document_link
-- **ASN.** A field named `ASN`, kind integer, `is_unique = true`. It's created when missing; a non-integer or non-unique existing `ASN` field is a kind conflict.
-- **Dates.** `created` (date) → `document_date`. `added` (UTC datetime) → `created_at`. `modified` → `updated_at`.
+**Tags.**
+- Folio tags are flat; each Paperless tag becomes a tag with its own name and color.
+- Documents in Paperless already carry their ancestor tags, so no hierarchy is lost from document membership.
+- Same-name tags under different parents: the lowest Paperless ID keeps the name, the others become `<parent>/<name>`.
+- Inbox tags are not created; documents carrying one are left unreviewed.
+- Names match case-sensitively, the same as the vault's unique index.
+
+**Correspondents and types.** Matched by name. Same-name entities owned by different Paperless users collapse into one.
+
+**Custom fields.** Mapped to metadata fields by `name_key`:
+
+| Paperless | Folio | Notes |
+|---|---|---|
+| string | text | |
+| longtext | long_text | |
+| url | url | |
+| date | date | |
+| boolean | boolean | |
+| integer | integer | |
+| float | decimal | Shortest round-trip form, then validated; a value that fails validation is dropped with a warning |
+| monetary | money | Parsed from the Paperless string `EUR123.45`, never a float. Currency from the value, else `extra_data.default_currency`, else the run's `default_currency` parameter (default `EUR`) |
+| select | select | Options by label, created in Paperless order |
+| documentlink | document_link | First resolvable link, see §3 |
+
+**ASN.** A field named `ASN`, kind integer, `is_unique = true`. It's created when missing. An existing `ASN` field that isn't a unique integer field is a kind conflict.
+
+**Dates.**
+- `created` (a date) → `document_date`
+- `added` (UTC) → `created_at`
+- `modified` → `updated_at`
 
 ### 7. Schema
 
 Migration `20261107120000_paperless_import.sql`, identical version in `migrations/sqlite` and `migrations/postgres`:
 
-- `documents`: add `external_source TEXT NULL`, `external_id TEXT NULL` and `content_sha256 TEXT NULL`. Add `UNIQUE INDEX documents_external_ref ON documents (vault_id, external_source, external_id) WHERE external_source IS NOT NULL`. The index covers trashed rows too, so restoring a trashed import doesn't collide with a re-import. A re-import of a trashed document is skipped as `already_imported`.
-- `import_runs`: `id`, `vault_id`, `kind`, `source_path`, `dry_run`, `status`, `params JSON`, `summary JSON`, `counts JSON`, `error`, `cancel_requested`, `created_by`, `created_at`, `started_at`, `finished_at`. Partial unique index on `vault_id` where status is `queued` or `running`.
-- `import_items`: `run_id`, `external_id`, `document_id` (pre-allocated), `title`, `status` (`pending`, `imported`, `would_import`, `skipped`, `failed`), `reason`, `warnings JSON`, `attempts`, `updated_at`. `PRIMARY KEY (run_id, external_id)`, index on `(run_id, status)`.
+- **`documents`:** add `external_source TEXT NULL`, `external_id TEXT NULL` and `content_sha256 TEXT NULL`.
+  - `CHECK ((external_source IS NULL) = (external_id IS NULL))`.
+  - `UNIQUE INDEX documents_external_ref ON documents (vault_id, external_source, external_id) WHERE external_source IS NOT NULL`. The index includes trashed rows, so a trashed import is never duplicated.
+- **`import_runs`:**
+  - `id`, `vault_id`, `kind`, `source_path`, `dry_run`, `status`
+  - `plan_complete`, `cancel_requested`, `driver_restarts`
+  - `params JSON`, `summary JSON`, `error`
+  - `created_by`, `created_at`, `started_at`, `finished_at`
+  - A partial unique index on `vault_id` where status is `queued` or `running`.
+- **`import_items`:**
+  - `run_id`, `external_id`, `seq INTEGER` (the numeric Paperless ID, for ordering), `document_id`, `title`
+  - `status` (`pending`, `in_progress`, `imported`, `would_import`, `skipped`, `failed`), `reason`, `warnings JSON`
+  - `payload JSON`, `attempts`, `claim`, `claimed_at`, `updated_at`
+  - `PRIMARY KEY (run_id, external_id)`, with an index on `(run_id, status, seq)`.
+- **`import_staging`:** `run_id`, `paperless_document_id`, `kind`, `record JSON`. It is emptied when the plan phase completes.
 
 Existing documents keep NULL in the new columns.
 
-### 8. API, events, config
+### 8. API and config
 
-- **Routes.** JSON routes in `crates/folio-api/src/routes/imports.rs`, under the existing vault router, guarded by the vault owner role check used in `routes/vaults.rs:155`.
-- **OpenAPI.** utoipa schemas `ImportRun`, `ImportItem`, `CreateImportRequest` and `ImportItemPage` are added to `openapi/openapi.json`.
-- **Swift client.** Regenerate it. No Apple UI is in scope, so the generated types are added unused.
-- **Events.** New realtime events `ImportProgress { run_id, counts }`, throttled to one per second per run in the driver, plus `ImportFinished`. Both go on `/events` for clients with access to the vault.
-- **Config.** `[import] allowed_roots = ["/imports"]` in `config.toml` (`FOLIO_IMPORT__ALLOWED_ROOTS`). It isn't in the settings table, because which server paths the app can read is a deployment decision, not something a web user should change. Path checks canonicalize both sides and require a prefix match on path components.
+**Routes.**
+- JSON routes in `crates/folio-api/src/routes/imports.rs`, under the vault router.
+- A guard that requires both the vault `owner()` check and `is_admin || is_owner` on the user.
+- Disabled imports return 403 `imports_disabled`. Other refusals return 403 `forbidden`.
+- A path that is outside every root or doesn't exist returns the same 400. The canonicalize error is never echoed, so the response doesn't reveal which paths exist.
+
+**OpenAPI.** utoipa schemas `ImportRun`, `ImportItem`, `CreateImportRequest` and `ImportItemPage` go into `openapi/openapi.json` in the same commit as the routes, which keeps `tests/openapi.rs` green. Then regenerate the Swift client.
+
+**Config.**
+- The section is `[import]`, with `allowed_roots = ["/imports"]` and `max_file_bytes = 536870912`, overridden by `FOLIO_IMPORT__ALLOWED_ROOTS` and `FOLIO_IMPORT__MAX_FILE_BYTES`.
+- Both are added to `SETTINGS` (`config.rs:471`) and `docs/configuration.md`, which the drift test checks.
+- They're config-only. Which server paths the app reads is a deployment decision, not a web setting.
+- The allowed-root check runs at POST and again at every driver start, so a narrowed config takes effect on resume.
 
 ## Risks / Trade-offs
 
-- **Thumbnail and embedding backlog after a large import** → The worker processes one document job at a time. A 5k-document import queues 10k jobs, and search by meaning lags behind until they drain. Text search works immediately because content is imported. Follow-up: configurable processing concurrency.
-- **A run holds the worker between batches** → Batches of 25 bounded at about 30 s each, followed by re-enqueue, keep normal uploads responsive.
-- **Large originals buffered in memory** → `StoragePort::put` takes bytes. The import reads one file at a time; the 50 MB HTTP limit doesn't apply. Files above `import.max_file_bytes` (default 512 MB) fail with `file_too_large`.
-- **Exports contain secrets** → The reader skips user, mail-account and token records without deserializing them, and the docs tell admins to export with `--passphrase` and delete the export afterwards.
-- **Monetary floats and Paperless rounding** → Values are parsed from Paperless's string form (`EUR123.45`), never from a float.
-- **SQLite write contention with a running server** → The import runs inside the server process through the same pool. There is no second process.
-- **Tag collapse across Paperless owners** → Two users' private "Invoice" tags become one shared tag. This is listed in the summary, and acceptable for a personal library.
+- **Thumbnail and embedding backlog after a large import** → A 5k-document import queues about 10k processing jobs that drain one at a time. Search by meaning lags behind until they finish, but text search works immediately because the content is imported. The follow-up is configurable processing concurrency.
+- **Large originals are buffered in memory** → `DocumentStore::put` takes bytes. Imports read one file at a time, the size cap bounds each file, and a batch ends after any file over 64 MB.
+- **The export contains secrets** → The reader skips user, mail-account and token records without deserializing them. Only instance admins can import. The admin guide says to export with `--passphrase` and delete the export afterwards.
+- **A burst of `created` events** → Live browsers re-render the list once per event during an import. This is accepted for a one-off migration.
+- **Tags collapse across Paperless owners** → Two users' private "Invoice" tags become one shared tag. The summary lists it, and this is acceptable for a personal library.
+- **Document links are truncated to the first link** → Folio holds one link per value. Every dropped link becomes a warning.
+- **Imported documents never fire `document.processed` workflows**, even on a later reprocess → This is documented in the workflow-triggers delta.
+- **Email originals** → `.eml` files are imported as originals without Paperless's rendered PDF. Folio thumbnails what it can.
 
 ## Migration Plan
 
 1. Deploy a release that contains the migration. It is additive, so rollback is the previous image; the new columns and tables are ignored.
 2. On hive, mount the export directory read-only into the container and set `import.allowed_roots`.
-3. Run a dry run, review the summary, then run the import. Retry failed items, and leave Paperless running until the counts match.
+3. Run a dry run and review the summary, then run the import. Retry failed items, and leave Paperless running until the counts match.
 
 ## Open Questions
 
