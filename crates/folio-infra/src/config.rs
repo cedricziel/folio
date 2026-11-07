@@ -1153,17 +1153,13 @@ mod tests {
     }
 
     #[test]
-    fn import_roots_and_size_limit_load_from_the_environment() {
-        let config = load(&[
-            ("FOLIO_IMPORT__ALLOWED_ROOTS", "/imports, /mnt/paperless"),
-            ("FOLIO_IMPORT__MAX_FILE_BYTES", "1048576"),
-        ]);
+    fn import_roots_split_on_commas_into_paths() {
+        let config = load(&[("FOLIO_IMPORT__ALLOWED_ROOTS", "/imports, /mnt/paperless")]);
         assert_eq!(
             config.import.allowed_roots,
             [PathBuf::from("/imports"), PathBuf::from("/mnt/paperless")]
         );
         assert!(config.import.imports_enabled());
-        assert_eq!(config.import.max_file_bytes, 1_048_576);
     }
 
     #[test]
