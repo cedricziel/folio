@@ -45,11 +45,15 @@ fn root_guard_accepts_paths_inside_a_root() {
     let layout = Layout::new();
     let roots = layout.roots();
     assert_eq!(
-        resolve_import_dir(&layout.path("imports/export"), &roots).unwrap(),
+        resolve_import_dir(&layout.path("imports/export"), &roots)
+            .unwrap()
+            .path(),
         layout.path("imports/export")
     );
     assert_eq!(
-        resolve_import_dir(&layout.path("imports/alias"), &roots).unwrap(),
+        resolve_import_dir(&layout.path("imports/alias"), &roots)
+            .unwrap()
+            .path(),
         layout.path("imports/export")
     );
 }
@@ -77,6 +81,12 @@ fn root_guard_rejects_escapes_siblings_and_missing_paths_alike() {
 fn root_guard_with_no_roots_rejects_everything() {
     let layout = Layout::new();
     assert!(resolve_import_dir(&layout.path("imports/export"), &[]).is_err());
+}
+
+fn reader_at(dir: &Path) -> PaperlessFsReader {
+    PaperlessFsReader::new(
+        resolve_import_dir(dir, std::slice::from_ref(&dir.to_path_buf())).unwrap(),
+    )
 }
 
 fn open_in(export: &Path, relative: &str) -> Result<(fs::File, u64), PaperlessReadError> {
@@ -171,7 +181,7 @@ async fn reader_refuses_unsafe_manifest_paths_without_opening_them() {
     )
     .unwrap();
 
-    let reader = PaperlessFsReader::open(&export).unwrap();
+    let reader = reader_at(&export);
     let records: Vec<_> = reader.scan().await.unwrap().try_collect().await.unwrap();
     assert_eq!(records.len(), 3);
     for record in &records {
@@ -193,7 +203,7 @@ async fn reader_refuses_a_symlinked_manifest() {
         export.join("manifest.json"),
     )
     .unwrap();
-    let reader = PaperlessFsReader::open(&export).unwrap();
+    let reader = reader_at(&export);
     assert_unsafe(reader.scan().await.map(|_| ()));
 }
 
@@ -208,7 +218,7 @@ async fn reader_keeps_reading_the_directory_it_opened_after_the_path_is_replaced
     )
     .unwrap();
 
-    let reader = PaperlessFsReader::open(&export).unwrap();
+    let reader = reader_at(&export);
     fs::rename(&export, layout.path("imports/moved")).unwrap();
     symlink(layout.path("outside"), &export).unwrap();
 

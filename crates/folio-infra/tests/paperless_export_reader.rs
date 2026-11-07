@@ -6,7 +6,7 @@ use folio_core::ports::{
     digest_original, ChecksumAlgorithm, PaperlessDocument, PaperlessFieldType, PaperlessFieldValue,
     PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessTag, PaperlessVersion,
 };
-use folio_infra::import::PaperlessFsReader;
+use folio_infra::import::{resolve_import_dir, PaperlessFsReader};
 use futures::{StreamExt, TryStreamExt};
 
 const FIXTURES: [&str; 4] = ["v2_20", "v3_4", "v3_4_split", "v3_4_folder_prefix"];
@@ -17,12 +17,16 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn reader_at(dir: &Path) -> PaperlessFsReader {
+    PaperlessFsReader::new(resolve_import_dir(dir, &[dir.to_path_buf()]).unwrap())
+}
+
 async fn scan_with(reader: &PaperlessFsReader) -> Vec<PaperlessRecord> {
     reader.scan().await.unwrap().try_collect().await.unwrap()
 }
 
 async fn scan(name: &str) -> Vec<PaperlessRecord> {
-    scan_with(&PaperlessFsReader::open(&fixture(name)).unwrap()).await
+    scan_with(&reader_at(&fixture(name))).await
 }
 
 fn documents(records: &[PaperlessRecord]) -> Vec<&PaperlessDocument> {
@@ -47,19 +51,11 @@ fn tags(records: &[PaperlessRecord]) -> Vec<&PaperlessTag> {
 
 #[tokio::test]
 async fn reads_the_version_from_metadata() {
-    let v2 = PaperlessFsReader::open(&fixture("v2_20"))
-        .unwrap()
-        .source_info()
-        .await
-        .unwrap();
+    let v2 = reader_at(&fixture("v2_20")).source_info().await.unwrap();
     assert_eq!(v2.version, PaperlessVersion::parse("2.20.15").unwrap());
     assert!(v2.version.is_supported());
 
-    let v3 = PaperlessFsReader::open(&fixture("v3_4"))
-        .unwrap()
-        .source_info()
-        .await
-        .unwrap();
+    let v3 = reader_at(&fixture("v3_4")).source_info().await.unwrap();
     assert_eq!(v3.version.to_string(), "3.4.2");
 }
 
@@ -206,7 +202,7 @@ async fn v2_export_yields_typed_records() {
 
 #[tokio::test]
 async fn counts_skipped_models_after_a_scan() {
-    let reader = PaperlessFsReader::open(&fixture("v2_20")).unwrap();
+    let reader = reader_at(&fixture("v2_20"));
     assert!(reader.skipped_models().is_empty());
     scan_with(&reader).await;
 
@@ -233,7 +229,7 @@ async fn counts_skipped_models_after_a_scan() {
     .collect();
     assert_eq!(reader.skipped_models(), expected);
 
-    let v3 = PaperlessFsReader::open(&fixture("v3_4")).unwrap();
+    let v3 = reader_at(&fixture("v3_4"));
     scan_with(&v3).await;
     assert_eq!(v3.skipped_models()["documents.sharelink"], 1);
 }
@@ -283,7 +279,7 @@ async fn v3_export_carries_trash_deleted_notes_and_versions() {
 
 #[tokio::test]
 async fn modified_since_returns_everything_from_an_export() {
-    let reader = PaperlessFsReader::open(&fixture("v3_4")).unwrap();
+    let reader = reader_at(&fixture("v3_4"));
     let since = Utc.with_ymd_and_hms(2100, 1, 1, 0, 0, 0).unwrap();
     let records: Vec<_> = reader
         .modified_since(since)
@@ -307,7 +303,7 @@ async fn omits_deleted_custom_field_values() {
         ]"#,
     )
     .unwrap();
-    let records = scan_with(&PaperlessFsReader::open(dir.path()).unwrap()).await;
+    let records = scan_with(&reader_at(dir.path())).await;
     let values: Vec<_> = records
         .iter()
         .filter_map(|r| match r {
@@ -323,7 +319,7 @@ async fn omits_deleted_custom_field_values() {
 
 #[tokio::test]
 async fn lists_every_document_id() {
-    let reader = PaperlessFsReader::open(&fixture("v3_4_split")).unwrap();
+    let reader = reader_at(&fixture("v3_4_split"));
     let ids = reader.list_document_ids().await.unwrap();
     assert_eq!(
         ids.ids().iter().copied().collect::<Vec<_>>(),
@@ -358,7 +354,7 @@ async fn split_and_folder_prefix_layouts_yield_the_same_records() {
 #[tokio::test]
 async fn originals_match_their_checksums() {
     for name in FIXTURES {
-        let reader = PaperlessFsReader::open(&fixture(name)).unwrap();
+        let reader = reader_at(&fixture(name));
         for doc in documents(&scan_with(&reader).await) {
             let original = reader.open_original(doc).await.unwrap();
             let size = original.size;
@@ -375,7 +371,7 @@ async fn originals_match_their_checksums() {
 #[tokio::test]
 async fn missing_and_malformed_files_are_typed_errors() {
     let dir = tempfile::tempdir().unwrap();
-    let reader = PaperlessFsReader::open(dir.path()).unwrap();
+    let reader = reader_at(dir.path());
     assert!(matches!(
         reader.source_info().await,
         Err(PaperlessReadError::Missing { .. })
@@ -407,13 +403,5 @@ async fn missing_and_malformed_files_are_typed_errors() {
     assert!(matches!(
         results.as_slice(),
         [Err(PaperlessReadError::Malformed { .. })]
-    ));
-}
-
-#[test]
-fn open_fails_for_a_missing_directory() {
-    assert!(matches!(
-        PaperlessFsReader::open(Path::new("/definitely/not/here")).err(),
-        Some(PaperlessReadError::Missing { .. })
     ));
 }

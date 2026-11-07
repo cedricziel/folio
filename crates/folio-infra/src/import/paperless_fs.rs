@@ -28,7 +28,7 @@ use rustix::fs::{AtFlags, FileType};
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::paths::{io_error, open_original_file, open_subdir};
+use super::paths::{io_error, open_original_file, open_subdir, ImportDir};
 
 const MANIFEST: &str = "manifest.json";
 const METADATA: &str = "metadata.json";
@@ -47,23 +47,12 @@ pub struct PaperlessFsReader {
 }
 
 impl PaperlessFsReader {
-    /// Opens an export directory; the caller checks it against the allowed roots first
-    pub fn open(dir: &Path) -> Result<Self, PaperlessReadError> {
-        let missing = || PaperlessReadError::Missing {
-            what: dir.display().to_string(),
-        };
-        let fd = rustix::fs::open(
-            dir,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|_| missing())?;
-        Ok(Self {
-            dir: Arc::new(File::from(fd)),
+    /// Reads the export directory the root guard opened
+    pub fn new(dir: ImportDir) -> Self {
+        Self {
+            dir: Arc::new(dir.into_file()),
             skipped: Arc::default(),
-        })
+        }
     }
 
     /// Records of models the import doesn't use, by Django model label,

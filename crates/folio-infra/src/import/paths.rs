@@ -16,22 +16,62 @@ use rustix::io::Errno;
 #[error("the path is not an existing directory inside an allowed import root")]
 pub struct OutsideAllowedRoots;
 
-/// Resolves `..` and symlinks in `path`, then requires the result to sit
-/// inside one of `roots`, compared component by component
-pub fn resolve_import_dir(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, OutsideAllowedRoots> {
+/// An export directory inside an allowed root, opened while it was checked
+#[derive(Debug)]
+pub struct ImportDir {
+    path: PathBuf,
+    dir: File,
+}
+
+impl ImportDir {
+    /// The canonical path at the time of the check, for display only
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn into_file(self) -> File {
+        self.dir
+    }
+}
+
+/// Resolves `..` and symlinks in `path`, requires the result to sit inside
+/// one of `roots` (compared component by component), and opens it by walking
+/// down from the opened root without following symlinks. A directory swapped
+/// after the path was resolved is refused, not followed.
+pub fn resolve_import_dir(
+    path: &Path,
+    roots: &[PathBuf],
+) -> Result<ImportDir, OutsideAllowedRoots> {
     if !path.is_absolute() {
         return Err(OutsideAllowedRoots);
     }
     let resolved = path.canonicalize().map_err(|_| OutsideAllowedRoots)?;
-    let inside = roots
-        .iter()
-        .filter_map(|root| root.canonicalize().ok())
-        .any(|root| resolved.starts_with(root));
-    if inside && resolved.is_dir() {
-        Ok(resolved)
-    } else {
-        Err(OutsideAllowedRoots)
+    for root in roots {
+        let Ok(root) = root.canonicalize() else {
+            continue;
+        };
+        let Ok(below) = resolved.strip_prefix(&root) else {
+            continue;
+        };
+        let mut dir = rustix::fs::open(
+            &root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map(File::from)
+        .map_err(|_| OutsideAllowedRoots)?;
+        for component in below.components() {
+            let Component::Normal(name) = component else {
+                return Err(OutsideAllowedRoots);
+            };
+            dir = File::from(open_subdir(&dir, name).map_err(|_| OutsideAllowedRoots)?);
+        }
+        return Ok(ImportDir {
+            path: resolved,
+            dir,
+        });
     }
+    Err(OutsideAllowedRoots)
 }
 
 /// Opens a manifest path under the opened export directory one component at
