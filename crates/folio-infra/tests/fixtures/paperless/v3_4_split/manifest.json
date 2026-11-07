@@ -1,0 +1,487 @@
+[
+  {
+    "model": "documents.correspondent",
+    "pk": 1,
+    "fields": {
+      "owner": 1,
+      "name": "ACME Corp",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true
+    }
+  },
+  {
+    "model": "documents.correspondent",
+    "pk": 2,
+    "fields": {
+      "owner": 1,
+      "name": "City Utilities",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true
+    }
+  },
+  {
+    "model": "documents.tag",
+    "pk": 2,
+    "fields": {
+      "owner": 1,
+      "name": "Finance",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true,
+      "color": "#1f78b4",
+      "is_inbox_tag": false,
+      "tn_parent": null,
+      "tn_priority": 0
+    }
+  },
+  {
+    "model": "documents.tag",
+    "pk": 4,
+    "fields": {
+      "owner": 1,
+      "name": "Home",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true,
+      "color": "#33a02c",
+      "is_inbox_tag": false,
+      "tn_parent": null,
+      "tn_priority": 0
+    }
+  },
+  {
+    "model": "documents.tag",
+    "pk": 1,
+    "fields": {
+      "owner": 1,
+      "name": "Inbox",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true,
+      "color": "#ff7f00",
+      "is_inbox_tag": true,
+      "tn_parent": null,
+      "tn_priority": 0
+    }
+  },
+  {
+    "model": "documents.tag",
+    "pk": 3,
+    "fields": {
+      "owner": 1,
+      "name": "Invoices",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true,
+      "color": "#e31a1c",
+      "is_inbox_tag": false,
+      "tn_parent": 2,
+      "tn_priority": 0
+    }
+  },
+  {
+    "model": "documents.tag",
+    "pk": 5,
+    "fields": {
+      "owner": 2,
+      "name": "Invoices",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true,
+      "color": "#fb9a99",
+      "is_inbox_tag": false,
+      "tn_parent": 4,
+      "tn_priority": 0
+    }
+  },
+  {
+    "model": "documents.documenttype",
+    "pk": 1,
+    "fields": {
+      "owner": 1,
+      "name": "Invoice",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true
+    }
+  },
+  {
+    "model": "documents.documenttype",
+    "pk": 2,
+    "fields": {
+      "owner": 1,
+      "name": "Contract",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true
+    }
+  },
+  {
+    "model": "documents.storagepath",
+    "pk": 1,
+    "fields": {
+      "owner": 1,
+      "name": "Archive",
+      "match": "",
+      "matching_algorithm": 6,
+      "is_insensitive": true,
+      "path": "{{ created_year }}/{{ title }}"
+    }
+  },
+  {
+    "model": "paperless_mail.mailaccount",
+    "pk": 1,
+    "fields": {
+      "owner": 1,
+      "name": "Personal mail",
+      "imap_server": "imap.example.com",
+      "imap_port": 993,
+      "imap_security": 2,
+      "username": "someone@example.com",
+      "password": "FIXTURE-SECRET-MAIL-PASSWORD",
+      "is_token": false,
+      "character_set": "UTF-8",
+      "account_type": 1,
+      "expiration": null
+    }
+  },
+  {
+    "model": "paperless_mail.mailrule",
+    "pk": 1,
+    "fields": {
+      "owner": 1,
+      "name": "Invoices",
+      "account": 1,
+      "enabled": true
+    }
+  },
+  {
+    "model": "auth.group",
+    "pk": 1,
+    "fields": {
+      "name": "family",
+      "permissions": [
+        1,
+        2
+      ]
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 1,
+    "fields": {
+      "password": "pbkdf2_sha256$870000$FIXTURESALT$FIXTURE-SECRET-PASSWORD-HASH=",
+      "last_login": "2025-01-02T08:00:00.123Z",
+      "is_superuser": true,
+      "username": "admin",
+      "first_name": "",
+      "last_name": "",
+      "email": "admin@example.com",
+      "is_staff": true,
+      "is_active": true,
+      "date_joined": "2023-05-01T10:00:00Z",
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "auth.user",
+    "pk": 2,
+    "fields": {
+      "password": "pbkdf2_sha256$870000$FIXTURESALT$FIXTURE-SECRET-PASSWORD-HASH=",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "partner",
+      "first_name": "",
+      "last_name": "",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2023-05-01T10:00:00Z",
+      "groups": [
+        1
+      ],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "documents.uisettings",
+    "pk": 1,
+    "fields": {
+      "user": 1,
+      "settings": {
+        "dark_mode": {
+          "enabled": "true"
+        }
+      }
+    }
+  },
+  {
+    "model": "contenttypes.contenttype",
+    "pk": 1,
+    "fields": {
+      "app_label": "documents",
+      "model": "document"
+    }
+  },
+  {
+    "model": "auth.permission",
+    "pk": 1,
+    "fields": {
+      "name": "Can view document",
+      "content_type": 1,
+      "codename": "view_document"
+    }
+  },
+  {
+    "model": "auth.permission",
+    "pk": 2,
+    "fields": {
+      "name": "Can change document",
+      "content_type": 1,
+      "codename": "change_document"
+    }
+  },
+  {
+    "model": "guardian.userobjectpermission",
+    "pk": 1,
+    "fields": {
+      "permission": 1,
+      "content_type": 1,
+      "object_pk": "1",
+      "user": 2
+    }
+  },
+  {
+    "model": "documents.workflowtrigger",
+    "pk": 1,
+    "fields": {
+      "type": 1,
+      "sources": [
+        1,
+        2,
+        3
+      ],
+      "filter_filename": "*.pdf"
+    }
+  },
+  {
+    "model": "documents.workflowaction",
+    "pk": 1,
+    "fields": {
+      "type": 1,
+      "assign_title": "{correspondent} invoice"
+    }
+  },
+  {
+    "model": "documents.workflow",
+    "pk": 1,
+    "fields": {
+      "name": "Invoices",
+      "order": 0,
+      "enabled": true,
+      "triggers": [
+        1
+      ],
+      "actions": [
+        1
+      ]
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 1,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Reference",
+      "data_type": "string",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 2,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Summary",
+      "data_type": "longtext",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 3,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Portal",
+      "data_type": "url",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 4,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Due date",
+      "data_type": "date",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 5,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Paid",
+      "data_type": "boolean",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 6,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Pages scanned",
+      "data_type": "integer",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 7,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Rating",
+      "data_type": "float",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 8,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Amount",
+      "data_type": "monetary",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": "EUR"
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 9,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Priority",
+      "data_type": "select",
+      "extra_data": {
+        "select_options": [
+          {
+            "id": "hJ3kQ9pLmN2x",
+            "label": "High"
+          },
+          {
+            "id": "aB4cD5eF6gH7",
+            "label": "Low"
+          }
+        ],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "documents.customfield",
+    "pk": 10,
+    "fields": {
+      "created": "2024-01-01T09:00:00Z",
+      "name": "Related",
+      "data_type": "documentlink",
+      "extra_data": {
+        "select_options": [],
+        "default_currency": null
+      }
+    }
+  },
+  {
+    "model": "paperless.applicationconfiguration",
+    "pk": 1,
+    "fields": {
+      "output_type": null,
+      "pages": null
+    }
+  },
+  {
+    "model": "documents.sharelink",
+    "pk": 1,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-20T10:00:00Z",
+      "expiration": null,
+      "slug": "Zx9",
+      "document": 1,
+      "owner": 1,
+      "file_version": "original"
+    }
+  },
+  {
+    "model": "socialaccount.socialaccount",
+    "pk": 1,
+    "fields": {
+      "user": 1,
+      "provider": "oidc",
+      "uid": "abc",
+      "extra_data": {}
+    }
+  },
+  {
+    "model": "socialaccount.socialtoken",
+    "pk": 1,
+    "fields": {
+      "app": null,
+      "account": 1,
+      "token": "FIXTURE-SECRET-SOCIAL-TOKEN",
+      "token_secret": "FIXTURE-SECRET-SOCIAL-TOKEN",
+      "expires_at": null
+    }
+  },
+  {
+    "model": "mfa.authenticator",
+    "pk": 1,
+    "fields": {
+      "user": 1,
+      "type": "totp",
+      "data": {
+        "secret": "FIXTURE-SECRET-TOTP"
+      }
+    }
+  }
+]

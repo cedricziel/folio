@@ -7,10 +7,12 @@
 //! - Thumbnail generation
 //! - Job queue for background processing
 //! - Configuration loading
+//! - Import sources and their path checks
 
 pub mod ai;
 pub mod config;
 pub mod database;
+pub mod import;
 pub mod ingest;
 pub mod queue;
 pub mod storage;

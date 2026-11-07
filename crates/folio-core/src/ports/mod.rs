@@ -6,6 +6,7 @@ mod access;
 mod ai;
 mod document_entries;
 mod health;
+mod import;
 mod ingest;
 mod metadata;
 mod outbox;
@@ -21,6 +22,14 @@ pub use ai::{
 };
 pub use document_entries::{DocumentEntryRepository, EntryCreation};
 pub use health::HealthCheck;
+pub use import::{
+    digest_original, ChecksumAlgorithm, CompleteIdSet, FileDigests, InvalidDocumentReason,
+    MalformedKind, OriginalFile, PaperlessChecksum, PaperlessCustomField,
+    PaperlessCustomFieldInstance, PaperlessDocument, PaperlessFieldType, PaperlessFieldValue,
+    PaperlessInvalidDocument, PaperlessNamed, PaperlessNote, PaperlessReadError, PaperlessReader,
+    PaperlessRecord, PaperlessSelectOption, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
+    PaperlessVersionInfo, RecordStream, SourceFailure, SourceLocation,
+};
 pub use ingest::{
     DocumentImporter, IngestLedger, IngestOutcomeReader, IngestOutcomeRepository, IngestSink,
     IngestionSource, IngestionSourceFactory, SourceRepository, VaultIngest,

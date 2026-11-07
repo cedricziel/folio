@@ -1,0 +1,48 @@
+[
+  {
+    "model": "documents.document",
+    "pk": 4,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "owner": 1,
+      "correspondent": null,
+      "storage_path": null,
+      "title": "Lease",
+      "document_type": 2,
+      "content": "Lease agreement",
+      "mime_type": "application/pdf",
+      "checksum": "aed91b987fdcb4b6cf269de4ea5274aa",
+      "archive_checksum": null,
+      "page_count": 1,
+      "created": "2024-03-10",
+      "modified": "2024-03-01T12:30:45.678Z",
+      "added": "2024-03-10T09:15:00.250Z",
+      "filename": "0000004.pdf",
+      "archive_filename": null,
+      "original_filename": "0000004.pdf",
+      "archive_serial_number": null,
+      "tags": [],
+      "content_length": 15,
+      "root_document": null,
+      "version_index": null,
+      "version_label": null
+    },
+    "__exported_file_name__": "archive/2024/2024-03-10 Lease.pdf",
+    "__exported_thumbnail_name__": "archive/2024/2024-03-10 Lease-thumbnail.webp"
+  },
+  {
+    "model": "documents.note",
+    "pk": 3,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "note": "Signed copy uploaded as a version.",
+      "created": "2024-03-12T11:00:00Z",
+      "document": 4,
+      "user": 1
+    }
+  }
+]

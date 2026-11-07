@@ -37,6 +37,7 @@ url = "2"
 # Source conditions and content hashing
 regex = "1"
 sha2 = { workspace = true }
+md-5 = { workspace = true }
 hex = { workspace = true }
 
 # Utilities

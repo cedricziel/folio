@@ -1,0 +1,287 @@
+[
+  {
+    "model": "documents.document",
+    "pk": 1,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "owner": 1,
+      "correspondent": 1,
+      "storage_path": null,
+      "title": "Invoice 42",
+      "document_type": 1,
+      "content": "ACME Corp\nInvoice 42\nTotal EUR 123.45",
+      "mime_type": "application/pdf",
+      "checksum": "d3293c805b3c2abbbc3c548e1b54a4c6a88a5c4e8a2622467420f7eac83b3838",
+      "archive_checksum": null,
+      "page_count": 1,
+      "created": "2024-01-15",
+      "modified": "2024-03-01T12:30:45.678Z",
+      "added": "2024-01-15T09:15:00.250Z",
+      "filename": "0000001.pdf",
+      "archive_filename": null,
+      "original_filename": "0000001.pdf",
+      "archive_serial_number": 1042,
+      "tags": [
+        2,
+        3
+      ],
+      "content_length": 37,
+      "root_document": null,
+      "version_index": null,
+      "version_label": null
+    },
+    "__exported_file_name__": "originals/2024-01-15 ACME Corp Invoice 42.pdf",
+    "__exported_thumbnail_name__": "thumbnails/2024-01-15 ACME Corp Invoice 42-thumbnail.webp"
+  },
+  {
+    "model": "documents.note",
+    "pk": 1,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "note": "Paid by bank transfer on 2024-02-10.",
+      "created": "2024-02-10T18:22:01.500Z",
+      "document": 1,
+      "user": 1
+    }
+  },
+  {
+    "model": "documents.note",
+    "pk": 2,
+    "fields": {
+      "deleted_at": "2024-02-10T18:00:00Z",
+      "restored_at": null,
+      "transaction_id": null,
+      "note": "Wrong amount, ignore.",
+      "created": "2024-02-09T07:00:00Z",
+      "document": 1,
+      "user": 1
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 1,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 1,
+      "value_text": "INV-42",
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 2,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 2,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": "Quarterly service fee\nincluding support."
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 3,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 3,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": "https://portal.example.com/invoices/42",
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 4,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 4,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": "2024-02-15",
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 5,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 5,
+      "value_text": null,
+      "value_bool": true,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 6,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 6,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": 3,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 7,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 7,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": 4.5,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 8,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 8,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": "EUR123.45",
+      "value_document_ids": null,
+      "value_select": null,
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 9,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 9,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": null,
+      "value_select": "hJ3kQ9pLmN2x",
+      "value_long_text": null
+    }
+  },
+  {
+    "model": "documents.customfieldinstance",
+    "pk": 10,
+    "fields": {
+      "deleted_at": null,
+      "restored_at": null,
+      "transaction_id": null,
+      "created": "2024-01-16T10:00:00Z",
+      "document": 1,
+      "field": 10,
+      "value_text": null,
+      "value_bool": null,
+      "value_url": null,
+      "value_date": null,
+      "value_int": null,
+      "value_float": null,
+      "value_monetary": null,
+      "value_document_ids": [
+        2,
+        99
+      ],
+      "value_select": null,
+      "value_long_text": null
+    }
+  }
+]
