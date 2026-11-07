@@ -163,16 +163,19 @@ impl Worker {
     }
 
     /// Persist an event, to be announced to clients and workflows by the dispatcher
-    async fn emit(&self, vault: VaultId, event: DocumentEvent) -> Result<(), BoxError> {
-        self.outbox
-            .append_document(vault, &event, EventOrigin::User)
-            .await?;
+    async fn emit(
+        &self,
+        vault: VaultId,
+        event: DocumentEvent,
+        origin: EventOrigin,
+    ) -> Result<(), BoxError> {
+        self.outbox.append_document(vault, &event, origin).await?;
         Ok(())
     }
 
     /// Like [`emit`](Self::emit) for a progress hint that must not fail the step it follows
     async fn emit_logged(&self, vault: VaultId, event: DocumentEvent) {
-        if let Err(e) = self.emit(vault, event).await {
+        if let Err(e) = self.emit(vault, event, EventOrigin::User).await {
             error!("Failed to persist event: {e}");
         }
     }
@@ -409,10 +412,7 @@ impl Worker {
                     continue;
                 }
                 self.queue
-                    .enqueue(JobType::GenerateEmbedding {
-                        document_id: doc.id,
-                        origin: repair_origin(&doc),
-                    })
+                    .enqueue(JobType::generate_embedding(doc.id))
                     .await?;
                 repaired_count += 1;
             } else if doc.ocr_status != ProcessingStatus::Pending
@@ -562,9 +562,7 @@ impl Worker {
             JobType::GenerateEmbedding {
                 document_id,
                 origin,
-            } => {
-                self.process_embedding(*document_id, *origin).await
-            }
+            } => self.process_embedding(*document_id, *origin).await,
             JobType::ProcessDocument { document_id, force } => {
                 self.process_document(*document_id, *force).await
             }
@@ -663,8 +661,12 @@ impl Worker {
         info!("Generated thumbnail for document {}", document_id);
 
         // Emit event
-        self.emit(vault, DocumentEvent::ThumbnailReady { document_id })
-            .await?;
+        self.emit(
+            vault,
+            DocumentEvent::ThumbnailReady { document_id },
+            EventOrigin::User,
+        )
+        .await?;
 
         Ok(())
     }
@@ -830,8 +832,7 @@ impl Worker {
         self.document_repo
             .set_stage_status(vault, document_id, ProcessingStage::Embed, status)
             .await?;
-        self.outbox
-            .append_document(vault, &DocumentEvent::Processed { document_id }, origin)
+        self.emit(vault, DocumentEvent::Processed { document_id }, origin)
             .await?;
         Ok(())
     }
@@ -1093,16 +1094,6 @@ impl Worker {
         info!("Completed processing document {}", document_id);
 
         Ok(())
-    }
-}
-
-/// A lost embedding job of an imported document most likely came from its
-/// import, whose `processed` event must not start workflows
-fn repair_origin(document: &folio_core::models::Document) -> EventOrigin {
-    if document.source.kind == folio_core::models::SourceKind::Import {
-        EventOrigin::Import
-    } else {
-        EventOrigin::User
     }
 }
 

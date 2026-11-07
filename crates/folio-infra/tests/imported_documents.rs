@@ -1,13 +1,10 @@
 mod common;
 
-use std::collections::BTreeMap;
-
-use chrono::{DateTime, Duration, SubsecRound, Utc};
+use chrono::{Duration, SubsecRound, Utc};
 use folio_core::models::{
     CreateCorrespondent, CreateDocumentType, CreateTag, DocumentStatus, EntryBody, EntryKind,
-    EntryPageQuery, ExternalRef, Id, ImportSource, ImportedDocument, ImportedNote,
-    MetadataFieldInput, MetadataKind, MetadataValue, ProcessingStatus, ReviewOrigin, SourceKind,
-    UserId, VaultId,
+    EntryPageQuery, Id, ImportedNote, MetadataFieldInput, MetadataKind, MetadataValue,
+    ProcessingStatus, ReviewOrigin, SourceKind, UserId,
 };
 use folio_core::mutation::with_actor;
 use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
@@ -18,31 +15,6 @@ use folio_infra::database::{
 };
 use folio_infra::Database;
 
-fn imported(vault: VaultId, external_id: &str, added: DateTime<Utc>) -> ImportedDocument {
-    ImportedDocument {
-        id: Id::new_v5(&Id::NAMESPACE_URL, format!("{vault}/{external_id}").as_bytes()),
-        external_ref: ExternalRef {
-            source: ImportSource::Paperless,
-            id: external_id.into(),
-        },
-        title: "Electricity bill".into(),
-        content: Some("Total due 42.00".into()),
-        original_filename: Some("bill.pdf".into()),
-        mime_type: Some("application/pdf".into()),
-        file_path: format!("documents/{external_id}/original"),
-        content_sha256: "ab".repeat(32),
-        document_date: Some("2019-03-04".parse().unwrap()),
-        created_at: added,
-        updated_at: added + Duration::days(2),
-        correspondent_id: None,
-        document_type_id: None,
-        tag_ids: Vec::new(),
-        metadata: BTreeMap::new(),
-        notes: Vec::new(),
-        in_inbox: false,
-    }
-}
-
 async fn note_external_id(db: &Database, id: Id) -> Option<String> {
     let sql = "SELECT external_id FROM document_entries WHERE id = $1";
     match db {
@@ -51,7 +23,11 @@ async fn note_external_id(db: &Database, id: Id) -> Option<String> {
             .fetch_one(pool)
             .await
             .unwrap(),
-        Database::Postgres(pool) => sqlx::query_scalar(sql).bind(id).fetch_one(pool).await.unwrap(),
+        Database::Postgres(pool) => sqlx::query_scalar(sql)
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap(),
     }
 }
 
@@ -117,7 +93,7 @@ async fn contract(db: Database) {
 
     let added = (Utc::now() - Duration::days(2000)).trunc_subsecs(6);
     let noted = added + Duration::hours(5);
-    let mut document = imported(vault, "7", added);
+    let mut document = common::imported_document(vault, "7", added);
     document.correspondent_id = Some(correspondent.id);
     document.document_type_id = Some(kind.id);
     document.tag_ids = vec![tag.id];
@@ -132,7 +108,7 @@ async fn contract(db: Database) {
     let admin = UserId("admin".into());
     let created = with_actor(
         Some(admin.clone()),
-        r.documents.create_imported(vault, document.clone()),
+        r.import_documents.create_imported(vault, document.clone()),
     )
     .await
     .unwrap();
@@ -173,10 +149,7 @@ async fn contract(db: Database) {
     };
     assert_eq!(embedded.status(), DocumentStatus::Filed);
     let tags = r.documents.get_tags(vault, document.id).await.unwrap();
-    assert_eq!(
-        tags.iter().map(|t| t.id).collect::<Vec<_>>(),
-        vec![tag.id]
-    );
+    assert_eq!(tags.iter().map(|t| t.id).collect::<Vec<_>>(), vec![tag.id]);
     let metadata = values.get(vault, document.id).await.unwrap();
     assert!(metadata.revision.is_some());
     assert_eq!(metadata.values.len(), 1);
@@ -220,11 +193,14 @@ async fn contract(db: Database) {
         .collect::<Vec<_>>();
     assert_eq!(created_events, vec![EventOrigin::Import]);
 
-    let again = r.documents.create_imported(vault, document.clone()).await;
+    let again = r
+        .import_documents
+        .create_imported(vault, document.clone())
+        .await;
     assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
     let mut renamed = document.clone();
     renamed.id = Id::new_v4();
-    let duplicate_ref = r.documents.create_imported(vault, renamed).await;
+    let duplicate_ref = r.import_documents.create_imported(vault, renamed).await;
     assert!(
         matches!(duplicate_ref, Err(Error::Conflict(_))),
         "{duplicate_ref:?}"
@@ -232,10 +208,14 @@ async fn contract(db: Database) {
     let all = r.documents.list(vault, None).await.unwrap();
     assert_eq!(all.len(), 1);
 
-    let mut inbox = imported(vault, "8", added);
+    let mut inbox = common::imported_document(vault, "8", added);
     inbox.content = None;
     inbox.in_inbox = true;
-    let inbox = r.documents.create_imported(vault, inbox).await.unwrap();
+    let inbox = r
+        .import_documents
+        .create_imported(vault, inbox)
+        .await
+        .unwrap();
     assert_eq!(inbox.ocr_status, ProcessingStatus::Done);
     assert_eq!(inbox.embed_status, ProcessingStatus::Skipped);
     assert_eq!(inbox.reviewed_at, None);

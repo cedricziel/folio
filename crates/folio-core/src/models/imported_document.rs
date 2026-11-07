@@ -5,13 +5,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    DocumentDate, DocumentSource, EntryBody, Id, MetadataValue, ProcessingStatus, SourceKind,
-};
+use super::{DocumentDate, EntryBody, Id, MetadataValue, ProcessingStatus};
 
 /// A document system Folio imports from
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ImportSource {
     Paperless,
@@ -21,17 +18,6 @@ impl ImportSource {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Paperless => "paperless",
-        }
-    }
-}
-
-impl std::str::FromStr for ImportSource {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "paperless" => Ok(Self::Paperless),
-            other => Err(format!("unknown import source: {other}")),
         }
     }
 }
@@ -85,17 +71,14 @@ pub struct ImportedDocument {
 impl ImportedDocument {
     /// Embeddings run only for documents that have text
     pub fn embed_status(&self) -> ProcessingStatus {
-        if self.content.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+        if self
+            .content
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+        {
             ProcessingStatus::Pending
         } else {
             ProcessingStatus::Skipped
-        }
-    }
-
-    pub fn source(&self) -> DocumentSource {
-        DocumentSource {
-            source_name: Some(self.external_ref.source.as_str().into()),
-            ..DocumentSource::of(SourceKind::Import)
         }
     }
 }

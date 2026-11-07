@@ -11,8 +11,9 @@ use uuid::Uuid;
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, EntryKind, ExternalRef, Id, ImportedDocument, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, Tag,
-    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
+    DocumentFilter, DocumentSource, DocumentType, EntryKind, ExternalRef, Id, ImportedDocument,
+    ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, Tag, UpdateCorrespondent,
+    UpdateDocument, UpdateDocumentType, UpdateTag, UserId, VaultId,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -35,16 +36,6 @@ fn escape_like(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('%', "\\%")
         .replace('_', "\\_")
-}
-
-/// An import that collides with an existing ID or external reference was
-/// already done by someone else
-fn import_conflict(e: sqlx::Error) -> Error {
-    if e.as_database_error().is_some_and(|e| e.is_unique_violation()) {
-        Error::Conflict("Document was already imported".into())
-    } else {
-        Error::Repository(e.to_string())
-    }
 }
 
 fn not_found(entity_type: &'static str, id: Id) -> Error {
@@ -336,22 +327,17 @@ impl PostgresDocumentRepository {
         self
     }
 
-    async fn emit_in(&self, tx: &mut Transaction<'_, Postgres>, event: DocumentEvent) -> Result<()> {
-        self.emit_as(tx, event, self.origin).await
-    }
-
-    async fn emit_as(
+    async fn emit_in(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         event: DocumentEvent,
-        origin: EventOrigin,
     ) -> Result<()> {
         let context = capture_document(tx, event.document_id(), None)
             .await?
             .ok_or_else(|| {
                 Error::Repository("Document vanished before its event was captured".into())
             })?;
-        insert_event(tx, &event, origin, Some(&context))
+        insert_event(tx, &event, self.origin, Some(&context))
             .await
             .map(|_| ())
     }
@@ -721,7 +707,11 @@ impl DocumentRepository for PostgresDocumentRepository {
             .await
     }
 
-    async fn create_imported(&self, vault: VaultId, document: ImportedDocument) -> Result<Document> {
+    async fn create_imported(
+        &self,
+        vault: VaultId,
+        document: ImportedDocument,
+    ) -> Result<Document> {
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now();
         let id = document.id;
@@ -739,10 +729,10 @@ impl DocumentRepository for PostgresDocumentRepository {
         sqlx::query(
             "INSERT INTO documents (id, vault_id, uploaded_by, created_by, updated_by, title, content,
                  original_filename, file_path, mime_type, correspondent_id, document_type_id,
-                 ocr_status, embed_status, source_type, source_meta, created_at, updated_at,
+                 ocr_status, embed_status, source_type, created_at, updated_at,
                  document_date, reviewed_at, review_origin, external_source, external_id, content_sha256)
-             VALUES ($1, $2, NULL, $3, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                 $17::text::date, $18, $19, $20, $21, $22)",
+             VALUES ($1, $2, NULL, $3, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                 $16::text::date, $17, $18, $19, $20, $21)",
         )
         .bind(id)
         .bind(vault.0)
@@ -757,7 +747,6 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(ProcessingStatus::Done.as_str())
         .bind(document.embed_status().as_str())
         .bind(SourceKind::Import.as_str())
-        .bind(document.source().metadata_json())
         .bind(document.created_at)
         .bind(document.updated_at)
         .bind(document.document_date.map(|date| date.to_string()))
@@ -768,7 +757,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(&document.content_sha256)
         .execute(&mut *tx)
         .await
-        .map_err(import_conflict)?;
+        .map_err(crate::database::import_conflict)?;
         for tag_id in &document.tag_ids {
             sqlx::query(
                 "INSERT INTO document_tags (document_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -804,21 +793,16 @@ impl DocumentRepository for PostgresDocumentRepository {
             .bind(&note.external_id)
             .execute(&mut *tx)
             .await
-            .map_err(import_conflict)?;
+            .map_err(crate::database::import_conflict)?;
         }
-        self.emit_as(
-            &mut tx,
-            DocumentEvent::Created { document_id: id },
-            EventOrigin::Import,
-        )
-        .await?;
-        let row: DocumentRow =
-            sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))
-                .bind(id)
-                .bind(vault.0)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(repo_err)?;
+        self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
+            .await?;
+        let row: DocumentRow = sqlx::query_as(select_documents!("WHERE id = $1 AND vault_id = $2"))
+            .bind(id)
+            .bind(vault.0)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(repo_err)?;
         let created = row.try_into()?;
         self.commit(tx).await?;
         Ok(created)

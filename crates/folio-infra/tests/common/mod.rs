@@ -132,7 +132,9 @@ pub async fn sqlite_database() -> (tempfile::TempDir, folio_infra::Database) {
 pub async fn postgres_database(
     what: &str,
 ) -> Option<(
-    testcontainers_modules::testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>,
+    testcontainers_modules::testcontainers::ContainerAsync<
+        testcontainers_modules::postgres::Postgres,
+    >,
     folio_infra::Database,
 )> {
     use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
@@ -152,4 +154,38 @@ pub async fn postgres_database(
     .unwrap();
     db.migrate().await.unwrap();
     Some((container, db))
+}
+
+/// A filed, text-bearing Paperless document with no taxonomy, keyed by `external_id`
+pub fn imported_document(
+    vault: folio_core::models::VaultId,
+    external_id: &str,
+    added: chrono::DateTime<chrono::Utc>,
+) -> folio_core::models::ImportedDocument {
+    use folio_core::models::{ExternalRef, Id, ImportSource, ImportedDocument};
+    ImportedDocument {
+        id: Id::new_v5(
+            &Id::NAMESPACE_URL,
+            format!("{vault}/{external_id}").as_bytes(),
+        ),
+        external_ref: ExternalRef {
+            source: ImportSource::Paperless,
+            id: external_id.into(),
+        },
+        title: "Electricity bill".into(),
+        content: Some("Total due 42.00".into()),
+        original_filename: Some("bill.pdf".into()),
+        mime_type: Some("application/pdf".into()),
+        file_path: format!("documents/{external_id}/original"),
+        content_sha256: "ab".repeat(32),
+        document_date: Some("2019-03-04".parse().unwrap()),
+        created_at: added,
+        updated_at: added + chrono::Duration::days(2),
+        correspondent_id: None,
+        document_type_id: None,
+        tag_ids: Vec::new(),
+        metadata: Default::default(),
+        notes: Vec::new(),
+        in_inbox: false,
+    }
 }

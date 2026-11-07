@@ -1,5 +1,7 @@
 //! Workflow engine and webhook delivery against real SQLite and a local HTTP server.
 
+mod common;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -2245,8 +2247,6 @@ async fn consume_pending(h: &Harness) {
 
 #[tokio::test]
 async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
-    use folio_core::models::{ExternalRef, ImportSource, ImportedDocument};
-
     let h = Harness::new().await;
     let synced_tag = h.tag("synced").await;
     let user_tag = h.tag("mine").await;
@@ -2271,41 +2271,16 @@ async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
             unreachable_hook(),
         )
         .await;
-    let now = chrono::Utc::now();
-    let doc = h
-        .documents
+    let mirror =
+        folio_infra::SqliteDocumentRepository::new(h.pool.clone()).with_origin(EventOrigin::Import);
+    let doc = mirror
         .create_imported(
             h.vault,
-            ImportedDocument {
-                id: Uuid::new_v4(),
-                external_ref: ExternalRef {
-                    source: ImportSource::Paperless,
-                    id: "7".into(),
-                },
-                title: "Imported".into(),
-                content: Some("text".into()),
-                original_filename: Some("a.pdf".into()),
-                mime_type: Some("application/pdf".into()),
-                file_path: "documents/a/original".into(),
-                content_sha256: "ab".repeat(32),
-                document_date: None,
-                created_at: now,
-                updated_at: now,
-                correspondent_id: None,
-                document_type_id: None,
-                tag_ids: Vec::new(),
-                metadata: BTreeMap::new(),
-                notes: Vec::new(),
-                in_inbox: false,
-            },
+            common::imported_document(h.vault, "7", chrono::Utc::now()),
         )
         .await
         .unwrap();
-    folio_infra::SqliteDocumentRepository::new(h.pool.clone())
-        .with_origin(EventOrigin::Import)
-        .add_tag(h.vault, doc.id, synced_tag)
-        .await
-        .unwrap();
+    mirror.add_tag(h.vault, doc.id, synced_tag).await.unwrap();
     h.outbox
         .append_document(
             h.vault,
@@ -2321,7 +2296,10 @@ async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
     assert_eq!(workflow_runs(&h, &processed).await, 0);
     assert_eq!(workflow_runs(&h, &tags_changed).await, 0);
 
-    h.documents.add_tag(h.vault, doc.id, user_tag).await.unwrap();
+    h.documents
+        .add_tag(h.vault, doc.id, user_tag)
+        .await
+        .unwrap();
     h.outbox
         .append_document(
             h.vault,

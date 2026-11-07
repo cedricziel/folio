@@ -47,6 +47,18 @@ pub use sqlite::{
     SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
+/// An import that collides with an existing ID or external reference was
+/// already done by someone else
+fn import_conflict(e: sqlx::Error) -> folio_core::Error {
+    if e.as_database_error()
+        .is_some_and(|e| e.is_unique_violation())
+    {
+        folio_core::Error::Conflict("Document was already imported".into())
+    } else {
+        folio_core::Error::Repository(e.to_string())
+    }
+}
+
 const CLEAR_PIPELINE_DEFAULTS: &str = "DELETE FROM settings WHERE key LIKE 'ocr.%' \
     OR key LIKE 'embeddings.%' OR key LIKE 'processing.%'";
 
@@ -108,6 +120,9 @@ pub struct Repositories {
     /// Like `documents`, but its events are attributed to workflows, so they
     /// reach live clients without triggering workflows again
     pub workflow_documents: Arc<dyn DocumentRepository>,
+    /// Like `documents`, but its events are attributed to imports and syncs,
+    /// which never trigger workflows
+    pub import_documents: Arc<dyn DocumentRepository>,
     pub outbox: Arc<dyn OutboxStore>,
     pub tags: Arc<dyn TagRepository>,
     pub correspondents: Arc<dyn CorrespondentRepository>,
@@ -176,6 +191,7 @@ impl Database {
                     ),
                     documents: documents(EventOrigin::User),
                     workflow_documents: documents(EventOrigin::Workflow),
+                    import_documents: documents(EventOrigin::Import),
                     outbox: Arc::new(SqliteOutboxStore::new(pool.clone()).with_wake(wake.clone())),
                     tags: Arc::new(SqliteTagRepository::new(pool.clone())),
                     correspondents: Arc::new(SqliteCorrespondentRepository::new(pool.clone())),
@@ -217,6 +233,7 @@ impl Database {
                     ),
                     documents: documents(EventOrigin::User),
                     workflow_documents: documents(EventOrigin::Workflow),
+                    import_documents: documents(EventOrigin::Import),
                     outbox: Arc::new(
                         PostgresOutboxStore::new(pool.clone()).with_wake(wake.clone()),
                     ),
