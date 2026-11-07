@@ -50,6 +50,15 @@ Short and functional: 120ms ease-out for hover and selection, 200ms for the pale
 
 CSS classes live in `components/bundle.css` with the `f-` prefix and read only these tokens, so the web app can ship that file as is. There is no JavaScript bundle: the web UI is server-rendered (Askama + Hotwire) and the Apple app is SwiftUI.
 
+- **Status** (`f-status`): a dot and a word. `-done` for finished, `-pending` for running or needs review, `-failed` for errors, `-idle` (a ring) for queued, cancelled or paused.
+- **Notice** (`f-notice`): `pending-tint` by default for warnings, `-danger` for errors, `-info` (`paper-sunken`) for neutral facts such as "Nothing in this vault changed".
+- **Form field** (`f-field`): `f-field-label`, an `f-input`, then `f-error` (with `aria-invalid="true"` on the input and `aria-describedby` pointing at it) and `f-help`.
+- **Switch** (`f-switch`): an `<input type="checkbox" role="switch">` followed by `f-switch-track`, inside a `<label>` with the visible text.
+- **Progress** (`f-progress`): segments sized by `flex-grow` from the counts, `-done`, `-skipped`, `-failed`, and a plain `<span>` for what's still waiting. It is `aria-hidden`; an `f-stats` list (`<dl>` of `f-stat`, each `dt` with an `f-swatch`) carries the numbers.
+- **Table** (`f-table` in `f-table-wrap`): real `<table>` markup for records people compare, such as failed import items. `f-num` right-aligns numbers.
+- **Filter chips** (`f-chips`, `f-chip` with `aria-pressed`): switch between subsets of one list.
+- **Breadcrumb** (`f-crumbs`): `<nav aria-label="Breadcrumb"><ol>` with the current page as `aria-current="page"`.
+
 ## Native apps
 
 `tokens.json` is the single source for both platforms. Generate CSS custom properties for the web and an asset catalog of named colors (light and dark appearances) plus a `FolioTheme` Swift file for the SwiftUI app. Token names carry over unchanged in camelCase: `paper-raised` → `Color.paperRaised`.
