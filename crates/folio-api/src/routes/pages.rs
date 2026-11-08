@@ -4,20 +4,22 @@ use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
-use tracing::{debug, error};
+use tracing::{debug, error, Instrument};
 use uuid::Uuid;
 
 use folio_core::models::{
     Correspondent, Document, DocumentSource, DocumentStatus, DocumentType, SourceKind,
     UpdateDocument, UserId, VaultId,
 };
-use folio_core::ports::{keys, StoredObject};
+use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
+use folio_core::ports::{keys, StoredObject, UploadReceiptKey};
 use folio_core::services::NewUpload;
+use folio_core::services::UploadOutcome;
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
@@ -564,7 +566,8 @@ pub(crate) async fn store_upload(
     uploaded_by: Option<UserId>,
     mut multipart: Multipart,
     source: SourceKind,
-) -> ApiResult<Document> {
+    idempotency_key: Option<Uuid>,
+) -> ApiResult<StoredUpload> {
     debug!("Starting document upload");
 
     let mut title: Option<String> = None;
@@ -591,6 +594,9 @@ pub(crate) async fn store_upload(
                 }
             }
             "file" => {
+                if file_data.is_some() {
+                    return Err(ApiError::bad_request("Upload exactly one file per request"));
+                }
                 filename = field.file_name().map(|s| s.to_string());
                 mime_type = field.content_type().map(|s| s.to_string());
                 file_data = Some(
@@ -610,27 +616,105 @@ pub(crate) async fn store_upload(
         .or_else(|| filename.clone())
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
+    let upload = NewUpload {
+        title: Some(title),
+        filename: filename.unwrap_or_else(|| "upload".to_string()),
+        mime_type: Some(mime_type),
+        data: file_data,
+        source: DocumentSource::of(source),
+        tag_ids: Vec::new(),
+        uploaded_by: uploaded_by.clone(),
+    };
 
-    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
-    let document = state
-        .importer
-        .import(
-            vault,
-            NewUpload {
-                title: Some(title),
-                filename: filename.unwrap_or_else(|| "upload".to_string()),
-                mime_type: Some(mime_type),
-                data: file_data,
-                source: DocumentSource::of(source),
-                tag_ids: Vec::new(),
-                uploaded_by,
-            },
+    // A client that disconnects drops this handler; the spawned task still finishes the import and records it,
+    // so the client's retry finds the document instead of storing it again.
+    let state = state.clone();
+    let (actor, lineage) = (current_actor(), current_lineage());
+    // Shutdown waits for these tasks, so a deploy does not leave a claimed key behind.
+    let stored = state
+        .upload_tasks
+        .clone()
+        .spawn(
+            with_actor(
+                actor,
+                with_lineage(lineage, async move {
+                    match idempotency_key {
+                        Some(key) => {
+                            let key = UploadReceiptKey {
+                                vault,
+                                actor_scope: uploaded_by
+                                    .as_ref()
+                                    .map(|user| format!("user:{}", user.as_str()))
+                                    .unwrap_or_else(|| "system".into()),
+                                key,
+                            };
+                            state.keyed_uploads.upload(key, upload).await
+                        }
+                        // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
+                        None => state
+                            .importer
+                            .import(vault, upload)
+                            .await
+                            .map(UploadOutcome::Created),
+                    }
+                }),
+            )
+            // Processing jobs inherit the request's trace from the current span.
+            .instrument(tracing::Span::current()),
         )
-        .await?;
+        .await
+        .map_err(|e| {
+            error!("Upload task failed: {}", e);
+            ApiError::internal("Upload failed")
+        })??;
 
-    folio_infra::telemetry::metrics().documents_changed(1);
+    match stored {
+        UploadOutcome::Created(document) => {
+            folio_infra::telemetry::metrics().documents_changed(1);
+            Ok(StoredUpload::Created(document))
+        }
+        UploadOutcome::Replayed(document) => Ok(StoredUpload::Replayed(document)),
+        UploadOutcome::InProgress => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "An upload with this Idempotency-Key is still in progress; retry shortly",
+        )
+        .with_retry_after(UPLOAD_RETRY_AFTER_SECS)),
+        UploadOutcome::Deleted => Err(ApiError::new(
+            StatusCode::GONE,
+            "The document uploaded with this Idempotency-Key has been deleted",
+        )),
+    }
+}
 
-    Ok(document)
+/// How long a client should wait before retrying an upload whose key is still in progress
+const UPLOAD_RETRY_AFTER_SECS: u64 = 5;
+
+/// A stored upload, or the one an earlier request with the same `Idempotency-Key` stored
+pub(crate) enum StoredUpload {
+    Created(Document),
+    Replayed(Document),
+}
+
+impl StoredUpload {
+    pub(crate) fn into_document(self) -> Document {
+        match self {
+            Self::Created(document) | Self::Replayed(document) => document,
+        }
+    }
+}
+
+/// Reads the optional `Idempotency-Key` header; a value must be a nonnil UUID
+pub(crate) fn idempotency_key(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
+    let Some(value) = headers.get("idempotency-key") else {
+        return Ok(None);
+    };
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| Uuid::parse_str(value.trim()).ok())
+        .filter(|key| !key.is_nil())
+        .map(Some)
+        .ok_or_else(|| ApiError::bad_request("Idempotency-Key must be a nonnil UUID"))
 }
 
 /// Keeps the status the multipart parser chose, such as 413 for an oversized body
@@ -644,9 +728,15 @@ async fn upload_document(
     DefaultVault(vault): DefaultVault,
     Uploader(uploader): Uploader,
     State(state): State<AppState>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Upload).await?;
+    let key = idempotency_key(&headers)?;
+    // A replay returns the row again: the retry exists because the first answer was lost, and Turbo replaces a
+    // row it already shows.
+    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Upload, key)
+        .await?
+        .into_document();
     let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())

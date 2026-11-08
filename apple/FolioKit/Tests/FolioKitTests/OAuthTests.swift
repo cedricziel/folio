@@ -179,7 +179,9 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
         }
 
         @Test func a401RefreshesRotatesAndRetriesOnce() async throws {
-            let store = InMemoryCredentialStore(credentials())
+            var signedIn = credentials()
+            signedIn.signInID = UUID()
+            let store = InMemoryCredentialStore(signedIn)
             var seenTokens: [String] = []
             var refreshBodies: [String] = []
             RouterURLProtocol.handler = { request, body in
@@ -202,6 +204,7 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
             #expect(refreshBodies[0].contains("refresh_token=r1"))
             #expect(store.load()?.tokens.accessToken == "new")
             #expect(store.load()?.tokens.refreshToken == "r2")
+            #expect(store.load()?.signInID == signedIn.signInID)
         }
 
         @Test func rawRequestsRetryAfterARefreshToo() async throws {
@@ -375,6 +378,7 @@ final class RouterURLProtocol: URLProtocol, @unchecked Sendable {
             #expect(store.load()?.tokens.accessToken == "acc")
             #expect(store.load()?.tokens.refreshToken == "ref")
             #expect(store.load()?.clientID == "client-9")
+            #expect(store.load()?.signInID != nil)
         }
 
         @Test func theClientRegistrationIsCachedPerServer() async throws {

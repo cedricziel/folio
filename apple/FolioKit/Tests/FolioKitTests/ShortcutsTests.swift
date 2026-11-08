@@ -33,7 +33,11 @@ private func makeCatalog(
     await service.setTags(tags)
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "UTC")!
-    return (DocumentCatalog(service: service, calendar: calendar), service)
+    return (
+        DocumentCatalog(
+            service: service, calendar: calendar, progress: InMemoryUploadProgressStore(), uploadScope: "tests"),
+        service
+    )
 }
 
 struct DocumentCatalogTests {

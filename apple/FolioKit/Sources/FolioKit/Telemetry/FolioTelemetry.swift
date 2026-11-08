@@ -65,13 +65,17 @@ public final class FolioTelemetry: @unchecked Sendable {
         await configure(baseURL: baseURL, tokenProvider: tokenProvider, ticket: ticket)
     }
 
-    /// How long accepted settings are reused before they are fetched again.
-    var refreshInterval: TimeInterval = 300
+    /// How long accepted settings are reused before they are fetched again. Tests shorten it.
+    var refreshInterval: TimeInterval {
+        get { lock.withLock { reuseInterval } }
+        set { lock.withLock { reuseInterval = newValue } }
+    }
+    private var reuseInterval: TimeInterval = 300
 
     /// A refresh for the same server keeps the current runtime recording until its replacement is accepted.
     private func reserve(baseURL: URL, tokenProvider: any BearerTokenProvider) -> UUID? {
         lock.withLock {
-            guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= refreshInterval else {
+            guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= reuseInterval else {
                 return nil
             }
             if let previousURL = configuredURL, previousURL != baseURL {
