@@ -42,11 +42,11 @@ public enum PDFBuilder {
     /// Cancelling the caller cancels the render, which stops before its next page.
     static func render(
         _ pages: ScanImages,
-        using makePDF: @escaping @Sendable ([CGImage]) throws -> Data = PDFBuilder.makePDF(from:)
+        using makePDF: @escaping @Sendable ([CGImage]) async throws -> Data = PDFBuilder.makePDF(from:)
     ) async throws -> Data {
         let clock = ContinuousClock()
         let start = clock.now
-        let work = Task.detached(priority: .userInitiated) { try makePDF(pages.images) }
+        let work = Task.detached(priority: .userInitiated) { try await makePDF(pages.images) }
         let data = try await withTaskCancellationHandler {
             try await work.value
         } onCancel: {
