@@ -33,8 +33,7 @@ import XCTest
         app.buttons["Edit saved view"].tap()
         XCTAssertTrue(app.navigationBars["Edit saved view"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.textFields["Name"].value as? String, "Saved fixture")
-        app.textFields["Name"].tap(withNumberOfTaps: 3, numberOfTouches: 1)
-        app.textFields["Name"].typeText("Saved fixture revised")
+        replaceText(in: app.textFields["Name"], with: "Saved fixture revised")
         XCTAssertEqual(app.textFields["Name"].value as? String, "Saved fixture revised")
         app.buttons["Save"].tap()
         XCTAssertTrue(app.navigationBars["Saved fixture revised"].waitForExistence(timeout: 5), app.debugDescription)
@@ -188,6 +187,14 @@ import XCTest
 
     private func picker(_ label: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+    }
+
+    /// Deletes the current value key by key; iOS 27 no longer selects all text on a triple tap.
+    private func replaceText(in field: XCUIElement, with text: String) {
+        field.tap()
+        let current = field.value as? String ?? ""
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
+        field.typeText(text)
     }
 
     private func capture(_ app: XCUIApplication, name: String) {
