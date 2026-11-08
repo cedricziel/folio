@@ -1,28 +1,41 @@
+import CryptoKit
 import FileProvider
 import FolioKit
 import UniformTypeIdentifiers
 
 /// Folio as a location in Files and Finder.
 ///
-/// Read-only except for creating files in Inbox, which uploads them. Rename, move and delete are refused
-/// with a clean "unsupported" error.
+/// Read-only except for creating files in Inbox, which uploads them, and for the metadata Files and Finder
+/// keep on this device (Recents, tags, favorites). Rename, move and delete are refused with a clean
+/// "unsupported" error.
 final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFileProviderThumbnailing {
     private let domain: NSFileProviderDomain
     private let service: (any FolioService)?
     private let temporaryDirectory: (() throws -> URL)?
+    private let localMetadata: LocalItemMetadataStore
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         service = nil
         temporaryDirectory = nil
+        localMetadata =
+            (try? LocalItemMetadataStore.file(domain: domain)).map(LocalItemMetadataStore.init(file:)) ?? .scratch()
         super.init()
     }
 
-    init(domain: NSFileProviderDomain, service: any FolioService, temporaryDirectory: (() throws -> URL)? = nil) {
+    init(
+        domain: NSFileProviderDomain, service: any FolioService, temporaryDirectory: (() throws -> URL)? = nil,
+        localMetadata: LocalItemMetadataStore = .scratch()
+    ) {
         self.domain = domain
         self.service = service
         self.temporaryDirectory = temporaryDirectory
+        self.localMetadata = localMetadata
         super.init()
+    }
+
+    private func providerItem(_ node: FolioNode) -> FolioProviderItem {
+        FolioProviderItem(node, local: localMetadata.metadata(for: node.id.providerIdentifier))
     }
 
     func invalidate() {}
@@ -46,7 +59,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                 guard let id = FolioItemID(providerIdentifier: identifier),
                     let node = try await catalog.node(for: id)
                 else { return completionHandler(nil, NSFileProviderError(.noSuchItem)) }
-                completionHandler(FolioProviderItem(node), nil)
+                completionHandler(providerItem(node), nil)
             } catch {
                 ProviderDiagnostics.failure(operation: "item", phase: "lookup", error: error)
                 completionHandler(nil, error.providerError)
@@ -81,7 +94,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                 else { throw NSFileProviderError(.noSuchItem) }
                 phase = "download"
                 let url = try await catalog.downloadFile(for: node)
-                completionHandler(url, FolioProviderItem(node), nil)
+                completionHandler(url, providerItem(node), nil)
             } catch {
                 ProviderDiagnostics.failure(operation: "fetchContents", phase: phase, error: error)
                 completionHandler(nil, nil, error.providerError)
@@ -151,7 +164,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                 var file = try UploadFile(contentsOf: url)
                 file.filename = filename
                 let node = try await catalog.upload(file, to: destination)
-                completionHandler(FolioProviderItem(node), [], false, nil)
+                completionHandler(providerItem(node), [], false, nil)
             } catch {
                 completionHandler(nil, [], false, error.providerError)
             }
@@ -159,14 +172,34 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         return progress
     }
 
+    /// Only the device-local fields can change; anything else would need the server.
     func modifyItem(
-        _: NSFileProviderItem, baseVersion _: NSFileProviderItemVersion,
-        changedFields _: NSFileProviderItemFields, contents _: URL?,
+        _ item: NSFileProviderItem, baseVersion _: NSFileProviderItemVersion,
+        changedFields: NSFileProviderItemFields, contents: URL?,
         options _: NSFileProviderModifyItemOptions = [], request _: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, (any Error)?) -> Void
     ) -> Progress {
-        completionHandler(nil, [], false, Self.unsupported)
-        return Progress()
+        let progress = Progress(totalUnitCount: 1)
+        guard contents == nil, changedFields.isSubset(of: LocalItemMetadata.fields) else {
+            completionHandler(nil, [], false, Self.unsupported)
+            progress.completedUnitCount = 1
+            return progress
+        }
+        Task {
+            defer { progress.completedUnitCount = 1 }
+            do {
+                let (catalog, _) = try catalog()
+                guard let id = FolioItemID(providerIdentifier: item.itemIdentifier),
+                    let node = try await catalog.node(for: id)
+                else { throw NSFileProviderError(.noSuchItem) }
+                let local = try localMetadata.update(with: item, fields: changedFields)
+                completionHandler(FolioProviderItem(node, local: local), [], false, nil)
+            } catch {
+                ProviderDiagnostics.failure(operation: "modifyItem", phase: "local-metadata", error: error)
+                completionHandler(nil, [], false, error.providerError)
+            }
+        }
+        return progress
     }
 
     func deleteItem(
@@ -185,7 +218,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         if containerItemIdentifier == .workingSet {
             return try FolioEnumerator(
                 catalog: catalog, container: nil,
-                directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier)
+                directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier),
+                localMetadata: localMetadata
             )
         }
         guard case let .folder(folder)? = FolioItemID(providerIdentifier: containerItemIdentifier) else {
@@ -193,7 +227,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         }
         return try FolioEnumerator(
             catalog: catalog, container: folder,
-            directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier)
+            directory: FolioSyncState.directory(domain: domain, container: containerItemIdentifier),
+            localMetadata: localMetadata
         )
     }
 
@@ -204,9 +239,18 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
 
 final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
     private let state: FolioSyncState
+    private let localMetadata: LocalItemMetadataStore
 
-    init(catalog: FolioCatalog, container: FolioItemID.Folder?, directory: URL) {
+    init(
+        catalog: FolioCatalog, container: FolioItemID.Folder?, directory: URL,
+        localMetadata: LocalItemMetadataStore = .scratch()
+    ) {
         state = FolioSyncState(catalog: catalog, container: container, directory: directory)
+        self.localMetadata = localMetadata
+    }
+
+    private func providerItem(_ node: FolioNode) -> FolioProviderItem {
+        FolioProviderItem(node, local: localMetadata.metadata(for: node.id.providerIdentifier))
     }
 
     func invalidate() {}
@@ -215,7 +259,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
         Task {
             do {
                 let snapshot = try await state.initialSnapshot()
-                observer.didEnumerate(snapshot.nodes.map(FolioProviderItem.init))
+                observer.didEnumerate(snapshot.nodes.map(providerItem))
                 observer.finishEnumerating(upTo: nil)
             } catch {
                 observer.finishEnumeratingWithError(error.providerError)
@@ -227,7 +271,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
         Task {
             do {
                 let (snapshot, updated, deleted) = try await state.changes(from: anchor)
-                observer.didUpdate(updated.map(FolioProviderItem.init))
+                observer.didUpdate(updated.map(providerItem))
                 observer.didDeleteItems(withIdentifiers: deleted)
                 observer.finishEnumeratingChanges(upTo: snapshot.anchor, moreComing: false)
             } catch {
@@ -245,9 +289,11 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
 
 final class FolioProviderItem: NSObject, NSFileProviderItem {
     private let node: FolioNode
+    private let local: LocalItemMetadata
 
-    init(_ node: FolioNode) {
+    init(_ node: FolioNode, local: LocalItemMetadata) {
         self.node = node
+        self.local = local
     }
 
     var itemIdentifier: NSFileProviderItemIdentifier {
@@ -282,9 +328,28 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
         node.created
     }
 
+    var lastUsedDate: Date? {
+        local.lastUsedDate
+    }
+
+    var tagData: Data? {
+        local.tagData
+    }
+
+    var favoriteRank: NSNumber? {
+        local.favoriteRank.map { NSNumber(value: $0) }
+    }
+
+    /// Items without local metadata keep the version the sync snapshots use.
     var itemVersion: NSFileProviderItemVersion {
         let stamp = Data(String(node.modified.timeIntervalSince1970).utf8)
-        return NSFileProviderItemVersion(contentVersion: stamp, metadataVersion: FolioSyncState.metadataVersion(node))
+        var metadata = FolioSyncState.metadataVersion(node)
+        if local != LocalItemMetadata() {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            metadata = Data(SHA256.hash(data: metadata + ((try? encoder.encode(local)) ?? Data())))
+        }
+        return NSFileProviderItemVersion(contentVersion: stamp, metadataVersion: metadata)
     }
 }
 

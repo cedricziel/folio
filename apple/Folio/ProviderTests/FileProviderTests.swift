@@ -10,6 +10,20 @@ private final class UploadTemplate: NSObject, NSFileProviderItem {
     var contentType = UTType.pdf
 }
 
+private final class EditedItem: NSObject, NSFileProviderItem {
+    let itemIdentifier: NSFileProviderItemIdentifier
+    var parentItemIdentifier: NSFileProviderItemIdentifier
+    var filename = "bill.pdf"
+    var lastUsedDate: Date?
+    var tagData: Data?
+    var favoriteRank: NSNumber?
+
+    init(_ id: FolioItemID, parent: FolioItemID) {
+        itemIdentifier = id.providerIdentifier
+        parentItemIdentifier = parent.providerIdentifier
+    }
+}
+
 final class FileProviderTests: XCTestCase {
     func testUploadCapturesTheVaultInboxEvenIfTheTemplateAndDefaultChange() async throws {
         let personal = Vault(id: UUID(), name: "Personal", role: .owner)
@@ -100,5 +114,70 @@ final class FileProviderTests: XCTestCase {
         await fulfillment(of: [completed], timeout: 5)
         let uploads = await service.uploads
         XCTAssertEqual(uploads.count, 1)
+    }
+
+    private static let anyVersion = NSFileProviderItemVersion(contentVersion: Data(), metadataVersion: Data())
+
+    func testLocalMetadataIsKeptAndReportedWithTheItem() async throws {
+        let document = Document(title: "Bill", originalFilename: "bill.pdf")
+        let service = MockFolioService(documents: [document])
+        let folder = FolioItemID.Folder.scoped(MockFolioService.defaultVault.id, .all)
+        let id = FolioItemID.document(document.id, in: folder)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let domain = NSFileProviderDomain(identifier: .init("local-metadata-test"), displayName: "Test")
+        let provider = FolioFileProvider(
+            domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file))
+        let edited = EditedItem(id, parent: .folder(folder))
+        edited.lastUsedDate = Date(timeIntervalSince1970: 1_750_000_000)
+        edited.tagData = Data("red".utf8)
+        edited.favoriteRank = NSNumber(value: UInt64(7))
+        let modified = expectation(description: "Local metadata saved")
+
+        _ = provider.modifyItem(
+            edited, baseVersion: Self.anyVersion, changedFields: LocalItemMetadata.fields, contents: nil,
+            request: NSFileProviderRequest()
+        ) { item, pending, fetch, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(item?.lastUsedDate ?? nil, edited.lastUsedDate)
+            XCTAssertEqual(item?.tagData ?? nil, edited.tagData)
+            XCTAssertEqual(item?.favoriteRank ?? nil, edited.favoriteRank)
+            XCTAssertTrue(pending.isEmpty)
+            XCTAssertFalse(fetch)
+            modified.fulfill()
+        }
+        await fulfillment(of: [modified], timeout: 5)
+
+        let restarted = FolioFileProvider(
+            domain: domain, service: service, localMetadata: LocalItemMetadataStore(file: file))
+        let looked = expectation(description: "Item looked up")
+        _ = restarted.item(for: id.providerIdentifier, request: NSFileProviderRequest()) { item, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(item?.tagData ?? nil, Data("red".utf8))
+            XCTAssertEqual(item?.lastUsedDate ?? nil, edited.lastUsedDate)
+            looked.fulfill()
+        }
+        await fulfillment(of: [looked], timeout: 5)
+    }
+
+    func testRenamingIsStillRefused() async {
+        let document = Document(title: "Bill", originalFilename: "bill.pdf")
+        let folder = FolioItemID.Folder.scoped(MockFolioService.defaultVault.id, .all)
+        let provider = FolioFileProvider(
+            domain: NSFileProviderDomain(identifier: .init("rename-test"), displayName: "Test"),
+            service: MockFolioService(documents: [document]))
+        let edited = EditedItem(.document(document.id, in: folder), parent: .folder(folder))
+        edited.filename = "renamed.pdf"
+        let refused = expectation(description: "Rename refused")
+
+        _ = provider.modifyItem(
+            edited, baseVersion: Self.anyVersion, changedFields: [.filename, .lastUsedDate], contents: nil,
+            request: NSFileProviderRequest()
+        ) { item, _, _, error in
+            XCTAssertNil(item)
+            XCTAssertEqual((error as NSError?)?.code, NSFeatureUnsupportedError)
+            refused.fulfill()
+        }
+        await fulfillment(of: [refused], timeout: 5)
     }
 }
