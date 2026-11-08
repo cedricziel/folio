@@ -477,6 +477,83 @@ struct FolioCatalogCacheTests {
         #expect(await source.queries.count == 2)
     }
 
+    @Test func enumeratingARevokedVaultReturnsNothing() async throws {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let scoped = MockFolioService(documents: letters)
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal], defaultVaultID: personal.id),
+            vaultServices: [personal.id: scoped])
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+        #expect(try await catalog.children(of: .root).count == 1)
+
+        await source.setVaults(.empty)
+        await scoped.setFailure(.server(status: 403, message: nil))
+
+        #expect(try await catalog.children(of: .scoped(personal.id, .all)).isEmpty)
+    }
+
+    private func signIn(_ refreshToken: String?, on server: URL, id: UUID? = nil) -> OAuthCredentials {
+        OAuthCredentials(
+            serverURL: server, clientID: "folio-client", tokenEndpoint: server.appending(path: "api/oauth/token"),
+            revocationEndpoint: nil,
+            tokens: OAuthTokens(
+                accessToken: "access-\(refreshToken ?? "none")", refreshToken: refreshToken,
+                expiresAt: .distantFuture),
+            signInID: id)
+    }
+
+    @Test func aTokenRefreshKeepsTheCacheAndTheNextSignInDoesNot() throws {
+        let server = URL(string: "https://folio.example")!
+        let caches = FolioCatalogCaches()
+        let id = UUID()
+        let cache = try #require(caches.cache(for: server, credentials: signIn("r1", on: server, id: id)))
+        #expect(caches.cache(for: server, credentials: signIn("r2", on: server, id: id)) === cache)
+        #expect(caches.cache(for: server, credentials: signIn("r2", on: server, id: UUID())) !== cache)
+    }
+
+    @Test func concurrentEnumerationsShareTheVaultRequestInFlight() async throws {
+        let cache = FolioCatalogCache()
+        let gate = VaultGate()
+        let fetch: @Sendable () async throws -> VaultCatalog = { await gate.fetch() }
+        async let first = cache.vaults(maxAge: .zero, fetch: fetch)
+        async let second = cache.vaults(maxAge: .zero, fetch: fetch)
+        await gate.waitForFirstFetch()
+        // Gives the second caller time to start its own fetch, should it not join the first.
+        try await Task.sleep(for: .milliseconds(100))
+        await gate.release()
+        _ = try await (first, second)
+        #expect(await gate.fetches == 1)
+    }
+
+    @Test func aSignInOnTheSameServerNeverServesThePreviousAccountsListings() async throws {
+        let server = URL(string: "https://folio.example")!
+        let caches = FolioCatalogCaches()
+        let alice = MockFolioService(documents: [Document(title: "Alice's letter")])
+        let bob = MockFolioService(documents: [Document(title: "Bob's letter")])
+        let aliceCache = try #require(caches.cache(for: server, credentials: signIn("alice", on: server)))
+        let listed = try await FolioCatalog(service: alice, cache: aliceCache).children(of: .scoped(vault, .all))
+        let alicesLetter = try #require(listed.first)
+        #expect(caches.cache(for: server, credentials: signIn("alice", on: server)) === aliceCache)
+
+        // Signed out and back in as Bob on the same server, while the extension process lived on.
+        let bobCache = try #require(caches.cache(for: server, credentials: signIn("bob", on: server)))
+        #expect(try await FolioCatalog(service: bob, cache: bobCache).node(for: alicesLetter.id) == nil)
+        #expect(await bob.queries.count == 1)
+    }
+
+    @Test func signedOutKeepsNoCache() throws {
+        let server = URL(string: "https://folio.example")!
+        let caches = FolioCatalogCaches()
+        let first = try #require(caches.cache(for: server, credentials: signIn("alice", on: server)))
+        var signedOut = signIn("alice", on: server)
+        signedOut.tokens = .signedOut
+        #expect(caches.cache(for: server, credentials: signedOut) == nil)
+        #expect(caches.cache(for: server, credentials: nil) == nil)
+        let other = URL(string: "https://other.example")!
+        #expect(caches.cache(for: other, credentials: signIn("alice", on: server)) == nil)
+        #expect(caches.cache(for: server, credentials: signIn("alice", on: server)) !== first)
+    }
+
     @Test func withoutACacheEveryLookupListsTheFolder() async throws {
         let source = MockFolioService(documents: letters)
         let catalog = FolioCatalog(service: source)
@@ -486,5 +563,32 @@ struct FolioCatalogCacheTests {
         }
 
         #expect(await source.queries.count == letters.count)
+    }
+}
+
+/// Holds every vault fetch until released, counting them.
+private actor VaultGate {
+    private(set) var fetches = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var started: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func fetch() async -> VaultCatalog {
+        fetches += 1
+        started?.resume()
+        started = nil
+        if !released { await withCheckedContinuation { waiting.append($0) } }
+        return .empty
+    }
+
+    func waitForFirstFetch() async {
+        guard fetches == 0 else { return }
+        await withCheckedContinuation { started = $0 }
+    }
+
+    func release() {
+        released = true
+        waiting.forEach { $0.resume() }
+        waiting = []
     }
 }

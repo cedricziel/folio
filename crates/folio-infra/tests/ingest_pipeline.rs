@@ -28,6 +28,24 @@ impl folio_core::ports::DocumentImporter for GatedImporter {
         self.inner.import(vault, upload).await
     }
 
+    async fn begin_as(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: folio_core::models::Id,
+        upload: &folio_core::services::NewUpload,
+    ) -> folio_core::Result<folio_core::models::Document> {
+        self.inner.begin_as(vault, id, upload).await
+    }
+
+    async fn import_as(
+        &self,
+        vault: folio_core::models::VaultId,
+        id: folio_core::models::Id,
+        upload: folio_core::services::NewUpload,
+    ) -> folio_core::Result<folio_core::models::Document> {
+        self.inner.import_as(vault, id, upload).await
+    }
+
     async fn import_reserved(
         &self,
         vault: folio_core::models::VaultId,
