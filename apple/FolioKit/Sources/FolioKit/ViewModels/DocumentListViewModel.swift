@@ -75,6 +75,7 @@ public final class DocumentListViewModel {
 
     private var nextCursor: String?
     private var activeQuery: DocumentBrowseQuery?
+    private var rowsQuery: DocumentBrowseQuery?
     private var loadedVaultID: UUID?
     private var resolvedDocument: Document?
     private var latestLookup = 0
@@ -239,6 +240,7 @@ public final class DocumentListViewModel {
             documents = page.documents
             nextCursor = page.nextCursor
             loadedVaultID = page.vaultID
+            rowsQuery = request
             phase = .loaded
             rebuildRows()
             if rows.contains(where: { !previousIDs.contains($0.id) && (afterUpload || $0.id == restoredDocumentID) }) {
@@ -246,6 +248,11 @@ public final class DocumentListViewModel {
             }
         } catch {
             guard isCurrent(ticket) else { return }
+            if request != rowsQuery {
+                // Rows from an earlier search would pass for results of this one.
+                documents = []
+                rebuildRows()
+            }
             phase = .failed(error.localizedDescription)
         }
     }
