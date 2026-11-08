@@ -52,7 +52,6 @@ export const ACTIONS = new Set([
   "discussion.post",
   "browse.scope.change",
   "browse.filter.change",
-  "browse.sort.change",
   "browse.load_more",
   "browse.refresh",
   "search.submit",
@@ -69,6 +68,46 @@ export const ACTIONS = new Set([
   "app_lock.unlock",
   "intent.run",
 ]);
+
+export const UPLOAD_SOURCES = new Set([
+  "picker",
+  "scan",
+  "drop",
+  "paste",
+  "share",
+  "intent",
+]);
+
+const LOG_ATTRIBUTES = new Set([
+  "http.route",
+  "folio.navigation.type",
+  "session.id",
+  "session.previous_id",
+  "folio.session.end_reason",
+  "app.screen.name",
+  "folio.action.name",
+  "folio.upload.source",
+]);
+
+const LOG_EVENTS = new Set([
+  "session.start",
+  "session.end",
+  "folio.screen.view",
+  "folio.action",
+]);
+
+/** Strips a log record to the fixed vocabulary before export. */
+export function sanitizeLog(record) {
+  for (const key of Object.keys(record.attributes))
+    if (!LOG_ATTRIBUTES.has(key)) delete record.attributes[key];
+  if (record.eventName !== undefined && !LOG_EVENTS.has(record.eventName))
+    record.setEventName(undefined);
+  if (record.body !== "folio.web.navigation") record.setBody(undefined);
+}
+
+export function uploadSource(value) {
+  return UPLOAD_SOURCES.has(value) ? value : undefined;
+}
 
 export function screenName(value) {
   return SCREENS.has(value) ? value : "other";
@@ -112,6 +151,7 @@ export class SessionStore {
   #now;
   #randomId;
   #memory;
+  #storageFailed = false;
 
   constructor({ storage, now = () => Date.now(), randomId: id = randomId }) {
     this.#storage = storage;
@@ -120,6 +160,7 @@ export class SessionStore {
   }
 
   #read() {
+    if (this.#storageFailed) return this.#memory;
     try {
       const saved = this.#storage?.getItem(SESSION_KEY);
       if (saved === null || saved === undefined) {
@@ -140,15 +181,21 @@ export class SessionStore {
       if (record) this.#storage?.setItem(SESSION_KEY, JSON.stringify(record));
       else this.#storage?.removeItem(SESSION_KEY);
     } catch {
-      // The session still works for this page.
+      // Storage that refuses writes would forget every session; keep this page's in memory from now on.
+      this.#storageFailed = true;
     }
   }
 
-  /** The live session ID, without counting as activity. */
+  /** The live session ID, without counting as activity. Reads the cached copy; see `refresh`. */
   current() {
-    const record = this.#read();
+    const record = this.#memory;
     if (!record || expiry(record, this.#now())) return undefined;
     return record.id;
+  }
+
+  /** Reloads the cached copy, for example when another tab changed the session. */
+  refresh() {
+    this.#read();
   }
 
   /** Records user activity: extends the live session or rotates an expired one. */

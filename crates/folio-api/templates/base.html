@@ -125,8 +125,8 @@ const vaultURL = (path) => {
 const uploadDestination = () => document.getElementById("upload-vault");
 const uploadURL = (id) => `/vaults/${id}/documents/upload`;
 // Telemetry records the action by name only; see web/telemetry-session.mjs for the vocabulary.
-const folioAction = (name) =>
-  document.dispatchEvent(new CustomEvent("folio:action", { detail: name }));
+const folioAction = (name, source) =>
+  document.dispatchEvent(new CustomEvent("folio:action", { detail: { name, source } }));
 
 const escapeHtml = (text) => {
   const div = document.createElement("div");
@@ -522,6 +522,7 @@ Stimulus.register(
         return;
       }
 
+      folioAction("search.submit");
       try {
         const response = await fetch(
           vaultURL(`/api/documents/search?q=${encodeURIComponent(query)}`),
@@ -761,7 +762,7 @@ Stimulus.register(
       this.buttonTarget.disabled = true;
       this.statusTarget.textContent = "Uploading to " + destinationName + "…";
       try {
-        folioAction("document.upload");
+        folioAction("document.upload", "picker");
         const response = await fetch(uploadURL(destination), {
           method: "POST",
           headers: { Accept: "text/vnd.turbo-stream.html" },
@@ -909,6 +910,7 @@ Stimulus.register(
       const files = Array.from(event.target.files);
       event.target.value = "";
       if (files.length > 0) {
+        folioAction("document.upload", "picker");
         this.queueFiles(files);
       }
     }
@@ -943,6 +945,7 @@ Stimulus.register(
 
       const files = Array.from(event.dataTransfer.files);
       if (files.length > 0) {
+        folioAction("document.upload", "drop");
         this.queueFiles(files);
       }
     }
@@ -1090,7 +1093,6 @@ Stimulus.register(
           reject(new Error("Upload failed: Network error"));
         });
 
-        folioAction("document.upload");
         xhr.open("POST", uploadURL(vaultId));
         xhr.setRequestHeader("Accept", "text/vnd.turbo-stream.html");
         xhr.send(formData);

@@ -23,10 +23,13 @@ import { XMLHttpRequestInstrumentation } from "@opentelemetry/instrumentation-xm
 import {
   actionName,
   randomId,
+  sanitizeLog,
   ScreenTracker,
   screenName,
+  SESSION_KEY,
   SessionStore,
   UiEventLimiter,
+  uploadSource,
 } from "./telemetry-session.mjs";
 
 const configFetch = window.fetch.bind(window);
@@ -105,21 +108,10 @@ const sessions = new SessionStore({
 });
 const screens = new ScreenTracker();
 const limiter = new UiEventLimiter();
-const logAttributes = new Set([
-  "http.route",
-  "folio.navigation.type",
-  "session.id",
-  "session.previous_id",
-  "folio.session.end_reason",
-  "app.screen.name",
-  "folio.action.name",
-]);
-const logEvents = new Set([
-  "session.start",
-  "session.end",
-  "folio.screen.view",
-  "folio.action",
-]);
+sessions.refresh();
+addEventListener("storage", (changed) => {
+  if (changed.key === SESSION_KEY || changed.key === null) sessions.refresh();
+});
 
 function routeFor(value) {
   try {
@@ -246,11 +238,7 @@ const spanStamper = {
 const logSanitizer = {
   onEmit(record) {
     stamp(record);
-    for (const key of Object.keys(record.attributes))
-      if (!logAttributes.has(key)) delete record.attributes[key];
-    if (record.eventName !== undefined && !logEvents.has(record.eventName))
-      record.setEventName(undefined);
-    if (record.body !== "folio.web.navigation") record.setBody(undefined);
+    sanitizeLog(record);
   },
   forceFlush: () => Promise.resolve(),
   shutdown: () => Promise.resolve(),
@@ -260,6 +248,8 @@ const logSanitizer = {
 function serverContext() {
   try {
     const [entry] = performance.getEntriesByType("navigation");
+    // Back and forward can replay a cached response whose traceparent belongs to an earlier request.
+    if (entry?.type === "back_forward") return ROOT_CONTEXT;
     const value = entry?.serverTiming?.find(
       (timing) => timing.name === "traceparent",
     )?.description;
@@ -428,11 +418,34 @@ function createTelemetry(config) {
     if (screens.view(name)) uiEvent("folio.screen.view", { "app.screen.name": name });
   }
 
-  function action(name) {
-    sessionEvents(sessions.touch().events);
-    uiEvent("folio.action", { "folio.action.name": name });
-    if (name === "auth.sign_out") sessionEvents(sessions.end("sign_out"));
-    void flush();
+  /** Logs and traces only: metrics wait for their interval, so actions don't spend the relay budget. */
+  function flushEvents() {
+    return Promise.allSettled([traces.forceFlush(), logs.forceFlush()]);
+  }
+
+  async function action(name, { source, leavesPage = false } = {}) {
+    const attributes = { "folio.action.name": name };
+    if (source) attributes["folio.upload.source"] = source;
+    if (name === "auth.sign_out") {
+      uiEvent("folio.action", attributes);
+      sessionEvents(sessions.end("sign_out"));
+      void flushEvents();
+      return;
+    }
+    // Extending a live session needs no lock, and the event must be queued before a link or form unloads
+    // the page. Only a rotation waits for the lock, unless the page is about to unload.
+    let session;
+    if (leavesPage || sessions.current()) session = sessions.touch();
+    else {
+      try {
+        session = await sessions.touchLocked(navigator.locks);
+      } catch {
+        session = sessions.touch();
+      }
+    }
+    sessionEvents(session.events);
+    uiEvent("folio.action", attributes);
+    if (leavesPage) void flushEvents();
   }
 
   function navigation(type, start = performance.now()) {
@@ -481,18 +494,21 @@ function declaredAction(element) {
 // Bubble phase: a cancelled confirmation stops propagation and records nothing.
 document.addEventListener("submit", (submitted) => {
   const name = declaredAction(submitted.target);
-  if (enabled && name) telemetry.action(name);
+  const leavesPage = submitted.target?.getAttribute?.("data-turbo") === "false";
+  if (enabled && name) void telemetry.action(name, { leavesPage });
 });
 document.addEventListener("click", (clicked) => {
   const element = clicked.target?.closest?.("[data-folio-action]");
   if (!element || element.tagName === "FORM") return;
   const name = declaredAction(element);
-  if (enabled && name) telemetry.action(name);
+  if (enabled && name) void telemetry.action(name);
 });
-// Scripted actions (uploads, tags, vault switch) announce themselves by name.
+// Scripted actions (uploads, tags, vault switch, search) announce themselves by name.
 document.addEventListener("folio:action", (announced) => {
-  const name = actionName(announced.detail);
-  if (enabled && name) telemetry.action(name);
+  const detail = announced.detail ?? {};
+  const name = actionName(detail.name);
+  if (enabled && name)
+    void telemetry.action(name, { source: uploadSource(detail.source) });
 });
 
 async function configure() {
