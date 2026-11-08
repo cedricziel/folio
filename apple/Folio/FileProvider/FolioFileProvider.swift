@@ -366,9 +366,11 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
         local.tagData
     }
 
-    var favoriteRank: NSNumber? {
-        local.favoriteRank.map { NSNumber(value: $0) }
-    }
+    #if !os(macOS)
+        var favoriteRank: NSNumber? {
+            local.favoriteRank.map { NSNumber(value: $0) }
+        }
+    #endif
 
     static let keepDownloadedAction = NSFileProviderExtensionActionIdentifier("com.cedricziel.folio.keep-downloaded")
     static let allowEvictionAction = NSFileProviderExtensionActionIdentifier("com.cedricziel.folio.allow-eviction")

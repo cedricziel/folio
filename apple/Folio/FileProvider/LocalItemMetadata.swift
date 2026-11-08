@@ -9,7 +9,12 @@ struct LocalItemMetadata: Codable, Equatable, Sendable {
     var favoriteRank: UInt64?
     var keepDownloaded: Bool?
 
-    static let fields: NSFileProviderItemFields = [.lastUsedDate, .tagData, .favoriteRank]
+    /// Favorite ranks exist only in the iOS Files app; macOS marks the field unavailable.
+    #if os(macOS)
+        static let fields: NSFileProviderItemFields = [.lastUsedDate, .tagData]
+    #else
+        static let fields: NSFileProviderItemFields = [.lastUsedDate, .tagData, .favoriteRank]
+    #endif
 }
 
 /// Keeps ``LocalItemMetadata`` per item identifier in a JSON file beside the extension. Every item the
@@ -50,7 +55,9 @@ final class LocalItemMetadataStore: @unchecked Sendable {
             var metadata = entries[key] ?? LocalItemMetadata()
             if fields.contains(.lastUsedDate) { metadata.lastUsedDate = item.lastUsedDate ?? nil }
             if fields.contains(.tagData) { metadata.tagData = item.tagData ?? nil }
-            if fields.contains(.favoriteRank) { metadata.favoriteRank = (item.favoriteRank ?? nil)?.uint64Value }
+            #if !os(macOS)
+                if fields.contains(.favoriteRank) { metadata.favoriteRank = (item.favoriteRank ?? nil)?.uint64Value }
+            #endif
             try save([key: metadata])
             return metadata
         }

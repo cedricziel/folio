@@ -16,7 +16,9 @@ private final class EditedItem: NSObject, NSFileProviderItem {
     var filename = "bill.pdf"
     var lastUsedDate: Date?
     var tagData: Data?
-    var favoriteRank: NSNumber?
+    #if !os(macOS)
+        var favoriteRank: NSNumber?
+    #endif
 
     init(_ id: FolioItemID, parent: FolioItemID) {
         itemIdentifier = id.providerIdentifier
@@ -131,7 +133,9 @@ final class FileProviderTests: XCTestCase {
         let edited = EditedItem(id, parent: .folder(folder))
         edited.lastUsedDate = Date(timeIntervalSince1970: 1_750_000_000)
         edited.tagData = Data("red".utf8)
-        edited.favoriteRank = NSNumber(value: UInt64(7))
+        #if !os(macOS)
+            edited.favoriteRank = NSNumber(value: UInt64(7))
+        #endif
         let modified = expectation(description: "Local metadata saved")
 
         _ = provider.modifyItem(
@@ -141,7 +145,9 @@ final class FileProviderTests: XCTestCase {
             XCTAssertNil(error)
             XCTAssertEqual(item?.lastUsedDate ?? nil, edited.lastUsedDate)
             XCTAssertEqual(item?.tagData ?? nil, edited.tagData)
-            XCTAssertEqual(item?.favoriteRank ?? nil, edited.favoriteRank)
+            #if !os(macOS)
+                XCTAssertEqual(item?.favoriteRank ?? nil, edited.favoriteRank)
+            #endif
             XCTAssertTrue(pending.isEmpty)
             XCTAssertFalse(fetch)
             modified.fulfill()
