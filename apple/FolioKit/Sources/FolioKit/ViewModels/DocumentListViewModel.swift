@@ -83,13 +83,17 @@ public final class DocumentListViewModel {
     private var lookupError: (id: Document.ID, message: String)?
     private let service: any FolioService
     private let searchDebounce: Duration
+    private let spotlight: SpotlightIndex
     private var documents: [Document] = []
     private var lookupsLoaded = false
     private var latestFetch = 0
 
-    public init(service: any FolioService, searchDebounce: Duration = .milliseconds(300)) {
+    public init(
+        service: any FolioService, searchDebounce: Duration = .milliseconds(300), spotlight: SpotlightIndex = .shared
+    ) {
         self.service = service
         self.searchDebounce = searchDebounce
+        self.spotlight = spotlight
     }
 
     public func correspondentName(for document: Document) -> String? {
@@ -175,6 +179,7 @@ public final class DocumentListViewModel {
         actionError = nil
         do {
             try await service.deleteDocument(id: document.id)
+            spotlight.remove(documentID: document.id)
             let wasVisible = rows.contains { $0.id == document.id }
             documents.removeAll { $0.id == document.id }
             if resolvedDocument?.id == document.id {
