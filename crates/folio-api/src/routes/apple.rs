@@ -68,6 +68,13 @@ async fn app_site_association(State(state): State<AppState>) -> ApiResult<Respon
         .into_response())
 }
 
+/// Scheme, host and port of `public_url`: Apple only fetches the file from the domain root
+pub(crate) fn origin(public_url: &str) -> String {
+    url::Url::parse(public_url)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_else(|_| public_url.trim_end_matches('/').to_string())
+}
+
 /// The path of `public_url` without a trailing slash; empty at the domain root
 fn path_prefix(public_url: &str) -> String {
     url::Url::parse(public_url)

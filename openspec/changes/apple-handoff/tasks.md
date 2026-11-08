@@ -36,7 +36,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 3. Admin setting at /settings
 
-- [ ] 3.1 Write failing tests in `apple_links.rs`:
+- [x] 3.1 Write failing tests in `apple_links.rs`:
   - `POST /settings/apple` with two valid IDs returns 303 to `/settings?saved=apple` and stores newline-separated text
   - an invalid line returns 422 naming it and leaves the stored value unchanged
   - a non-admin gets 403
