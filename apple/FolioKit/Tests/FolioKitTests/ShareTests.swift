@@ -121,7 +121,7 @@ struct ShareViewModelTests {
         await model.upload()
 
         #expect(uploader.destinations == [shared.id])
-        #expect(model.state == .done)
+        #expect(model.state == .queued)
     }
 
     private func file(_ name: String = "a.pdf") -> UploadFile {
@@ -153,7 +153,7 @@ struct ShareViewModelTests {
         let service = MockFolioService()
         let model = ShareViewModel(files: [file()], service: service, background: background)
         await model.upload()
-        #expect(model.state == .done)
+        #expect(model.state == .queued)
         #expect(background.enqueued.count == 1)
         #expect(background.enqueued.first?.title == "a.pdf")
         #expect(await service.uploads.isEmpty)
