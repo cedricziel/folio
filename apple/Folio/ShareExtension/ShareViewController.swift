@@ -54,16 +54,20 @@ struct ShareRoot: View {
         }
     }
 
-    private func buildModel(_ files: [UploadFile]) async -> ShareViewModel? {
+    @MainActor private func buildModel(_ files: [UploadFile]) async -> ShareViewModel? {
         guard let serverURL = SharedConfiguration.serverURL(), let service = SharedConfiguration.makeService() else {
             return nil
         }
-        guard let token = try? await SharedConfiguration.tokenProvider(for: serverURL).token() else { return nil }
+        let tokens = SharedConfiguration.tokenProvider(for: serverURL)
+        guard (try? await tokens.token()) != nil else { return nil }
         let uploader = BackgroundUploader(
-            serverURL: serverURL, token: token,
-            identifier: "com.cedricziel.folio.share.\(UUID().uuidString)"
+            serverURL: serverURL, tokens: tokens, identifier: BackgroundUploader.makeIdentifier()
         )
-        return await ShareViewModel(files: files, service: service, background: uploader)
+        let model = ShareViewModel(files: files, service: service, background: uploader)
+        uploader.onChange = { _ in
+            Task { @MainActor [weak model] in model?.refreshRetained() }
+        }
+        return model
     }
 }
 

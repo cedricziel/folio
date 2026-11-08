@@ -6,6 +6,9 @@ typealias Document = FolioKit.Document
 
 @main
 struct FolioApp: App {
+    #if os(iOS)
+        @UIApplicationDelegateAdaptor(FolioAppDelegate.self) private var appDelegate
+    #endif
     @State private var model = AppModel()
     @State private var security = AppLockLifecycle()
     @Environment(\.scenePhase) private var scenePhase
@@ -53,6 +56,40 @@ struct FolioApp: App {
         #endif
     }
 }
+
+#if os(iOS)
+    import UIKit
+
+    /// Receives the outcome of share-extension uploads that finish after the extension has gone, so failed
+    /// shares are recorded and kept for retry instead of staying pending forever.
+    @MainActor final class FolioAppDelegate: NSObject, UIApplicationDelegate {
+        private var uploaders: [String: BackgroundUploader] = [:]
+        private var completions: [String: () -> Void] = [:]
+
+        func application(
+            _: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+            completionHandler: @escaping () -> Void
+        ) {
+            guard identifier.hasPrefix(BackgroundUploader.identifierPrefix),
+                let serverURL = SharedConfiguration.serverURL()
+            else {
+                completionHandler()
+                return
+            }
+            completions[identifier] = completionHandler
+            let uploader = BackgroundUploader(serverURL: serverURL, tokens: nil, identifier: identifier)
+            uploader.onEventsFinished = {
+                Task { @MainActor [weak self] in self?.finishEvents(for: identifier) }
+            }
+            uploaders[identifier] = uploader
+        }
+
+        private func finishEvents(for identifier: String) {
+            uploaders.removeValue(forKey: identifier)?.invalidate()
+            completions.removeValue(forKey: identifier)?()
+        }
+    }
+#endif
 
 @MainActor @Observable
 final class AppModel {
