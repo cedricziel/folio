@@ -477,6 +477,59 @@ struct FolioCatalogCacheTests {
         #expect(await source.queries.count == 2)
     }
 
+    @Test func enumeratingARevokedVaultReturnsNothing() async throws {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let scoped = MockFolioService(documents: letters)
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal], defaultVaultID: personal.id),
+            vaultServices: [personal.id: scoped])
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+        #expect(try await catalog.children(of: .root).count == 1)
+
+        await source.setVaults(.empty)
+        await scoped.setFailure(.server(status: 403, message: nil))
+
+        #expect(try await catalog.children(of: .scoped(personal.id, .all)).isEmpty)
+    }
+
+    private func signIn(_ refreshToken: String?, on server: URL) -> OAuthCredentials {
+        OAuthCredentials(
+            serverURL: server, clientID: "folio-client", tokenEndpoint: server.appending(path: "api/oauth/token"),
+            revocationEndpoint: nil,
+            tokens: OAuthTokens(
+                accessToken: "access-\(refreshToken ?? "none")", refreshToken: refreshToken,
+                expiresAt: .distantFuture))
+    }
+
+    @Test func aSignInOnTheSameServerNeverServesThePreviousAccountsListings() async throws {
+        let server = URL(string: "https://folio.example")!
+        let caches = FolioCatalogCaches()
+        let alice = MockFolioService(documents: [Document(title: "Alice's letter")])
+        let bob = MockFolioService(documents: [Document(title: "Bob's letter")])
+        let aliceCache = try #require(caches.cache(for: server, credentials: signIn("alice", on: server)))
+        let listed = try await FolioCatalog(service: alice, cache: aliceCache).children(of: .scoped(vault, .all))
+        let alicesLetter = try #require(listed.first)
+        #expect(caches.cache(for: server, credentials: signIn("alice", on: server)) === aliceCache)
+
+        // Signed out and back in as Bob on the same server, while the extension process lived on.
+        let bobCache = try #require(caches.cache(for: server, credentials: signIn("bob", on: server)))
+        #expect(try await FolioCatalog(service: bob, cache: bobCache).node(for: alicesLetter.id) == nil)
+        #expect(await bob.queries.count == 1)
+    }
+
+    @Test func signedOutKeepsNoCache() throws {
+        let server = URL(string: "https://folio.example")!
+        let caches = FolioCatalogCaches()
+        let first = try #require(caches.cache(for: server, credentials: signIn("alice", on: server)))
+        var signedOut = signIn("alice", on: server)
+        signedOut.tokens = .signedOut
+        #expect(caches.cache(for: server, credentials: signedOut) == nil)
+        #expect(caches.cache(for: server, credentials: nil) == nil)
+        let other = URL(string: "https://other.example")!
+        #expect(caches.cache(for: other, credentials: signIn("alice", on: server)) == nil)
+        #expect(caches.cache(for: server, credentials: signIn("alice", on: server)) !== first)
+    }
+
     @Test func withoutACacheEveryLookupListsTheFolder() async throws {
         let source = MockFolioService(documents: letters)
         let catalog = FolioCatalog(service: source)
