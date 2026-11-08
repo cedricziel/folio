@@ -433,7 +433,6 @@ struct InboxView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("document-\(row.id)")
-                    .documentEntityIdentifier(row.id)
                     .contextMenu {
                         if canEdit {
                             Button("Move to Trash", systemImage: "trash", role: .destructive) {
@@ -474,7 +473,6 @@ struct InboxView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("document-\(row.id)")
-        .documentEntityIdentifier(row.id)
     }
 
     @ViewBuilder
