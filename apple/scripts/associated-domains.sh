@@ -16,11 +16,14 @@ plistbuddy="${PLISTBUDDY:-/usr/libexec/PlistBuddy}"
 key=com.apple.developer.associated-domains
 
 if [ -z "${FOLIO_ASSOCIATED_DOMAINS+set}" ] && [ -f "$folio_dir/Config/Local.xcconfig" ]; then
+    # The last assignment wins, as in Xcode; a trailing // comment is not part of the value.
     FOLIO_ASSOCIATED_DOMAINS="$(sed -n 's/^[[:space:]]*FOLIO_ASSOCIATED_DOMAINS[[:space:]]*=\(.*\)$/\1/p' \
-        "$folio_dir/Config/Local.xcconfig" | tail -n 1)"
+        "$folio_dir/Config/Local.xcconfig" | tail -n 1 | sed 's|//.*$||')"
 fi
 hosts=()
-for host in ${FOLIO_ASSOCIATED_DOMAINS//,/ }; do
+# read -a splits without globbing, so "folio.lan?mode=developer" stays as written.
+read -r -a words <<<"${FOLIO_ASSOCIATED_DOMAINS//,/ }"
+for host in ${words[@]+"${words[@]}"}; do
     hosts+=("${host#applinks:}")
 done
 
