@@ -1,7 +1,6 @@
 import AppIntents
 import Foundation
 import Observation
-import os
 
 /// The identifiers an open-document activity carries. Never credentials, contents, titles or file paths.
 public struct DocumentActivityPayload: Equatable, Sendable {
@@ -39,124 +38,103 @@ public struct DocumentActivityPayload: Equatable, Sendable {
     }
 }
 
-/// What the app knows about where open documents live, so intents and transfers that only receive a
-/// document id reach the right server and vault. In memory only, and emptied when the session ends.
-public final class DocumentLocator: Sendable {
-    public static let shared = DocumentLocator()
-
-    private struct State {
-        var server: URL?
-        var vaults: [Document.ID: UUID] = [:]
-    }
-
-    private let state = OSAllocatedUnfairLock(initialState: State())
-
-    public init() {}
-
-    public var server: URL? {
-        state.withLock { $0.server }
-    }
-
-    /// Forgets every document and, when `server` is nil, stops producing links.
-    public func reset(server: URL?) {
-        state.withLock { $0 = State(server: server) }
-    }
-
-    public func record(documentID: Document.ID, vaultID: UUID) {
-        state.withLock { state in
-            guard state.server != nil else { return }
-            state.vaults[documentID] = vaultID
-        }
-    }
-
-    public func forget(documentID: Document.ID) {
-        _ = state.withLock { $0.vaults.removeValue(forKey: documentID) }
-    }
-
-    public func vault(for documentID: Document.ID) -> UUID? {
-        state.withLock { $0.vaults[documentID] }
-    }
-
-    /// The document's page in the web app, which asks for its own sign-in.
-    public func webURL(for documentID: Document.ID) -> URL? {
-        state.withLock { state in
-            guard let server = state.server else { return nil }
-            let document = "documents/\(documentID.uuidString.lowercased())"
-            guard let vault = state.vaults[documentID] else { return server.appending(path: document) }
-            return server.appending(path: "vaults/\(vault.uuidString.lowercased())/\(document)")
-        }
-    }
-}
-
-/// The document on screen, as the system sees it: one activity per open document that tells Siri and
-/// Apple Intelligence which document is visible. Cleared when the document closes, is deleted, or the
-/// session ends or moves to another server.
+/// The document on screen in one scene, as the system sees it: one activity per open document that tells
+/// Siri and Apple Intelligence which document is visible. Each window keeps its own tracker.
+///
+/// The activity follows the session the way the Spotlight index does: an interrupted or restoring session
+/// withdraws it and the same server coming back publishes it again; sign-out, an expired session, another
+/// server or an interactive sign-in forget it.
 @MainActor @Observable
 public final class DocumentActivityTracker {
-    public static let shared = DocumentActivityTracker(locator: .shared)
-
     public private(set) var current: DocumentActivityPayload?
-    private var title: String?
-    private var server: URL?
-    @ObservationIgnored private let locator: DocumentLocator
+    @ObservationIgnored public let isEligibleForHandoff: Bool
+    @ObservationIgnored private var shown: (summary: DocumentSummary, vaultID: UUID)?
+    @ObservationIgnored private var server: URL?
+    @ObservationIgnored private var suspended = true
 
-    public init(locator: DocumentLocator) {
-        self.locator = locator
+    /// - Parameter isEligibleForHandoff: Whether other devices may continue the open document.
+    public init(isEligibleForHandoff: Bool = false) {
+        self.isEligibleForHandoff = isEligibleForHandoff
     }
 
     public func sessionChanged(to session: SessionRestoration) {
-        let next: URL? = if case let .signedIn(url) = session { url } else { nil }
-        guard next != server else { return }
-        server = next
-        clear()
-        locator.reset(server: next)
+        switch session {
+        case let .signedIn(url):
+            if url != server {
+                forget()
+                server = url
+            }
+            suspended = false
+            publish()
+        case .signedOut, .expired:
+            forget()
+            server = nil
+        case .restoring, .interrupted, .unavailable:
+            suspended = true
+            current = nil
+        }
+    }
+
+    /// An interactive sign-in may be another account on the same server, so nothing carries over.
+    public func signedIn(to url: URL) {
+        forget()
+        server = url
+        suspended = false
     }
 
     public func show(_ summary: DocumentSummary, vaultID: UUID) {
-        guard let server else { return }
-        locator.record(documentID: summary.id, vaultID: vaultID)
-        current = DocumentActivityPayload(server: server, vaultID: vaultID, documentID: summary.id)
-        title = summary.title
+        shown = (summary, vaultID)
+        publish()
     }
 
     /// Called when a document's view goes away; a document opened since then stays current.
     public func hide(documentID: Document.ID) {
-        guard isCurrent(documentID) else { return }
-        clear()
+        guard shown?.summary.id == documentID else { return }
+        shown = nil
+        current = nil
     }
 
     public func documentRemoved(_ documentID: Document.ID) {
         hide(documentID: documentID)
-        locator.forget(documentID: documentID)
     }
 
     public func isCurrent(_ documentID: Document.ID) -> Bool {
         current?.documentID == documentID
     }
 
-    /// Writes the current document into the scene's activity. The activity stays out of Spotlight and
-    /// public indexing; only the app's own scenes and the system's on-screen awareness read it.
+    /// Writes the current document into the scene's activity. It carries identifiers only, no title, and
+    /// stays out of Spotlight, public indexing and Siri suggestions.
     public func configure(_ activity: NSUserActivity) {
         activity.isEligibleForSearch = false
         activity.isEligibleForPublicIndexing = false
         #if os(iOS)
             activity.isEligibleForPrediction = false
         #endif
-        activity.isEligibleForHandoff = false
-        activity.title = current == nil ? nil : title
+        activity.isEligibleForHandoff = isEligibleForHandoff && current != nil
+        activity.title = nil
         activity.targetContentIdentifier = current?.documentID.uuidString.lowercased()
         activity.requiredUserInfoKeys = current == nil ? [] : DocumentActivityPayload.requiredKeys
         activity.userInfo = current?.userInfo ?? [:]
         if #available(iOS 26, macOS 26, *) {
             activity.appEntityIdentifier = current.map {
-                EntityIdentifier(for: DocumentEntity.self, identifier: $0.documentID)
+                EntityIdentifier(
+                    for: DocumentEntity.self,
+                    identifier: DocumentEntityID(documentID: $0.documentID, vaultID: $0.vaultID))
             }
         }
         activity.needsSave = true
     }
 
-    private func clear() {
+    private func publish() {
+        guard !suspended, let server, let shown else {
+            current = nil
+            return
+        }
+        current = DocumentActivityPayload(server: server, vaultID: shown.vaultID, documentID: shown.summary.id)
+    }
+
+    private func forget() {
+        shown = nil
         current = nil
-        title = nil
     }
 }

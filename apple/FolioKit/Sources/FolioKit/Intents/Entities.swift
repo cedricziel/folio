@@ -9,7 +9,7 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
     )
     public static let defaultQuery = DocumentEntityQuery()
 
-    public let id: UUID
+    public let id: DocumentEntityID
 
     @Property(title: "Title")
     public var title: String
@@ -30,8 +30,12 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
     public let contentType: UTType
     public let hasRecognizedText: Bool
 
+    public var documentID: Document.ID {
+        id.documentID
+    }
+
     public init(_ summary: DocumentSummary) {
-        id = summary.id
+        id = DocumentEntityID(documentID: summary.id, vaultID: summary.vaultID)
         contentType = DocumentTransfer.contentType(mimeType: summary.mimeType, filename: summary.originalFilename)
         hasRecognizedText = summary.hasRecognizedText
         title = summary.title
@@ -68,7 +72,7 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
 public struct DocumentEntityQuery: EntityStringQuery {
     public init() {}
 
-    public func entities(for identifiers: [UUID]) async throws -> [DocumentEntity] {
+    public func entities(for identifiers: [DocumentEntityID]) async throws -> [DocumentEntity] {
         try await IntentEnvironment.run { try await $0.documents(ids: identifiers) }.map(DocumentEntity.init)
     }
 

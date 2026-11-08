@@ -5,9 +5,10 @@ import UniformTypeIdentifiers
 
 /// How a document's original file is typed when it leaves Folio.
 public enum DocumentTransfer {
-    /// The file types offered by name, so receivers can pick a document by what it is. Anything else
-    /// goes out as plain data.
-    public static let fileTypes: [UTType] = [.pdf, .png, .jpeg, .heic, .tiff]
+    /// The file types offered by name, most specific first, so receivers can pick a document by what it is.
+    /// Other images and documents go out under the broad image and content types, and anything else as
+    /// plain data; the file keeps its own name and extension either way.
+    public static let fileTypes: [UTType] = [.pdf, .png, .jpeg, .heic, .image, .content]
 
     public static func contentType(mimeType: String?, filename: String?) -> UTType {
         // Unknown MIME types and extensions come back as dynamic types, which say nothing about the content.
@@ -29,13 +30,15 @@ public enum DocumentTransfer {
 
 extension DocumentEntity: Transferable {
     /// The original file first, then the text Folio read from it, then a link to it in the web app.
-    /// Every download goes through the signed-in session and the vault the document was opened from.
+    /// Every download goes through the signed-in session and the document's own vault.
     public static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .pdf, exporting: exportFile).exportingCondition { $0.exports(.pdf) }
         FileRepresentation(exportedContentType: .png, exporting: exportFile).exportingCondition { $0.exports(.png) }
         FileRepresentation(exportedContentType: .jpeg, exporting: exportFile).exportingCondition { $0.exports(.jpeg) }
         FileRepresentation(exportedContentType: .heic, exporting: exportFile).exportingCondition { $0.exports(.heic) }
-        FileRepresentation(exportedContentType: .tiff, exporting: exportFile).exportingCondition { $0.exports(.tiff) }
+        FileRepresentation(exportedContentType: .image, exporting: exportFile).exportingCondition { $0.exports(.image) }
+        FileRepresentation(exportedContentType: .content, exporting: exportFile)
+            .exportingCondition { $0.exports(.content) }
         FileRepresentation(exportedContentType: .data, exporting: exportFile).exportingCondition { $0.exports(.data) }
         DataRepresentation(exportedContentType: .utf8PlainText, exporting: exportText)
             .exportingCondition { $0.hasRecognizedText }
@@ -56,7 +59,7 @@ extension DocumentEntity: Transferable {
     }
 
     @Sendable private static func webLink(_ entity: DocumentEntity) throws -> URL {
-        guard let url = DocumentLocator.shared.webURL(for: entity.id) else { throw ShortcutError.notSignedIn }
-        return url
+        guard let server = SharedConfiguration.serverURL() else { throw ShortcutError.notSignedIn }
+        return entity.id.webURL(server: server)
     }
 }
