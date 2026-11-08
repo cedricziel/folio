@@ -78,8 +78,8 @@ impl UploadReceiptRepository for PostgresUploadReceiptRepository {
                 created,
             });
         }
-        let (previous, document, completed): (String, Id, Option<DateTime<Utc>>) = sqlx::query_as("SELECT request_fingerprint, document_id, completed_at FROM document_upload_receipts WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3")
-            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key)
+        let (previous, document, completed): (String, Id, Option<DateTime<Utc>>) = sqlx::query_as("UPDATE document_upload_receipts SET last_active_at = CASE WHEN completed_at IS NOT NULL AND request_fingerprint = $4 THEN GREATEST(last_active_at, $5) ELSE last_active_at END WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3 RETURNING request_fingerprint, document_id, completed_at")
+            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key).bind(fingerprint).bind(now)
             .fetch_one(&self.pool).await.map_err(error)?;
         Ok(match completed {
             _ if previous != fingerprint => UploadClaim::Mismatch,

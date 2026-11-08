@@ -678,11 +678,18 @@ pub(crate) async fn store_upload(
             StatusCode::CONFLICT,
             "An upload with this Idempotency-Key is still in progress; retry shortly",
         )
+        .with_code("upload_in_progress")
         .with_retry_after(UPLOAD_RETRY_AFTER_SECS)),
+        UploadOutcome::KeyMismatch => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "This Idempotency-Key was already used for a different upload",
+        )
+        .with_code("idempotency_key_mismatch")),
         UploadOutcome::Deleted => Err(ApiError::new(
             StatusCode::GONE,
             "The document uploaded with this Idempotency-Key has been deleted",
-        )),
+        )
+        .with_code("upload_deleted")),
     }
 }
 

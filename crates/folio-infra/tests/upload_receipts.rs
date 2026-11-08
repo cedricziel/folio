@@ -209,6 +209,72 @@ async fn receipts_contract(r: &Repositories) {
             .unwrap(),
         UploadClaim::Completed(_)
     ));
+
+    // A replay counts as activity, so a client retrying within a week of its last attempt still gets its document.
+    let old = now - UPLOAD_RECEIPT_RETENTION + Duration::hours(1);
+    let retried = key(vault, "system");
+    let (retried_document, retried_token, _) = claimed(
+        receipts
+            .claim(&retried, "scan", old, stale(old))
+            .await
+            .unwrap(),
+    );
+    receipts
+        .complete(&retried, retried_token, old)
+        .await
+        .unwrap();
+    assert_eq!(
+        receipts
+            .claim(&retried, "other content", now, stale(now))
+            .await
+            .unwrap(),
+        UploadClaim::Mismatch
+    );
+    assert_eq!(
+        receipts
+            .claim(&retried, "scan", now, stale(now))
+            .await
+            .unwrap(),
+        UploadClaim::Completed(retried_document)
+    );
+    let sweep = now + Duration::hours(2);
+    receipts
+        .expire(sweep - UPLOAD_RECEIPT_RETENTION)
+        .await
+        .unwrap();
+    assert_eq!(
+        receipts
+            .claim(&retried, "scan", sweep, stale(sweep))
+            .await
+            .unwrap(),
+        UploadClaim::Completed(retried_document),
+        "the replay refreshed the receipt"
+    );
+
+    // A mismatched key does not keep an old receipt alive.
+    let reused = key(vault, "system");
+    let (_, reused_token, _) = claimed(
+        receipts
+            .claim(&reused, "scan", old, stale(old))
+            .await
+            .unwrap(),
+    );
+    receipts.complete(&reused, reused_token, old).await.unwrap();
+    receipts
+        .claim(&reused, "other content", now, stale(now))
+        .await
+        .unwrap();
+    receipts
+        .expire(sweep - UPLOAD_RECEIPT_RETENTION)
+        .await
+        .unwrap();
+    assert!(matches!(
+        receipts
+            .claim(&reused, "scan", sweep, stale(sweep))
+            .await
+            .unwrap(),
+        UploadClaim::Claimed { .. }
+    ));
 }
 
 fn upload(data: &str) -> NewUpload {
@@ -347,11 +413,13 @@ async fn uploads_contract(r: &Repositories) {
         .await
         .unwrap();
     assert!(matches!(&again, UploadOutcome::Replayed(d) if d.id == first.id));
-    assert!(f
-        .uploads
-        .upload(repeat.clone(), upload("other pixels"))
-        .await
-        .is_err());
+    assert!(matches!(
+        f.uploads
+            .upload(repeat.clone(), upload("other pixels"))
+            .await
+            .unwrap(),
+        UploadOutcome::KeyMismatch
+    ));
     assert_eq!(documents(r, vault).await, 1);
 
     // Two concurrent requests with one key store one document.
