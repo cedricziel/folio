@@ -387,9 +387,7 @@ pub async fn transition_import_run(
             .await
             .map_err(storage_error)?;
             match active {
-                Some(active_run) => Ok(RunTransition::Conflict {
-                    active_run: active_run,
-                }),
+                Some(active_run) => Ok(RunTransition::Conflict { active_run }),
                 None => Err(Error::Conflict(
                     "the vault's active import run changed meanwhile; try again".into(),
                 )),
