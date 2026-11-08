@@ -48,13 +48,22 @@ public final class FolioTelemetry: @unchecked Sendable {
         await configure(baseURL: baseURL, tokenProvider: tokenProvider, ticket: ticket)
     }
 
+    /// How long accepted settings are reused before they are fetched again.
+    var refreshInterval: TimeInterval = 300
+
+    /// A refresh for the same server keeps the current runtime recording until its replacement is accepted.
     private func reserve(baseURL: URL, tokenProvider: any BearerTokenProvider) -> UUID? {
         lock.withLock {
-            guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= 300 else { return nil }
-            runtime?.transport.disable()
-            let previous = runtime
-            runtime = nil
-            if let previous { Task.detached { previous.shutdown() } }
+            guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= refreshInterval else {
+                return nil
+            }
+            if configuredURL != baseURL {
+                // Signals recorded for another server must not be sent once its credentials are gone.
+                runtime?.transport.disable()
+                let previous = runtime
+                runtime = nil
+                if let previous { Task.detached { previous.shutdown() } }
+            }
             configuredURL = baseURL
             configuredProvider = tokenProvider
             lastConfiguration = Date()
@@ -72,6 +81,12 @@ public final class FolioTelemetry: @unchecked Sendable {
             let (data, _) = try await transport.data(for: request)
             let config = try JSONDecoder().decode(TelemetryConfiguration.self, from: data)
             guard config.enabled, config.serviceNamespace == "folio", config.endpoint == "/api/telemetry" else {
+                let disabled = lock.withLock { () -> TelemetryRuntime? in
+                    guard generation == ticket else { return nil }
+                    defer { runtime = nil }
+                    return runtime
+                }
+                if let disabled { Task.detached { disabled.shutdown() } }
                 return
             }
             guard let installation = installationIdentity.resolve() else {
@@ -82,8 +97,10 @@ public final class FolioTelemetry: @unchecked Sendable {
             }
             let resource = Self.resource(installationID: installation)
             let next = TelemetryRuntime(baseURL: baseURL, transport: transport, resource: resource)
+            var retired: TelemetryRuntime?
             let accepted = lock.withLock {
                 guard generation == ticket else { return false }
+                retired = runtime
                 runtime = next
                 if instrumentation == nil {
                     instrumentation = URLSessionInstrumentation(
@@ -109,6 +126,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 }
                 return true
             }
+            if let retired { Task.detached { retired.retire() } }
             if accepted { next.event("app.session.start") } else { next.shutdown() }
         } catch {
             // Optional observability must never block sign-in or document access.
@@ -180,7 +198,16 @@ public final class FolioTelemetry: @unchecked Sendable {
         return TelemetryRequestPolicy.allows(request.url, origin: runtime.baseURL)
     }
 
-    static func resource(installationID: UUID, version: String? = nil) -> Resource {
+    /// Which Folio process records: the app, or the extension named by its bundle identifier suffix.
+    static func component(bundleIdentifier: String?) -> String {
+        let suffix = bundleIdentifier?.split(separator: ".").last.map(String.init) ?? ""
+        return ["share", "fileprovider"].contains(suffix) ? suffix : "app"
+    }
+
+    static func resource(
+        installationID: UUID, version: String? = nil,
+        component: String = FolioTelemetry.component(bundleIdentifier: Bundle.main.bundleIdentifier)
+    ) -> Resource {
         var system = utsname()
         uname(&system)
         var model = withUnsafeBytes(of: &system.machine) { bytes in
@@ -213,7 +240,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 "service.version": .string(
                     version ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
                         ?? "unknown"),
-                "service.instance.id": .string(processID),
+                "service.instance.id": .string(processID), "folio.app.component": .string(component),
                 "folio.installation.id": .string(installationID.uuidString.lowercased()),
                 "os.type": .string("darwin"), "os.name": .string(os),
                 "os.version": .string(ProcessInfo.processInfo.operatingSystemVersionString),
@@ -455,6 +482,12 @@ final class TelemetryRuntime: @unchecked Sendable {
         traces.forceFlush(timeout: 5)
         logProcessor.forceFlush(timeout: 5)
         _ = metrics.forceFlush()
+    }
+
+    /// Sends what is still queued, then stops; for a runtime replaced while its server stays the same.
+    func retire() {
+        flush()
+        shutdown()
     }
 
     func shutdown() {

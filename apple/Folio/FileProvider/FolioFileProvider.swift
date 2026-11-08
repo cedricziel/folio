@@ -54,7 +54,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             do {
                 let (catalog, _) = try catalog()
                 guard let id = FolioItemID(providerIdentifier: identifier),
@@ -76,7 +79,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             var phase = "staging"
             do {
                 let directory: URL
@@ -113,6 +119,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         let batch = ThumbnailBatch(
             progress: progress, perThumbnail: perThumbnailCompletionHandler, completion: completionHandler)
         let task = Task {
+            defer { FolioTelemetry.shared.flush() }
             var source: (any FolioService)?
             for identifier in itemIdentifiers {
                 do {
@@ -159,7 +166,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         }
         let filename = itemTemplate.filename
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             do {
                 let (catalog, _) = try catalog()
                 var file = try UploadFile(contentsOf: url)
@@ -198,7 +208,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             return progress
         }
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             do {
                 let local = try localMetadata.update(with: item, fields: changedFields)
                 let (catalog, _) = try catalog()
@@ -298,6 +311,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
 
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt _: NSFileProviderPage) {
         Task {
+            defer { FolioTelemetry.shared.flush() }
             do {
                 let snapshot = try await state.initialSnapshot()
                 observer.didEnumerate(snapshot.nodes.map(providerItem))
@@ -310,6 +324,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
         Task {
+            defer { FolioTelemetry.shared.flush() }
             do {
                 let (snapshot, updated, deleted) = try await state.changes(from: anchor)
                 observer.didUpdate(updated.map(providerItem))
