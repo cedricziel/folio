@@ -33,11 +33,21 @@ env:
 
 jobs:
   test:
+    name: ${{ matrix.toolchain.xcode == '26.6' && 'test' || 'test (Xcode 27.1)' }}
     if: github.event_name == 'pull_request'
     concurrency:
-      group: apple-test-${{ github.ref }}
+      group: apple-test-${{ github.ref }}-${{ matrix.toolchain.xcode }}
       cancel-in-progress: true
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        # Releases stay on 26.6 until #198; Xcode 27 runs beside it on its own runner image.
+        toolchain:
+          - { runner: macos-26, xcode: "26.6" }
+          - { runner: xcode-27, xcode: "27.1" }
+    runs-on: ${{ matrix.toolchain.runner }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.toolchain.xcode }}.app/Contents/Developer
     timeout-minutes: 60
     defaults:
       run:
@@ -74,8 +84,10 @@ jobs:
             rm -rf "$verify_dir"
           }
           trap cleanup EXIT
-          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
-          verify_device=$(xcrun simctl create Folio-Navigation-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          # The Xcode 27 image also carries a Duo-only iOS 27.1 runtime, so pick one that runs the device.
+          device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-16
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$device_type")
+          verify_device=$(xcrun simctl create Folio-Navigation-CI "$device_type" "$runtime")
           xcodegen generate --spec NavigationTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
             -destination "platform=iOS Simulator,id=$verify_device" \
@@ -101,12 +113,21 @@ jobs:
             CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
 
   thumbnails:
-    name: Thumbnail UI
+    name: ${{ matrix.toolchain.xcode == '26.6' && 'Thumbnail UI' || 'Thumbnail UI (Xcode 27.1)' }}
     if: github.event_name == 'pull_request'
     concurrency:
-      group: apple-thumbnails-${{ github.ref }}
+      group: apple-thumbnails-${{ github.ref }}-${{ matrix.toolchain.xcode }}
       cancel-in-progress: true
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        # Releases stay on 26.6 until #198; Xcode 27 runs beside it on its own runner image.
+        toolchain:
+          - { runner: macos-26, xcode: "26.6" }
+          - { runner: xcode-27, xcode: "27.1" }
+    runs-on: ${{ matrix.toolchain.runner }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.toolchain.xcode }}.app/Contents/Developer
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -123,8 +144,10 @@ jobs:
             rm -rf "$verify_dir"
           }
           trap cleanup EXIT
-          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
-          verify_device=$(xcrun simctl create Folio-Thumbnails-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          # The Xcode 27 image also carries a Duo-only iOS 27.1 runtime, so pick one that runs the device.
+          device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-16
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$device_type")
+          verify_device=$(xcrun simctl create Folio-Thumbnails-CI "$device_type" "$runtime")
           xcodegen generate --spec apple/ThumbnailTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/ThumbnailPreview.xcodeproj" -scheme Fixture \
             -destination "platform=iOS Simulator,id=$verify_device" \
@@ -142,12 +165,21 @@ jobs:
           retention-days: 7
 
   classifications:
-    name: Classification UI
+    name: ${{ matrix.toolchain.xcode == '26.6' && 'Classification UI' || 'Classification UI (Xcode 27.1)' }}
     if: github.event_name == 'pull_request'
     concurrency:
-      group: apple-classifications-${{ github.ref }}
+      group: apple-classifications-${{ github.ref }}-${{ matrix.toolchain.xcode }}
       cancel-in-progress: true
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        # Releases stay on 26.6 until #198; Xcode 27 runs beside it on its own runner image.
+        toolchain:
+          - { runner: macos-26, xcode: "26.6" }
+          - { runner: xcode-27, xcode: "27.1" }
+    runs-on: ${{ matrix.toolchain.runner }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.toolchain.xcode }}.app/Contents/Developer
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -164,8 +196,10 @@ jobs:
             rm -rf "$verify_dir"
           }
           trap cleanup EXIT
-          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
-          verify_device=$(xcrun simctl create Folio-Classifications-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          # The Xcode 27 image also carries a Duo-only iOS 27.1 runtime, so pick one that runs the device.
+          device_type=com.apple.CoreSimulator.SimDeviceType.iPhone-16
+          runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$device_type")
+          verify_device=$(xcrun simctl create Folio-Classifications-CI "$device_type" "$runtime")
           xcodegen generate --spec apple/ClassificationTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/ClassificationPreview.xcodeproj" -scheme Fixture \
             -destination "platform=iOS Simulator,id=$verify_device" \
