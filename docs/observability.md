@@ -198,3 +198,39 @@ To follow one person's session in SignalDB (`homelab`/`apps`):
    (`folio.screen.view`, `folio.action`, `session.end`).
 3. Reach the server: take the trace IDs of spans with that `session.id` and
    look up `service.name=folio-server` spans with the same trace IDs.
+
+## Apple sessions, screens and actions
+
+The Apple app, its share and File Provider extensions and App Intents share
+one client session through `telemetry-session.json` in the App Group
+container, read and written under an exclusive lock on every use. While a
+session is live, every Apple span and log record carries `session.id`; it is
+never a resource or metric attribute. `folio.app.component` tells the
+processes apart.
+
+- **Lifetime.** A session ends after 30 minutes without activity, after 4
+  hours, on sign-out or on a server switch. A clock set back ends it too.
+  Activity is a screen view, an action, the app becoming active or the share
+  sheet opening. Network calls, background uploads, Spotlight and File
+  Provider callbacks never extend, rotate or start a session.
+- **File Provider.** It stamps a live session but never starts one; Files
+  traffic with no live session carries no `session.id`.
+- **Events.** `session.start` (with `session.previous_id` after a timeout or
+  the 4-hour limit), `session.end` with `folio.session.end_reason`,
+  `folio.screen.view` with `app.screen.name`, and `folio.action` with
+  `folio.action.name` (plus `folio.intent.name` for `intent.run`). They are
+  log records only. Session events and the screen on show before telemetry is
+  configured are sent once it is; actions from that window are dropped.
+  Sign-out sends `session.end` best-effort before the token is removed.
+- **Browse context.** `documents.browse` spans and their completion logs carry
+  `folio.browse.scope` (`inbox`, `all`, `saved_view`), `folio.browse.filters`
+  (kinds only, never values), `folio.browse.sort` and `folio.browse.page`.
+- **Limits.** The same screen within a second is reported once, and each
+  process sends at most 60 screen and action events per minute; the excess is
+  counted in `folio.telemetry.ui_events.dropped`.
+- **Rename.** The event formerly named `app.session.start` is
+  `folio.telemetry.configured`: it marks each time telemetry is configured,
+  not a session.
+
+Screen and action names are fixed enums in
+`apple/FolioKit/Sources/FolioKit/Telemetry/TelemetryVocabulary.swift`.
