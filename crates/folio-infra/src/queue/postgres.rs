@@ -33,14 +33,16 @@ pub(crate) async fn insert_job(
             correlation_id: Uuid::new_v4(),
             causation_id: None,
         });
+    let trace = super::JobTraceContext::current();
     let payload = serde_json::to_string(&job_type)
         .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
 
     sqlx::query(
         "INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts,
-                           created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id)
+                           created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id,
+                           trace_parent, trace_state)
          VALUES ($1, $2, $3::jsonb, 'pending', 0, $4, $5, $5, $6,
-                 $7, $8, $9, $10)",
+                 $7, $8, $9, $10, $11, $12)",
     )
     .bind(id)
     .bind(type_name)
@@ -52,6 +54,8 @@ pub(crate) async fn insert_job(
     .bind(lineage.correlation_id)
     .bind(lineage.causation_id)
     .bind(plan.group_id)
+    .bind(trace.as_ref().map(|trace| trace.traceparent.as_str()))
+    .bind(trace.as_ref().and_then(|trace| trace.tracestate.as_deref()))
     .execute(&mut *conn)
     .await
     .map_err(repo_err("Failed to enqueue job"))?;
@@ -256,6 +260,16 @@ impl PostgresJobQueue {
                 causation_id: causation,
             },
         }))
+    }
+
+    pub async fn trace_context(&self, job_id: Uuid) -> Result<Option<super::JobTraceContext>> {
+        let row: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT trace_parent, trace_state FROM jobs WHERE id = $1")
+                .bind(job_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(repo_err("Failed to read job trace context"))?;
+        Ok(row.and_then(|(parent, state)| super::JobTraceContext::from_columns(parent, state)))
     }
 
     pub async fn pending_count(&self) -> Result<i64> {

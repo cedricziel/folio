@@ -29,13 +29,14 @@ pub(crate) async fn insert_job(
             correlation_id: Uuid::new_v4(),
             causation_id: None,
         });
+    let trace = super::JobTraceContext::current();
     let payload = serde_json::to_string(&job_type)
         .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
 
     sqlx::query(
         r#"
-        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id)
-        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id, trace_parent, trace_state)
+        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(id.to_string())
@@ -49,6 +50,8 @@ pub(crate) async fn insert_job(
     .bind(lineage.correlation_id.to_string())
     .bind(lineage.causation_id.map(|id| id.to_string()))
     .bind(plan.group_id.map(|id| id.to_string()))
+    .bind(trace.as_ref().map(|trace| trace.traceparent.as_str()))
+    .bind(trace.as_ref().and_then(|trace| trace.tracestate.as_deref()))
     .execute(&mut *conn)
     .await
     .map_err(|e| Error::Repository(format!("Failed to enqueue job: {}", e)))?;
@@ -260,6 +263,16 @@ impl SqliteJobQueue {
                 causation_id: causation.map(parse).transpose()?,
             },
         }))
+    }
+
+    pub async fn trace_context(&self, job_id: Uuid) -> Result<Option<super::JobTraceContext>> {
+        let row: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("SELECT trace_parent, trace_state FROM jobs WHERE id = ?")
+                .bind(job_id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| Error::Repository(e.to_string()))?;
+        Ok(row.and_then(|(parent, state)| super::JobTraceContext::from_columns(parent, state)))
     }
 
     /// Get count of pending jobs

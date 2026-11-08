@@ -5,12 +5,14 @@ mod processing_scope;
 mod recovery;
 mod sqlite;
 pub mod stages;
+mod trace_context;
 mod worker;
 
 pub(crate) use postgres::insert_job as insert_job_postgres;
 use postgres::PostgresJobQueue;
 pub(crate) use sqlite::insert_job as insert_job_sqlite;
 use sqlite::SqliteJobQueue;
+pub use trace_context::JobTraceContext;
 pub use worker::{Worker, WorkerConfig};
 
 use chrono::{DateTime, Utc};
@@ -326,6 +328,11 @@ impl JobQueue {
     /// Returns the enqueue-time scope, or None for jobs created before context persistence.
     pub async fn context(&self, job_id: Uuid) -> Result<Option<JobContext>> {
         dispatch!(self, context(job_id))
+    }
+
+    /// The trace context the job was queued under, or None for untraced and older jobs.
+    pub async fn trace_context(&self, job_id: Uuid) -> Result<Option<JobTraceContext>> {
+        dispatch!(self, trace_context(job_id))
     }
 
     /// Get count of pending jobs

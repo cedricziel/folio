@@ -8,6 +8,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::watch;
 use tokio::time::sleep;
 use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use folio_core::events::{DocumentEvent, EventOrigin};
 use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
@@ -297,6 +298,15 @@ impl Worker {
             job.attempt = job.attempts,
             document.id = job.job_type.document_id().map(tracing::field::display),
         );
+        // Parent, not a link: one request queues one job, and the job then shows
+        // in the request's trace. Jobs without stored context start their own trace.
+        match self.queue.trace_context(job.id).await {
+            Ok(Some(trace)) => {
+                let _ = span.set_parent(trace.to_parent());
+            }
+            Ok(None) => {}
+            Err(e) => warn!(job.id = %job.id, "Failed to read job trace context: {e}"),
+        }
         let started = Instant::now();
         let Some(result) = run_with_lease(
             &self.queue,
