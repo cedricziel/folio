@@ -8,7 +8,7 @@ Lets a user continue the Folio screen they are looking at on another of their Ap
 
 ### Requirement: Screens that offer Handoff
 
-The Apple app SHALL advertise a Handoff activity while one of these is visible and unlocked: a document's detail, a document's discussion, the vault library (Inbox or All documents), or a saved view. The search, upload or scan review, classifications and settings screens SHALL NOT advertise one.
+Each unlocked window SHALL advertise at most one Handoff activity: the selected document (with its discussion pane when that is open), or, when no document is selected, the vault library (Inbox or All documents) or saved view on screen. Search, upload or scan review, classifications and settings SHALL NOT advertise one.
 
 #### Scenario: Viewing a document
 
@@ -17,13 +17,17 @@ The Apple app SHALL advertise a Handoff activity while one of these is visible a
 
 #### Scenario: Viewing the discussion
 
-- **WHEN** the user has a document's discussion open
-- **THEN** the advertised activity identifies the same document and asks the receiver to open its discussion
+- **WHEN** the user opens a document's discussion
+- **THEN** the window's single document activity now also asks the receiver to open the discussion, and closing the discussion removes that request
 
 #### Scenario: Browsing a vault or saved view
 
-- **WHEN** the user is on the Inbox, All documents or a saved view of a vault
+- **WHEN** the user is on the Inbox, All documents or a saved view of a vault and no document is selected
 - **THEN** the advertised activity identifies that vault and that list or saved view
+
+#### Scenario: Split view with a selected document
+- **WHEN** an iPad or Mac window shows the document list and a selected document's detail side by side
+- **THEN** that window advertises only the selected document, and advertises the list again once the selection is cleared
 
 #### Scenario: Searching
 
@@ -69,7 +73,7 @@ Activity user info and keywords SHALL NOT carry document, vault or saved-view na
 
 ### Requirement: Server identity is compared canonically
 
-The app SHALL treat two server URLs as the same server when their canonical forms are equal. Canonical form: lowercased scheme and host, default port (80 for http, 443 for https) removed, user info, query and fragment removed, and trailing slashes trimmed from a path that is otherwise compared case-sensitively.
+The app SHALL treat two server URLs as the same server when their canonical forms are equal. Canonical form: lowercased scheme; host lowercased and, if internationalised, in its punycode (IDNA) form, IPv6 literals kept bracketed; default port (80 for http, 443 for https) removed; user info, query and fragment removed; trailing slashes trimmed from a case-sensitive path.
 
 #### Scenario: Equivalent spellings
 
@@ -80,6 +84,14 @@ The app SHALL treat two server URLs as the same server when their canonical form
 
 - **WHEN** the two URLs differ in scheme, in a non-default port, or in the path prefix (e.g. `/folio` vs `/`)
 - **THEN** the servers do not match
+
+#### Scenario: Internationalised host
+- **WHEN** the payload names `https://bücher.example` and the receiver is signed in to `https://xn--bcher-kva.example`
+- **THEN** the servers match
+
+#### Scenario: IPv6 literal with a port
+- **WHEN** the payload names `http://[::1]:8080/` and the receiver is signed in to `http://[::1]:8080`
+- **THEN** the servers match, and `http://[::1]` does not match either
 
 ### Requirement: Continuation on the same server opens the target
 
@@ -114,24 +126,57 @@ If the vault is not in the receiver's vault list, the app SHALL report that the 
 - **WHEN** a document activity names a document that has since been moved to Trash
 - **THEN** the app opens the vault and shows the document as unavailable without offering to restore it
 
-### Requirement: Continuation without a matching session falls back safely
+### Requirement: Continuation never changes the account
+The app SHALL NOT sign out, switch servers or discard a stored sign-in because of a continuation. When its session (signed in, expired, interrupted or unavailable) names another server than the payload, it SHALL keep that session and offer to open the activity's web page URL in a browser.
 
-The app SHALL NOT sign out or switch servers because of a continuation. If it is signed out, it SHALL show sign-in prefilled with the payload's server and open the target after sign-in to that server. If it is signed in to another server, it SHALL offer to open the web page URL in a browser instead.
+#### Scenario: Receiver on another server
+- **WHEN** a document activity from server A arrives on a device signed in to server B
+- **THEN** the app stays signed in to B, explains the document is on A's host, and offers "Open in Browser" for the activity's web page URL
+
+#### Scenario: Expired session on another server
+- **WHEN** a document activity from server A arrives while the app's session for server B has expired
+- **THEN** the app offers "Open in Browser" and leaves the expired session for B as it was
+
+### Requirement: Signed-out receiver is offered sign-in
+When the app is signed out, a Handoff or universal-link continuation SHALL show sign-in prefilled with the payload's server and open the target after sign-in to that server. A Spotlight continuation while signed out SHALL be ignored.
 
 #### Scenario: Receiver signed out
-
 - **WHEN** a document activity from `https://folio.example.com` arrives on a signed-out device
 - **THEN** the sign-in screen shows that server address and, once the user signs in to it, the document opens
 
 #### Scenario: Sign-in to a different server instead
-
 - **WHEN** the user edits the prefilled address and signs in to another server
 - **THEN** the held continuation is discarded and the app opens normally
 
-#### Scenario: Receiver on another server
+#### Scenario: Spotlight result while signed out
+- **WHEN** a Folio Spotlight result is opened on a signed-out device
+- **THEN** the app shows its normal sign-in screen and does not navigate after sign-in
 
-- **WHEN** a document activity from server A arrives on a device signed in to server B
-- **THEN** the app stays signed in to B, explains the document is on A's host, and offers "Open in Browser" for the activity's web page URL
+### Requirement: Continuation waits for the same server's session
+While the app is restoring its session, or its session for the payload's server is expired, interrupted or unavailable, it SHALL hold the continuation and open the target once that session becomes signed in. Signing out discards it.
+
+#### Scenario: Cold launch
+- **WHEN** a continuation launches the app and session restoration is still running
+- **THEN** the target opens once restoration reports signed in to the same server
+
+#### Scenario: Expired session on the same server
+- **WHEN** a document activity arrives while the session for that server has expired
+- **THEN** the app keeps the continuation through reconnecting and opens the document once signed in again
+
+#### Scenario: Server unreachable
+- **WHEN** a continuation arrives while the session is unavailable because the server cannot be reached, and the user later signs out instead of retrying
+- **THEN** the continuation is discarded
+
+### Requirement: Continuation is handled once in an existing window
+A continuation SHALL be handled exactly once by the app, in an existing window (the frontmost one when several are open), without opening a new window.
+
+#### Scenario: Mac with two windows
+- **WHEN** a document activity arrives on a Mac with two Folio windows open
+- **THEN** only the frontmost window navigates to the document, the other window is unchanged, and no third window opens
+
+#### Scenario: iPad with two scenes
+- **WHEN** the same arrives on an iPad with two Folio scenes in Split View
+- **THEN** the scene the system activates handles it and the other scene is unchanged
 
 ### Requirement: Activities fall back to the web page
 
@@ -196,5 +241,5 @@ A self-built app with associated domains SHALL accept universal links for the we
 
 #### Scenario: Link to an unsupported page
 
-- **WHEN** a universal link names a path the app does not route, such as a document's download URL
+- **WHEN** a universal link reaches the app with a path it does not route, for example from an association a device cached before the server changed it
 - **THEN** the app presents the URL in an in-app browser view and does not navigate

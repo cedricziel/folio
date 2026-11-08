@@ -27,7 +27,7 @@ The server SHALL accept a list of Apple app IDs (`TEAMID.bundle.id`: a 10-charac
 
 ### Requirement: Database value wins over startup configuration
 
-A non-empty `apple.app_ids` value in the `settings` table SHALL replace the startup value. An empty or missing database value SHALL fall back to the startup value. Changes SHALL apply to the next association request without a restart.
+A non-empty `apple.app_ids` value in the `settings` table SHALL replace the startup value. An empty or missing database value SHALL fall back to the startup value, so an app ID set in `config.toml` or the environment cannot be turned off from `/settings`. Changes SHALL apply to the next association response without a restart.
 
 #### Scenario: Database overrides config
 
@@ -37,11 +37,15 @@ A non-empty `apple.app_ids` value in the `settings` table SHALL replace the star
 #### Scenario: Database cleared
 
 - **WHEN** the settings-table value is saved empty while `config.toml` lists A
-- **THEN** the association lists A
+- **THEN** the association lists A, and `/settings` shows the source as `config.toml`
+
+#### Scenario: Turning off a config value
+- **WHEN** an admin wants no association while `config.toml` or `FOLIO_APPLE__APP_IDS` lists app IDs
+- **THEN** clearing the field at `/settings` is not enough; the operator removes the startup value and restarts, and the server then answers 404
 
 ### Requirement: Admins edit the app IDs at /settings
 
-`GET /settings` SHALL show an "Apple app links" section to owners and admins with the effective app IDs and the setting's source. `POST /settings/apple` (HTML form) SHALL save one app ID per line. It SHALL redirect to `/settings?saved=apple` on success and re-render the form with 422 naming the first invalid entry.
+`GET /settings` SHALL show an "Apple app links" section to owners and admins with the effective app IDs, their source, and help text stating that devices pick up changes only when Apple's CDN refreshes its copy. `POST /settings/apple` (HTML form) SHALL save one app ID per line. It SHALL redirect to `/settings?saved=apple` on success and re-render the form with 422 naming the first invalid entry.
 
 #### Scenario: Save valid app IDs
 
@@ -72,6 +76,10 @@ When at least one app ID is configured, `GET /.well-known/apple-app-site-associa
 - **WHEN** the same path is requested
 - **THEN** the response carries `Cache-Control: public, max-age=3600` and no `Set-Cookie`
 
+#### Scenario: Changed app IDs
+- **WHEN** an admin changes `apple.app_ids`
+- **THEN** the next `GET /.well-known/apple-app-site-association` returns the new body, while devices keep the previous association until Apple's CDN refreshes it, which the server cannot force
+
 ### Requirement: Association is absent when unconfigured
 
 When no app ID is configured, `GET /.well-known/apple-app-site-association` SHALL return 404 and SHALL NOT redirect to `/login`. The legacy path `GET /apple-app-site-association` SHALL NOT be served.
@@ -87,21 +95,17 @@ When no app ID is configured, `GET /.well-known/apple-app-site-association` SHAL
 - **THEN** it is handled like any other unknown path and no association is returned
 
 ### Requirement: Association matches only handed-over pages
-
-The association's components SHALL claim `/vaults/*/documents/*`, `/vaults/*/saved-views/*` and the vault root `/vaults/*/`, each prefixed with the path of `server.public_url`. Listed before them, as exclusions, are sub-resources and actions: `/vaults/*/documents/*/*`, `/vaults/*/documents/search`, `/vaults/*/documents/upload`, `/vaults/*/saved-views/*/*` and `/vaults/*/saved-views/new`. Login, OAuth, settings, API, static assets and downloads SHALL NOT be claimed.
+The association's components SHALL claim exactly three path shapes, using `?` masks for UUIDs (`U` = `????????-????-????-????-????????????`): `/vaults/U/`, `/vaults/U/documents/U` and `/vaults/U/saved-views/U`, each prefixed with the path of `server.public_url`. They SHALL contain no `*` wildcards and no exclusions.
 
 #### Scenario: Document page claimed
-
 - **WHEN** the device evaluates `/vaults/{vault_id}/documents/{id}` against the association
 - **THEN** it matches and opens the app
 
-#### Scenario: Download excluded
-
-- **WHEN** the device evaluates `/vaults/{vault_id}/documents/{id}/download`
-- **THEN** an exclusion matches first and the link stays in the browser
+#### Scenario: Sub-resources not claimed
+- **WHEN** the device evaluates `/vaults/{vault_id}/documents/{id}/download`, `/vaults/{vault_id}/documents/search` or `/vaults/{vault_id}/saved-views/new`
+- **THEN** no component matches and the link stays in the browser
 
 #### Scenario: Sign-in pages untouched
-
 - **WHEN** the device evaluates `/login` or `/oauth/authorize`
 - **THEN** no component matches and the link stays in the browser
 
