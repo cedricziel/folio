@@ -2,16 +2,85 @@
 
 mod common;
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use opentelemetry::trace::{SpanKind, TraceId, TracerProvider as _};
-use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
+use opentelemetry::trace::{TraceContextExt, TraceId, TracerProvider as _};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tower::ServiceExt;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing::dispatcher::WeakDispatch;
+use tracing::span;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::Layer;
 
 use folio_infra::{Worker, WorkerConfig};
 
 const TRACE_ID: &str = "11223344556677881122334455667788";
+
+/// Trace ID of each span by name, read when the span is exited
+///
+/// Exported spans are not enough: some request and job spans stay open after
+/// their work is done, so they may never reach an exporter during a test.
+#[derive(Clone, Default)]
+struct TraceIds {
+    seen: Arc<Mutex<Vec<(String, TraceId)>>>,
+    dispatch: Arc<Mutex<Option<WeakDispatch>>>,
+}
+
+impl TraceIds {
+    fn of(&self, name: &str) -> Vec<TraceId> {
+        let seen = self.seen.lock().unwrap();
+        let mut ids: Vec<_> = seen
+            .iter()
+            .filter(|(seen, _)| seen == name)
+            .map(|(_, id)| *id)
+            .collect();
+        ids.dedup();
+        ids
+    }
+}
+
+impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> Layer<S> for TraceIds {
+    fn on_register_dispatch(&self, subscriber: &tracing::Dispatch) {
+        *self.dispatch.lock().unwrap() = Some(subscriber.downgrade());
+    }
+
+    fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        let name = span.metadata().name();
+        if name != "job" && name != "HTTP request" {
+            return;
+        }
+        let Some(dispatch) = self
+            .dispatch
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|d| d.upgrade())
+        else {
+            return;
+        };
+        if let Some(cx) = tracing_opentelemetry::get_otel_context(id, &dispatch) {
+            let trace_id = cx.span().span_context().trace_id();
+            self.seen.lock().unwrap().push((name.to_string(), trace_id));
+        }
+    }
+}
+
+fn tracing_setup() -> (TraceIds, tracing::subscriber::DefaultGuard) {
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(InMemorySpanExporter::default())
+        .build();
+    let trace_ids = TraceIds::default();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("folio-test")))
+        .with(trace_ids.clone());
+    (trace_ids, tracing::subscriber::set_default(subscriber))
+}
 
 fn worker(h: &common::Harness) -> Worker {
     let state = &h.state;
@@ -32,12 +101,20 @@ fn worker(h: &common::Harness) -> Worker {
     )
 }
 
-/// Run the worker until the queued `process_document` job has finished; return its span,
-/// status and error.
-async fn run_process_document(
-    h: &common::Harness,
-    exporter: &InMemorySpanExporter,
-) -> (SpanData, String, Option<String>) {
+async fn upload(h: &common::Harness, traceparent: Option<String>) {
+    let mut request = common::multipart(&[("file", Some("scan.png"), "not really a png")]);
+    *request.uri_mut() = "/api/documents/upload".parse().unwrap();
+    if let Some(traceparent) = traceparent {
+        request
+            .headers_mut()
+            .insert("traceparent", traceparent.parse().unwrap());
+    }
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert!(response.status().is_success(), "{}", response.status());
+}
+
+/// Run the worker until the queued `process_document` job has finished; return its status and error.
+async fn run_process_document(h: &common::Harness) -> (String, Option<String>) {
     let folio_infra::Database::Sqlite(pool) = &h.database else {
         unreachable!("the harness uses SQLite");
     };
@@ -58,75 +135,33 @@ async fn run_process_document(
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     };
-    let (_, (status, error)) = tokio::time::timeout(
+    let (_, outcome) = tokio::time::timeout(
         Duration::from_secs(30),
         futures::future::join(worker.run(shutdown), finished),
     )
     .await
     .expect("the worker finishes the queued document");
-    // SQLite connection threads keep the span of their last command alive, so
-    // the job span may only end once the pool closes.
-    pool.close().await;
-    let span = exporter
-        .get_finished_spans()
-        .unwrap()
-        .into_iter()
-        .find(|span| span.name == "job process_document")
-        .expect("a job process_document span");
-    (span, status, error)
-}
-
-fn tracing_setup() -> (InMemorySpanExporter, tracing::subscriber::DefaultGuard) {
-    opentelemetry::global::set_text_map_propagator(
-        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-    );
-    let exporter = InMemorySpanExporter::default();
-    let provider = SdkTracerProvider::builder()
-        .with_simple_exporter(exporter.clone())
-        .build();
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("folio-test")));
-    (exporter, tracing::subscriber::set_default(subscriber))
+    outcome
 }
 
 #[tokio::test]
 async fn an_uploads_processing_job_continues_the_request_trace() {
-    let (exporter, _default) = tracing_setup();
+    let (trace_ids, _default) = tracing_setup();
     let h = common::harness().await;
-    let mut request = common::multipart(&[("file", Some("scan.png"), "not really a png")]);
-    *request.uri_mut() = "/api/documents/upload".parse().unwrap();
-    request.headers_mut().insert(
-        "traceparent",
-        format!("00-{TRACE_ID}-1234567812345678-01")
-            .parse()
-            .unwrap(),
-    );
-    let response = h.app.clone().oneshot(request).await.unwrap();
-    assert!(response.status().is_success(), "{}", response.status());
-    drop(response);
+    upload(&h, Some(format!("00-{TRACE_ID}-1234567812345678-01"))).await;
 
-    let (job, _, _) = run_process_document(&h, &exporter).await;
+    run_process_document(&h).await;
 
-    assert_eq!(job.span_kind, SpanKind::Consumer);
-    assert_eq!(job.span_context.trace_id().to_string(), TRACE_ID);
-    let spans = exporter.get_finished_spans().unwrap();
-    assert!(
-        spans
-            .iter()
-            .any(|span| span.span_context.span_id() == job.parent_span_id),
-        "the job's parent is a span of the request"
-    );
+    let expected = TraceId::from_hex(TRACE_ID).unwrap();
+    assert_eq!(trace_ids.of("HTTP request"), vec![expected]);
+    assert_eq!(trace_ids.of("job"), vec![expected]);
 }
 
 #[tokio::test]
 async fn a_job_queued_without_trace_context_still_runs_in_a_new_trace() {
-    let (exporter, _default) = tracing_setup();
+    let (trace_ids, _default) = tracing_setup();
     let h = common::harness().await;
-    let mut request = common::multipart(&[("file", Some("scan.png"), "not really a png")]);
-    *request.uri_mut() = "/api/documents/upload".parse().unwrap();
-    let response = h.app.clone().oneshot(request).await.unwrap();
-    assert!(response.status().is_success(), "{}", response.status());
-    drop(response);
+    upload(&h, None).await;
     let folio_infra::Database::Sqlite(pool) = &h.database else {
         unreachable!("the harness uses SQLite");
     };
@@ -139,9 +174,13 @@ async fn a_job_queued_without_trace_context_still_runs_in_a_new_trace() {
     .await
     .unwrap();
 
-    let (job, status, error) = run_process_document(&h, &exporter).await;
+    let (status, error) = run_process_document(&h).await;
 
-    assert_ne!(job.span_context.trace_id(), TraceId::INVALID);
-    assert_eq!(job.parent_span_id, opentelemetry::trace::SpanId::INVALID);
     assert_eq!((status.as_str(), error), ("completed", None));
+    let request = trace_ids.of("HTTP request");
+    let job = trace_ids.of("job");
+    assert_eq!(request.len(), 1);
+    assert_eq!(job.len(), 1, "{job:?}");
+    assert_ne!(job[0], TraceId::INVALID);
+    assert_ne!(job[0], request[0], "the job starts a new trace");
 }
