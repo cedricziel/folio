@@ -92,6 +92,10 @@ public final class DocumentListViewModel {
         self.searchDebounce = searchDebounce
     }
 
+    public var lookups: DocumentLookups {
+        DocumentLookups(correspondents: correspondents, documentTypes: documentTypes)
+    }
+
     public func correspondentName(for document: Document) -> String? {
         document.correspondentID.flatMap { correspondents[$0] }
     }

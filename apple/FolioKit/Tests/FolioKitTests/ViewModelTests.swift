@@ -259,7 +259,7 @@ extension JSONDecoder {
             document: Document(
                 title: "Retained history", createdBy: "archive-creator", updatedBy: nil,
                 deletedAt: Date(timeIntervalSince1970: 1_741_950_000)),
-            correspondent: nil, type: nil, service: MockFolioService()
+            service: MockFolioService()
         )
         let history = Dictionary(uniqueKeysWithValues: model.history.map { ($0.label, $0) })
         #expect(history["Created by"]?.value == "archive-creator")
@@ -275,7 +275,7 @@ extension JSONDecoder {
         var saved = original
         saved.documentDate = try #require(DocumentDate(rawValue: "2026-11-02"))
         await service.setDocuments([saved])
-        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: original, service: service)
         await model.refreshMetadata()
         #expect(model.document.documentDate == saved.documentDate)
         #expect(model.metadataFailure == nil)
@@ -286,7 +286,7 @@ extension JSONDecoder {
         let original = Document(title: "Letter", canEditDocumentDate: true)
         await service.setDocuments([original])
         await service.suspendDocumentReads()
-        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: original, service: service)
         let refresh = Task { await model.refreshMetadata() }
         await service.waitForDocumentRead()
         let date = try #require(DocumentDate(rawValue: "2024-01-05"))
@@ -301,7 +301,7 @@ extension JSONDecoder {
         let service = MockFolioService()
         let original = Document(title: "Letter", canEditDocumentDate: true, createdAt: Date(timeIntervalSince1970: 0))
         await service.setDocuments([original])
-        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: original, service: service)
         let date = try #require(DocumentDate(rawValue: "1582-10-10"))
         try await model.saveDocumentDate(date)
         #expect(model.document.documentDate == date)
@@ -317,10 +317,10 @@ extension JSONDecoder {
     @Test func metadataListsRecordsInMono() {
         let model = DocumentDetailViewModel(
             document: Document(
-                title: "Bill", originalFilename: "bill.pdf", pageCount: 2,
-                createdAt: Date(timeIntervalSince1970: 1_741_950_000)
+                title: "Bill", originalFilename: "bill.pdf", correspondentID: stadtwerke.id,
+                documentTypeID: invoice.id, pageCount: 2, createdAt: Date(timeIntervalSince1970: 1_741_950_000)
             ),
-            correspondent: "Stadtwerke Köln", type: "Invoice", service: MockFolioService()
+            lookups: lookups, service: MockFolioService()
         )
         let byLabel = Dictionary(uniqueKeysWithValues: model.metadata.map { ($0.label, $0) })
         #expect(byLabel["From"]?.value == "Stadtwerke Köln")
@@ -332,8 +332,7 @@ extension JSONDecoder {
 
     @Test func missingClassificationReadsAsNotSet() {
         let model = DocumentDetailViewModel(
-            document: Document(title: "Bill"), correspondent: nil, type: nil,
-            service: MockFolioService()
+            document: Document(title: "Bill"), service: MockFolioService()
         )
         #expect(model.metadata.first { $0.label == "From" }?.value == "Not set")
     }
@@ -341,7 +340,7 @@ extension JSONDecoder {
     @Test func previewLoadsTheDownloadedFile() async {
         let doc = Document(title: "Bill", originalFilename: "bill.pdf")
         let model = DocumentDetailViewModel(
-            document: doc, correspondent: nil, type: nil, service: MockFolioService()
+            document: doc, service: MockFolioService()
         )
         await model.loadPreview()
         #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
@@ -351,7 +350,7 @@ extension JSONDecoder {
         let service = MockFolioService()
         await service.setFailure(.server(status: 404, message: "Document has no file"))
         let model = DocumentDetailViewModel(
-            document: Document(title: "Bill"), correspondent: nil, type: nil, service: service
+            document: Document(title: "Bill"), service: service
         )
         await model.loadPreview()
         #expect(model.preview == .failed("Document has no file"))
@@ -361,14 +360,14 @@ extension JSONDecoder {
         let service = MockFolioService()
         let first = DocumentDetailViewModel(
             document: Document(title: "First", originalFilename: "first.pdf"),
-            correspondent: nil, type: nil, service: service
+            service: service
         )
         await first.loadPreview()
         #expect(first.preview == .ready(URL(filePath: "/tmp/first.pdf")))
 
         let next = DocumentDetailViewModel(
             document: Document(title: "Next", originalFilename: "next.png"),
-            correspondent: nil, type: nil, service: service
+            service: service
         )
         let navigation = Task {
             withUnsafeCurrentTask { $0?.cancel() }
@@ -382,7 +381,7 @@ extension JSONDecoder {
         let service = MockFolioService()
         let model = DocumentDetailViewModel(
             document: Document(title: "Bill", originalFilename: "bill.pdf"),
-            correspondent: nil, type: nil, service: service
+            service: service
         )
         await model.loadPreview()
         await service.setFailure(.unreachable)
@@ -395,7 +394,7 @@ extension JSONDecoder {
         await service.setFailure(.unreachable)
         let model = DocumentDetailViewModel(
             document: Document(title: "Bill", originalFilename: "bill.pdf"),
-            correspondent: nil, type: nil, service: service
+            service: service
         )
         await model.loadPreview()
         #expect(model.preview == .failed("Couldn't reach the server."))
@@ -409,17 +408,18 @@ extension JSONDecoder {
         let original = Document(
             title: "Scan 0001", originalFilename: "scan.pdf", updatedAt: Date(timeIntervalSince1970: 100),
             updatedBy: "uploader")
-        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: original, service: service)
         await model.loadPreview()
 
         var processed = original
         processed.title = "Electricity bill"
+        processed.correspondentID = stadtwerke.id
+        processed.documentTypeID = invoice.id
         processed.pageCount = 3
         processed.tags = [Tag(name: "Utilities")]
         processed.updatedAt = Date(timeIntervalSince1970: 200)
         processed.updatedBy = "classifier"
-        await service.setFailure(.unreachable)
-        model.update(document: processed, correspondent: "Stadtwerke Köln", type: "Invoice")
+        model.update(document: processed, lookups: lookups)
         await model.loadPreview()
 
         let byLabel = Dictionary(uniqueKeysWithValues: model.metadata.map { ($0.label, $0.value) })
@@ -436,23 +436,119 @@ extension JSONDecoder {
         #expect(model.summary.tags == ["Utilities"])
         #expect(model.summary.pageCount == 3)
         #expect(model.preview == .ready(URL(filePath: "/tmp/scan.pdf")))
+        #expect(await service.downloads == 1)
+    }
+
+    @Test func aNewerSearchRowWithoutTagsKeepsTheShownTags() async {
+        let service = MockFolioService()
+        let original = Document(
+            title: "Scan 0001", tags: [Tag(name: "Utilities")], updatedAt: Date(timeIntervalSince1970: 100))
+        let model = DocumentDetailViewModel(document: original, service: service)
+        var row = original
+        row.title = "Electricity bill"
+        row.tags = []
+        row.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setFailure(.unreachable)
+
+        model.update(document: row, lookups: lookups)
+        await model.refreshMetadata()
+
+        #expect(model.document.title == "Electricity bill")
+        #expect(model.document.tags.map(\.name) == ["Utilities"])
+        #expect(model.summary.tags == ["Utilities"])
     }
 
     @Test func anOlderListSnapshotDoesNotRevertFetchedDetails() async throws {
         let service = MockFolioService()
-        let stale = Document(title: "Scan 0001", updatedAt: Date(timeIntervalSince1970: 100))
+        let stale = Document(
+            title: "Scan 0001", correspondentID: stadtwerke.id, updatedAt: Date(timeIntervalSince1970: 100))
         var current = stale
         current.title = "Electricity bill"
         current.updatedAt = Date(timeIntervalSince1970: 200)
         await service.setDocuments([current])
-        let model = DocumentDetailViewModel(document: stale, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: stale, service: service)
         await model.refreshMetadata()
 
-        model.update(document: stale, correspondent: "Stadtwerke Köln", type: nil)
+        model.update(document: stale, lookups: lookups)
 
         #expect(model.document.title == "Electricity bill")
         #expect(model.summary.title == "Electricity bill")
         #expect(model.metadata.first { $0.label == "From" }?.value == "Stadtwerke Köln")
+    }
+
+    @Test func aSlowRefreshDoesNotRevertNewerListData() async {
+        let service = MockFolioService()
+        let original = Document(title: "Scan 0001", updatedAt: Date(timeIntervalSince1970: 100))
+        await service.setDocuments([original])
+        await service.suspendDocumentReads()
+        let model = DocumentDetailViewModel(document: original, service: service)
+        let refresh = Task { await model.refreshMetadata() }
+        await service.waitForDocumentRead()
+        var row = original
+        row.title = "Electricity bill"
+        row.updatedAt = Date(timeIntervalSince1970: 200)
+
+        model.update(document: row, lookups: lookups)
+        await service.releaseDocumentReads()
+        await refresh.value
+
+        #expect(model.document.title == "Electricity bill")
+        #expect(model.summary.title == "Electricity bill")
+    }
+
+    @Test func aRefreshStartedBeforeAReviewDoesNotUndoIt() async throws {
+        let service = MockFolioService()
+        let original = Document(title: "Letter", reviewed: false, canReviewDocument: true)
+        await service.setDocuments([original])
+        await service.suspendDocumentReads()
+        let model = DocumentDetailViewModel(document: original, service: service)
+        let refresh = Task { await model.refreshMetadata() }
+        await service.waitForDocumentRead()
+
+        try await model.saveReview(true)
+        await service.releaseDocumentReads()
+        await refresh.value
+
+        #expect(model.document.reviewed == true)
+    }
+
+    @Test func aCancelledRefreshChangesNothing() async {
+        let service = MockFolioService()
+        let original = Document(title: "Scan 0001", updatedAt: Date(timeIntervalSince1970: 100))
+        var renamed = original
+        renamed.title = "Electricity bill"
+        renamed.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setDocuments([renamed])
+        await service.suspendDocumentReads()
+        let model = DocumentDetailViewModel(document: original, service: service)
+        let refresh = Task { await model.refreshMetadata() }
+        await service.waitForDocumentRead()
+
+        refresh.cancel()
+        await service.releaseDocumentReads()
+        await refresh.value
+
+        #expect(model.document.title == "Scan 0001")
+        #expect(model.metadataFailure == nil)
+    }
+
+    @Test func fetchedDetailsNameTheFetchedCorrespondent() async {
+        let service = MockFolioService()
+        let gasag = Correspondent(name: "GASAG")
+        let original = Document(
+            title: "Bill", correspondentID: stadtwerke.id, updatedAt: Date(timeIntervalSince1970: 100))
+        var moved = original
+        moved.correspondentID = gasag.id
+        moved.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setDocuments([moved])
+        var names = lookups
+        names.correspondents[gasag.id] = gasag.name
+        let model = DocumentDetailViewModel(document: original, lookups: names, service: service)
+
+        await model.refreshMetadata()
+
+        #expect(model.metadata.first { $0.label == "From" }?.value == "GASAG")
+        #expect(model.summary.correspondent == "GASAG")
     }
 
     @Test func fetchedDetailsRefreshEveryField() async {
@@ -463,7 +559,7 @@ extension JSONDecoder {
         processed.pageCount = 2
         processed.updatedAt = Date(timeIntervalSince1970: 200)
         await service.setDocuments([processed])
-        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: original, service: service)
 
         await model.refreshMetadata()
 
@@ -472,6 +568,10 @@ extension JSONDecoder {
         #expect(model.summary.pageCount == 2)
     }
 
+    private var lookups: DocumentLookups {
+        DocumentLookups(
+            correspondents: [stadtwerke.id: stadtwerke.name], documentTypes: [invoice.id: invoice.name])
+    }
 }
 
 @MainActor struct UploadViewModelTests {

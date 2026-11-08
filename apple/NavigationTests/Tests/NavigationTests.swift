@@ -85,7 +85,8 @@ import XCTest
         XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
         first.tap()
         XCTAssertTrue(app.staticTexts["first.pdf"].waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertFalse(app.staticTexts["PAGES"].exists)
+        let pages = app.staticTexts["metadata-Pages"]
+        XCTAssertFalse(pages.exists)
 
         app.buttons["Simulate remote edit"].tap()
         let top = first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -93,8 +94,8 @@ import XCTest
 
         let renamed = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Electricity bill")).firstMatch
         XCTAssertTrue(renamed.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["PAGES"].waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["3"].exists, app.debugDescription)
+        XCTAssertTrue(pages.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(pages.label, "3")
         XCTAssertTrue(app.staticTexts["Electricity bill"].exists, app.debugDescription)
         XCTAssertTrue(app.staticTexts["first.pdf"].exists)
     }

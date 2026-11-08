@@ -135,10 +135,8 @@ struct InboxView: View {
         Group {
             if let document = list.document(for: id) {
                 DocumentDetailView(
-                    snapshot: .init(
-                        document: document, correspondent: list.correspondentName(for: document),
-                        type: list.typeName(for: document)
-                    ), service: service, vaultID: vaultID
+                    snapshot: .init(document: document, lookups: list.lookups), service: service,
+                    vaultID: vaultID
                 )
                 .id(id)
             } else if let message = list.documentError(for: id) {

@@ -5,8 +5,7 @@ struct DocumentDetailView: View {
     /// What the document list currently knows about this document.
     struct Snapshot: Equatable {
         let document: Document
-        let correspondent: String?
-        let type: String?
+        let lookups: DocumentLookups
     }
 
     @State private var model: DocumentDetailViewModel
@@ -18,8 +17,7 @@ struct DocumentDetailView: View {
     init(snapshot: Snapshot, service: any FolioService, vaultID: UUID) {
         _model = State(
             initialValue: DocumentDetailViewModel(
-                document: snapshot.document, correspondent: snapshot.correspondent, type: snapshot.type,
-                service: service))
+                document: snapshot.document, lookups: snapshot.lookups, service: service))
         self.snapshot = snapshot
         self.vaultID = vaultID
     }
@@ -43,7 +41,7 @@ struct DocumentDetailView: View {
             }
         }
         .onChange(of: snapshot) { _, snapshot in
-            model.update(document: snapshot.document, correspondent: snapshot.correspondent, type: snapshot.type)
+            model.update(document: snapshot.document, lookups: snapshot.lookups)
         }
         .task { await model.loadPreview() }
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
@@ -91,6 +89,7 @@ struct DocumentDetailView: View {
                                 .font(field.isRecord ? FolioTheme.Typography.meta : FolioTheme.Typography.body)
                                 .foregroundStyle(Color.ink)
                                 .textSelection(.enabled)
+                                .accessibilityIdentifier("metadata-\(field.label)")
                         }
                     }
                 }
