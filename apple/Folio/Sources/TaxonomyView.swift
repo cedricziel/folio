@@ -18,6 +18,7 @@ struct TaxonomyView: View {
         }
         .navigationTitle("Classifications")
         .background(Color.paper)
+        .telemetryScreen(.taxonomy)
     }
 }
 

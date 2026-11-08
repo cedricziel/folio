@@ -17,6 +17,7 @@ public struct ScanDocumentIntent: AppIntent {
 
     @MainActor
     public func perform() async throws -> some IntentResult {
+        IntentEnvironment.ran(.scanDocument)
         IntentRouter.shared.route(.scan)
         return .result()
     }
@@ -57,6 +58,7 @@ public struct UploadFileIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
+        IntentEnvironment.ran(.uploadFile)
         let summaries = try await IntentEnvironment.run {
             try await $0.upload(files.map { try UploadFile(intentFile: $0) }, title: title, tagIDs: tags.map(\.id))
         }
@@ -88,6 +90,7 @@ public struct SearchDocumentsIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
+        IntentEnvironment.ran(.searchDocuments)
         let summaries = try await IntentEnvironment.run { try await $0.search(query) }
         let dialog: LocalizedStringResource =
             summaries.isEmpty
@@ -132,6 +135,7 @@ public struct FindDocumentsIntent: AppIntent {
     public init() {}
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
+        IntentEnvironment.ran(.findDocuments)
         let criteria = DocumentCriteria(
             tagID: tag?.id, correspondentID: correspondent?.id, documentTypeID: documentType?.id,
             from: from, through: through
@@ -156,20 +160,32 @@ public struct GetLatestDocumentIntent: AppIntent {
     public init() {}
 
     public func perform() async throws -> some IntentResult & ReturnsValue<DocumentEntity> & ProvidesDialog {
+        IntentEnvironment.ran(.getLatestDocument)
         let latest = try await IntentEnvironment.run { try await $0.latest() }
         return .result(value: DocumentEntity(latest), dialog: "Your latest document is \(latest.title).")
     }
 }
 
-public struct OpenDocumentIntent: OpenIntent {
+public struct OpenDocumentIntent: OpenIntent, PredictableIntent {
     public static let title: LocalizedStringResource = "Open a document"
     public static let description = IntentDescription(
         "Opens a document in Folio.", categoryName: "Documents"
     )
     public static let openAppWhenRun = true
 
-    @Parameter(title: "Document")
+    @Parameter(title: "Document", requestValueDialog: "Which document?")
     public var target: DocumentEntity
+
+    // Spotlight offers an intent only when its summary shows every required parameter.
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Open \(\.$target)")
+    }
+
+    public static var predictionConfiguration: some IntentPredictionConfiguration {
+        IntentPrediction(parameters: (\Self.$target)) { target in
+            DisplayRepresentation(title: "Open \(target.title)")
+        }
+    }
 
     public init() {}
 
@@ -179,7 +195,8 @@ public struct OpenDocumentIntent: OpenIntent {
 
     @MainActor
     public func perform() async throws -> some IntentResult {
-        IntentRouter.shared.route(.document(target.id))
+        IntentEnvironment.ran(.openDocument)
+        IntentRouter.shared.route(.document(target.documentID, vaultID: target.id.vaultID))
         return .result()
     }
 }
@@ -208,7 +225,10 @@ public struct AddTagIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await IntentEnvironment.run { try await $0.addTag(tag.id, to: document.id) }
+        IntentEnvironment.ran(.addTag)
+        try await IntentEnvironment.run {
+            try await $0.scoped(to: document.id.vaultID).addTag(tag.id, to: document.documentID)
+        }
         return .result(dialog: "Tagged \(document.title) with \(tag.name).")
     }
 }
@@ -237,7 +257,10 @@ public struct RemoveTagIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await IntentEnvironment.run { try await $0.removeTag(tag.id, from: document.id) }
+        IntentEnvironment.ran(.removeTag)
+        try await IntentEnvironment.run {
+            try await $0.scoped(to: document.id.vaultID).removeTag(tag.id, from: document.documentID)
+        }
         return .result(dialog: "Removed \(tag.name) from \(document.title).")
     }
 }
@@ -263,6 +286,7 @@ public struct GetDocumentFileIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<IntentFile> {
+        IntentEnvironment.ran(.getDocumentFile)
         let (url, original) = try await IntentEnvironment.run { try await $0.file(for: document.id) }
         let type = original.mimeType.flatMap { UTType(mimeType: $0) }
         return .result(value: IntentFile(fileURL: url, filename: url.lastPathComponent, type: type))

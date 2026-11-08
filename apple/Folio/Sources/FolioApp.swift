@@ -93,8 +93,13 @@ struct FolioApp: App {
 @MainActor @Observable
 final class AppModel {
     private(set) var session: SessionRestoration = .restoring {
-        didSet { SpotlightIndex.shared.sessionChanged(to: session) }
+        didSet {
+            SpotlightIndex.shared.sessionChanged(to: session)
+            TransferFileCache.shared.sessionChanged(to: session)
+        }
     }
+    /// Counts sign-ins through the browser, which may be another account even on the same server.
+    private(set) var interactiveSignIns = 0
     private(set) var isWorking = false
     var operationError: String?
     private var restorationTask: Task<Void, Never>?
@@ -132,7 +137,10 @@ final class AppModel {
                 session = restored
                 if case .signedIn = restored { FileProviderDomain.register() }
             }
-            if case .signedIn = restored { FileProviderDomain.signalChanges() }
+            if case .signedIn = restored {
+                FolioTelemetry.shared.signedIn()
+                FileProviderDomain.signalChanges()
+            }
         }
     }
 
@@ -144,7 +152,10 @@ final class AppModel {
         restorationTask?.cancel()
         restorationGeneration += 1
         SpotlightIndex.shared.signedIn(to: url)
+        TransferFileCache.shared.signedIn(to: url)
+        interactiveSignIns += 1
         session = .signedIn(url)
+        FolioTelemetry.shared.signedIn()
         FileProviderDomain.register()
     }
 
@@ -179,11 +190,16 @@ final class AppModel {
         Task {
             defer { isWorking = false }
             do {
+                // Sent while the token still works; best effort, sign-out never waits more than briefly.
+                FolioTelemetry.shared.action(.signOut)
+                await FolioTelemetry.shared.endSession(.signOut)
                 try await SharedConfiguration.tokenProvider().signOut()
                 FolioTelemetry.shared.stop()
                 session = .signedOut
                 FileProviderDomain.unregister()
             } catch {
+                // Still signed in, so keep recording against a session.
+                FolioTelemetry.shared.signedIn()
                 operationError = error.localizedDescription
             }
         }
@@ -194,12 +210,19 @@ final class AppModel {
 struct RootView: View {
     let model: AppModel
     let lock: AppLock
+    /// This window's open document, as the system sees it.
+    @State private var activity = DocumentActivityTracker()
     #if os(iOS)
         @State private var showLockSettings = false
     #endif
 
     var body: some View {
         content
+            .environment(activity)
+            .onChange(of: model.session, initial: true) { _, session in activity.sessionChanged(to: session) }
+            .onChange(of: model.interactiveSignIns) {
+                if case let .signedIn(url) = model.session { activity.signedIn(to: url) }
+            }
             .alert(
                 "Couldn't complete sign-in change",
                 isPresented: Binding(

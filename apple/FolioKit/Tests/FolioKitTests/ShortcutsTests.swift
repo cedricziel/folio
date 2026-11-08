@@ -107,7 +107,9 @@ struct DocumentCatalogTests {
     @Test func documentsForIdsKeepsOnlyKnownOnes() async throws {
         let kept = document("Kept")
         let (catalog, _) = await makeCatalog([kept, document("Other")])
-        let found = try await catalog.documents(ids: [kept.id, UUID()])
+        let found = try await catalog.documents(ids: [
+            DocumentEntityID(documentID: kept.id), DocumentEntityID(documentID: UUID()),
+        ])
         #expect(found.map(\.id) == [kept.id])
     }
 
@@ -139,15 +141,60 @@ struct DocumentCatalogTests {
 
     @Test func fileForUnknownDocumentFails() async {
         let (catalog, _) = await makeCatalog()
-        await #expect(throws: ShortcutFailure.documentNotFound) { try await catalog.file(for: UUID()) }
+        await #expect(throws: ShortcutFailure.documentNotFound) {
+            try await catalog.file(for: DocumentEntityID(documentID: UUID()))
+        }
     }
 }
 
-@Suite(.serialized) struct IntentTests {
+private final class IntentRuns: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TelemetryIntent] = []
+
+    var all: [TelemetryIntent] { lock.withLock { recorded } }
+
+    func append(_ intent: TelemetryIntent) {
+        lock.withLock { recorded.append(intent) }
+    }
+}
+
+/// How many tags the service held at each flush, so a flush can be shown to follow the work.
+private actor FlushLog {
+    var taggedAtFlush: [Int] = []
+
+    func append(_ count: Int) {
+        taggedAtFlush.append(count)
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1))) struct IntentTests {
+    private let runs = IntentRuns()
+
     private func install(_ documents: [Document] = []) async -> MockFolioService {
         let (_, service) = await makeCatalog(documents)
         IntentEnvironment.use { service }
+        let runs = runs
+        IntentEnvironment.recordRuns { runs.append($0) }
+        IntentEnvironment.flushRuns {}
         return service
+    }
+
+    @Test func everyShortcutRecordsItsRunByNameOnly() async throws {
+        let target = document("Gas bill", tags: [utilities])
+        _ = await install([target])
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        var search = SearchDocumentsIntent(query: "gas")
+        search.query = "gas"
+        _ = try await search.perform()
+        _ = try await GetLatestDocumentIntent().perform()
+        _ = try await FindDocumentsIntent().perform()
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(taxes)).perform()
+        _ = try await RemoveTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        _ = try await GetDocumentFileIntent(document: entity).perform()
+        #expect(
+            runs.all == [
+                .searchDocuments, .getLatestDocument, .findDocuments, .addTag, .removeTag, .getDocumentFile,
+            ])
     }
 
     @Test func searchReturnsEntitiesAndSaysHowMany() async throws {
@@ -233,12 +280,122 @@ struct DocumentCatalogTests {
     @Test func entityQueriesUseTheService() async throws {
         let target = document("Gas bill", correspondent: stadtwerke, type: invoice)
         _ = await install([target])
-        #expect(try await DocumentEntityQuery().entities(for: [target.id]).map(\.title) == ["Gas bill"])
+        #expect(
+            try await DocumentEntityQuery().entities(for: [DocumentEntityID(documentID: target.id)]).map(\.title)
+                == ["Gas bill"])
         #expect(try await DocumentEntityQuery().entities(matching: "gas").count == 1)
         #expect(try await TagEntityQuery().entities(matching: "util").map(\.name) == ["Utilities"])
         #expect(try await CorrespondentEntityQuery().suggestedEntities().map(\.name) == ["Stadtwerke Köln"])
         #expect(try await DocumentTypeEntityQuery().entities(for: [invoice.id]).map(\.name) == ["Invoice"])
         #expect(try await VaultEntityQuery().suggestedEntities().isEmpty)
+    }
+
+    private func installSpotlight(_ listed: [Document], vaultID: UUID) async -> FakeSpotlightIndex {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: UserDefaults(suiteName: "IntentTests-\(UUID())")!)
+        await spotlight.sessionChanged(to: .signedIn(URL(string: "https://folio.example")!)).value
+        let summaries = listed.map { DocumentSummary($0, correspondent: nil, documentType: nil) }
+        await spotlight.index(summaries, vaultID: vaultID).value
+        IntentEnvironment.use(spotlight: spotlight)
+        return fake
+    }
+
+    @Test func documentQueryKeepsADocumentFromAnotherVaultInSpotlight() async throws {
+        let vaultB = UUID()
+        let inB = document("Lease")
+        let (_, scopedB) = await makeCatalog([inB])
+        let root = MockFolioService(documents: [], vaultServices: [vaultB: scopedB])
+        IntentEnvironment.use { root }
+        let fake = await installSpotlight([inB], vaultID: vaultB)
+        defer { IntentEnvironment.use(spotlight: .shared) }
+
+        let entities = try await DocumentEntityQuery().entities(
+            for: [DocumentEntityID(documentID: inB.id, vaultID: vaultB)])
+        await IntentEnvironment.spotlight.idle()
+
+        #expect(entities.map(\.documentID) == [inB.id])
+        #expect(await fake.documentIDs == [inB.id])
+    }
+
+    @Test func documentQueryRemovesDocumentsGoneFromTheirVault() async throws {
+        let vault = UUID()
+        let kept = document("Kept"), gone = document("Gone")
+        let (_, scoped) = await makeCatalog([kept])
+        IntentEnvironment.use { MockFolioService(documents: [], vaultServices: [vault: scoped]) }
+        let fake = await installSpotlight([kept, gone], vaultID: vault)
+        defer { IntentEnvironment.use(spotlight: .shared) }
+
+        let entities = try await DocumentEntityQuery().entities(for: [
+            DocumentEntityID(documentID: gone.id, vaultID: vault),
+            DocumentEntityID(documentID: kept.id, vaultID: vault),
+        ])
+        await IntentEnvironment.spotlight.idle()
+
+        #expect(entities.map(\.documentID) == [kept.id])
+        #expect(await fake.documentIDs == [kept.id])
+    }
+
+    @Test func documentQueryNeverRemovesOnAMissWithoutAVault() async throws {
+        let elsewhere = document("In another vault")
+        _ = await install([])
+        let fake = await installSpotlight([elsewhere], vaultID: UUID())
+        defer { IntentEnvironment.use(spotlight: .shared) }
+
+        let entities = try await DocumentEntityQuery().entities(for: [DocumentEntityID(documentID: elsewhere.id)])
+        await IntentEnvironment.spotlight.idle()
+
+        #expect(entities.isEmpty)
+        #expect(await fake.documentIDs == [elsewhere.id])
+    }
+
+    @Test func documentQueryKeepsEntriesTheServerCouldNotAnswerFor() async throws {
+        let vault = UUID()
+        let kept = document("Kept"), flaky = document("Flaky")
+        let (_, scoped) = await makeCatalog([kept, flaky])
+        await scoped.setFailingDocuments([flaky.id])
+        IntentEnvironment.use { MockFolioService(documents: [], vaultServices: [vault: scoped]) }
+        let fake = await installSpotlight([kept, flaky], vaultID: vault)
+        defer { IntentEnvironment.use(spotlight: .shared) }
+
+        let entities = try await DocumentEntityQuery().entities(for: [
+            DocumentEntityID(documentID: flaky.id, vaultID: vault),
+            DocumentEntityID(documentID: kept.id, vaultID: vault),
+        ])
+        await IntentEnvironment.spotlight.idle()
+
+        #expect(entities.map(\.documentID) == [kept.id])
+        #expect(await fake.documentIDs == [kept.id, flaky.id])
+    }
+
+    @Test func spotlightItemsCarryTheVaultAwareEntity() {
+        let vault = UUID()
+        let target = document("Lease")
+        let item = SpotlightItem(
+            DocumentSummary(target, correspondent: nil, documentType: nil), vaultID: vault,
+            server: URL(string: "https://folio.example")!)
+
+        #expect(DocumentEntity(item.summary).id == DocumentEntityID(documentID: target.id, vaultID: vault))
+        #expect(DocumentEntity(item.summary).id.entityIdentifierString == item.identifier)
+    }
+
+    @Test func performSendsTelemetryAfterItsWorkAndAfterAFailure() async throws {
+        let target = document("Gas bill")
+        let service = await install([target])
+        let flushes = FlushLog()
+        IntentEnvironment.flushRuns {
+            let tagged = await service.tagged.count
+            await flushes.append(tagged)
+        }
+        defer { IntentEnvironment.flushRuns {} }
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        #expect(await flushes.taggedAtFlush == [1])
+
+        IntentEnvironment.use { nil }
+        await #expect(throws: ShortcutError.notSignedIn) {
+            try await GetLatestDocumentIntent().perform()
+        }
+        #expect(await flushes.taggedAtFlush.count == 2)
     }
 
     @Test func notSignedInSaysToOpenTheApp() async {

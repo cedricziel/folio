@@ -90,5 +90,6 @@ struct ScanReviewView: View {
         } message: {
             Text("These pages haven't been filed. Discarding the scan permanently removes them.")
         }
+        .telemetryScreen(.scanReview)
     }
 }
