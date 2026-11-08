@@ -630,39 +630,43 @@ pub(crate) async fn store_upload(
     // so the client's retry finds the document instead of storing it again.
     let state = state.clone();
     let (actor, lineage) = (current_actor(), current_lineage());
-    let stored = tokio::spawn(
-        with_actor(
-            actor,
-            with_lineage(lineage, async move {
-                match idempotency_key {
-                    Some(key) => {
-                        let key = UploadReceiptKey {
-                            vault,
-                            actor_scope: uploaded_by
-                                .as_ref()
-                                .map(|user| format!("user:{}", user.as_str()))
-                                .unwrap_or_else(|| "system".into()),
-                            key,
-                        };
-                        state.keyed_uploads.upload(key, upload).await
+    // Shutdown waits for these tasks, so a deploy does not leave a claimed key behind.
+    let stored = state
+        .upload_tasks
+        .clone()
+        .spawn(
+            with_actor(
+                actor,
+                with_lineage(lineage, async move {
+                    match idempotency_key {
+                        Some(key) => {
+                            let key = UploadReceiptKey {
+                                vault,
+                                actor_scope: uploaded_by
+                                    .as_ref()
+                                    .map(|user| format!("user:{}", user.as_str()))
+                                    .unwrap_or_else(|| "system".into()),
+                                key,
+                            };
+                            state.keyed_uploads.upload(key, upload).await
+                        }
+                        // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
+                        None => state
+                            .importer
+                            .import(vault, upload)
+                            .await
+                            .map(UploadOutcome::Created),
                     }
-                    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
-                    None => state
-                        .importer
-                        .import(vault, upload)
-                        .await
-                        .map(UploadOutcome::Created),
-                }
-            }),
+                }),
+            )
+            // Processing jobs inherit the request's trace from the current span.
+            .instrument(tracing::Span::current()),
         )
-        // Processing jobs inherit the request's trace from the current span.
-        .instrument(tracing::Span::current()),
-    )
-    .await
-    .map_err(|e| {
-        error!("Upload task failed: {}", e);
-        ApiError::internal("Upload failed")
-    })??;
+        .await
+        .map_err(|e| {
+            error!("Upload task failed: {}", e);
+            ApiError::internal("Upload failed")
+        })??;
 
     match stored {
         UploadOutcome::Created(document) => {
@@ -670,12 +674,20 @@ pub(crate) async fn store_upload(
             Ok(StoredUpload::Created(document))
         }
         UploadOutcome::Replayed(document) => Ok(StoredUpload::Replayed(document)),
+        UploadOutcome::InProgress => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "An upload with this Idempotency-Key is still in progress; retry shortly",
+        )
+        .with_retry_after(UPLOAD_RETRY_AFTER_SECS)),
         UploadOutcome::Deleted => Err(ApiError::new(
             StatusCode::GONE,
             "The document uploaded with this Idempotency-Key has been deleted",
         )),
     }
 }
+
+/// How long a client should wait before retrying an upload whose key is still in progress
+const UPLOAD_RETRY_AFTER_SECS: u64 = 5;
 
 /// A stored upload, or the one an earlier request with the same `Idempotency-Key` stored
 pub(crate) enum StoredUpload {
@@ -720,14 +732,12 @@ async fn upload_document(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let key = idempotency_key(&headers)?;
-    let html =
-        match store_upload(&state, vault, uploader, multipart, SourceKind::Upload, key).await? {
-            StoredUpload::Created(document) => {
-                DocumentStreams::added(&state, document).await?.into_html()
-            }
-            // The first request already added this row; adding it again would show the document twice.
-            StoredUpload::Replayed(_) => String::new(),
-        };
+    // A replay returns the row again: the retry exists because the first answer was lost, and Turbo replaces a
+    // row it already shows.
+    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Upload, key)
+        .await?
+        .into_document();
+    let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
 }

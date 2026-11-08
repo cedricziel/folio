@@ -15,7 +15,7 @@ mod vaults;
 mod workflow_engine;
 
 pub use file_sizes::backfill_file_sizes;
-pub use idempotent_uploads::{IdempotentUploads, UploadOutcome};
+pub use idempotent_uploads::{ClaimTiming, IdempotentUploads, UploadOutcome};
 pub use importer::Importer;
 pub use ingest::{content_key, IngestPipeline, IngestScheduler};
 pub use library::{
