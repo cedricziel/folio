@@ -114,22 +114,42 @@ struct VaultProviderCatalogTests {
     @Test func foldersCarryTheDatesOfWhatTheyStandFor() async throws {
         let vaultCreated = Date(timeIntervalSince1970: 1_700_000_000)
         let personCreated = Date(timeIntervalSince1970: 1_710_000_000)
+        let tagCreated = Date(timeIntervalSince1970: 1_720_000_000)
+        let typeCreated = Date(timeIntervalSince1970: 1_730_000_000)
         let vault = Vault(id: UUID(), name: "Personal", role: .owner, createdAt: vaultCreated)
         let person = Correspondent(name: "ACME", createdAt: personCreated)
+        let tag = Tag(name: "Taxes", createdAt: tagCreated)
+        let type = DocumentType(name: "Invoice", createdAt: typeCreated)
+        let target = MockFolioService(correspondents: [person], types: [type])
+        await target.setTags([tag])
         let source = MockFolioService(
-            vaults: VaultCatalog(vaults: [vault], defaultVaultID: vault.id),
-            vaultServices: [vault.id: MockFolioService(correspondents: [person])]
+            vaults: VaultCatalog(vaults: [vault], defaultVaultID: vault.id), vaultServices: [vault.id: target]
         )
         let catalog = FolioCatalog(service: source)
 
         let root = try #require(try await catalog.children(of: .root).first)
         let sections = try await catalog.children(of: .vault(vault.id))
-        let people = try await catalog.children(of: .scoped(vault.id, .correspondents))
+        let listed = [
+            try await catalog.children(of: .scoped(vault.id, .correspondents)),
+            try await catalog.children(of: .scoped(vault.id, .tags)),
+            try await catalog.children(of: .scoped(vault.id, .types)),
+        ].flatMap { $0 }
+        let workingSet = try await catalog.allNodes()
+        let expected: [FolioItemID: Date] = [
+            .folder(.scoped(vault.id, .correspondent(person.id))): personCreated,
+            .folder(.scoped(vault.id, .tag(tag.id))): tagCreated,
+            .folder(.scoped(vault.id, .type(type.id))): typeCreated,
+        ]
 
         #expect(root.created == vaultCreated)
         #expect(!sections.isEmpty && sections.allSatisfy { $0.created == vaultCreated && $0.modified == vaultCreated })
-        #expect(people.map(\.created) == [personCreated])
-        #expect(try await catalog.allNodes().allSatisfy { $0.created != nil })
+        #expect(workingSet.allSatisfy { $0.created != nil })
+        for (id, date) in expected {
+            for nodes in [listed, workingSet] {
+                let node = try #require(nodes.first { $0.id == id })
+                #expect(node.created == date && node.modified == date)
+            }
+        }
     }
 
     @Test func viewerInboxIsReadOnlyAndCannotUpload() async throws {
