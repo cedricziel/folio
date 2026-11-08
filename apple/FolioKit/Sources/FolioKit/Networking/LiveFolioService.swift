@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import OpenAPIRuntime
 import OpenAPIURLSession
+import OpenTelemetryApi
 import UniformTypeIdentifiers
 
 /// Talks to a Folio server. JSON endpoints go through the generated client; file transfer uses
@@ -282,7 +283,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     }
 
     public func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage {
-        try await call("documents.browse") {
+        try await call("documents.browse", attributes: query.telemetryAttributes(cursor: cursor)) {
             let filter = query.filter
             let input = Operations.BrowseDocuments.Input.Query(
                 q: query.text.isEmpty ? nil : query.text,
@@ -648,10 +649,12 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         }
     }
 
-    private func call<T>(_ name: String, _ work: () async throws -> T) async throws -> T {
+    private func call<T>(
+        _ name: String, attributes: [String: AttributeValue] = [:], _ work: () async throws -> T
+    ) async throws -> T {
         // Telemetry sees the transport error before it is mapped, so a span can tell a timeout from a cancel.
         if let telemetry {
-            return try await mappedCall { try await telemetry.operation(name, work) }
+            return try await mappedCall { try await telemetry.operation(name, attributes: attributes, work) }
         }
         return try await mappedCall(work)
     }

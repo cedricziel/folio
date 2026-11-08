@@ -45,7 +45,9 @@ private final class TelemetryCapture: @unchecked Sendable {
         let environment = ProcessInfo.processInfo.environment
         let url = try #require(environment["FOLIO_TELEMETRY_SMOKE_URL"].flatMap(URL.init(string:)))
         let provider = SmokeToken(value: environment["FOLIO_TELEMETRY_SMOKE_TOKEN"] ?? "folio-telemetry-smoke")
-        let telemetry = FolioTelemetry(installationStore: TestInstallationIDStore())
+        let telemetry = FolioTelemetry(
+            session: nil, installationStore: TestInstallationIDStore(), sessions: TelemetrySession(directory: nil)
+        )
         defer { telemetry.stop() }
         await telemetry.configure(baseURL: url, tokenProvider: provider)
         let runtime = try #require(telemetry.current)
@@ -156,7 +158,8 @@ private final class TelemetryCapture: @unchecked Sendable {
             return (200, Data("{}".utf8))
         }
         let telemetry = FolioTelemetry(
-            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore(),
+            sessions: TelemetrySession(directory: nil)
         )
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         let network = URLSession(configuration: config)
@@ -215,7 +218,8 @@ private final class TelemetryCapture: @unchecked Sendable {
             return (503, Data())
         }
         let telemetry = FolioTelemetry(
-            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore(),
+            sessions: TelemetrySession(directory: nil)
         )
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         let service = LiveFolioService(
@@ -322,7 +326,8 @@ private final class TelemetryCapture: @unchecked Sendable {
         let store = TestInstallationIDStore()
         store.readUnavailable = true
         let telemetry = FolioTelemetry(
-            session: URLSession(configuration: config), installationStore: store
+            session: URLSession(configuration: config), installationStore: store,
+            sessions: TelemetrySession(directory: nil)
         )
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         #expect(await telemetry.operation("documents.list") { 42 } == 42)
@@ -343,12 +348,136 @@ private final class TelemetryCapture: @unchecked Sendable {
             return (status, Data(#"{"enabled":false,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8))
         }
         let telemetry = FolioTelemetry(
-            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore(),
+            sessions: TelemetrySession(directory: nil)
         )
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         #expect(await telemetry.operation("documents.list") { 42 } == 42)
         #expect(telemetry.current == nil)
         #expect(capture.requests.count == 1)
+    }
+
+    private func recordingTelemetry(
+        sessions: TelemetrySession = TelemetrySession(directory: nil)
+    ) -> (FolioTelemetry, TelemetryCapture) {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                return (200, Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8))
+            }
+            return (200, Data("{}".utf8))
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore(),
+            sessions: sessions
+        )
+        return (telemetry, capture)
+    }
+
+    private func exportedLogs(_ capture: TelemetryCapture) throws -> [Opentelemetry_Proto_Logs_V1_LogRecord] {
+        try capture.requests.filter { $0.0.url?.lastPathComponent == "logs" }.flatMap {
+            try Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest(serializedBytes: $0.1)
+                .resourceLogs.flatMap(\.scopeLogs).flatMap(\.logRecords)
+        }
+    }
+
+    private func exportedSpans(_ capture: TelemetryCapture) throws -> [Opentelemetry_Proto_Trace_V1_Span] {
+        try capture.requests.filter { $0.0.url?.lastPathComponent == "traces" }.flatMap {
+            try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(serializedBytes: $0.1)
+                .resourceSpans.flatMap(\.scopeSpans).flatMap(\.spans)
+        }
+    }
+
+    private func strings(_ attributes: [Opentelemetry_Proto_Common_V1_KeyValue]) -> [String: String] {
+        Dictionary(attributes.map { ($0.key, $0.value.stringValue) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    @Test func screenAndSessionStartBeforeConfigurationAreExportedOnceReady() async throws {
+        let (telemetry, capture) = recordingTelemetry()
+        defer { telemetry.stop() }
+        telemetry.screen(.inbox)
+        telemetry.action(.documentOpen)
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let runtime = try #require(telemetry.current)
+        await Task.detached { runtime.flush() }.value
+
+        let logs = try exportedLogs(capture)
+        let events = logs.map(\.eventName).filter { $0 != "folio.operation.completed" }
+        #expect(events == ["session.start", "folio.screen.view"])
+        let start = try #require(logs.first { $0.eventName == "session.start" })
+        let screen = try #require(logs.first { $0.eventName == "folio.screen.view" })
+        #expect(strings(screen.attributes)["app.screen.name"] == "inbox")
+        #expect(strings(screen.attributes)["session.id"] == strings(start.attributes)["session.id"])
+        let spans = try exportedSpans(capture).map(\.name)
+        #expect(spans.contains("folio.telemetry.configured"))
+        #expect(!spans.contains("app.session.start"))
+        #expect(!spans.contains("folio.screen.view"))
+    }
+
+    @Test func spansAndLogsCarrySessionScreenAndBrowseContextButMetricsDoNot() async throws {
+        let (telemetry, capture) = recordingTelemetry()
+        defer { telemetry.stop() }
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        telemetry.screen(.inbox)
+        let query = DocumentBrowseQuery(scope: .inbox)
+        _ = await telemetry.operation("documents.browse", attributes: query.telemetryAttributes(cursor: nil)) { 1 }
+        let runtime = try #require(telemetry.current)
+        await Task.detached { runtime.flush() }.value
+
+        let span = try #require(exportedSpans(capture).first { $0.name == "documents.browse" })
+        let spanAttributes = strings(span.attributes)
+        #expect(spanAttributes["app.screen.name"] == "inbox")
+        #expect(spanAttributes["folio.browse.scope"] == "inbox")
+        let session = try #require(spanAttributes["session.id"])
+        let completion = try #require(
+            exportedLogs(capture).first {
+                $0.eventName == "folio.operation.completed" && $0.body.stringValue == "documents.browse"
+            })
+        #expect(strings(completion.attributes)["session.id"] == session)
+        #expect(strings(completion.attributes)["folio.browse.page"] == "first")
+        let metrics = try capture.requests.filter { $0.0.url?.lastPathComponent == "metrics" }.flatMap {
+            try Opentelemetry_Proto_Collector_Metrics_V1_ExportMetricsServiceRequest(serializedBytes: $0.1)
+                .resourceMetrics.flatMap(\.scopeMetrics).flatMap(\.metrics)
+        }
+        let operations = try #require(metrics.first { $0.name == "folio.app.operations" })
+        let keys = Set(operations.sum.dataPoints.flatMap { $0.attributes.map(\.key) })
+        #expect(keys == ["folio.operation", "folio.outcome"])
+    }
+
+    @Test func signingOutSendsSessionEndWhileCredentialsStillWork() async throws {
+        let (telemetry, capture) = recordingTelemetry()
+        defer { telemetry.stop() }
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        telemetry.activity()
+        await telemetry.endSession(.signOut)
+
+        let end = try #require(exportedLogs(capture).first { $0.eventName == "session.end" })
+        #expect(strings(end.attributes)["folio.session.end_reason"] == "sign_out")
+    }
+
+    @Test func aRotationRaisedBeforeARefreshIsSentByTheRetiringRuntime() async throws {
+        let clock = MovableClock()
+        let (telemetry, capture) = recordingTelemetry(sessions: TelemetrySession(directory: nil, now: { clock.now }))
+        defer { telemetry.stop() }
+        telemetry.refreshInterval = 0
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        telemetry.activity()
+        clock.advance(TelemetrySession.inactivity + 1)
+        // A foreground after a long pause: the rotation lands on the runtime the refresh then replaces.
+        telemetry.activity()
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+
+        var events: [String] = []
+        // Under the 5-second batch delay, so only the retiring flush can deliver it in time.
+        for _ in 0..<20 where !events.contains("session.end") {
+            try await Task.sleep(for: .milliseconds(100))
+            events = try exportedLogs(capture).map(\.eventName)
+        }
+        #expect(events.filter { $0 == "session.start" }.count == 2)
+        #expect(events.contains("session.end"))
     }
 
     // URLSessionInstrumentation swizzles URLSession once per process, and the first configured instance
@@ -366,7 +495,8 @@ private final class TelemetryCapture: @unchecked Sendable {
             return (200, Data("{}".utf8))
         }
         let telemetry = FolioTelemetry(
-            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore(),
+            sessions: TelemetrySession(directory: nil)
         )
         defer { telemetry.stop() }
         telemetry.refreshInterval = 0
@@ -407,7 +537,8 @@ private final class TelemetryCapture: @unchecked Sendable {
             return (200, Data("{}".utf8))
         }
         let telemetry = FolioTelemetry(
-            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore(),
+            sessions: TelemetrySession(directory: nil)
         )
         defer { telemetry.stop() }
         telemetry.refreshInterval = 0
@@ -453,6 +584,17 @@ private final class TelemetryCapture: @unchecked Sendable {
         await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
         let configRequests = capture.requests.filter { $0.0.url?.path == "/api/telemetry/config" }
         #expect(configRequests.count == 3)
+    }
+}
+
+private final class MovableClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = Date(timeIntervalSince1970: 1_800_000_000)
+
+    var now: Date { lock.withLock { value } }
+
+    func advance(_ seconds: TimeInterval) {
+        lock.withLock { value = value.addingTimeInterval(seconds) }
     }
 }
 

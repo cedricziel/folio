@@ -27,14 +27,25 @@ public final class FolioTelemetry: @unchecked Sendable {
     private var instrumentation: URLSessionInstrumentation?
     private let installationIdentity: InstallationIdentity
     private let session: URLSession
+    // Session and screen belong to the process, not to a runtime that each reconfigure replaces.
+    private let sessions: TelemetrySession
+    private var currentScreen: TelemetryScreen?
+    private var lastScreenAt = ContinuousClock.Instant.now - .seconds(60)
+    private var pendingBoundaries: [SessionBoundary] = []
+    private var limiter = UIEventLimiter()
 
-    public init(
+    public convenience init(
         session: URLSession? = nil,
         installationStore: any InstallationIDStore = KeychainInstallationIDStore()
     ) {
+        self.init(session: session, installationStore: installationStore, sessions: .shared)
+    }
+
+    init(session: URLSession?, installationStore: any InstallationIDStore, sessions: TelemetrySession) {
         installationIdentity = InstallationIdentity(store: installationStore)
         self.session =
             session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
+        self.sessions = sessions
         _ = Self.contextInstalled
     }
 
@@ -58,6 +69,11 @@ public final class FolioTelemetry: @unchecked Sendable {
         lock.withLock {
             guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= refreshInterval else {
                 return nil
+            }
+            if let previousURL = configuredURL, previousURL != baseURL {
+                // A new server starts a new session; the old runtime's queue is discarded below.
+                _ = sessions.end(.serverChange)
+                pendingBoundaries = []
             }
             if configuredURL != baseURL {
                 // Signals recorded for another server must not be sent once its credentials are gone.
@@ -109,7 +125,10 @@ public final class FolioTelemetry: @unchecked Sendable {
                         configuration: .init(
                             shouldRecordPayload: { _ in false },
                             shouldInstrument: { [weak self] in self?.allows($0) ?? false },
-                            spanCustomization: { request, builder in
+                            spanCustomization: { [weak self] request, builder in
+                                for (key, value) in self?.stamp() ?? [:] {
+                                    builder.setAttribute(key: key, value: value)
+                                }
                                 let route = TelemetryRequestPolicy.route(request.url)
                                 builder.setAttribute(
                                     key: "url.full", value: TelemetryRequestPolicy.redactedURL(request.url))
@@ -129,7 +148,20 @@ public final class FolioTelemetry: @unchecked Sendable {
                 return true
             }
             if let retired { Task.detached { retired.retire() } }
-            if accepted { next.event("app.session.start") } else { next.shutdown() }
+            guard accepted else {
+                next.shutdown()
+                return
+            }
+            next.event("folio.telemetry.configured")
+            // What happened before export was possible: session boundaries, and the screen on show.
+            let (queued, screen) = lock.withLock { () -> ([SessionBoundary], TelemetryScreen?) in
+                defer { pendingBoundaries = [] }
+                return (pendingBoundaries, currentScreen)
+            }
+            for boundary in queued { next.boundary(boundary) }
+            if retired == nil, let screen {
+                next.uiEvent("folio.screen.view", attributes: stamp(["app.screen.name": .string(screen.rawValue)]))
+            }
         } catch {
             // Optional observability must never block sign-in or document access. A server that refuses the
             // settings request (401, 403, no token) stops collection. Any other failure, such as a 5xx while the
@@ -152,7 +184,10 @@ public final class FolioTelemetry: @unchecked Sendable {
 
     /// Stops collection immediately and discards queued exports on sign-out.
     public func stop() {
+        _ = sessions.end(.signOut)
         let previous = lock.withLock {
+            pendingBoundaries = []
+            currentScreen = nil
             generation = UUID()
             configuredURL = nil
             configuredProvider = nil
@@ -164,9 +199,89 @@ public final class FolioTelemetry: @unchecked Sendable {
         if let previous { Task.detached { previous.shutdown() } }
     }
 
+    /// Ends the session and sends its `session.end` while credentials still work. Call before signing out.
+    public func endSession(_ reason: SessionEndReason) async {
+        let boundaries = sessions.end(reason)
+        lock.withLock {
+            pendingBoundaries = []
+            currentScreen = nil
+        }
+        guard let runtime = current else { return }
+        for boundary in boundaries { runtime.boundary(boundary) }
+        await flush(timeout: .milliseconds(1500))
+    }
+
+    /// Records that the person is using Folio: extends the shared session, or starts the next one.
+    public func activity() {
+        record(sessions.touch().boundaries)
+    }
+
+    /// Records the screen on show. The same screen again within a second is not reported twice.
+    public func screen(_ screen: TelemetryScreen) {
+        let boundaries = sessions.touch().boundaries
+        let repeated = lock.withLock { () -> Bool in
+            let now = ContinuousClock.now
+            defer {
+                currentScreen = screen
+                lastScreenAt = now
+            }
+            return currentScreen == screen && now - lastScreenAt < .seconds(1)
+        }
+        record(
+            boundaries,
+            event: repeated ? nil : ("folio.screen.view", ["app.screen.name": .string(screen.rawValue)]))
+    }
+
+    /// Records a deliberate user action by name. Actions before telemetry is configured are dropped.
+    public func action(_ action: TelemetryAction, upload source: UploadSource? = nil) {
+        var attributes: [String: AttributeValue] = ["folio.action.name": .string(action.rawValue)]
+        if let source { attributes["folio.upload.source"] = .string(source.rawValue) }
+        record(sessions.touch().boundaries, event: ("folio.action", attributes))
+    }
+
+    /// Records that a Shortcut ran.
+    public func intent(_ intent: TelemetryIntent) {
+        record(
+            sessions.touch().boundaries,
+            event: (
+                "folio.action",
+                [
+                    "folio.action.name": .string(TelemetryAction.intentRun.rawValue),
+                    "folio.intent.name": .string(intent.rawValue),
+                ]
+            ))
+    }
+
+    /// Sends session boundaries and a UI event now, or keeps the latest boundaries until a runtime is ready.
+    private func record(_ boundaries: [SessionBoundary], event: (String, [String: AttributeValue])? = nil) {
+        let target = lock.withLock { () -> (TelemetryRuntime, Bool, Int)? in
+            guard let runtime else {
+                pendingBoundaries.append(contentsOf: boundaries)
+                if pendingBoundaries.count > 8 { pendingBoundaries.removeFirst(pendingBoundaries.count - 8) }
+                return nil
+            }
+            let allowed = event == nil || limiter.allow(at: .now)
+            return (runtime, allowed, limiter.takeDropped())
+        }
+        guard let target else { return }
+        let (runtime, allowed, dropped) = target
+        for boundary in boundaries { runtime.boundary(boundary) }
+        if let event, allowed { runtime.uiEvent(event.0, attributes: stamp(event.1)) }
+        if dropped > 0 { runtime.dropped(dropped) }
+    }
+
+    /// The live session and current screen, under `attributes`, for spans and log records. Never metrics.
+    func stamp(_ attributes: [String: AttributeValue] = [:]) -> [String: AttributeValue] {
+        var stamped: [String: AttributeValue] = [:]
+        if let id = sessions.current() { stamped["session.id"] = .string(id) }
+        if let screen = lock.withLock({ currentScreen }) { stamped["app.screen.name"] = .string(screen.rawValue) }
+        return stamped.merging(attributes) { _, explicit in explicit }
+    }
+
     /// Records an app lifecycle transition without view, account, or document details.
     public func lifecycle(_ phase: String) {
         guard ["active", "inactive", "background"].contains(phase) else { return }
+        if phase == "active" { activity() }
         current?.event("app.lifecycle.\(phase)")
         if phase == "active",
             let target = lock.withLock({ configuredURL.flatMap { url in configuredProvider.map { (url, $0) } } })
@@ -176,14 +291,22 @@ public final class FolioTelemetry: @unchecked Sendable {
         if phase == "background" { flush() }
     }
 
-    /// Runs a named operation; only the caller's fixed operation name and outcome are exported.
-    public func operation<T>(_ name: String, _ work: () async throws -> T) async rethrows -> T {
+    /// Runs a named operation; only the caller's fixed operation name, `attributes` and outcome are exported.
+    /// `attributes` go on the span and its completion log, never on metrics.
+    public func operation<T>(
+        _ name: String, attributes: [String: AttributeValue] = [:], _ work: () async throws -> T
+    ) async rethrows -> T {
         guard let runtime = current else { return try await work() }
         let start = ContinuousClock.now
-        return try await runtime.tracer.spanBuilder(spanName: name).withActiveSpan { span in
+        let context = stamp(attributes)
+        let builder = context.reduce(runtime.tracer.spanBuilder(spanName: name)) {
+            $0.setAttribute(key: $1.key, value: $1.value)
+        }
+        return try await builder.withActiveSpan { span in
             do {
                 let result = try await work()
-                runtime.completed(name, outcome: "success", duration: start.duration(to: .now), span: span)
+                runtime.completed(
+                    name, outcome: "success", duration: start.duration(to: .now), span: span, context: context)
                 return result
             } catch {
                 let failure = OperationFailure(error, cancelled: Task.isCancelled)
@@ -192,11 +315,14 @@ public final class FolioTelemetry: @unchecked Sendable {
                 }
                 if failure.isCancellation {
                     span.setAttribute(key: "folio.outcome", value: "cancelled")
-                    runtime.completed(name, outcome: "cancelled", duration: start.duration(to: .now), span: span)
+                    runtime.completed(
+                        name, outcome: "cancelled", duration: start.duration(to: .now), span: span,
+                        context: context)
                 } else {
                     span.setAttribute(key: "error.type", value: failure.type)
                     span.status = .error(description: failure.type)
-                    runtime.completed(name, outcome: "error", duration: start.duration(to: .now), span: span)
+                    runtime.completed(
+                        name, outcome: "error", duration: start.duration(to: .now), span: span, context: context)
                 }
                 throw error
             }
@@ -492,6 +618,7 @@ final class TelemetryRuntime: @unchecked Sendable {
     private let measurementLock = NSLock()
     private var operations: LongCounter
     private var duration: DoubleHistogram
+    private var droppedEvents: LongCounter
 
     init(baseURL: URL, transport: TelemetryHTTPClient, resource: Resource) {
         self.baseURL = baseURL
@@ -525,13 +652,22 @@ final class TelemetryRuntime: @unchecked Sendable {
                 selector: InstrumentSelector.builder().setInstrument(name: "folio[.]app[.].*").build(),
                 view: View.builder().build()
             )
+            .registerView(
+                selector: InstrumentSelector.builder().setInstrument(name: "folio[.]telemetry[.].*").build(),
+                view: View.builder().build()
+            )
             .registerMetricReader(reader: reader).build()
         let meter = metrics.get(name: "folio-app")
         operations = meter.counterBuilder(name: "folio.app.operations").build()
         duration = meter.histogramBuilder(name: "folio.app.operation.duration").setUnit("s").build()
+        droppedEvents = meter.counterBuilder(name: "folio.telemetry.ui_events.dropped").build()
     }
 
-    func completed(_ name: String, outcome: String, duration elapsed: Duration, span: any SpanBase) {
+    /// `context` (session, screen, browse details) goes on the log only; metrics keep operation and outcome.
+    func completed(
+        _ name: String, outcome: String, duration elapsed: Duration, span: any SpanBase,
+        context: [String: AttributeValue] = [:]
+    ) {
         let attributes: [String: AttributeValue] = [
             "folio.operation": .string(name), "folio.outcome": .string(outcome),
         ]
@@ -542,8 +678,33 @@ final class TelemetryRuntime: @unchecked Sendable {
         }
         logs.get(instrumentationScopeName: "folio-app").logRecordBuilder().setTimestamp(Date())
             .setEventName("folio.operation.completed").setBody(.string(name))
-            .setSeverity(outcome == "success" ? .info : .error).setAttributes(attributes)
+            .setSeverity(outcome == "success" ? .info : .error)
+            .setAttributes(context.merging(attributes) { _, operation in operation })
             .setSpanContext(span.context).emit()
+    }
+
+    /// A log-only event: no span and no metric point.
+    func uiEvent(_ name: String, attributes: [String: AttributeValue], at timestamp: Date = Date()) {
+        logs.get(instrumentationScopeName: "folio-app").logRecordBuilder().setTimestamp(timestamp)
+            .setEventName(name).setSeverity(.info).setAttributes(attributes).emit()
+    }
+
+    func boundary(_ boundary: SessionBoundary) {
+        switch boundary {
+        case .start(let id, let previousID):
+            var attributes: [String: AttributeValue] = ["session.id": .string(id)]
+            if let previousID { attributes["session.previous_id"] = .string(previousID) }
+            uiEvent("session.start", attributes: attributes)
+        case .end(let id, let reason, let at):
+            uiEvent(
+                "session.end",
+                attributes: ["session.id": .string(id), "folio.session.end_reason": .string(reason.rawValue)],
+                at: at)
+        }
+    }
+
+    func dropped(_ count: Int) {
+        measurementLock.withLock { droppedEvents.add(value: count, attributes: [:]) }
     }
 
     func event(_ name: String) {

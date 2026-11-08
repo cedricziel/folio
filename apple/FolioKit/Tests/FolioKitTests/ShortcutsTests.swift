@@ -139,11 +139,44 @@ struct DocumentCatalogTests {
     }
 }
 
+private final class IntentRuns: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TelemetryIntent] = []
+
+    var all: [TelemetryIntent] { lock.withLock { recorded } }
+
+    func append(_ intent: TelemetryIntent) {
+        lock.withLock { recorded.append(intent) }
+    }
+}
+
 @Suite(.serialized) struct IntentTests {
+    private let runs = IntentRuns()
+
     private func install(_ documents: [Document] = []) async -> MockFolioService {
         let (_, service) = await makeCatalog(documents)
         IntentEnvironment.use { service }
+        let runs = runs
+        IntentEnvironment.recordRuns { runs.append($0) }
         return service
+    }
+
+    @Test func everyShortcutRecordsItsRunByNameOnly() async throws {
+        let target = document("Gas bill", tags: [utilities])
+        _ = await install([target])
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        var search = SearchDocumentsIntent(query: "gas")
+        search.query = "gas"
+        _ = try await search.perform()
+        _ = try await GetLatestDocumentIntent().perform()
+        _ = try await FindDocumentsIntent().perform()
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(taxes)).perform()
+        _ = try await RemoveTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        _ = try await GetDocumentFileIntent(document: entity).perform()
+        #expect(
+            runs.all == [
+                .searchDocuments, .getLatestDocument, .findDocuments, .addTag, .removeTag, .getDocumentFile,
+            ])
     }
 
     @Test func searchReturnsEntitiesAndSaysHowMany() async throws {

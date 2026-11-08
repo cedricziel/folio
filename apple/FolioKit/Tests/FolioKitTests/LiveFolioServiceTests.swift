@@ -371,6 +371,18 @@ private let documentJSON = """
         #expect(page.documents.first?.tags.first?.name == "Taxes")
     }
 
+    @Test func browseScopeStaysOutOfTheRequest() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, _ in
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            #expect(Set(items.map(\.name)) == ["limit", "sort"])
+            #expect(!request.url!.absoluteString.contains("saved_view"))
+            return .init(body: Data("{\"vault_id\":\"\(vault)\",\"documents\":[]}".utf8))
+        }
+        _ = try await makeService().scoped(to: vault).documentPage(
+            query: DocumentBrowseQuery(scope: .savedView), cursor: nil)
+    }
+
     @Test func directDocumentLookupKeepsVaultScopeAndTags() async throws {
         let vault = UUID()
         let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!

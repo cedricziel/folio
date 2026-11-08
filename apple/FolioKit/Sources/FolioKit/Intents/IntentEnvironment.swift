@@ -14,6 +14,21 @@ public enum IntentEnvironment {
         factory.withLock { $0 = make }
     }
 
+    public typealias IntentRecorder = @Sendable (TelemetryIntent) -> Void
+
+    private static let recorder = OSAllocatedUnfairLock<IntentRecorder>(
+        initialState: { FolioTelemetry.shared.intent($0) })
+
+    /// Swaps where Shortcut runs are recorded, for tests.
+    public static func recordRuns(with record: @escaping IntentRecorder) {
+        recorder.withLock { $0 = record }
+    }
+
+    /// Records that a Shortcut ran, by name only.
+    static func ran(_ intent: TelemetryIntent) {
+        recorder.withLock { $0 }(intent)
+    }
+
     public static func catalog() throws -> DocumentCatalog {
         guard let service = try factory.withLock({ $0 })() else { throw ShortcutError.notSignedIn }
         return DocumentCatalog(service: service)
