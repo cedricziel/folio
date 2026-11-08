@@ -137,6 +137,9 @@ pub struct Repositories {
     pub sources: Arc<dyn SourceRepository>,
     pub ledger: Arc<dyn IngestLedger>,
     pub ingest_outcomes: Arc<dyn IngestOutcomeRepository>,
+    pub import_runs: Arc<dyn folio_core::ports::ImportRunRepository>,
+    pub import_items: Arc<dyn folio_core::ports::ImportItemRepository>,
+    pub paperless_ledger: Arc<dyn folio_core::ports::PaperlessLedgerRepository>,
     pub search: Arc<dyn SearchService>,
     pub jobs: JobQueue,
     pub auth: Arc<dyn AuthStore>,
@@ -177,6 +180,7 @@ impl Database {
         match self {
             Self::Sqlite(pool) => {
                 let vaults = Arc::new(SqliteVaultRepository::new(pool.clone()));
+                let imports = Arc::new(sqlite::SqliteImportRepository::new(pool.clone()));
                 let wake = Arc::new(Notify::new());
                 let documents = |origin| {
                     Arc::new(
@@ -207,6 +211,9 @@ impl Database {
                     ingest_outcomes: Arc::new(sqlite::SqliteIngestOutcomeRepository::new(
                         pool.clone(),
                     )),
+                    import_runs: imports.clone(),
+                    import_items: imports.clone(),
+                    paperless_ledger: imports,
                     search: Arc::new(SqliteSearchService::new(pool.clone())),
                     jobs: JobQueue::sqlite(pool.clone()),
                     auth: Arc::new(SqliteAuthStore::new(pool.clone())),
@@ -218,6 +225,7 @@ impl Database {
             }
             Self::Postgres(pool) => {
                 let vaults = Arc::new(PostgresVaultRepository::new(pool.clone()));
+                let imports = Arc::new(postgres::PostgresImportRepository::new(pool.clone()));
                 let wake = Arc::new(Notify::new());
                 let documents = |origin| {
                     Arc::new(
@@ -250,6 +258,9 @@ impl Database {
                     ingest_outcomes: Arc::new(postgres::PostgresIngestOutcomeRepository::new(
                         pool.clone(),
                     )),
+                    import_runs: imports.clone(),
+                    import_items: imports.clone(),
+                    paperless_ledger: imports,
                     search: Arc::new(PostgresSearchService::new(pool.clone()).await),
                     jobs: JobQueue::postgres(pool.clone()),
                     auth: Arc::new(PostgresAuthStore::new(pool.clone())),
