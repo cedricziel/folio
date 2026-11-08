@@ -99,6 +99,28 @@ activity_types="$(plutil -extract NSUserActivityTypes json -o - "$folio_dir/Reso
 expect "Folio-Info.plist NSUserActivityTypes" "$activity_types" \
     '["com.cedricziel.folio.document","com.cedricziel.folio.library","com.cedricziel.folio.saved-view"]'
 
+# Info.plist and entitlement values the build expands from FOLIO_* when it processes each target, so the
+# identifiers checked below are the ones these files end up with.
+plistbuddy="${PLISTBUDDY:-/usr/libexec/PlistBuddy}"
+plist_value() {
+    "$plistbuddy" -c "Print :$1" "$2" 2>/dev/null || true
+}
+for name in Folio FolioShare FolioFileProvider; do
+    info="$folio_dir/Resources/$name-Info.plist"
+    entitlements="$folio_dir/Resources/$name.entitlements"
+    expect "$name-Info.plist FolioKeychainGroup" "$(plist_value FolioKeychainGroup "$info")" \
+        '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
+    expect "$name-Info.plist FolioAppGroup" "$(plist_value FolioAppGroup "$info")" '$(FOLIO_APP_GROUP)'
+    expect "$name-Info.plist FolioCallbackScheme" "$(plist_value FolioCallbackScheme "$info")" '$(FOLIO_BUNDLE_ID)'
+    expect "$name.entitlements keychain-access-groups" "$(plist_value keychain-access-groups:0 "$entitlements")" \
+        '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
+    expect "$name.entitlements application-groups" \
+        "$(plist_value com.apple.security.application-groups:0 "$entitlements")" '$(FOLIO_APP_GROUP)'
+done
+expect "FolioFileProvider-Info.plist NSExtensionFileProviderDocumentGroup" \
+    "$(plist_value NSExtension:NSExtensionFileProviderDocumentGroup "$folio_dir/Resources/FolioFileProvider-Info.plist")" \
+    '$(FOLIO_APP_GROUP)'
+
 # The App Store profile has no Associated Domains capability; the key would break signing.
 if [ "$mode" = official ] &&
     grep -q com.apple.developer.associated-domains "$folio_dir/Resources/Folio.entitlements"; then
@@ -125,6 +147,7 @@ for entry in "${targets[@]}"; do
             expect "$label DEVELOPMENT_TEAM" "$(setting DEVELOPMENT_TEAM <<<"$settings")" "$team"
             expect "$label CODE_SIGN_ENTITLEMENTS" "$(setting CODE_SIGN_ENTITLEMENTS <<<"$settings")" "$entitlements"
             expect "$label FOLIO_APP_GROUP" "$(setting FOLIO_APP_GROUP <<<"$settings")" "$app_group"
+            expect "$label FOLIO_BUNDLE_ID" "$(setting FOLIO_BUNDLE_ID <<<"$settings")" "$bundle"
             [ "$configuration" = Release ] || continue
             if [ "$sdk" = macosx ]; then platform=MACOS; else platform=IOS; fi
             profile="$(profile_for "$profile_key" "$platform" "$suffix")"
