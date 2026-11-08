@@ -103,8 +103,7 @@ struct WorkspaceView: View {
                     onSignOut: onSignOut,
                     onNavigate: { workspace.destination = $0 },
                     onOpenDocument: { workspace.open($0, vaultID: $1) },
-                    advertisedList: workspace.selectedSavedViewID.map(AdvertisedList.savedView)
-                        ?? .library(workspace.destination == .all ? .all : .inbox)
+                    advertisedList: advertisedList
                 )
                 .environment(\.thumbnailCache, workspace.thumbnails)
 
@@ -198,6 +197,15 @@ struct WorkspaceView: View {
             Button("OK") { workspace.dismissNavigationError() }
         } message: {
             Text(workspace.navigationError ?? "")
+        }
+    }
+
+    /// The list Handoff offers while no document is selected.
+    private var advertisedList: AdvertisedList {
+        if let savedView = workspace.selectedSavedViewID { return .savedView(savedView) }
+        switch workspace.destination {
+        case .inbox: return .library(.inbox)
+        case .all: return .library(.all)
         }
     }
 

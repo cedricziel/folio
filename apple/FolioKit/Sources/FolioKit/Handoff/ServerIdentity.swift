@@ -3,6 +3,10 @@ import Foundation
 /// A Folio server, compared by its canonical base URL: lowercased scheme and host, an internationalised
 /// host in its punycode form, IPv6 literals bracketed, no default port, user info, query or fragment, and
 /// a case-sensitive path without trailing slashes.
+///
+/// Known limit: before punycode encoding, a host label is only NFC-normalised and lowercased, not mapped with
+/// UTS #46. Spellings that differ only by a UTS #46 mapping (full-width characters, ß/ss, ignored code points)
+/// compare as different servers, which falls back to the browser rather than opening the wrong data.
 public struct ServerIdentity: Hashable, Sendable, CustomStringConvertible {
     public let scheme: String
     /// Lowercased, ASCII (punycode) host; IPv6 literals without brackets.

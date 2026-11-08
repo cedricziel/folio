@@ -117,7 +117,7 @@ Search text is not an input, so it cannot leak.
 
 Wiring:
 - `DocumentDetailView` keeps a **single** `.userActivity` (the one from #392's `.documentActivity` modifier, or one new modifier if Handoff lands first). Its `isActive` is `payload != nil`, and its update closure calls `HandoffActivity.configure(activity, payload:)`. `showingDiscussion` feeds the pane. The discussion sheet adds no modifier of its own.
-- `InboxView` has one `.userActivity` for library and saved-view types, with `isActive` = `session.selection == nil && payload != nil`. In a split view with a selected document, only the detail's activity is active.
+- `InboxView` has one `.userActivity` for library and saved-view types, with `isActive` = `session.selection == nil && payload != nil`. In a split view with a selected document, only the detail's activity is active. In the implementation this is two `.userActivity` modifiers, one per type, of which at most one is active: SwiftUI fixes an activity's type when it creates it, so switching between a library and a saved view hands over to the other modifier instead of changing the type in place.
 - `HandoffActivity.configure` sets `userInfo`, `requiredUserInfoKeys`, `webpageURL` and `isEligibleForHandoff = true`. It sets `isEligibleForSearch`, `isEligibleForPublicIndexing` and `isEligibleForPrediction` to false. For documents it extends #392's `DocumentActivityTracker.configure`, keeping its title and `targetContentIdentifier`.
 
 Views are torn down on lock, sign-out and vault switch (`WorkspaceView` is keyed by `.id(url)` and the inbox by `.id(workspace.session.id)`), so SwiftUI invalidates the activity. `isLocked` in the advertiser covers the privacy-cover window that is still mounted.
