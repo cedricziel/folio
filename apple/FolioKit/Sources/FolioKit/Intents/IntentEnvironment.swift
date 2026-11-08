@@ -14,16 +14,46 @@ public enum IntentEnvironment {
         factory.withLock { $0 = make }
     }
 
+    public typealias IntentRecorder = @Sendable (TelemetryIntent) -> Void
+
+    private static let recorder = OSAllocatedUnfairLock<IntentRecorder>(
+        initialState: { FolioTelemetry.shared.intent($0) })
+
+    /// Swaps where Shortcut runs are recorded, for tests.
+    public static func recordRuns(with record: @escaping IntentRecorder) {
+        recorder.withLock { $0 = record }
+    }
+
+    /// Records that a Shortcut ran, by name only.
+    static func ran(_ intent: TelemetryIntent) {
+        recorder.withLock { $0 }(intent)
+    }
+
+    public typealias IntentFlush = @Sendable () async -> Void
+
+    private static let flusher = OSAllocatedUnfairLock<IntentFlush>(
+        initialState: { await FolioTelemetry.shared.flush(timeout: .milliseconds(1500)) })
+
+    /// Swaps how a Shortcut's telemetry is sent before the system suspends it, for tests.
+    public static func flushRuns(with flush: @escaping IntentFlush) {
+        flusher.withLock { $0 = flush }
+    }
+
     public static func catalog() throws -> DocumentCatalog {
         guard let service = try factory.withLock({ $0 })() else { throw ShortcutError.notSignedIn }
         return DocumentCatalog(service: service)
     }
 
-    /// Runs `work` and rewrites whatever it throws into a message the person can read.
+    /// Runs `work` and rewrites whatever it throws into a message the person can read. Telemetry is sent before
+    /// returning, because the system may suspend an intent's process as soon as `perform` ends.
     public static func run<T>(_ work: (DocumentCatalog) async throws -> T) async throws -> T {
+        let flush = flusher.withLock { $0 }
         do {
-            return try await work(catalog())
+            let result = try await work(catalog())
+            await flush()
+            return result
         } catch {
+            await flush()
             throw ShortcutError(mapping: error)
         }
     }

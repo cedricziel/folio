@@ -5,41 +5,35 @@ import Testing
 
 struct ShareUploadRequestTests {
     @Test func backgroundRequestCapturesItsVaultDestination() throws {
-        let directory = try directory()
-        defer { try? FileManager.default.removeItem(at: directory) }
         let vaultID = UUID()
-        let built = try ShareUploadRequest.make(
-            file: UploadFile(data: Data(), filename: "a.pdf", mimeType: "application/pdf"),
-            serverURL: #require(URL(string: "https://folio.example.com")), token: nil,
-            directory: directory, vaultID: vaultID
+        let request = try ShareUploadRequest.request(
+            serverURL: #require(URL(string: "https://folio.example.com")), contentType: "multipart/form-data",
+            token: nil, vaultID: vaultID, idempotencyKey: UUID()
         )
 
-        #expect(built.request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+        #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
     }
 
-    private func directory() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    @Test func buildsAMultipartPostFromAFileOnDisk() throws {
-        let file = UploadFile(
-            data: Data("%PDF-1.4".utf8), filename: "scan.pdf", mimeType: "application/pdf", title: "Scan"
+    @Test func buildsAKeyedMultipartPost() throws {
+        let form = MultipartForm(
+            file: UploadFile(
+                data: Data("%PDF-1.4".utf8), filename: "scan.pdf", mimeType: "application/pdf", title: "Scan")
         )
-        let built = try ShareUploadRequest.make(
-            file: file, serverURL: #require(URL(string: "https://folio.example.com/base")), token: "secret",
-            directory: directory()
+        let key = UUID()
+        let request = try ShareUploadRequest.request(
+            serverURL: #require(URL(string: "https://folio.example.com/base")), contentType: form.contentType,
+            token: "secret", vaultID: nil, idempotencyKey: key
         )
 
-        #expect(built.request.httpMethod == "POST")
-        #expect(built.request.url?.absoluteString == "https://folio.example.com/base/api/documents/upload")
-        #expect(built.request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
-        let contentType = try #require(built.request.value(forHTTPHeaderField: "Content-Type"))
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.absoluteString == "https://folio.example.com/base/api/documents/upload")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+        #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == key.uuidString.lowercased())
+        #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == nil)
+        let contentType = try #require(request.value(forHTTPHeaderField: "Content-Type"))
         #expect(contentType.hasPrefix("multipart/form-data; boundary="))
 
-        let body = try String(decoding: Data(contentsOf: built.bodyFile), as: UTF8.self)
+        let body = String(decoding: form.body, as: UTF8.self)
         #expect(body.contains("name=\"file\"; filename=\"scan.pdf\""))
         #expect(body.contains("Content-Type: application/pdf"))
         #expect(body.contains("name=\"title\""))
@@ -47,11 +41,21 @@ struct ShareUploadRequestTests {
     }
 
     @Test func omitsAuthorizationWithoutAToken() throws {
-        let file = UploadFile(data: Data(), filename: "a.png", mimeType: "image/png")
-        let built = try ShareUploadRequest.make(
-            file: file, serverURL: #require(URL(string: "http://localhost:3000")), token: nil, directory: directory()
+        let request = try ShareUploadRequest.request(
+            serverURL: #require(URL(string: "http://localhost:3000")), contentType: "multipart/form-data",
+            token: nil, vaultID: nil, idempotencyKey: UUID()
         )
-        #expect(built.request.value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test func aTaskNamesItsRecordAndAttempt() {
+        let id = UUID()
+        let task = ShareTask(id: id, attempt: 3)
+
+        #expect(ShareTask(task.description) == task)
+        #expect(ShareTask(id.uuidString) == ShareTask(id: id, attempt: nil), "tasks from earlier builds")
+        #expect(ShareTask("/private/var/upload-x.multipart") == nil)
+        #expect(ShareTask("\(id.uuidString) x") == nil)
     }
 }
 

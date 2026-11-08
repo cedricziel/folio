@@ -97,6 +97,8 @@ jobs:
           phone=com.apple.CoreSimulator.SimDeviceType.iPhone-16
           runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$phone")
           verify_device=$(xcrun simctl create Folio-Navigation-CI "$phone" "$runtime")
+          # A cold simulator can miss the UI-test runner's accessibility handshake; boot it fully first.
+          xcrun simctl bootstatus "$verify_device" -b
           xcodegen generate --spec NavigationTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
             -destination "platform=iOS Simulator,id=$verify_device" \
@@ -117,6 +119,7 @@ jobs:
           if [ "${{ matrix.toolchain.xcode }}" = "26.6" ]; then
             tablet=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if "iPad Pro" in d["name"] and "13-inch" in d["name"]))')
             verify_device=$(xcrun simctl create Folio-iPad-Navigation-CI "$tablet" "$runtime")
+            xcrun simctl bootstatus "$verify_device" -b
             xcrun xcodebuild test-without-building "${common[@]}" \
               -destination "platform=iOS Simulator,id=$verify_device" \
               -only-testing:NavigationTests/NavigationTests/testWideWindowKeepsDocumentListBesidePreview \
@@ -127,6 +130,7 @@ jobs:
             duo=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; print(next(d["identifier"] for d in json.load(sys.stdin)["devicetypes"] if d["name"] == "iPhone Duo"))')
             duo_runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and any(d["identifier"] == sys.argv[1] for d in r.get("supportedDeviceTypes", []))))' "$duo")
             verify_device=$(xcrun simctl create Folio-Duo-Navigation-CI "$duo" "$duo_runtime")
+            xcrun simctl bootstatus "$verify_device" -b
             xcrun xcodebuild test-without-building "${common[@]}" \
               -destination "platform=iOS Simulator,id=$verify_device"
           fi
@@ -156,6 +160,7 @@ jobs:
           trap cleanup EXIT
           runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
           verify_device=$(xcrun simctl create Folio-Thumbnails-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          xcrun simctl bootstatus "$verify_device" -b
           xcodegen generate --spec apple/ThumbnailTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/ThumbnailPreview.xcodeproj" -scheme Fixture \
             -destination "platform=iOS Simulator,id=$verify_device" \
@@ -197,6 +202,7 @@ jobs:
           trap cleanup EXIT
           runtime=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; print(next(r["identifier"] for r in json.load(sys.stdin)["runtimes"] if r["isAvailable"] and ".iOS-" in r["identifier"]))')
           verify_device=$(xcrun simctl create Folio-Classifications-CI com.apple.CoreSimulator.SimDeviceType.iPhone-16 "$runtime")
+          xcrun simctl bootstatus "$verify_device" -b
           xcodegen generate --spec apple/ClassificationTests/project.yml --project "$verify_dir"
           xcrun xcodebuild test -project "$verify_dir/ClassificationPreview.xcodeproj" -scheme Fixture \
             -destination "platform=iOS Simulator,id=$verify_device" \
