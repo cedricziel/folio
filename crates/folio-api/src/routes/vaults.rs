@@ -178,18 +178,20 @@ pub(crate) async fn list_vaults(
     Query(query): Query<DiscoveryQuery>,
     State(state): State<AppState>,
 ) -> ApiResult<Json<VaultDiscovery>> {
-    let vaults: Vec<VaultSummary> = state
-        .vaults
-        .list(user.as_ref())
-        .await?
-        .into_iter()
-        .map(|(v, role)| VaultSummary {
+    let mut vaults = Vec::new();
+    for (v, role) in state.vaults.list(user.as_ref()).await? {
+        let shared = match &user {
+            Some(user) => Some(state.vaults.shared_beyond(user, v.id).await?),
+            None => None,
+        };
+        vaults.push(VaultSummary {
             id: v.id,
             name: v.name,
             role,
             created_at: v.created_at,
-        })
-        .collect();
+            shared,
+        });
+    }
     let deleted_vaults = if query.include_deleted {
         state.vaults.deleted(&signed_in(user.clone())?).await?
     } else {
