@@ -122,6 +122,7 @@ impl From<PgPool> for Database {
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
     pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
+    pub upload_receipts: Arc<dyn folio_core::ports::UploadReceiptRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     /// Writes an outbox event with every lifecycle change
     pub documents: Arc<dyn DocumentRepository>,
@@ -194,6 +195,9 @@ impl Database {
                         sqlite::SqliteDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
                     ),
+                    upload_receipts: Arc::new(sqlite::SqliteUploadReceiptRepository::new(
+                        pool.clone(),
+                    )),
                     saved_views: Arc::new(
                         sqlite::SqliteSavedViewRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -239,6 +243,9 @@ impl Database {
                         postgres::PostgresDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
                     ),
+                    upload_receipts: Arc::new(postgres::PostgresUploadReceiptRepository::new(
+                        pool.clone(),
+                    )),
                     saved_views: Arc::new(
                         postgres::PostgresSavedViewRepository::new(pool.clone())
                             .with_wake(wake.clone()),

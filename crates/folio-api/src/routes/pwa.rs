@@ -56,6 +56,6 @@ async fn share_target(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    store_upload(&state, vault, uploader, multipart, SourceKind::Upload).await?;
+    store_upload(&state, vault, uploader, multipart, SourceKind::Upload, None).await?;
     Ok(Redirect::to("/").into_response())
 }
