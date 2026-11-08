@@ -10,7 +10,8 @@ public struct FolioNode: Equatable, Sendable {
     public let contentType: String?
     public let document: Document?
     public var canUpload = false
-    /// For folders, which have no content of their own, also their modification date.
+    /// For documents, the date written on the document when known, else when it reached Folio. For
+    /// folders, which have no content of their own, also their modification date.
     public var created: Date?
 }
 
@@ -223,7 +224,7 @@ public struct FolioCatalog: Sendable {
             return FolioNode(
                 id: .document(document.id, in: folder), parent: .folder(folder), name: name, isFolder: false,
                 modified: document.updatedAt, contentType: document.mimeType, document: document,
-                created: document.createdAt
+                created: document.documentDate?.start() ?? document.createdAt
             )
         }
     }

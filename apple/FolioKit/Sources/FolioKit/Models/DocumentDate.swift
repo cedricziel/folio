@@ -31,6 +31,14 @@ public struct DocumentDate: RawRepresentable, Hashable, Sendable, Codable {
         self = date
     }
 
+    /// Midnight at the start of this day in `timeZone`.
+    public func start(in timeZone: TimeZone = .current) -> Date? {
+        let parts = rawValue.split(separator: "-").compactMap { Int($0) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)

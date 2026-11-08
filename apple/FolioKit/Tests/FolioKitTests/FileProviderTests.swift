@@ -111,6 +111,20 @@ struct VaultProviderCatalogTests {
                 == "Home-Archive (\(first.id.uuidString.lowercased()))")
     }
 
+    @Test func documentsAreCreatedOnTheirDocumentDate() async throws {
+        let uploaded = Date(timeIntervalSince1970: 1_760_000_000)
+        let dated = Document(
+            title: "Invoice", documentDate: DocumentDate(rawValue: "2021-06-15"), createdAt: uploaded)
+        let undated = Document(title: "Letter", createdAt: uploaded)
+        let catalog = FolioCatalog(service: MockFolioService(documents: [dated, undated]))
+
+        let nodes = try await catalog.children(of: .scoped(MockFolioService.defaultVault.id, .all))
+
+        let created = Dictionary(uniqueKeysWithValues: nodes.map { ($0.document?.id, $0.created) })
+        #expect(created[dated.id] == DocumentDate(rawValue: "2021-06-15")?.start())
+        #expect(created[undated.id] == uploaded)
+    }
+
     @Test func foldersCarryTheDatesOfWhatTheyStandFor() async throws {
         let vaultCreated = Date(timeIntervalSince1970: 1_700_000_000)
         let personCreated = Date(timeIntervalSince1970: 1_710_000_000)
