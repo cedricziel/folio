@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use super::NewUpload;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::models::{Document, Id, VaultId};
 use crate::ports::{
     upload_fingerprint, DocumentImporter, DocumentRepository, UploadClaim, UploadReceiptKey,
@@ -24,6 +24,8 @@ pub enum UploadOutcome {
     InProgress,
     /// An earlier request with the same key stored a document that has since been deleted
     Deleted,
+    /// The key was already used for a different upload; retrying with it never succeeds
+    KeyMismatch,
 }
 
 /// How long a claim lives without renewal, and how often an import renews it.
@@ -112,9 +114,7 @@ impl IdempotentUploads {
                 }
                 _ => Ok(UploadOutcome::InProgress),
             },
-            UploadClaim::Mismatch => Err(Error::Conflict(
-                "This Idempotency-Key was already used for a different upload".into(),
-            )),
+            UploadClaim::Mismatch => Ok(UploadOutcome::KeyMismatch),
         }
     }
 
@@ -138,8 +138,13 @@ impl IdempotentUploads {
             tokio::select! {
                 imported = &mut work => break imported,
                 _ = heartbeat.tick() => {
-                    if let Err(e) = self.receipts.heartbeat(key, token, Utc::now()).await {
-                        tracing::warn!("Failed to renew upload claim: {e}");
+                    match self.receipts.heartbeat(key, token, Utc::now()).await {
+                        Ok(true) => {}
+                        Ok(false) => tracing::warn!(
+                            document = %document,
+                            "Upload claim was taken over by a retry while this attempt was still importing"
+                        ),
+                        Err(e) => tracing::warn!("Failed to renew upload claim: {e}"),
                     }
                 }
             }

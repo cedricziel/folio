@@ -43,6 +43,12 @@ impl ApiError {
         }
     }
 
+    /// Sets the stable machine-readable `code` of the body
+    pub fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+
     /// Tells the client when to try again, as a `Retry-After` header
     pub fn with_retry_after(mut self, seconds: u64) -> Self {
         self.retry_after_secs = Some(seconds);

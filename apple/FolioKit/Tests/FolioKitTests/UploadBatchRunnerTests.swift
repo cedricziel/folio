@@ -216,14 +216,54 @@ struct UploadBatchRunnerTests {
         #expect(store.load("current") == progress)
     }
 
+    @Test func aLongRunRenewsItsLock() async throws {
+        let service = MockFolioService()
+        await service.setUploadDelay(.milliseconds(400))
+        let store = RenewalCountingStore()
+        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(50))
+
+        _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        let renewals = store.renewals
+
+        #expect(renewals > 0)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(store.renewals == renewals, "renewal stops with the run")
+    }
+
+    @Test func fileStoreRenewalKeepsARunningBatchFromBeingTakenOver() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "folio-progress-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let running = FileUploadProgressStore(directory: directory)
+        let later = Date.now.addingTimeInterval(FileUploadProgressStore.lockTimeout + 60)
+        #expect(running.lock("batch"))
+
+        let lock = directory.appending(path: "upload-progress/batch.lock")
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date.now.addingTimeInterval(-FileUploadProgressStore.lockTimeout - 60)],
+            ofItemAtPath: lock.path)
+        running.renew("batch")
+        #expect(!FileUploadProgressStore(directory: directory).lock("batch", now: .now))
+
+        let other = FileUploadProgressStore(directory: directory)
+        #expect(other.lock("batch", now: later), "a lock nobody renews is taken over")
+        running.unlock("batch")
+        #expect(!FileUploadProgressStore(directory: directory).lock("batch", now: .now))
+        other.unlock("batch")
+        #expect(FileUploadProgressStore(directory: directory).lock("batch"))
+    }
+
     @Test func fileStoreLocksABatchAcrossInstances() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "folio-progress-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        #expect(FileUploadProgressStore(directory: directory).lock("batch"))
+        let holder = FileUploadProgressStore(directory: directory)
+        #expect(holder.lock("batch"))
         #expect(!FileUploadProgressStore(directory: directory).lock("batch"))
         FileUploadProgressStore(directory: directory).unlock("batch")
+        #expect(!FileUploadProgressStore(directory: directory).lock("batch"), "only the holder releases the lock")
+        holder.unlock("batch")
         #expect(FileUploadProgressStore(directory: directory).lock("batch"))
     }
 }
@@ -311,4 +351,20 @@ struct ShortcutUploadRetryTests {
         #expect(!paths.dropFirst(3).contains("/api/documents/upload"))
         #expect(documents.map(\.id.uuidString).map { $0.lowercased() } == [documentID])
     }
+}
+
+/// Counts lock renewals of an in-memory store.
+private final class RenewalCountingStore: UploadProgressStoring, @unchecked Sendable {
+    private let base = InMemoryUploadProgressStore()
+    private let mutex = NSLock()
+    private var count = 0
+
+    var renewals: Int { mutex.withLock { count } }
+
+    func load(_ key: String) -> UploadBatchProgress? { base.load(key) }
+    func save(_ progress: UploadBatchProgress, for key: String) { base.save(progress, for: key) }
+    func remove(_ key: String) { base.remove(key) }
+    func lock(_ key: String) -> Bool { base.lock(key) }
+    func renew(_: String) { mutex.withLock { count += 1 } }
+    func unlock(_ key: String) { base.unlock(key) }
 }

@@ -81,7 +81,8 @@ struct ShareRoot: View {
         let coordinator = ShareSessionCoordinator.shared
         coordinator.onChange = { [weak model] _ in model?.refreshRetained() }
         Task { [weak model] in
-            await coordinator.recoverInterrupted()
+            // Sessions belong to the app, which reattaches them when it opens.
+            await coordinator.recoverInterrupted(reattachingSessions: false)
             model?.refreshRetained()
         }
         return model
