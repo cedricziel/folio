@@ -110,6 +110,9 @@ struct InboxView: View {
             .listActivity(
                 vaultID: vaultID, list: advertisedList,
                 selection: showsPreview ? session.selection : session.path.last)
+            .onChange(of: showsPreview) { _, showsPreview in
+                session.adaptToLayout(showsPreview: showsPreview)
+            }
         }
         .onChange(of: session.path) { _, path in
             if let id = path.last {
@@ -602,7 +605,7 @@ struct InboxView: View {
             } label: {
                 Label("Scan", systemImage: "doc.viewfinder").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .modifier(FloatingActionStyle())
             .controlSize(.large)
             .padding(FolioTheme.Spacing.space4)
             .disabled(!canAcceptImport || !DocumentScanner.isSupported)
@@ -694,3 +697,16 @@ private struct UploadBatch: Identifiable {
     let id = UUID()
     let files: [UploadFile]
 }
+
+#if os(iOS)
+    /// The Scan inset floats over the list, so it takes the system glass where available.
+    private struct FloatingActionStyle: ViewModifier {
+        func body(content: Content) -> some View {
+            if #available(iOS 26, *) {
+                content.buttonStyle(.glassProminent)
+            } else {
+                content.buttonStyle(.borderedProminent)
+            }
+        }
+    }
+#endif

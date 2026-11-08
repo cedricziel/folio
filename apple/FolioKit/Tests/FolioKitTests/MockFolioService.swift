@@ -107,6 +107,17 @@ actor MockFolioService: FolioService {
     var typeList: [DocumentType] = []
     var failure: FolioError?
     var failUploadsAfter: Int?
+    /// Creates the document but loses the answer, as when the connection drops after the server stored it.
+    var loseUploadResponses = false
+    var failingTagIDs: Set<Tag.ID> = []
+    /// Documents someone deleted; tagging them answers 404.
+    var deletedDocumentIDs: Set<Document.ID> = []
+    /// Tags someone deleted; assigning them answers 404, as the server does.
+    var missingTagIDs: Set<Tag.ID> = []
+    /// Adds uploaded documents to the list, so `document(id:)` finds them.
+    var keepsUploads = false
+    private var keyedUploads: [UUID: Document] = [:]
+    private(set) var uploadKeys: [UUID] = []
     var failLookups = false
     var uploadDelay: Duration?
     var tagList: [Tag] = []
@@ -240,6 +251,26 @@ actor MockFolioService: FolioService {
 
     func setFailUploadsAfter(_ count: Int?) {
         failUploadsAfter = count
+    }
+
+    func setLoseUploadResponses(_ lose: Bool) {
+        loseUploadResponses = lose
+    }
+
+    func setFailingTags(_ ids: Set<Tag.ID>) {
+        failingTagIDs = ids
+    }
+
+    func setMissingTags(_ ids: Set<Tag.ID>) {
+        missingTagIDs = ids
+    }
+
+    func setKeepsUploads(_ keeps: Bool) {
+        keepsUploads = keeps
+    }
+
+    func markDeleted(_ id: Document.ID) {
+        deletedDocumentIDs.insert(id)
     }
 
     func setTags(_ tags: [Tag]) {
@@ -441,6 +472,22 @@ actor MockFolioService: FolioService {
     }
 
     func upload(_ file: UploadFile) async throws -> Document {
+        try await store(file, idempotencyKey: nil)
+    }
+
+    /// Like the server: a key seen before returns its document, or 410 once that document was deleted.
+    func upload(_ file: UploadFile, idempotencyKey: UUID) async throws -> Document {
+        uploadKeys.append(idempotencyKey)
+        if let earlier = keyedUploads[idempotencyKey] {
+            if deletedDocumentIDs.contains(earlier.id) {
+                throw FolioError.server(status: 410, message: nil)
+            }
+            return earlier
+        }
+        return try await store(file, idempotencyKey: idempotencyKey)
+    }
+
+    private func store(_ file: UploadFile, idempotencyKey: UUID?) async throws -> Document {
         if suspendUploadRequests {
             await withCheckedContinuation {
                 uploadGate = $0
@@ -458,7 +505,18 @@ actor MockFolioService: FolioService {
             throw FolioError.unreachable
         }
         uploads.append(file)
-        return Document(title: file.title ?? file.filename, originalFilename: file.filename)
+        let document = Document(title: file.title ?? file.filename, originalFilename: file.filename)
+        if let idempotencyKey {
+            keyedUploads[idempotencyKey] = document
+        }
+        if keepsUploads {
+            documentList.append(document)
+        }
+        if loseUploadResponses {
+            documentList.append(document)
+            throw FolioError.unreachable
+        }
+        return document
     }
 
     func tags() async throws -> [Tag] {
@@ -484,6 +542,12 @@ actor MockFolioService: FolioService {
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
         if let failure {
             throw failure
+        }
+        if deletedDocumentIDs.contains(documentID) || missingTagIDs.contains(tagID) {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        if failingTagIDs.contains(tagID) {
+            throw FolioError.server(status: 500, message: nil)
         }
         tagged.append(TagAssignment(tag: tagID, document: documentID))
         if let tag = tagList.first(where: { $0.id == tagID }) {

@@ -103,17 +103,32 @@ public struct DocumentCatalog: Sendable {
     private let calendar: Calendar
     /// The vault `service` is scoped to; nil is the server's default vault.
     private let vaultID: UUID?
+    private let progress: any UploadProgressStoring
+    private let uploads: UploadBatchRunner
+    private let uploadScope: String
 
-    public init(service: any FolioService, calendar: Calendar = .current, vaultID: UUID? = nil) {
+    /// - Parameters:
+    ///   - progress: Where unfinished uploads are remembered, so running the Shortcut again resumes them.
+    ///   - uploadScope: Separates remembered uploads by server.
+    public init(
+        service: any FolioService, calendar: Calendar = .current,
+        progress: any UploadProgressStoring = FileUploadProgressStore.shared,
+        uploadScope: String = SharedConfiguration.serverURL()?.absoluteString ?? "", vaultID: UUID? = nil
+    ) {
         self.service = service
         self.calendar = calendar
         self.vaultID = vaultID
+        self.progress = progress
+        uploads = UploadBatchRunner(service: service, store: progress)
+        self.uploadScope = uploadScope
     }
 
     /// The same catalog in another vault; nil keeps this one.
     public func scoped(to vaultID: UUID?) -> DocumentCatalog {
         guard let vaultID, vaultID != self.vaultID else { return self }
-        return DocumentCatalog(service: service.scoped(to: vaultID), calendar: calendar, vaultID: vaultID)
+        return DocumentCatalog(
+            service: service.scoped(to: vaultID), calendar: calendar, progress: progress, uploadScope: uploadScope,
+            vaultID: vaultID)
     }
 
     public func search(_ query: String, limit: Int = 25) async throws -> [DocumentSummary] {
@@ -287,22 +302,17 @@ public struct DocumentCatalog: Sendable {
     }
 
     /// Uploads each file, then tags every new document. A single file may carry a title.
+    ///
+    /// When a run stops part-way, running it again with the same files and tags finishes only the remaining
+    /// uploads and tags instead of creating the earlier documents again.
     public func upload(
         _ files: [UploadFile], title: String? = nil, tagIDs: [Tag.ID] = []
     ) async throws -> [DocumentSummary] {
-        var uploaded: [Document] = []
-        for var file in files {
-            if files.count == 1, let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !title.isEmpty
-            {
-                file.title = title
-            }
-            let document = try await service.upload(file)
-            for tagID in tagIDs {
-                try await service.addTag(tagID, to: document.id)
-            }
-            uploaded.append(document)
+        var titled = files
+        if files.count == 1, let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            titled[0].title = title
         }
+        let uploaded = try await uploads.run(titled, tagIDs: tagIDs, scope: uploadScope)
         return try await summaries(uploaded)
     }
 

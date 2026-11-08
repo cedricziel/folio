@@ -53,10 +53,15 @@ public struct OAuthCredentials: Codable, Equatable, Sendable {
     public var revocationEndpoint: URL?
     public var tokens: OAuthTokens
     public var refreshPending: Bool?
+    /// Identifies one sign-in: a refresh keeps it, the next sign-in gets a new one. Nil for credentials saved
+    /// before it existed.
+    public var signInID: UUID?
 
     public init(
-        serverURL: URL, clientID: String, tokenEndpoint: URL, revocationEndpoint: URL?, tokens: OAuthTokens
+        serverURL: URL, clientID: String, tokenEndpoint: URL, revocationEndpoint: URL?, tokens: OAuthTokens,
+        signInID: UUID? = nil
     ) {
+        self.signInID = signInID
         self.serverURL = serverURL
         self.clientID = clientID
         self.tokenEndpoint = tokenEndpoint

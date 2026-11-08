@@ -11,6 +11,9 @@ typealias Document = FolioKit.Document
 
 @main
 struct FolioApp: App {
+    #if os(iOS)
+        @UIApplicationDelegateAdaptor(FolioAppDelegate.self) private var appDelegate
+    #endif
     @State private var model = AppModel()
     @State private var security = AppLockLifecycle()
     @Environment(\.scenePhase) private var scenePhase
@@ -33,6 +36,7 @@ struct FolioApp: App {
                     case .active:
                         FolioTelemetry.shared.lifecycle("active")
                         model.restore()
+                        Task { await ShareSessionCoordinator.shared.recoverInterrupted() }
                     case .inactive: FolioTelemetry.shared.lifecycle("inactive")
                     case .background: FolioTelemetry.shared.lifecycle("background")
                     @unknown default: break
@@ -60,6 +64,23 @@ struct FolioApp: App {
         #endif
     }
 }
+
+#if os(iOS)
+    import UIKit
+
+    /// Hands share-extension upload sessions the system relaunches the app for to the share coordinator, so
+    /// their outcome is recorded after the extension has gone.
+    @MainActor final class FolioAppDelegate: NSObject, UIApplicationDelegate {
+        func application(
+            _: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+            completionHandler: @escaping () -> Void
+        ) {
+            if !ShareSessionCoordinator.shared.handleEvents(for: identifier, completion: completionHandler) {
+                completionHandler()
+            }
+        }
+    }
+#endif
 
 @MainActor @Observable
 final class AppModel {

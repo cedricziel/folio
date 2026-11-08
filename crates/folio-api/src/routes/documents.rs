@@ -368,10 +368,13 @@ pub struct UploadDocumentRequest {
     path = "/api/documents/upload",
     operation_id = "uploadDocument",
     tag = "documents",
+    params(("Idempotency-Key" = Option<Uuid>, Header, nullable = false, description = "Optional nonnil UUID kept across retries of one upload; anything else is a 400. Repeating it with the same file returns the document the first request created, until 7 days after the key was last used.")),
     request_body(content = UploadDocumentRequest, content_type = "multipart/form-data"),
     responses(
-        (status = 200, description = "The created document", body = Document),
+        (status = 200, description = "The created document, or the one an earlier request with the same Idempotency-Key created", body = Document),
         BadRequest,
+        (status = 409, description = "The Idempotency-Key was already used for a different file (permanent), or its first request is still storing the document. In the second case the response has Retry-After; a request that stopped answering is taken over after at most 2 minutes.", body = crate::error::ErrorResponse),
+        (status = 410, description = "The document an earlier request with this Idempotency-Key created has been deleted", body = crate::error::ErrorResponse),
         PayloadTooLarge,
         InternalError,
     )
@@ -380,10 +383,12 @@ pub(crate) async fn upload_document(
     DefaultVault(vault): DefaultVault,
     crate::vault::Uploader(uploader): crate::vault::Uploader,
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Json<Document>> {
-    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Api).await?;
-    Ok(Json(document))
+    let key = super::pages::idempotency_key(&headers)?;
+    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Api, key).await?;
+    Ok(Json(document.into_document()))
 }
 
 /// Search request body (for POST)
