@@ -24,7 +24,8 @@ struct Store {
     outcomes: HashSet<(Id, &'static str)>,
     pending: Vec<PendingNotification>,
     states: HashMap<Uuid, PushDeviceState>,
-    leases: HashMap<Uuid, DateTime<Utc>>,
+    /// Lease end and holder per claimed device
+    leases: HashMap<Uuid, (DateTime<Utc>, Uuid)>,
 }
 
 #[derive(Default)]
@@ -207,6 +208,7 @@ impl PushDeviceRepository for MemoryDevices {
         ceiling: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>> {
         let mut store = self.0.lock().unwrap();
         let mut ids: Vec<Uuid> = store.pending.iter().map(|p| p.device_id).collect();
@@ -223,14 +225,14 @@ impl PushDeviceRepository for MemoryDevices {
             let newest = *times.iter().max().unwrap();
             let oldest = *times.iter().min().unwrap();
             let due = newest <= now - quiet || oldest <= now - ceiling;
-            let leased = store.leases.get(&id).is_some_and(|until| *until > now);
+            let leased = store.leases.get(&id).is_some_and(|(until, _)| *until > now);
             let backing_off = store
                 .states
                 .get(&id)
                 .and_then(|s| s.backoff_until)
                 .is_some_and(|until| until > now);
             if due && !leased && !backing_off && claimed.len() < limit as usize {
-                store.leases.insert(id, now + lease);
+                store.leases.insert(id, (now + lease, holder));
                 claimed.push(id);
             }
         }
@@ -243,6 +245,7 @@ impl PushDeviceRepository for MemoryDevices {
         min_interval: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>> {
         let mut store = self.0.lock().unwrap();
         let mut claimed = Vec::new();
@@ -254,9 +257,9 @@ impl PushDeviceRepository for MemoryDevices {
                 && state
                     .widgets_sent_at
                     .is_none_or(|sent| sent <= now - min_interval);
-            let leased = store.leases.get(&id).is_some_and(|until| *until > now);
+            let leased = store.leases.get(&id).is_some_and(|(until, _)| *until > now);
             if has_token && due && !leased && claimed.len() < limit as usize {
-                store.leases.insert(id, now + lease);
+                store.leases.insert(id, (now + lease, holder));
                 claimed.push(id);
             }
         }
@@ -295,8 +298,26 @@ impl PushDeviceRepository for MemoryDevices {
             .unwrap_or_default())
     }
 
-    async fn release(&self, device: Uuid, state: &PushDeviceState) -> Result<()> {
+    async fn renew(&self, device: Uuid, holder: Uuid, until: DateTime<Utc>) -> Result<bool> {
         let mut store = self.0.lock().unwrap();
+        match store.leases.get_mut(&device) {
+            Some((end, owner)) if *owner == holder => {
+                *end = until;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn release(&self, device: Uuid, holder: Uuid, state: &PushDeviceState) -> Result<bool> {
+        let mut store = self.0.lock().unwrap();
+        if store
+            .leases
+            .get(&device)
+            .is_none_or(|(_, owner)| *owner != holder)
+        {
+            return Ok(false);
+        }
         let previous = store.states.get(&device).cloned().unwrap_or_default();
         let mut state = state.clone();
         // Widgets dirtied while the lease was held stay dirty.
@@ -305,7 +326,7 @@ impl PushDeviceRepository for MemoryDevices {
         }
         store.states.insert(device, state);
         store.leases.remove(&device);
-        Ok(())
+        Ok(true)
     }
 
     async fn mark_delivered(&self, device: Uuid, at: DateTime<Utc>) -> Result<()> {

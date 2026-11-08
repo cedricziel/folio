@@ -32,6 +32,8 @@ struct Trigger {
     document: Id,
     vault: VaultId,
     outcome: Option<DocumentOutcome>,
+    /// Imports record their outcome so a later reprocess is not a first, but tell nobody
+    notify: bool,
 }
 
 fn trigger(event: &OutboxEvent) -> Option<Trigger> {
@@ -39,7 +41,7 @@ fn trigger(event: &OutboxEvent) -> Option<Trigger> {
     if let Some(document_event) = &event.event {
         let vault = event.origin_vault()?;
         let outcome = match document_event {
-            DocumentEvent::Processed { .. } => notify.then_some(DocumentOutcome::Completed),
+            DocumentEvent::Processed { .. } => Some(DocumentOutcome::Completed),
             DocumentEvent::Created { .. }
             | DocumentEvent::Trashed { .. }
             | DocumentEvent::Restored { .. }
@@ -50,13 +52,14 @@ fn trigger(event: &OutboxEvent) -> Option<Trigger> {
             document: document_event.document_id(),
             vault,
             outcome,
+            notify,
         });
     }
     let envelope = event.envelope.as_ref()?;
     let document = envelope.document_id()?;
     let event_type = envelope.event_type();
     let outcome = if FAILED_STAGES.contains(&event_type) {
-        notify.then_some(DocumentOutcome::Failed)
+        Some(DocumentOutcome::Failed)
     } else if REVIEW_CHANGES.contains(&event_type) {
         None
     } else {
@@ -66,6 +69,7 @@ fn trigger(event: &OutboxEvent) -> Option<Trigger> {
         document,
         vault: envelope.vault_id(),
         outcome,
+        notify,
     })
 }
 
@@ -99,6 +103,12 @@ impl NotificationPlanner {
         let Some(outcome) = trigger.outcome else {
             return Ok(());
         };
+        if !trigger.notify {
+            self.devices
+                .record_first_outcome(trigger.document, outcome, &[])
+                .await?;
+            return Ok(());
+        }
         let document = self
             .documents
             .document(trigger.vault, trigger.document)

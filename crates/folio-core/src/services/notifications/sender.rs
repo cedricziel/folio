@@ -1,7 +1,7 @@
 //! Sends what the planner queued: one alert per device per flush
 
 use std::sync::Arc;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{DateTime, Duration, Utc};
 use tokio::sync::{watch, Notify};
@@ -60,6 +60,13 @@ pub enum TestRefusal {
     NoToken,
 }
 
+/// One flush: the sender's claim on its devices and when it started
+struct Pass {
+    holder: Uuid,
+    now: DateTime<Utc>,
+    started: Instant,
+}
+
 /// What sending to one device came to
 enum Flushed {
     Sent(usize),
@@ -104,6 +111,11 @@ impl NotificationSender {
             return Ok(0);
         }
         let limits = self.limits.limits().await;
+        let pass = Pass {
+            holder: Uuid::new_v4(),
+            now,
+            started: Instant::now(),
+        };
         let mut sent = 0;
         let mut refused = false;
         for device in self
@@ -114,15 +126,16 @@ impl NotificationSender {
                 self.config.ceiling,
                 self.config.lease,
                 self.config.batch,
+                pass.holder,
             )
             .await?
         {
             if refused {
-                self.unclaim(device).await?;
+                self.unclaim(device, &pass).await?;
                 continue;
             }
             match self
-                .flush_device(device, now, limits.max_alerts_per_hour)
+                .flush_device(device, &pass, limits.max_alerts_per_hour)
                 .await?
             {
                 Flushed::Sent(count) => sent += count,
@@ -139,14 +152,15 @@ impl NotificationSender {
                 self.config.widget_interval,
                 self.config.lease,
                 self.config.batch,
+                pass.holder,
             )
             .await?
         {
             if refused {
-                self.unclaim(device).await?;
+                self.unclaim(device, &pass).await?;
                 continue;
             }
-            match self.flush_widgets(device, now).await? {
+            match self.flush_widgets(device, &pass).await? {
                 Flushed::Sent(count) => sent += count,
                 Flushed::Refused => refused = true,
             }
@@ -155,9 +169,21 @@ impl NotificationSender {
     }
 
     /// Give back a claimed device untouched, for the next flush
-    async fn unclaim(&self, id: Uuid) -> Result<()> {
+    async fn unclaim(&self, id: Uuid, pass: &Pass) -> Result<()> {
         let state = self.devices.state(id).await?;
-        self.devices.release(id, &state).await
+        self.devices.release(id, pass.holder, &state).await?;
+        Ok(())
+    }
+
+    /// Extend the lease before a send; `false` when another sender has taken the device
+    async fn renew(&self, id: Uuid, pass: &Pass) -> Result<bool> {
+        let elapsed = Duration::from_std(pass.started.elapsed()).unwrap_or(Duration::zero());
+        let until = pass.now + elapsed + self.config.lease;
+        let renewed = self.devices.renew(id, pass.holder, until).await?;
+        if !renewed {
+            debug!(device = %id, "Another sender took over the device");
+        }
+        Ok(renewed)
     }
 
     /// The device if its grant still authorizes the app; otherwise it is deleted
@@ -173,7 +199,8 @@ impl NotificationSender {
         Ok(Some(device))
     }
 
-    async fn flush_device(&self, id: Uuid, now: DateTime<Utc>, cap: u32) -> Result<Flushed> {
+    async fn flush_device(&self, id: Uuid, pass: &Pass, cap: u32) -> Result<Flushed> {
+        let now = pass.now;
         let Some(device) = self.live_device(id).await? else {
             return Ok(Flushed::Sent(0));
         };
@@ -184,7 +211,8 @@ impl NotificationSender {
         }
         let Some(token) = device.alert_token.as_ref().filter(|_| !summary.is_empty()) else {
             self.devices.remove_pending(id, &summary.items()).await?;
-            self.devices.release(id, &state).await?;
+            state.batch_id = None;
+            self.devices.release(id, pass.holder, &state).await?;
             return Ok(Flushed::Sent(0));
         };
 
@@ -200,17 +228,22 @@ impl NotificationSender {
             state.backoff_until = state
                 .window_started_at
                 .map(|start| start + Duration::hours(1));
-            self.devices.release(id, &state).await?;
+            self.devices.release(id, pass.holder, &state).await?;
             return Ok(Flushed::Sent(0));
         }
 
+        if !self.renew(id, pass).await? {
+            return Ok(Flushed::Sent(0));
+        }
+        // A retry reuses the collapse id, so an attempt that did reach APNs is replaced.
+        let batch = *state.batch_id.get_or_insert_with(Uuid::new_v4);
         let message = PushMessage {
             apns_id: Uuid::new_v4(),
             token: token.value.clone(),
             environment: device.environment,
             push_type: PushType::Alert,
             priority: summary.priority(),
-            collapse_id: Some(Uuid::new_v4().to_string()),
+            collapse_id: Some(batch.to_string()),
             expiration: now + self.config.expiration,
             payload: summary.payload(&device.locale, device.preferences.show_titles),
         };
@@ -224,6 +257,7 @@ impl NotificationSender {
                 state.alerts_in_window += 1;
                 state.failures = 0;
                 state.backoff_until = None;
+                state.batch_id = None;
                 1
             }
             PushOutcome::TokenInvalid { since } => {
@@ -231,11 +265,13 @@ impl NotificationSender {
                 self.devices
                     .clear_token(id, PushTokenKind::Alert, since)
                     .await?;
+                state.batch_id = None;
                 0
             }
             PushOutcome::Rejected { reason } => {
                 warn!(device = %id, apns_id = %message.apns_id, %reason, "APNs rejected an alert");
                 self.devices.remove_pending(id, &items).await?;
+                state.batch_id = None;
                 0
             }
             PushOutcome::Retry { reason } => {
@@ -246,12 +282,12 @@ impl NotificationSender {
             }
             PushOutcome::CredentialError { reason } => {
                 warn!(%reason, "APNs refused the provider credentials");
-                self.devices.release(id, &state).await?;
+                self.devices.release(id, pass.holder, &state).await?;
                 return Ok(Flushed::Refused);
             }
         };
         if self.devices.get(id).await?.is_some() {
-            self.devices.release(id, &state).await?;
+            self.devices.release(id, pass.holder, &state).await?;
         }
         Ok(Flushed::Sent(sent))
     }
@@ -291,16 +327,20 @@ impl NotificationSender {
         Ok((summary, stale))
     }
 
-    async fn flush_widgets(&self, id: Uuid, now: DateTime<Utc>) -> Result<Flushed> {
+    async fn flush_widgets(&self, id: Uuid, pass: &Pass) -> Result<Flushed> {
+        let now = pass.now;
         let Some(device) = self.live_device(id).await? else {
             return Ok(Flushed::Sent(0));
         };
         let mut state = self.devices.state(id).await?;
         let Some(token) = device.widget_token.as_ref() else {
             state.widgets_dirty_at = None;
-            self.devices.release(id, &state).await?;
+            self.devices.release(id, pass.holder, &state).await?;
             return Ok(Flushed::Sent(0));
         };
+        if !self.renew(id, pass).await? {
+            return Ok(Flushed::Sent(0));
+        }
         let message = PushMessage {
             apns_id: Uuid::new_v4(),
             token: token.value.clone(),
@@ -337,12 +377,12 @@ impl NotificationSender {
             }
             PushOutcome::CredentialError { reason } => {
                 warn!(%reason, "APNs refused the provider credentials");
-                self.devices.release(id, &state).await?;
+                self.devices.release(id, pass.holder, &state).await?;
                 return Ok(Flushed::Refused);
             }
         };
         if self.devices.get(id).await?.is_some() {
-            self.devices.release(id, &state).await?;
+            self.devices.release(id, pass.holder, &state).await?;
         }
         Ok(Flushed::Sent(sent))
     }
