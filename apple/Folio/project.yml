@@ -69,7 +69,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(FOLIO_BUNDLE_ID)
-        CODE_SIGN_ENTITLEMENTS: $(FOLIO_APP_ENTITLEMENTS)
+        # XcodeGen writes CODE_SIGN_ENTITLEMENTS = entitlements.path into these settings itself, which would
+        # override a plain key here. A condition that matches every SDK takes precedence over it, so a
+        # self-build's Local.xcconfig can point at Folio-Local.entitlements (see scripts/associated-domains.sh).
+        CODE_SIGN_ENTITLEMENTS[sdk=*]: $(FOLIO_APP_ENTITLEMENTS)
         ENABLE_APP_SANDBOX: 'YES'
         ENABLE_OUTGOING_NETWORK_CONNECTIONS: 'YES'
         ENABLE_USER_SELECTED_FILES: readwrite
