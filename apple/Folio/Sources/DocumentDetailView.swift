@@ -11,15 +11,22 @@ struct DocumentDetailView: View {
     @State private var model: DocumentDetailViewModel
     @State private var showingDiscussion = false
     @State private var editingDate = false
+    @State private var classifying = false
     let snapshot: Snapshot
     let vaultID: UUID
+    /// Hands saved edits back to the list so its rows and inbox follow them.
+    let onDocumentChange: @MainActor (Document) -> Void
 
-    init(snapshot: Snapshot, service: any FolioService, vaultID: UUID) {
+    init(
+        snapshot: Snapshot, service: any FolioService, vaultID: UUID,
+        onDocumentChange: @escaping @MainActor (Document) -> Void = { _ in }
+    ) {
         _model = State(
             initialValue: DocumentDetailViewModel(
                 document: snapshot.document, lookups: snapshot.lookups, service: service))
         self.snapshot = snapshot
         self.vaultID = vaultID
+        self.onDocumentChange = onDocumentChange
     }
 
     var body: some View {
@@ -40,6 +47,8 @@ struct DocumentDetailView: View {
                 try await model.saveDocumentDate(date)
             }
         }
+        .sheet(isPresented: $classifying) { DocumentClassificationView(model: model) }
+        .onChange(of: model.document) { _, document in onDocumentChange(document) }
         .onChange(of: snapshot) { _, snapshot in
             model.update(document: snapshot.document, lookups: snapshot.lookups)
         }
@@ -95,6 +104,9 @@ struct DocumentDetailView: View {
                 }
                 DocumentProcessingView(document: model.document)
                 Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
+                if model.canClassify {
+                    Button("Classify", systemImage: "tag") { classifying = true }
+                }
                 if let failure = model.metadataFailure {
                     Text(failure).foregroundStyle(Color.danger)
                     Button("Retry details") { Task { await model.refreshMetadata() } }

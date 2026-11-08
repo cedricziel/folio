@@ -100,6 +100,92 @@ import XCTest
         XCTAssertTrue(app.staticTexts["first.pdf"].exists)
     }
 
+    func testFilingFromTheInboxRecoversFromAFailedSaveAndLeavesTheInbox() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = launchClassification()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Unfiled letter")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Unfiled letter"].waitForExistence(timeout: 5), app.debugDescription)
+        classifyWithRetry(app)
+        XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
+        XCTAssertEqual(app.staticTexts["metadata-Type"].label, "Invoice")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let kept = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
+        XCTAssertTrue(kept.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "A filed document leaves the inbox.")
+    }
+
+    func testFilingBesideTheListKeepsTheDocumentOpen() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = launchClassification()
+        try XCTSkipIf(app.windows.firstMatch.frame.width < 1000, "Requires a full-width iPad window.")
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Unfiled letter")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        row.tap()
+        XCTAssertTrue(app.staticTexts["letter.pdf"].waitForExistence(timeout: 5), app.debugDescription)
+        classifyWithRetry(app)
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "A filed document leaves the inbox.")
+        XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
+        XCTAssertTrue(app.staticTexts["letter.pdf"].exists, "The filed document stays open beside the list.")
+    }
+
+    private func launchClassification() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["--classification", "--classification-save-failure"]
+        app.launch()
+        return app
+    }
+
+    /// The fixture fails the first save, so this covers the error, Retry and the remaining fields.
+    private func classifyWithRetry(_ app: XCUIApplication) {
+        let classify = app.buttons["Classify"]
+        XCTAssertTrue(classify.waitForExistence(timeout: 5), app.debugDescription)
+        classify.tap()
+        let from = picker("From", in: app)
+        XCTAssertTrue(from.waitForExistence(timeout: 5), app.debugDescription)
+        from.tap()
+        let city = app.buttons["City utilities"]
+        XCTAssertTrue(city.waitForExistence(timeout: 5), app.debugDescription)
+        city.tap()
+        let retry = app.buttons["Retry save"]
+        XCTAssertTrue(retry.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Couldn't reach the server."].exists, app.debugDescription)
+        capture(app, name: "Failed classification save with Retry")
+        retry.tap()
+        XCTAssertTrue(retry.waitForNonExistence(timeout: 5), app.debugDescription)
+
+        // Controls stay disabled while a save is in flight.
+        let type = picker("Type", in: app)
+        XCTAssertTrue(type.wait(for: \.isEnabled, toEqual: true, timeout: 5), app.debugDescription)
+        type.tap()
+        let invoice = app.buttons["Invoice"]
+        XCTAssertTrue(invoice.waitForExistence(timeout: 5), app.debugDescription)
+        invoice.tap()
+        let taxes = app.buttons["Taxes"]
+        XCTAssertTrue(taxes.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(taxes.wait(for: \.isEnabled, toEqual: true, timeout: 5), app.debugDescription)
+        taxes.tap()
+        XCTAssertTrue(taxes.wait(for: \.isSelected, toEqual: true, timeout: 5), app.debugDescription)
+        capture(app, name: "Classified document")
+        let done = app.buttons["Done"]
+        XCTAssertTrue(done.wait(for: \.isEnabled, toEqual: true, timeout: 5), app.debugDescription)
+        done.tap()
+        XCTAssertTrue(app.staticTexts["metadata-From"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    private func picker(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+    }
+
+    private func capture(_ app: XCUIApplication, name: String) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = name
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testPendingScanSurvivesSwipeDismissal() {
         let app = openScanReview()
         let title = app.navigationBars["Review a scan"]

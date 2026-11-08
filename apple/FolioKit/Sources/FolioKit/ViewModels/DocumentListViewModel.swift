@@ -213,6 +213,19 @@ public final class DocumentListViewModel {
         }
     }
 
+    /// Takes a document saved elsewhere, such as in its detail view, so the row and inbox membership follow it.
+    ///
+    /// A filed document leaves the inbox rows but stays resolvable, so its open detail stays put.
+    public func apply(_ updated: Document) {
+        if let index = documents.firstIndex(where: { $0.id == updated.id }) {
+            guard updated.updatedAt >= documents[index].updatedAt else { return }
+            documents[index] = updated
+            rebuildRows()
+        } else if let resolved = resolvedDocument, resolved.id == updated.id, updated.updatedAt >= resolved.updatedAt {
+            resolvedDocument = updated
+        }
+    }
+
     public func dismissActionError() {
         actionError = nil
     }
