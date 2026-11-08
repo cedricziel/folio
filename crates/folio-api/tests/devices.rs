@@ -399,3 +399,17 @@ oShkVBX+C6hjdfOCLb99IVGjenWhRANCAAQHz9RTjiH1cvtgtneWb5gLPuVYpIpN
 KAuAQloidgaveNCZtHQFTnDTR4pFwYBKElRLGQnBgDU8trF2AC/LsCzk
 -----END PRIVATE KEY-----
 ";
+
+#[tokio::test]
+async fn long_vault_lists_are_refused_before_any_lookup() {
+    let h = harness_requiring_login().await;
+    let alice = app_user(&h, "alice", "grant-a").await;
+    let vaults: Vec<_> = (0..101).map(|_| uuid::Uuid::new_v4()).collect();
+    let body = json!({"platform": "ios", "environment": "production", "locale": "en",
+        "preferences": {"vaults": vaults}});
+
+    let (status, body) = send(&h, request("PUT", "/api/devices/phone-1", &alice, body)).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body.to_string().contains("Too many vaults"), "{body}");
+}

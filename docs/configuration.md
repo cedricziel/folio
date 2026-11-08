@@ -14,8 +14,9 @@ From lowest to highest:
 
 The database overrides the other layers only for the keys it manages:
 `ai.openai_api_key`, `ai.anthropic_api_key`, `ocr.*`, `embeddings.*`,
-the `processing.*` toggles and `apple.app_ids`. Everything else is fixed at
-startup by the first three layers.
+the `processing.*` toggles, `apple.app_ids` and `push.*` (except
+`push.apns.base_url`, which is read from configuration only). Everything else
+is fixed at startup by the first three layers.
 
 New databases use startup pipeline values until settings are saved. Upgrades
 preserve existing database rows, including values seeded by earlier releases.

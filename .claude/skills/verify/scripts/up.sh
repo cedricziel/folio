@@ -50,7 +50,7 @@ fi
     FOLIO_PROCESSING__AUTO_EMBED="${FOLIO_VERIFY_AUTO_EMBED:-true}" \
     FOLIO_AUTH__REQUIRED="${FOLIO_VERIFY_AUTH_REQUIRED:-false}" \
     FOLIO_APPLE__APP_IDS="${FOLIO_VERIFY_APPLE_APP_IDS:-}" \
-    "${extra[@]}" \
+    ${extra[@]+"${extra[@]}"} \
     "$bin"
 ) >"$dir/server.log" 2>&1 &
 pid=$!

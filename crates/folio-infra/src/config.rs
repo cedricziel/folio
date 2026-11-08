@@ -968,6 +968,12 @@ impl Config {
     /// Rejects combinations that are unsafe to run. Called once at startup.
     pub fn validate(&self) -> Result<(), String> {
         self.apple.parsed()?;
+        if !matches!(self.push.transport.as_str(), "none" | "apns") {
+            return Err(format!(
+                "push.transport (FOLIO_PUSH__TRANSPORT) must be \"none\" or \"apns\", got {:?}",
+                self.push.transport
+            ));
+        }
         if let Some(url) = self.server.public_url.as_deref().filter(|u| !u.is_empty()) {
             url::Url::parse(url).map_err(|e| {
                 format!("server.public_url (FOLIO_SERVER__PUBLIC_URL) is not a valid URL ({e}): {url:?}")
@@ -1514,6 +1520,19 @@ vault = "{VAULT}"
         let err = config.validate().unwrap_err();
         assert!(err.contains("apple.app_ids"), "{err}");
         assert!(err.contains("com.example.folio"), "{err}");
+    }
+
+    #[test]
+    fn unknown_push_transport_fails_startup_naming_the_setting() {
+        let err = load(&[("FOLIO_PUSH__TRANSPORT", "apn")])
+            .validate()
+            .unwrap_err();
+        assert!(err.contains("push.transport"), "{err}");
+        for transport in ["none", "apns"] {
+            assert!(load(&[("FOLIO_PUSH__TRANSPORT", transport)])
+                .validate()
+                .is_ok());
+        }
     }
 
     #[test]

@@ -556,3 +556,41 @@ async fn a_vault_lost_while_pending_is_dropped_when_its_row_comes_first() {
 async fn a_vault_lost_while_pending_is_dropped_when_its_row_comes_second() {
     lost_vault_is_dropped(false).await;
 }
+
+#[tokio::test]
+async fn refused_credentials_stop_the_rest_of_the_batch() {
+    let w = world();
+    let bob = device("bob", w.start - Duration::days(1));
+    w.devices.add(bob.clone());
+    w.roles.grant(&bob.user_id, w.vault, VaultRole::Editor);
+    queue(&w, w.vault, NotificationKind::NeedsReview, w.start).await;
+    let doc = document(w.vault, Some("bob"), w.start);
+    w.documents.put(doc.clone());
+    w.devices
+        .record_first_outcome(
+            doc.id,
+            DocumentOutcome::Completed,
+            &[PendingNotification {
+                device_id: bob.id,
+                document_id: doc.id,
+                kind: NotificationKind::NeedsReview,
+                vault_id: w.vault,
+                created_at: w.start,
+            }],
+        )
+        .await
+        .unwrap();
+    w.transport.answer(PushOutcome::CredentialError {
+        reason: "InvalidProviderToken".into(),
+    });
+
+    let now = w.start + Duration::minutes(1);
+    w.sender.flush(now).await.unwrap();
+
+    assert_eq!(w.transport.sent().len(), 1, "no send after the refusal");
+    for id in [w.alice.id, bob.id] {
+        assert!(!w.devices.pending(id).await.unwrap().is_empty());
+    }
+    // Both claims were released, so the next flush delivers both.
+    assert_eq!(w.sender.flush(now + Duration::seconds(1)).await.unwrap(), 2);
+}

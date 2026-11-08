@@ -135,7 +135,7 @@ impl PushDeviceRepository for PostgresPushRepository {
         .await
         .map_err(err)?;
 
-        sqlx::query(
+        let stored = sqlx::query(
             "INSERT INTO push_devices (id, user_id, installation_id, client_id, grant_id,
                 platform, environment, locale, preferences, alert_token, alert_token_registered_at,
                 widget_token, widget_token_registered_at, created_at, updated_at)
@@ -152,7 +152,8 @@ impl PushDeviceRepository for PostgresPushRepository {
                     push_devices.alert_token_registered_at),
                 widget_token = COALESCE(EXCLUDED.widget_token, push_devices.widget_token),
                 widget_token_registered_at = COALESCE(EXCLUDED.widget_token_registered_at,
-                    push_devices.widget_token_registered_at)",
+                    push_devices.widget_token_registered_at)
+             RETURNING id, (xmax = 0) AS inserted",
         )
         .bind(id)
         .bind(r.user_id.as_str())
@@ -166,15 +167,17 @@ impl PushDeviceRepository for PostgresPushRepository {
         .bind(&r.alert_token)
         .bind(&r.widget_token)
         .bind(now)
-        .execute(&mut *tx)
+        .fetch_one(&mut *tx)
         .await
         .map_err(err)?;
         tx.commit().await.map_err(err)?;
+        // A concurrent first registration may have won the insert; report its row.
+        let (id, inserted): (Uuid, bool) = (stored.get("id"), stored.get("inserted"));
         let device = self
             .get(id)
             .await?
             .ok_or_else(|| err("registered device vanished"))?;
-        Ok((device, existing.is_none()))
+        Ok((device, inserted))
     }
 
     async fn get(&self, id: Uuid) -> Result<Option<PushDevice>> {
