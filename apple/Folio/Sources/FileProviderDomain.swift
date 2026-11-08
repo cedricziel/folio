@@ -13,4 +13,10 @@ enum FileProviderDomain {
     static func unregister() {
         NSFileProviderManager.remove(domain) { _ in }
     }
+
+    /// Files and Finder don't poll the extension, so without this signal folders they already listed
+    /// keep their contents until the system happens to enumerate them again.
+    static func signalChanges() {
+        NSFileProviderManager(for: domain)?.signalEnumerator(for: .workingSet) { _ in }
+    }
 }

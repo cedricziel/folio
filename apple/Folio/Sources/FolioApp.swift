@@ -90,9 +90,11 @@ final class AppModel {
                 restored = .unavailable(server: server, message: error.localizedDescription)
             }
             guard !Task.isCancelled, generation == restorationGeneration, !isWorking else { return }
-            guard restored != session else { return }
-            session = restored
-            if case .signedIn = restored { FileProviderDomain.register() }
+            if restored != session {
+                session = restored
+                if case .signedIn = restored { FileProviderDomain.register() }
+            }
+            if case .signedIn = restored { FileProviderDomain.signalChanges() }
         }
     }
 
