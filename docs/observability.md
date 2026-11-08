@@ -29,14 +29,18 @@ On shutdown (SIGTERM or Ctrl+C) Folio flushes pending data before exiting.
   `http.request.method`, `http.route`, `url.path`,
   `http.response.status_code` and `user_agent.original`. A W3C `traceparent`
   header from the caller is continued.
-- `GET /`, `GET /documents` and `GET /documents/search` spans also carry
+- `GET /`, `GET /documents`, `GET /documents/search` and the search palette's
+  `GET /api/documents/search` spans also carry
   `folio.browse.scope` (`inbox`, `all` or `search`) and
   `folio.browse.filters`, the sorted kinds of filter in use (`reviewed`,
   `document_date`, `correspondent`, `document_type`, `tag`, `text`). Filter
-  values are never recorded.
-- HTML responses carry `Server-Timing: traceparent;desc="00-<trace>-<span>-01"`,
-  naming the request span so a browser page load can join its trace. JSON API
-  responses don't.
+  values are never recorded, and a taxonomy filter counts only when it is an ID,
+  as the page itself ignores anything else.
+- HTML responses, error pages included, carry
+  `Server-Timing: traceparent;desc="00-<trace>-<span>-<flags>"`, naming the
+  request span and its sampled flag so a browser page load can join its trace.
+  JSON API responses don't. A back or forward navigation ignores it, since the
+  browser may replay a cached response.
 - One `job {type}` span per background job attempt with `job.id`,
   `job.type`, `job.attempt` and `document.id`; work done by the job is nested
   inside it.
@@ -170,8 +174,10 @@ outside telemetry export.
   `web/telemetry-session.mjs`; anything else becomes `other`.
 - **Actions.** Elements marked `data-folio-action`, and scripts that dispatch a
   `folio:action` event, record a `folio.action` log event with
-  `folio.action.name`. Names outside the list are ignored. Nothing else is read
-  from the page.
+  `folio.action.name`; uploads add `folio.upload.source` (`picker` or `drop`).
+  Names outside the list are ignored. Nothing else is read from the page.
+  Logs and traces are flushed right away only for forms that leave the page
+  and for sign-out; everything else goes out with the next batch.
 - **Limits.** A repeated screen within a second is dropped, and each page sends
   at most 60 screen and action events per minute. The excess is counted in
   `folio.telemetry.ui_events.dropped`.
