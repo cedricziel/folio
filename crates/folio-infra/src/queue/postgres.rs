@@ -19,6 +19,7 @@ pub(crate) async fn insert_job(
     job_type: JobType,
     scheduled_at: DateTime<Utc>,
     max_attempts: i32,
+    trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
     let plan =
         super::processing_scope::postgres::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
@@ -33,7 +34,6 @@ pub(crate) async fn insert_job(
             correlation_id: Uuid::new_v4(),
             causation_id: None,
         });
-    let trace = super::JobTraceContext::current();
     let payload = serde_json::to_string(&job_type)
         .map_err(|e| Error::Repository(format!("Failed to serialize job: {}", e)))?;
 
@@ -54,8 +54,8 @@ pub(crate) async fn insert_job(
     .bind(lineage.correlation_id)
     .bind(lineage.causation_id)
     .bind(plan.group_id)
-    .bind(trace.as_ref().map(|trace| trace.traceparent.as_str()))
-    .bind(trace.as_ref().and_then(|trace| trace.tracestate.as_deref()))
+    .bind(trace.map(|trace| trace.traceparent.as_str()))
+    .bind(trace.and_then(|trace| trace.tracestate.as_deref()))
     .execute(&mut *conn)
     .await
     .map_err(repo_err("Failed to enqueue job"))?;
@@ -86,12 +86,15 @@ struct JobRow {
     completed_at: Option<DateTime<Utc>>,
     claim_id: Option<Uuid>,
     lease_expires_at: Option<i64>,
+    trace_parent: Option<String>,
+    trace_state: Option<String>,
 }
 
 macro_rules! job_columns {
     () => {
         "id, status, payload::text AS payload, attempts, max_attempts, error, \
-         created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at"
+         created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at, \
+         trace_parent, trace_state"
     };
 }
 
@@ -115,6 +118,7 @@ impl TryFrom<JobRow> for Job {
             completed_at: row.completed_at,
             claim_id: row.claim_id,
             lease_expires_at: row.lease_expires_at,
+            trace: super::JobTraceContext::from_columns(row.trace_parent, row.trace_state),
         })
     }
 }
@@ -132,34 +136,47 @@ impl PostgresJobQueue {
         &self.pool
     }
 
-    #[instrument(skip(self))]
-    pub async fn enqueue(&self, job_type: JobType) -> Result<Uuid> {
-        self.enqueue_delayed(job_type, Utc::now()).await
+    #[instrument(skip(self, trace))]
+    pub async fn enqueue(
+        &self,
+        job_type: JobType,
+        trace: Option<super::JobTraceContext>,
+    ) -> Result<Uuid> {
+        self.enqueue_delayed(job_type, Utc::now(), trace).await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, trace))]
     pub async fn enqueue_delayed(
         &self,
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
+        trace: Option<super::JobTraceContext>,
     ) -> Result<Uuid> {
-        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS)
+        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS, trace)
             .await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, trace))]
     pub async fn enqueue_with_max_attempts(
         &self,
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
+        trace: Option<super::JobTraceContext>,
     ) -> Result<Uuid> {
         let mut tx = self
             .pool
             .begin()
             .await
             .map_err(repo_err("Failed to begin enqueue"))?;
-        let id = insert_job(&mut tx, job_type, scheduled_at, max_attempts).await?;
+        let id = insert_job(
+            &mut tx,
+            job_type,
+            scheduled_at,
+            max_attempts,
+            trace.as_ref(),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(repo_err("Failed to commit enqueue"))?;
@@ -260,16 +277,6 @@ impl PostgresJobQueue {
                 causation_id: causation,
             },
         }))
-    }
-
-    pub async fn trace_context(&self, job_id: Uuid) -> Result<Option<super::JobTraceContext>> {
-        let row: Option<(Option<String>, Option<String>)> =
-            sqlx::query_as("SELECT trace_parent, trace_state FROM jobs WHERE id = $1")
-                .bind(job_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(repo_err("Failed to read job trace context"))?;
-        Ok(row.and_then(|(parent, state)| super::JobTraceContext::from_columns(parent, state)))
     }
 
     pub async fn pending_count(&self) -> Result<i64> {

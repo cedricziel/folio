@@ -200,6 +200,8 @@ pub struct Job {
     pub completed_at: Option<DateTime<Utc>>,
     pub claim_id: Option<Uuid>,
     pub lease_expires_at: Option<i64>,
+    /// Trace context the job was queued under; None for untraced and older jobs
+    pub trace: Option<JobTraceContext>,
 }
 
 /// Retry budget of a job unless the caller sets one
@@ -234,7 +236,14 @@ impl JobQueue {
 
     /// Enqueue a new job
     pub async fn enqueue(&self, job_type: JobType) -> Result<Uuid> {
-        dispatch!(self, enqueue(job_type))
+        let trace = JobTraceContext::current();
+        dispatch!(self, enqueue(job_type, trace))
+    }
+
+    /// Enqueue a job without linking it to the current trace, for bulk enqueues
+    /// that would otherwise put every job into one trace
+    pub async fn enqueue_untraced(&self, job_type: JobType) -> Result<Uuid> {
+        dispatch!(self, enqueue(job_type, None))
     }
 
     /// Enqueue a job to run at a specific time
@@ -243,7 +252,8 @@ impl JobQueue {
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
     ) -> Result<Uuid> {
-        dispatch!(self, enqueue_delayed(job_type, scheduled_at))
+        let trace = JobTraceContext::current();
+        dispatch!(self, enqueue_delayed(job_type, scheduled_at, trace))
     }
 
     /// Enqueue a job with its own retry budget
@@ -253,9 +263,10 @@ impl JobQueue {
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<Uuid> {
+        let trace = JobTraceContext::current();
         dispatch!(
             self,
-            enqueue_with_max_attempts(job_type, scheduled_at, max_attempts)
+            enqueue_with_max_attempts(job_type, scheduled_at, max_attempts, trace)
         )
     }
 
@@ -328,11 +339,6 @@ impl JobQueue {
     /// Returns the enqueue-time scope, or None for jobs created before context persistence.
     pub async fn context(&self, job_id: Uuid) -> Result<Option<JobContext>> {
         dispatch!(self, context(job_id))
-    }
-
-    /// The trace context the job was queued under, or None for untraced and older jobs.
-    pub async fn trace_context(&self, job_id: Uuid) -> Result<Option<JobTraceContext>> {
-        dispatch!(self, trace_context(job_id))
     }
 
     /// Get count of pending jobs

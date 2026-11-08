@@ -303,6 +303,7 @@ async fn complete_embedding_plan(
                         JobType::generate_embedding(fence.document_id),
                         Utc::now(),
                         DEFAULT_MAX_ATTEMPTS,
+                        crate::queue::JobTraceContext::current().as_ref(),
                     )
                     .await
                 }),

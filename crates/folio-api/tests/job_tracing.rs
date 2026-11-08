@@ -184,3 +184,48 @@ async fn a_job_queued_without_trace_context_still_runs_in_a_new_trace() {
     assert_ne!(job[0], TraceId::INVALID);
     assert_ne!(job[0], request[0], "the job starts a new trace");
 }
+
+#[tokio::test]
+async fn re_embedding_every_document_queues_untraced_jobs() {
+    let (_trace_ids, _default) = tracing_setup();
+    let h = common::harness().await;
+    for title in ["First", "Second"] {
+        h.state
+            .document_repo
+            .create(
+                h.vault,
+                folio_core::models::CreateDocument {
+                    title: title.into(),
+                    content: Some("text".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/settings/processing/reembed")
+        .header("host", "localhost")
+        .header("origin", "http://localhost")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("traceparent", format!("00-{TRACE_ID}-1234567812345678-01"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.headers()["location"], "/settings?reembedded=2");
+
+    let folio_infra::Database::Sqlite(pool) = &h.database else {
+        unreachable!("the harness uses SQLite");
+    };
+    let traced: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT trace_parent FROM jobs WHERE job_type = 'generate_embedding'")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        traced,
+        [None, None],
+        "one request must not put every job in its trace"
+    );
+}

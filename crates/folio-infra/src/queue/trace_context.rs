@@ -42,6 +42,13 @@ impl JobTraceContext {
         })
     }
 
+    /// The stored span, when the value parses
+    pub(crate) fn span_context(&self) -> Option<opentelemetry::trace::SpanContext> {
+        let parent = self.to_parent();
+        let span = parent.span().span_context().clone();
+        span.is_valid().then_some(span)
+    }
+
     /// The remote parent for the job span; empty when the stored value does not parse
     pub(crate) fn to_parent(&self) -> opentelemetry::Context {
         let mut headers = HashMap::from([("traceparent".to_string(), self.traceparent.clone())]);
