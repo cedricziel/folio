@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// A document as Shortcuts, Siri and Spotlight see it: names instead of ids.
 public struct DocumentSummary: Identifiable, Hashable, Sendable {
@@ -10,10 +11,14 @@ public struct DocumentSummary: Identifiable, Hashable, Sendable {
     public var date: Date
     public var mimeType: String?
     public var pageCount: Int?
+    public var originalFilename: String?
+    /// Whether the server has read the document's text, so it can be shared as plain text.
+    public var hasRecognizedText: Bool
 
     public init(
         id: Document.ID, title: String, correspondent: String? = nil, documentType: String? = nil,
-        tags: [String] = [], date: Date, mimeType: String? = nil, pageCount: Int? = nil
+        tags: [String] = [], date: Date, mimeType: String? = nil, pageCount: Int? = nil,
+        originalFilename: String? = nil, hasRecognizedText: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -23,13 +28,18 @@ public struct DocumentSummary: Identifiable, Hashable, Sendable {
         self.date = date
         self.mimeType = mimeType
         self.pageCount = pageCount
+        self.originalFilename = originalFilename
+        self.hasRecognizedText = hasRecognizedText
     }
 
     public init(_ document: Document, correspondent: String?, documentType: String?) {
         self.init(
             id: document.id, title: document.title, correspondent: correspondent,
             documentType: documentType, tags: document.tags.map(\.name), date: document.createdAt,
-            mimeType: document.mimeType, pageCount: document.pageCount
+            mimeType: document.mimeType, pageCount: document.pageCount,
+            originalFilename: document.originalFilename,
+            hasRecognizedText: document.ocrStatus == .done
+                || !(document.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
 }
@@ -60,7 +70,14 @@ public enum ShortcutFailure: Error, Equatable, Sendable {
     case notSignedIn
     case noDocuments
     case documentNotFound
+    case noRecognizedText
     case unreadableFile(String)
+}
+
+/// A document's original file, downloaded for sharing.
+public struct DocumentTransferFile: Sendable {
+    public let url: URL
+    public let contentType: UTType
 }
 
 /// Everything an intent does against the server, kept free of the AppIntents framework so
@@ -68,10 +85,12 @@ public enum ShortcutFailure: Error, Equatable, Sendable {
 public struct DocumentCatalog: Sendable {
     private let service: any FolioService
     private let calendar: Calendar
+    private let locator: DocumentLocator
 
-    public init(service: any FolioService, calendar: Calendar = .current) {
+    public init(service: any FolioService, calendar: Calendar = .current, locator: DocumentLocator = .shared) {
         self.service = service
         self.calendar = calendar
+        self.locator = locator
     }
 
     public func search(_ query: String, limit: Int = 25) async throws -> [DocumentSummary] {
@@ -90,9 +109,17 @@ public struct DocumentCatalog: Sendable {
         return first
     }
 
+    /// Looks each document up by id, in the vault the app opened it from, and skips those that are gone.
     public func documents(ids: [Document.ID]) async throws -> [DocumentSummary] {
-        let wanted = Set(ids)
-        let documents = try await service.documents(matching: "").filter { wanted.contains($0.id) }
+        var documents: [Document] = []
+        var seen = Set<Document.ID>()
+        for id in ids where seen.insert(id).inserted {
+            do {
+                documents.append(try await document(id))
+            } catch ShortcutFailure.documentNotFound {
+                continue
+            }
+        }
         return try await summaries(documents)
     }
 
@@ -139,11 +166,41 @@ public struct DocumentCatalog: Sendable {
         try await service.removeTag(tagID, from: documentID)
     }
 
-    /// Downloads the original file.
+    /// Downloads the original file through the authenticated download path.
     public func file(for id: Document.ID) async throws -> (url: URL, document: Document) {
-        guard let document = try await service.documents(matching: "").first(where: { $0.id == id })
-        else { throw ShortcutFailure.documentNotFound }
-        return try await (service.downloadFile(for: document), document)
+        let document = try await document(id)
+        return try await (service(for: id).downloadFile(for: document), document)
+    }
+
+    /// The original file, named as it was uploaded, with the type its content declares.
+    public func transferFile(for id: Document.ID) async throws -> DocumentTransferFile {
+        let (url, document) = try await file(for: id)
+        return DocumentTransferFile(
+            url: url,
+            contentType: DocumentTransfer.contentType(mimeType: document.mimeType, filename: document.originalFilename)
+        )
+    }
+
+    /// The text the server read from the document.
+    public func recognizedText(for id: Document.ID) async throws -> String {
+        let text = try await document(id).content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else { throw ShortcutFailure.noRecognizedText }
+        return text
+    }
+
+    private func service(for id: Document.ID) -> any FolioService {
+        locator.vault(for: id).map(service.scoped(to:)) ?? service
+    }
+
+    private func document(_ id: Document.ID) async throws -> Document {
+        let document: Document
+        do {
+            document = try await service(for: id).document(id: id)
+        } catch FolioError.server(status: 404, _) {
+            throw ShortcutFailure.documentNotFound
+        }
+        guard document.id == id, document.deletedAt == nil else { throw ShortcutFailure.documentNotFound }
+        return document
     }
 
     /// Uploads each file, then tags every new document. A single file may carry a title.

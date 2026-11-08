@@ -14,6 +14,9 @@ struct FolioApp: App {
         WindowGroup {
             RootView(model: model, lock: security.lock)
                 .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
+                .onChange(of: model.session, initial: true) { _, session in
+                    DocumentActivityTracker.shared.sessionChanged(to: session)
+                }
                 .tint(.archive)
                 .onReceive(
                     NotificationCenter.default.publisher(for: Notification.Name("FolioSessionChanged")).receive(
