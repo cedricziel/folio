@@ -11,7 +11,7 @@ struct ShareRoot: View {
     var body: some View {
         Group {
             if let model {
-                ShareView(model: model) { context?.completeRequest(returningItems: nil) }
+                ShareView(model: model) { finish() }
             } else if loaded, let attachments, !attachments.canUpload {
                 VStack(alignment: .leading, spacing: FolioTheme.Spacing.space3) {
                     Text(attachments.files.isEmpty ? "No readable attachments" : "Some attachments could not be read")
@@ -25,7 +25,7 @@ struct ShareRoot: View {
                         }
                     }
                     HStack {
-                        Button("Cancel", role: .cancel) { context?.completeRequest(returningItems: nil) }
+                        Button("Cancel", role: .cancel) { finish() }
                         Button("Retry") { attempt += 1 }
                     }
                 }
@@ -34,7 +34,7 @@ struct ShareRoot: View {
                 VStack(spacing: FolioTheme.Spacing.space3) {
                     Text("Open Folio and enter your server address first.")
                         .font(FolioTheme.Typography.body)
-                    Button("Close") { context?.completeRequest(returningItems: nil) }
+                    Button("Close") { finish() }
                 }
                 .padding(FolioTheme.Spacing.space6)
             } else {
@@ -51,6 +51,14 @@ struct ShareRoot: View {
             attachments = result
             model = result.canUpload ? await buildModel(result.files) : nil
             loaded = true
+        }
+    }
+
+    /// Sends recorded telemetry, waiting briefly, before the system suspends the extension.
+    private func finish() {
+        Task {
+            await FolioTelemetry.shared.flush(timeout: .milliseconds(1500))
+            context?.completeRequest(returningItems: nil)
         }
     }
 

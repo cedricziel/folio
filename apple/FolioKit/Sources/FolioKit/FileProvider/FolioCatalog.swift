@@ -18,9 +18,37 @@ public struct FolioNode: Equatable, Sendable {
 /// Maps the server's data onto the virtual folder tree shown in Files and Finder.
 public struct FolioCatalog: Sendable {
     private let service: any FolioService
+    private let cache: FolioCatalogCache?
 
-    public init(service: any FolioService) {
+    /// Listings this old are reused when resolving a single item.
+    static let lookupAge: Duration = .seconds(30)
+    /// A missing item refetches its folder only when the listing is older than this.
+    static let missRefetchAge: Duration = .seconds(5)
+
+    /// With `cache`, item lookups reuse recent listings; enumerations always fetch and refresh it.
+    public init(service: any FolioService, cache: FolioCatalogCache? = nil) {
         self.service = service
+        self.cache = cache
+    }
+
+    private func vaultCatalog(maxAge: Duration) async throws -> VaultCatalog {
+        guard let cache else { return try await service.vaults() }
+        let service = service
+        return try await cache.vaults(maxAge: maxAge) { try await service.vaults() }
+    }
+
+    private func listing(of folder: FolioItemID.Folder, maxAge: Duration) async throws -> [FolioNode] {
+        guard let cache else { return try await fetchChildren(of: folder) }
+        return try await cache.children(of: folder, maxAge: maxAge) { try await fetchChildren(of: folder) }
+    }
+
+    /// Finds `id` in `folder`'s listing, refetching a reused listing once if the item is not in it.
+    private func lookup(_ id: FolioItemID, in folder: FolioItemID.Folder) async throws -> FolioNode? {
+        if let node = try await listing(of: folder, maxAge: Self.lookupAge).first(where: { $0.id == id }) {
+            return node
+        }
+        guard cache != nil else { return nil }
+        return try await listing(of: folder, maxAge: Self.missRefetchAge).first { $0.id == id }
     }
 
     private struct Context {
@@ -58,14 +86,19 @@ public struct FolioCatalog: Sendable {
 
     private func context(for folder: FolioItemID.Folder) async throws -> Context? {
         guard let id = folder.vaultID else { return nil }
-        let catalog = try await service.vaults()
+        let catalog = try await vaultCatalog(maxAge: Self.lookupAge)
         guard let vault = catalog.vaults.first(where: { $0.id == id }) else { return nil }
         return Context(service: service.scoped(to: id), vault: vault)
     }
 
+    /// Always asks the server, and refreshes the cache for later lookups.
     public func children(of folder: FolioItemID.Folder) async throws -> [FolioNode] {
+        try await listing(of: folder, maxAge: .zero)
+    }
+
+    private func fetchChildren(of folder: FolioItemID.Folder) async throws -> [FolioNode] {
         if folder == .root {
-            let catalog = try await service.vaults()
+            let catalog = try await vaultCatalog(maxAge: .zero)
             return vaultNodes(catalog.vaults)
         }
         guard let context = try await context(for: folder) else { return [] }
@@ -91,9 +124,9 @@ public struct FolioCatalog: Sendable {
             )
         case let .folder(folder):
             guard let parent = folder.parent else { return nil }
-            return try await children(of: parent).first { $0.id == id }
+            return try await lookup(id, in: parent)
         case let .document(_, folder):
-            return try await children(of: folder).first { $0.id == id }
+            return try await lookup(id, in: folder)
         }
     }
 
@@ -102,6 +135,7 @@ public struct FolioCatalog: Sendable {
         guard let context = try await context(for: folder) else { throw FolioError.server(status: 404, message: nil) }
         guard context.vault.role.canUpload else { throw FolioError.server(status: 403, message: nil) }
         let document = try await context.service.upload(file)
+        await cache?.invalidateListings()
         return documentNodes([document], in: folder)[0]
     }
 
@@ -113,7 +147,7 @@ public struct FolioCatalog: Sendable {
     }
 
     public func allNodes() async throws -> [FolioNode] {
-        let catalog = try await service.vaults()
+        let catalog = try await vaultCatalog(maxAge: .zero)
         let roots = vaultNodes(catalog.vaults)
         var nodes: [FolioNode] = []
         for vault in catalog.vaults.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {

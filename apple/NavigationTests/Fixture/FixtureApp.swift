@@ -9,9 +9,7 @@ typealias Document = FolioKit.Document
         Document(title: "First fixture", originalFilename: "first.pdf"),
         Document(title: "Second fixture", originalFilename: "second.pdf"),
     ]
-    let service = MockFolioService(
-        documents: FixtureApp.documents,
-        loseFirstEntryResponse: ProcessInfo.processInfo.arguments.contains("--discussion-save-failure"))
+    let service = FixtureApp.makeService(arguments: ProcessInfo.processInfo.arguments)
 
     var body: some Scene {
         WindowGroup {
@@ -41,6 +39,24 @@ typealias Document = FolioKit.Document
 }
 
 extension FixtureApp {
+    private static func makeService(arguments: [String]) -> MockFolioService {
+        guard arguments.contains("--classification") else {
+            return MockFolioService(
+                documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"))
+        }
+        // Processed but not reviewed, so the inbox holds it until it is marked reviewed.
+        let letter = Document(
+            title: "Unfiled letter", originalFilename: "letter.pdf", ocrStatus: .done, embedStatus: .done,
+            canEditDocumentDate: true, reviewed: false, canReviewDocument: true)
+        let kept = Document(
+            title: "Second fixture", originalFilename: "second.pdf", ocrStatus: .done, embedStatus: .done,
+            reviewed: false)
+        return MockFolioService(
+            documents: [letter, kept], correspondents: [Correspondent(name: "City utilities")],
+            types: [DocumentType(name: "Invoice")], tags: [FolioKit.Tag(name: "Taxes")],
+            failFirstClassificationSave: arguments.contains("--classification-save-failure"))
+    }
+
     /// Changes the first document on the server, as finished processing would, without telling the app.
     private func simulateRemoteEdit() {
         var documents = Self.documents
