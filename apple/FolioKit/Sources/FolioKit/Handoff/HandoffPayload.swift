@@ -18,7 +18,8 @@ public enum HandoffList: String, Equatable, Sendable {
 }
 
 public enum HandoffTarget: Equatable, Sendable {
-    case document(Document.ID, pane: HandoffPane? = nil)
+    /// `page` is the 1-based reading position, when the sender's preview has pages.
+    case document(Document.ID, pane: HandoffPane? = nil, page: Int? = nil)
     case library(HandoffList)
     case savedView(UUID)
 }
@@ -68,9 +69,10 @@ public struct HandoffPayload: Equatable, Sendable {
             "vault": vaultID.uuidString.lowercased(),
         ]
         switch target {
-        case let .document(id, pane):
+        case let .document(id, pane, page):
             info["document"] = id.uuidString.lowercased()
             if let pane { info["pane"] = pane.rawValue }
+            if let page { info["page"] = page }
         case let .library(list):
             info["list"] = list.rawValue
         case let .savedView(id):
@@ -80,7 +82,8 @@ public struct HandoffPayload: Equatable, Sendable {
     }
 
     /// Fails for an unknown type, a missing key, an invalid UUID, a server that is not http(s) with a
-    /// host, or another `version`. Unknown keys, and an unknown `pane`, are ignored.
+    /// host, or another `version`. Unknown keys, an unknown `pane` and a `page` that is not an integer
+    /// are ignored; `page` is optional within version 1.
     public init?(activityType: String, userInfo: [AnyHashable: Any]?) {
         guard let userInfo, userInfo["version"] as? Int == Self.version,
             let address = userInfo["server"] as? String, let server = URL(string: address),
@@ -91,7 +94,9 @@ public struct HandoffPayload: Equatable, Sendable {
         switch activityType {
         case HandoffActivityType.document:
             guard let document = Self.uuid(userInfo["document"]) else { return nil }
-            target = .document(document, pane: (userInfo["pane"] as? String).flatMap(HandoffPane.init(rawValue:)))
+            target = .document(
+                document, pane: (userInfo["pane"] as? String).flatMap(HandoffPane.init(rawValue:)),
+                page: userInfo["page"] as? Int)
         case HandoffActivityType.library:
             guard let list = (userInfo["list"] as? String).flatMap(HandoffList.init(rawValue:)) else { return nil }
             target = .library(list)
@@ -106,7 +111,7 @@ public struct HandoffPayload: Equatable, Sendable {
 
     /// The same document as #353's on-screen activity, without the Handoff extras.
     public var documentActivity: DocumentActivityPayload? {
-        guard case let .document(id, _) = target else { return nil }
+        guard case let .document(id, _, _) = target else { return nil }
         return DocumentActivityPayload(server: server, vaultID: vaultID, documentID: id)
     }
 

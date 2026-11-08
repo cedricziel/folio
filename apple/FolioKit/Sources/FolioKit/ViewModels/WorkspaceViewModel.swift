@@ -25,10 +25,13 @@ public enum WorkspaceDestination: String, CaseIterable, Sendable {
 public struct DocumentContinuation: Equatable, Sendable {
     public let documentID: Document.ID
     public let pane: HandoffPane?
+    /// The sender's 1-based page; the preview clamps it to the loaded file.
+    public let page: Int?
 
-    public init(documentID: Document.ID, pane: HandoffPane?) {
+    public init(documentID: Document.ID, pane: HandoffPane?, page: Int? = nil) {
         self.documentID = documentID
         self.pane = pane
+        self.page = page
     }
 }
 
@@ -41,7 +44,7 @@ public final class DocumentBrowserSession: Identifiable {
     public var presentation = SavedView.Presentation.list
     public var selection: Document.ID?
     public var path: [Document.ID] = []
-    /// Set when Handoff opens a document with a pane; the detail view consumes it.
+    /// Set when Handoff opens a document with a pane or page; the detail view consumes it.
     public var continuation: DocumentContinuation?
 
     init(service: any FolioService, destination: WorkspaceDestination) {
@@ -149,7 +152,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Opens a document in the supplied vault or the server default used by document intents.
-    public func open(_ id: Document.ID, vaultID: UUID? = nil, pane: HandoffPane? = nil) {
+    public func open(_ id: Document.ID, vaultID: UUID? = nil, pane: HandoffPane? = nil, page: Int? = nil) {
         if let vaultID = vaultID ?? catalog.defaultVaultID {
             guard catalog.vaults.contains(where: { $0.id == vaultID }) else {
                 navigationError = "This vault is no longer available."
@@ -162,7 +165,8 @@ public final class WorkspaceViewModel {
         all.list.searchText = ""
         all.selection = id
         all.path = [id]
-        all.continuation = pane.map { DocumentContinuation(documentID: id, pane: $0) }
+        all.continuation =
+            pane == nil && page == nil ? nil : DocumentContinuation(documentID: id, pane: pane, page: page)
     }
 
     /// Opens a continued target. An unknown vault keeps the current one; a saved view that no longer
@@ -173,8 +177,8 @@ public final class WorkspaceViewModel {
             return
         }
         switch route.target {
-        case let .document(id, pane):
-            open(id, vaultID: route.vaultID, pane: pane)
+        case let .document(id, pane, page):
+            open(id, vaultID: route.vaultID, pane: pane, page: page)
         case let .library(list):
             selectVault(route.vaultID)
             navigationError = nil

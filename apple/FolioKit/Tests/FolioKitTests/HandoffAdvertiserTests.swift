@@ -60,8 +60,16 @@ struct HandoffAdvertiserTests {
         #expect(HandoffAdvertiser.payload(for: noVault) == nil)
     }
 
+    @Test func theReportedPageTravelsWithTheDocument() {
+        var paged = state(document: document)
+        paged.page = 4
+        #expect(HandoffAdvertiser.payload(for: paged)?.target == .document(document, page: 4))
+        #expect(HandoffAdvertiser.payload(for: state(document: document))?.target == .document(document, page: nil))
+        #expect(HandoffAdvertiser.payload(for: state(document: document))?.userInfo["page"] == nil)
+    }
+
     @Test func searchTextIsNotAnInput() {
         let labels = Mirror(reflecting: state()).children.compactMap(\.label)
-        #expect(labels == ["session", "isLocked", "vaultID", "list", "documentID", "showingDiscussion"])
+        #expect(labels == ["session", "isLocked", "vaultID", "list", "documentID", "showingDiscussion", "page"])
     }
 }

@@ -131,7 +131,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(apple): workspace routes for Handoff targets`.
 
-- [ ] 6.9 Add `ReadingPosition.clamp(page:pageCount:)` and the optional `page` key in `HandoffPayload`. First write failing tests:
+- [x] 6.9 Add `ReadingPosition.clamp(page:pageCount:)` and the optional `page` key in `HandoffPayload`. First write failing tests:
   - `ReadingPositionTests`: 7 of 12 → 7; 40 of 12 → 12; nil, 0 or −3 → 1; any page with a nil `pageCount` → 1
   - `HandoffPayloadTests` additions: `page` round-trips; a payload without `page` or with a string/float `page` still decodes, with `page == nil`; a #392 payload without `page` still decodes
   - `HandoffAdvertiserTests` addition: the reported page appears in the document payload, and a QuickLook (no page) state omits it

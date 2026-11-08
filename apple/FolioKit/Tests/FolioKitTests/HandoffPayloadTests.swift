@@ -11,6 +11,7 @@ private let savedView = UUID(uuidString: "66666666-7777-4888-8999-AAAAAAAAAAAA")
 private let payloads: [HandoffPayload] = [
     HandoffPayload(server: server, vaultID: vault, target: .document(document)),
     HandoffPayload(server: server, vaultID: vault, target: .document(document, pane: .discussion)),
+    HandoffPayload(server: server, vaultID: vault, target: .document(document, pane: .discussion, page: 7)),
     HandoffPayload(server: server, vaultID: vault, target: .library(.inbox)),
     HandoffPayload(server: server, vaultID: vault, target: .library(.all)),
     HandoffPayload(server: server, vaultID: vault, target: .savedView(savedView)),
@@ -28,7 +29,8 @@ struct HandoffPayloadTests {
 
     @Test func activityTypesAreFixed() {
         #expect(payloads.map(\.activityType) == [
-            "com.cedricziel.folio.document", "com.cedricziel.folio.document", "com.cedricziel.folio.library",
+            "com.cedricziel.folio.document", "com.cedricziel.folio.document", "com.cedricziel.folio.document",
+            "com.cedricziel.folio.library",
             "com.cedricziel.folio.library", "com.cedricziel.folio.saved-view",
         ])
         #expect(HandoffActivityType.all.count == 3)
@@ -48,8 +50,9 @@ struct HandoffPayloadTests {
 
     @Test func requiredKeysNameTheTarget() {
         #expect(payloads[0].requiredUserInfoKeys == DocumentActivityPayload.requiredKeys)
-        #expect(payloads[2].requiredUserInfoKeys == ["version", "server", "vault", "list"])
-        #expect(payloads[4].requiredUserInfoKeys == ["version", "server", "vault", "savedView"])
+        #expect(payloads[2].requiredUserInfoKeys == DocumentActivityPayload.requiredKeys)
+        #expect(payloads[3].requiredUserInfoKeys == ["version", "server", "vault", "list"])
+        #expect(payloads[5].requiredUserInfoKeys == ["version", "server", "vault", "savedView"])
         for payload in payloads {
             #expect(payload.requiredUserInfoKeys.isSubset(of: keys(payload.userInfo)))
         }
@@ -58,8 +61,9 @@ struct HandoffPayloadTests {
     @Test func userInfoHoldsOnlyIdentifiers() {
         #expect(keys(payloads[0].userInfo) == ["version", "server", "vault", "document"])
         #expect(keys(payloads[1].userInfo) == ["version", "server", "vault", "document", "pane"])
-        #expect(keys(payloads[2].userInfo) == ["version", "server", "vault", "list"])
-        #expect(keys(payloads[4].userInfo) == ["version", "server", "vault", "savedView"])
+        #expect(keys(payloads[2].userInfo) == ["version", "server", "vault", "document", "pane", "page"])
+        #expect(keys(payloads[3].userInfo) == ["version", "server", "vault", "list"])
+        #expect(keys(payloads[5].userInfo) == ["version", "server", "vault", "savedView"])
         #expect(payloads[0].userInfo["vault"] as? String == vault.uuidString.lowercased())
         #expect(payloads[0].userInfo["document"] as? String == document.uuidString.lowercased())
         #expect(payloads[0].userInfo["version"] as? Int == 1)
@@ -89,6 +93,28 @@ struct HandoffPayloadTests {
         }
         #expect(HandoffPayload(activityType: "com.cedricziel.folio.search", userInfo: payload.userInfo) == nil)
         #expect(HandoffPayload(activityType: "com.example.document", userInfo: payload.userInfo) == nil)
+    }
+
+    @Test func thePageRoundTrips() {
+        let payload = payloads[2]
+        #expect(payload.userInfo["page"] as? Int == 7)
+        #expect(HandoffPayload(activityType: payload.activityType, userInfo: payload.userInfo)?.target
+            == .document(document, pane: .discussion, page: 7))
+    }
+
+    @Test func pagesThatAreNotIntegersAreDropped() {
+        let base = payloads[0].userInfo
+        let values: [Any?] = [nil, "7", 2.5]
+        for value in values {
+            var info = base
+            info["page"] = value
+            let decoded = HandoffPayload(activityType: HandoffActivityType.document, userInfo: info)
+            #expect(decoded?.target == .document(document), "page \(String(describing: value))")
+        }
+        let onScreen = DocumentActivityPayload(server: server, vaultID: vault, documentID: document)
+        #expect(
+            HandoffPayload(activityType: HandoffActivityType.document, userInfo: onScreen.userInfo)?.target
+                == .document(document, pane: nil, page: nil))
     }
 
     @Test func unknownExtrasAreIgnored() {

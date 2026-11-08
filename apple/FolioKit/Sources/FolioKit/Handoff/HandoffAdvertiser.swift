@@ -14,10 +14,12 @@ public struct AdvertisingState: Equatable, Sendable {
     public var list: AdvertisedList
     public var documentID: Document.ID?
     public var showingDiscussion: Bool
+    /// The preview's 1-based page, when it has pages.
+    public var page: Int?
 
     public init(
         session: SessionRestoration, isLocked: Bool, vaultID: UUID?, list: AdvertisedList = .library(.inbox),
-        documentID: Document.ID? = nil, showingDiscussion: Bool = false
+        documentID: Document.ID? = nil, showingDiscussion: Bool = false, page: Int? = nil
     ) {
         self.session = session
         self.isLocked = isLocked
@@ -25,6 +27,7 @@ public struct AdvertisingState: Equatable, Sendable {
         self.list = list
         self.documentID = documentID
         self.showingDiscussion = showingDiscussion
+        self.page = page
     }
 }
 
@@ -37,7 +40,7 @@ public enum HandoffAdvertiser {
         }
         let target: HandoffTarget
         if let document = state.documentID {
-            target = .document(document, pane: state.showingDiscussion ? .discussion : nil)
+            target = .document(document, pane: state.showingDiscussion ? .discussion : nil, page: state.page)
         } else {
             switch state.list {
             case let .library(list): target = .library(list)

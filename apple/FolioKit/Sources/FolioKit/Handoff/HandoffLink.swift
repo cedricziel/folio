@@ -16,7 +16,7 @@ public enum HandoffLink {
         components.query = nil
         components.fragment = nil
         switch payload.target {
-        case let .document(id, _):
+        case let .document(id, _, _):
             components.percentEncodedPath = "\(vault)/documents/\(id.uuidString.lowercased())"
         case let .library(list):
             components.percentEncodedPath = "\(vault)/"

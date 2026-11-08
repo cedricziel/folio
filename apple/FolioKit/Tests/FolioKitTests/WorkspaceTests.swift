@@ -38,6 +38,9 @@ import Testing
         #expect(workspace.session.path == [document.id])
         #expect(workspace.session.continuation == DocumentContinuation(documentID: document.id, pane: .discussion))
 
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .document(document.id, page: 7)))
+        #expect(workspace.session.continuation == DocumentContinuation(documentID: document.id, pane: nil, page: 7))
+
         await workspace.open(HandoffRoute(vaultID: shared.id, target: .document(document.id)))
         #expect(workspace.session.continuation == nil)
     }
