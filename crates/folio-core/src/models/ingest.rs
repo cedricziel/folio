@@ -93,6 +93,8 @@ pub struct EmailConfig {
     pub accept_invalid_certs: bool,
     pub username: String,
     /// Shown as `********` by the API; send it back unchanged to keep the stored one
+    /// while the host, port and username stay the same and the connection does not
+    /// get weaker
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     /// Read the password from this file (for Docker secrets); wins over `password`

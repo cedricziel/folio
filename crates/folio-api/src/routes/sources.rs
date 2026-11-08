@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use folio_core::error::Error as DomainError;
 use folio_core::models::{
-    Id, IngestionSourceDef, IngestionSourceInput, PaperlessConfig, SourceConfig, SourceOrigin,
-    SourceStatus, REDACTED,
+    EmailConfig, Id, IngestionSourceDef, IngestionSourceInput, MailSecurity, PaperlessConfig,
+    SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
 
 use super::auth::VAULT_MANAGEMENT_SCOPE;
@@ -207,8 +207,9 @@ pub(crate) async fn claim_paperless_slot(
 ///
 /// A password or token file would let a UI user make the server read any file
 /// and send its content to a host of their choosing, so files are
-/// configuration-only. A stored Paperless token is only kept while the URL
-/// stays the same, so it is never sent to a host the user just typed in.
+/// configuration-only. A stored secret is only kept while it would go to the
+/// same server (see [`keeps_password`] and [`same_url`]), so it is never sent
+/// to a host the user just typed in.
 pub(crate) fn prepare_input(
     input: &mut IngestionSourceInput,
     existing: Option<&IngestionSourceDef>,
@@ -223,6 +224,13 @@ pub(crate) fn prepare_input(
             }
             if email.password.as_deref() == Some(REDACTED) || email.password.is_none() {
                 let stored = match previous {
+                    Some(SourceConfig::Email(old)) if !keeps_password(old, email) => {
+                        return Err(DomainError::Validation(
+                            "Enter the account password again, because the server, username or \
+                             security settings changed"
+                                .to_string(),
+                        ))
+                    }
                     Some(SourceConfig::Email(old)) => old.password.clone(),
                     _ => None,
                 };
@@ -260,6 +268,20 @@ pub(crate) fn prepare_input(
         SourceConfig::Folder(_) => {}
     }
     input.validate()
+}
+
+/// Whether a masked password may stand for the stored one
+///
+/// Only for the same server and username, and only while the connection does
+/// not get weaker, so an edit cannot send the stored password somewhere else.
+pub(crate) fn keeps_password(old: &EmailConfig, new: &EmailConfig) -> bool {
+    let host = |h: &str| h.trim().trim_end_matches('.').to_ascii_lowercase();
+    let downgraded = (old.security == MailSecurity::Tls && new.security == MailSecurity::Plain)
+        || (!old.accept_invalid_certs && new.accept_invalid_certs);
+    host(&old.host) == host(&new.host)
+        && old.port == new.port
+        && old.username == new.username
+        && !downgraded
 }
 
 /// Whether a stored Paperless source points at `url`, which is already normalized
@@ -352,7 +374,8 @@ pub(crate) async fn create_source(
 
 /// Replace an ingestion source
 ///
-/// A password of `********` keeps the stored one.
+/// A password of `********` keeps the stored one while the host, port,
+/// username and connection security stay the same.
 #[utoipa::path(
     put,
     path = "/api/sources/{id}",

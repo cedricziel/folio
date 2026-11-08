@@ -3225,7 +3225,7 @@
           "sources"
         ],
         "summary": "Replace an ingestion source",
-        "description": "A password of `********` keeps the stored one.",
+        "description": "A password of `********` keeps the stored one while the host, port,\nusername and connection security stay the same.",
         "operationId": "updateSource",
         "parameters": [
           {
@@ -7150,7 +7150,7 @@
               "string",
               "null"
             ],
-            "description": "Shown as `********` by the API; send it back unchanged to keep the stored one"
+            "description": "Shown as `********` by the API; send it back unchanged to keep the stored one\nwhile the host, port and username stay the same and the connection does not\nget weaker"
           },
           "password_file": {
             "type": [

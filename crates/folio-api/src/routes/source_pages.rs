@@ -19,8 +19,8 @@ use folio_core::models::{
 };
 
 use super::sources::{
-    all_sources, claim_paperless_slot, find, find_retained, guard_paperless, prepare_input,
-    require_managed, require_paperless_admin, run_test, same_url, SourceListQuery,
+    all_sources, claim_paperless_slot, find, find_retained, guard_paperless, keeps_password,
+    prepare_input, require_managed, require_paperless_admin, run_test, same_url, SourceListQuery,
 };
 use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
@@ -539,24 +539,42 @@ async fn save(
     stored.map(drop).map_err(|e| e.to_string())
 }
 
-/// A re-rendered form never echoes a typed token: it shows the mask where
-/// saving would keep the stored token, and an empty field otherwise
-fn hide_token(values: &mut FormValues, existing: Option<&IngestionSourceDef>) {
-    if values.kind != "paperless" {
-        return;
-    }
-    let keeps_stored = match existing.map(|def| &def.config) {
-        Some(SourceConfig::Paperless(old)) => {
-            old.token.is_some()
-                && PaperlessConfig::normalize_url(&values.url).is_ok_and(|url| same_url(old, &url))
+/// A re-rendered form never echoes a typed password or token: it shows the
+/// mask where saving would keep the stored secret, and an empty field otherwise
+fn hide_secret(values: &mut FormValues, existing: Option<&IngestionSourceDef>) {
+    let previous = existing.map(|def| &def.config);
+    match values.kind.as_str() {
+        "paperless" => {
+            let keeps_stored = match previous {
+                Some(SourceConfig::Paperless(old)) => {
+                    old.token.is_some()
+                        && PaperlessConfig::normalize_url(&values.url)
+                            .is_ok_and(|url| same_url(old, &url))
+                }
+                _ => false,
+            };
+            values.token = mask_if(keeps_stored);
         }
-        _ => false,
-    };
-    values.token = if keeps_stored {
+        "email" => {
+            let keeps_stored = match (previous, values.clone().into_input()) {
+                (Some(SourceConfig::Email(old)), Ok(input)) => match &input.config {
+                    SourceConfig::Email(new) => old.password.is_some() && keeps_password(old, new),
+                    _ => false,
+                },
+                _ => false,
+            };
+            values.password = mask_if(keeps_stored);
+        }
+        _ => {}
+    }
+}
+
+fn mask_if(keeps_stored: bool) -> String {
+    if keeps_stored {
         REDACTED.into()
     } else {
         String::new()
-    };
+    }
 }
 
 async fn create(
@@ -575,7 +593,7 @@ async fn create(
             Err(message) => danger(message),
         }
     };
-    hide_token(&mut values, None);
+    hide_secret(&mut values, None);
     Ok(form(vault, &state, None, values, notice)
         .await?
         .into_response())
@@ -600,7 +618,7 @@ async fn update(
             Err(message) => danger(message),
         }
     };
-    hide_token(&mut values, Some(&existing));
+    hide_secret(&mut values, Some(&existing));
     Ok(form(vault, &state, Some(id.to_string()), values, notice)
         .await?
         .into_response())
