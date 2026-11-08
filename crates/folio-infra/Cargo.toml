@@ -45,7 +45,7 @@ chrono = { workspace = true }
 
 # HTTP client (AI APIs, Paperless)
 reqwest = { workspace = true, features = ["query", "stream"] }
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-util = { workspace = true }
 
 # Object storage
 object_store = { workspace = true }
