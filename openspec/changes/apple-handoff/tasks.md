@@ -67,7 +67,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Run it in `.github/workflows/apple.yml` (official case only). Commit `build(apple): identifiers from Folio.xcconfig with optional local overrides`.
 
-- [ ] 5.3 Add `apple/scripts/associated-domains.sh`, which writes `Folio-Local.entitlements` with `applinks:` entries from `FOLIO_ASSOCIATED_DOMAINS` and does nothing when that is empty. In the private `generate_project` helper in `apple/fastlane/Fastfile` (also called by `lane :test` and therefore CI), call the script only `if File.exist?` the `Local.xcconfig`. Add a CI step that fails if the official generated `Folio.entitlements` contains `com.apple.developer.associated-domains`. Verify by running the script with `FOLIO_ASSOCIATED_DOMAINS=folio.example.com` (expect one `applinks:folio.example.com` entry) and with it empty (expect no file). Commit `build(apple): generate associated domains for self-builds`.
+- [x] 5.3 Add `apple/scripts/associated-domains.sh`, which writes `Folio-Local.entitlements` with `applinks:` entries from `FOLIO_ASSOCIATED_DOMAINS` and does nothing when that is empty. In the private `generate_project` helper in `apple/fastlane/Fastfile` (also called by `lane :test` and therefore CI), call the script only `if File.exist?` the `Local.xcconfig`. Add a CI step that fails if the official generated `Folio.entitlements` contains `com.apple.developer.associated-domains`. Verify by running the script with `FOLIO_ASSOCIATED_DOMAINS=folio.example.com` (expect one `applinks:folio.example.com` entry) and with it empty (expect no file). Commit `build(apple): generate associated domains for self-builds`.
 
 ## 6. FolioKit Handoff core (pure, `swift test`)
 

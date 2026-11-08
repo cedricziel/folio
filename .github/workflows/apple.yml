@@ -63,6 +63,18 @@ jobs:
       - run: bundle exec fastlane test
       - name: Check the official build's identifiers
         run: scripts/check-build-settings.sh
+      - name: Check associated domains for self-builds
+        run: |
+          local_entitlements=Folio/Resources/Folio-Local.entitlements
+          trap 'rm -f "$local_entitlements"' EXIT
+          FOLIO_ASSOCIATED_DOMAINS=folio.example.com scripts/associated-domains.sh
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains' "$local_entitlements" > "$RUNNER_TEMP/domains.txt"
+          cat "$RUNNER_TEMP/domains.txt"
+          test "$(grep -c 'applinks:' "$RUNNER_TEMP/domains.txt")" = 1
+          grep -q 'applinks:folio.example.com' "$RUNNER_TEMP/domains.txt"
+          rm "$local_entitlements"
+          FOLIO_ASSOCIATED_DOMAINS= scripts/associated-domains.sh
+          test ! -e "$local_entitlements"
       - name: Test navigation on iPhone and iPad
         timeout-minutes: 25
         run: |

@@ -47,6 +47,13 @@ esac
 
 (cd "$folio_dir" && xcodegen generate --quiet)
 
+# The App Store profile has no Associated Domains capability; the key would break signing.
+if [ "$mode" = official ] &&
+    grep -q com.apple.developer.associated-domains "$folio_dir/Resources/Folio.entitlements"; then
+    echo "FAIL  Resources/Folio.entitlements contains com.apple.developer.associated-domains"
+    failures=$((failures + 1))
+fi
+
 # Prints KEY's value from `xcodebuild -showBuildSettings` output on stdin; empty when unset.
 setting() {
     awk -v key="$1" '

@@ -39,6 +39,8 @@ end
 
 def generate_project
   sh("cd '#{APPLE_DIR}/Folio' && xcodegen generate")
+  # Only self-builds have a Local.xcconfig, so CI and the official lanes never depend on one.
+  sh("'#{APPLE_DIR}/scripts/associated-domains.sh'") if File.exist?(File.join(APPLE_DIR, "Folio", "Config", "Local.xcconfig"))
 end
 
 def changelog_since_last_tag
