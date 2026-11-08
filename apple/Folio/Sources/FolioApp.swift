@@ -6,6 +6,11 @@ typealias Document = FolioKit.Document
 
 @main
 struct FolioApp: App {
+    #if os(iOS)
+        @UIApplicationDelegateAdaptor(FolioAppDelegate.self) private var appDelegate
+    #else
+        @NSApplicationDelegateAdaptor(FolioAppDelegate.self) private var appDelegate
+    #endif
     @State private var model = AppModel()
     @State private var security = AppLockLifecycle()
     @Environment(\.scenePhase) private var scenePhase
@@ -20,6 +25,9 @@ struct FolioApp: App {
                         on: DispatchQueue.main)
                 ) { _ in
                     model.restore()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .folioUploadFinished)) { _ in
+                    PushNotifications.afterUpload()
                 }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
@@ -42,7 +50,12 @@ struct FolioApp: App {
                     if security.lock.isLocked {
                         AppLockView(lock: security.lock)
                     } else {
-                        AppLockSettingsView(lock: security.lock)
+                        TabView {
+                            AppLockSettingsView(lock: security.lock)
+                                .tabItem { Label("Privacy", systemImage: "lock.shield") }
+                            NotificationSettingsView()
+                                .tabItem { Label("Notifications", systemImage: "bell") }
+                        }
                     }
                 }
                 .navigationTitle("Folio Settings")
@@ -57,7 +70,10 @@ struct FolioApp: App {
 @MainActor @Observable
 final class AppModel {
     private(set) var session: SessionRestoration = .restoring {
-        didSet { SpotlightIndex.shared.sessionChanged(to: session) }
+        didSet {
+            SpotlightIndex.shared.sessionChanged(to: session)
+            if case let .signedIn(url) = session { PushNotifications.signedIn(to: url) }
+        }
     }
     private(set) var isWorking = false
     var operationError: String?
@@ -143,6 +159,8 @@ final class AppModel {
         Task {
             defer { isWorking = false }
             do {
+                // The server forgets this device while the credentials still work; revocation removes it too.
+                await PushNotifications.signingOut()
                 try await SharedConfiguration.tokenProvider().signOut()
                 FolioTelemetry.shared.stop()
                 session = .signedOut
@@ -160,6 +178,7 @@ struct RootView: View {
     let lock: AppLock
     #if os(iOS)
         @State private var showLockSettings = false
+        @State private var showNotificationSettings = false
     #endif
 
     var body: some View {
@@ -188,6 +207,7 @@ struct RootView: View {
                         ToolbarItem {
                             Menu {
                                 Button("App lock settings…") { showLockSettings = true }
+                                Button("Notification settings…") { showNotificationSettings = true }
                                 if lock.isEnabled {
                                     Button("Lock now", systemImage: "lock") { lock.lockNow() }
                                 }
@@ -197,7 +217,13 @@ struct RootView: View {
                         }
                     }
                     .sheet(isPresented: $showLockSettings) { AppLockSettingsView(lock: lock) }
-                    .onDisappear { showLockSettings = false }
+                    .sheet(isPresented: $showNotificationSettings) {
+                        NavigationStack { NotificationSettingsView() }
+                    }
+                    .onDisappear {
+                        showLockSettings = false
+                        showNotificationSettings = false
+                    }
                 #endif
         } else {
             switch model.session {
