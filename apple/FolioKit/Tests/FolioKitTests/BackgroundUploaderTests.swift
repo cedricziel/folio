@@ -193,6 +193,36 @@ struct ShareUploadFailureTests {
         #expect(!ShareUploadFailure.rejected(status: 410).isRetryable)
     }
 
+    @Test func aReusedKeyIsAPermanentRefusal() throws {
+        let reused = Data(#"{"error":"used","code":"idempotency_key_mismatch"}"#.utf8)
+        let busy = Data(#"{"error":"busy","code":"upload_in_progress"}"#.utf8)
+
+        #expect(ShareUploadFailure.classify(response: response(409), error: nil, body: reused) == .keyReused)
+        #expect(ShareUploadFailure.classify(response: response(409), error: nil, body: busy) == .rejected(status: 409))
+        #expect(
+            ShareUploadFailure.classify(response: response(409), error: nil) == .rejected(status: 409),
+            "an answer whose body never arrived stays retryable")
+        #expect(!ShareUploadFailure.keyReused.isRetryable)
+        #expect(ShareUploadFailure.keyReused.message.contains("Share the file again"))
+    }
+
+    @Test func keyedConflictsReadTheirCodeAndWait() throws {
+        func conflict(_ status: Int, _ headers: [String: String], _ body: String) throws -> KeyedUploadConflict? {
+            let response = try #require(
+                HTTPURLResponse(
+                    url: #require(URL(string: "https://folio.example.com")), statusCode: status, httpVersion: nil,
+                    headerFields: headers))
+            return KeyedUploadConflict(response: response, body: Data(body.utf8))
+        }
+
+        #expect(try conflict(409, [:], #"{"code":"idempotency_key_mismatch"}"#) == .keyReused)
+        #expect(
+            try conflict(409, ["Retry-After": "5"], #"{"code":"upload_in_progress"}"#)
+                == .inProgress(retryAfter: .seconds(5)))
+        #expect(try conflict(409, [:], "not json") == .inProgress(retryAfter: nil))
+        #expect(try conflict(410, [:], #"{"code":"upload_deleted"}"#) == nil)
+    }
+
     @Test func keyedConflictsExplainWhatToDo() {
         #expect(ShareUploadFailure.rejected(status: 409).message.contains("still filing"))
         #expect(ShareUploadFailure.rejected(status: 410).message.contains("deleted"))
@@ -283,6 +313,65 @@ struct ShareUploadStoreTests {
         #expect(!FileManager.default.fileExists(atPath: legacy.path))
         #expect(FileManager.default.fileExists(atPath: recent.path), "an old build's task may still be sending it")
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
+    @Test func theMostRecentFailureIsKeptEvenWhenItAloneExceedsTheCap() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareUploadStore(directory: directory)
+        let older = try saved(store, .failed(.rejected(status: 503)), minutesAgo: 20, bodyBytes: 600)
+        let newest = try saved(store, .failed(.rejected(status: 503)), minutesAgo: 10, bodyBytes: 600)
+
+        store.prune(bodyLimit: 500)
+
+        #expect(store.all().map(\.id) == [newest.id])
+        #expect(store.record(older.id) == nil)
+    }
+
+    @Test func pruningLeavesAShareAnotherProcessIsRetrying() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareUploadStore(directory: directory)
+        let retrying = try saved(store, .failed(.rejected(status: 503)), minutesAgo: 8 * 24 * 60)
+        let other = ShareUploadStore(directory: directory)
+        #expect(other.claim(retrying.id))
+
+        store.prune()
+
+        #expect(store.record(retrying.id) != nil)
+        #expect(FileManager.default.fileExists(atPath: store.bodyFile(for: retrying.id).path))
+        other.unclaim(retrying.id)
+        store.prune()
+        #expect(store.record(retrying.id) == nil)
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            atPath: directory.appending(path: "share-uploads").path)
+        #expect(leftovers.isEmpty, "removing a record also forgets its claim")
+    }
+
+    @Test func pruningLeavesAShareThatChangedSinceItWasListed() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareUploadStore(directory: directory)
+        var record = try saved(store, .failed(.rejected(status: 503)), minutesAgo: 8 * 24 * 60)
+        record.status = .pending
+        record.updatedAt = .now
+        try store.save(record)
+
+        store.prune()
+
+        #expect(store.record(record.id)?.status == .pending)
+    }
+
+    @Test func aClaimHeldThroughALongWaitIsRenewed() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let retrying = ShareUploadStore(directory: directory)
+        let id = UUID()
+        #expect(retrying.claim(id))
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date.now.addingTimeInterval(-2 * ShareUploadStore.claimTimeout)],
+            ofItemAtPath: directory.appending(path: "share-uploads/\(id.uuidString).claim.1").path)
+
+        #expect(retrying.renewClaim(id))
+
+        #expect(!ShareUploadStore(directory: directory).claim(id), "the renewed claim is not taken over")
+        #expect(!ShareUploadStore(directory: directory).renewClaim(id), "only the holder renews")
     }
 
     @Test func aLateUnclaimDoesNotReleaseAClaimTakenOverSince() throws {
@@ -460,6 +549,18 @@ struct ShareUploadStoreTests {
         try await harness.uploader.retry(record.id)
         #expect(await harness.nextOutcome()?.status == .failed(.interrupted), "reconcile reports the change")
         #expect(await harness.nextOutcome()?.status == .uploaded)
+    }
+
+    @Test func aShareWhoseKeyWasUsedForAnotherFileIsNotOfferedAgain() async throws {
+        let harness = ShareUploadHarness([.json(409, #"{"error":"used","code":"idempotency_key_mismatch"}"#)])
+        defer { harness.tearDown() }
+        try await harness.uploader.enqueue(pdf())
+
+        let failed = try #require(await harness.nextOutcome())
+
+        #expect(failed.status == .failed(.keyReused))
+        #expect(!failed.canRetry)
+        #expect(!harness.bodyExists(failed))
     }
 
     @Test func aRetryHeldByAnotherProcessIsRefused() async throws {

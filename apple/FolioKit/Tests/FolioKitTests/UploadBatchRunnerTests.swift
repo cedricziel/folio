@@ -230,6 +230,64 @@ struct UploadBatchRunnerTests {
         #expect(store.renewals == renewals, "renewal stops with the run")
     }
 
+    @Test func aRunThatLosesItsLockStopsBeforeItsNextRequest() async throws {
+        let service = MockFolioService()
+        await service.setUploadDelay(.milliseconds(300))
+        let store = RenewalCountingStore(holds: false)
+        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(50))
+        let files = [file("a.pdf"), file("b.pdf")]
+
+        await #expect(throws: UploadBatchError.lockLost) {
+            _ = try await runner.run(files, tagIDs: [first.id], scope: "s")
+        }
+
+        #expect(await service.uploads.map(\.filename) == ["a.pdf"])
+        #expect(await service.tagged.isEmpty)
+    }
+
+    @Test func anUploadStillBeingStoredIsTriedAgainAfterTheServersWait() async throws {
+        let service = MockFolioService()
+        await service.setUploadConflicts([.inProgress(retryAfter: .seconds(7))])
+        let waits = Waits()
+        let runner = UploadBatchRunner(
+            service: service, store: InMemoryUploadProgressStore(), sleep: { waits.add($0) })
+
+        let documents = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+
+        #expect(documents.count == 1)
+        #expect(waits.all == [.seconds(7)])
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2 && keys[0] == keys[1], "the retry keeps the key")
+    }
+
+    @Test func theWaitIsCappedAndTriedOnlyOnce() async throws {
+        let service = MockFolioService()
+        await service.setUploadConflicts([.inProgress(retryAfter: .seconds(600)), .inProgress(retryAfter: nil)])
+        let waits = Waits()
+        let store = InMemoryUploadProgressStore()
+        let runner = UploadBatchRunner(service: service, store: store, sleep: { waits.add($0) })
+
+        await #expect(throws: KeyedUploadConflict.inProgress(retryAfter: nil)) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        }
+
+        #expect(waits.all == [UploadBatchRunner.maxConflictWait])
+        let kept = try #require(runner.progress(files: [file("a.pdf")], tagIDs: [], scope: "s"))
+        #expect(kept.steps.first?.idempotencyKey == (await service.uploadKeys).first, "the next run keeps the key")
+    }
+
+    @Test func aKeyUsedForAnotherFileIsReplaced() async throws {
+        let service = MockFolioService()
+        await service.setUploadConflicts([.keyReused])
+        let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
+
+        _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2 && keys[0] != keys[1])
+        #expect(await service.uploads.count == 1)
+    }
+
     @Test func fileStoreRenewalKeepsARunningBatchFromBeingTakenOver() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "folio-progress-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -238,15 +296,16 @@ struct UploadBatchRunnerTests {
         let later = Date.now.addingTimeInterval(FileUploadProgressStore.lockTimeout + 60)
         #expect(running.lock("batch"))
 
-        let lock = directory.appending(path: "upload-progress/batch.lock")
+        let lock = directory.appending(path: "upload-progress/batch.lock.1")
         try FileManager.default.setAttributes(
             [.modificationDate: Date.now.addingTimeInterval(-FileUploadProgressStore.lockTimeout - 60)],
             ofItemAtPath: lock.path)
-        running.renew("batch")
+        #expect(running.renew("batch"))
         #expect(!FileUploadProgressStore(directory: directory).lock("batch", now: .now))
 
         let other = FileUploadProgressStore(directory: directory)
         #expect(other.lock("batch", now: later), "a lock nobody renews is taken over")
+        #expect(!running.renew("batch"), "the run that lost its lock learns it at its next renewal")
         running.unlock("batch")
         #expect(!FileUploadProgressStore(directory: directory).lock("batch", now: .now))
         other.unlock("batch")
@@ -353,11 +412,16 @@ struct ShortcutUploadRetryTests {
     }
 }
 
-/// Counts lock renewals of an in-memory store.
+/// Counts lock renewals of an in-memory store, answering each with `holds`.
 private final class RenewalCountingStore: UploadProgressStoring, @unchecked Sendable {
     private let base = InMemoryUploadProgressStore()
+    private let holds: Bool
     private let mutex = NSLock()
     private var count = 0
+
+    init(holds: Bool = true) {
+        self.holds = holds
+    }
 
     var renewals: Int { mutex.withLock { count } }
 
@@ -365,6 +429,21 @@ private final class RenewalCountingStore: UploadProgressStoring, @unchecked Send
     func save(_ progress: UploadBatchProgress, for key: String) { base.save(progress, for: key) }
     func remove(_ key: String) { base.remove(key) }
     func lock(_ key: String) -> Bool { base.lock(key) }
-    func renew(_: String) { mutex.withLock { count += 1 } }
+    func renew(_: String) -> Bool {
+        mutex.withLock { count += 1 }
+        return holds
+    }
     func unlock(_ key: String) { base.unlock(key) }
+}
+
+/// Records the waits a runner asked for instead of sleeping.
+private final class Waits: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var waits: [Duration] = []
+
+    var all: [Duration] { mutex.withLock { waits } }
+
+    func add(_ wait: Duration) {
+        mutex.withLock { waits.append(wait) }
+    }
 }

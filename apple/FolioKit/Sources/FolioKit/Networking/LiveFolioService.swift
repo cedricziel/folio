@@ -605,6 +605,11 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let (data, response) = try await authorizedTransfer(request) {
             try await session.upload(for: $0, from: form.body)
         }
+        if idempotencyKey != nil, let http = response as? HTTPURLResponse,
+            let conflict = KeyedUploadConflict(response: http, body: data)
+        {
+            throw conflict
+        }
         try check(response, body: data)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
