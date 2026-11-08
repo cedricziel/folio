@@ -36,6 +36,10 @@ public protocol FolioService: DocumentEntryService {
     func tags() async throws -> [Tag]
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws
     func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws
+    /// Nil clears the correspondent.
+    func setCorrespondent(_ correspondentID: Correspondent.ID?, for documentID: Document.ID) async throws
+    /// Nil clears the document type.
+    func setDocumentType(_ documentTypeID: DocumentType.ID?, for documentID: Document.ID) async throws
     func correspondents() async throws -> [Correspondent]
     func documentTypes() async throws -> [DocumentType]
 }
@@ -111,5 +115,13 @@ public extension FolioService {
 
     func setDocumentDate(_ date: DocumentDate?, for id: Document.ID) async throws -> Document {
         throw FolioError.server(status: 501, message: "This server does not support document date editing.")
+    }
+
+    func setCorrespondent(_ correspondentID: Correspondent.ID?, for documentID: Document.ID) async throws {
+        throw FolioError.server(status: 501, message: "Classification is unavailable.")
+    }
+
+    func setDocumentType(_ documentTypeID: DocumentType.ID?, for documentID: Document.ID) async throws {
+        throw FolioError.server(status: 501, message: "Classification is unavailable.")
     }
 }

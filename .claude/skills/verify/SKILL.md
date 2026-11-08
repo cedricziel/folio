@@ -121,6 +121,10 @@ Run `xcrun swift test --package-path apple/FolioKit` for native changes. For lis
 
 Check navigation in a throwaway simulator with test credentials and an isolated server. Open a document, return to the list, and open it again. Check that rows remain visible and the preview loads. Also leave detail before the download finishes and reopen it. Keep list loading on the containing split view so compact navigation does not cancel it when hiding the sidebar. Do not use an existing signed-in simulator or device for this check.
 
+## Apple Files and telemetry
+
+For File Provider lookups, run `xcrun swift test --package-path apple/FolioKit --filter FolioCatalogCacheTests`: item lookups reuse an enumerated listing, concurrent lookups share one request, a missing item does not refetch a recent listing, and enumerations always ask the server. For telemetry, `--filter TelemetryTests` covers `folio.app.component` per process and a same-server refresh that keeps recording and exports what the replaced runtime queued. In SignalDB, extension spans carry `folio.app.component=fileprovider` or `share`; check that a Files folder opens with one `GET /api/documents` per folder rather than one per item. Use a test server and simulator, never a signed-in device.
+
 ## Apple share attachments
 
 For share attachment changes, run the provider regression suite with isolated build and preference storage. This does not launch Folio or access its server configuration. Do not run the Keychain round-trip suite against a user's keychain.
