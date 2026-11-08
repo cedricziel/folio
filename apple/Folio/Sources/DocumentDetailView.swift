@@ -11,6 +11,10 @@ struct DocumentDetailView: View {
     @State private var model: DocumentDetailViewModel
     @State private var showingDiscussion = false
     @State private var editingDate = false
+    /// The PDF preview's current page, handed over with the document.
+    @State private var page: Int?
+    /// The page a continued document asked for, applied once when the PDF loads.
+    @State private var initialPage: Int?
     let snapshot: Snapshot
     let vaultID: UUID
     /// How Handoff asked to show this document, if it did.
@@ -55,10 +59,11 @@ struct DocumentDetailView: View {
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
         .task(id: snapshot.document.updatedAt) { await model.refreshMetadata() }
         .task(id: model.summary) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
-        .documentActivity(model.summary, vaultID: vaultID, showingDiscussion: showingDiscussion)
+        .documentActivity(model.summary, vaultID: vaultID, showingDiscussion: showingDiscussion, page: page)
         .onChange(of: continuation, initial: true) { _, continuation in
             guard let continuation else { return }
             if continuation.pane == .discussion { showingDiscussion = true }
+            initialPage = continuation.page
             onContinued()
         }
     }
@@ -71,7 +76,11 @@ struct DocumentDetailView: View {
                 .font(FolioTheme.Typography.body)
                 .foregroundStyle(Color.inkMuted)
         case let .ready(url):
-            QuickLookPreview(url: url)
+            if isPDF(url) {
+                PDFPreview(url: url, initialPage: initialPage) { page = $0 }
+            } else {
+                QuickLookPreview(url: url)
+            }
         case let .failed(message):
             ContentUnavailableView {
                 Label("Couldn't open this file", systemImage: "exclamationmark.triangle")
@@ -82,6 +91,10 @@ struct DocumentDetailView: View {
                 Button("Try again") { Task { await model.loadPreview() } }
             }
         }
+    }
+
+    private func isPDF(_ url: URL) -> Bool {
+        model.document.mimeType == "application/pdf" || url.pathExtension.lowercased() == "pdf"
     }
 
     private var metadataPanel: some View {

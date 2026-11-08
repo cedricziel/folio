@@ -89,6 +89,7 @@ targets:
       - path: Sources/WebAuthenticator.swift
       - path: Sources/AppLock.swift
       - path: Sources/DeviceAuthenticator.swift
+      - path: Sources/PDFPreview.swift
     dependencies:
       - package: FolioKit
     settings:
