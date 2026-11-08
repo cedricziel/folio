@@ -58,6 +58,17 @@ pub async fn harness_with(
     configured: Vec<IngestionSourceDef>,
     make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
 ) -> Harness {
+    harness_with_push(configured, make_auth, Default::default(), None).await
+}
+
+/// Like [`harness_with`], with push notifications configured by `push`
+pub async fn harness_with_push(
+    configured: Vec<IngestionSourceDef>,
+    make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
+    push: folio_infra::config::PushConfig,
+    // An `auth.secret_key` from configuration, which allows storing keys
+    secret_key: Option<&str>,
+) -> Harness {
     let directory = tempfile::Builder::new()
         .prefix("folio-test-")
         .tempdir()
@@ -88,6 +99,29 @@ pub async fn harness_with(
     let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
+    let push_settings = Arc::new(folio_infra::push::ConfiguredPush::new(
+        repos.settings.clone(),
+        push,
+        secret_key.map(|key| Arc::new(folio_auth::secret::SecretBox::new(key).unwrap())),
+        secret_key.is_some(),
+    ));
+    let push_state = folio_api::routes::devices::PushState {
+        devices: repos.push.clone(),
+        sender: Arc::new(
+            folio_core::services::notifications::NotificationSender::new(
+                repos.push.clone(),
+                Arc::new(folio_core::ports::RepositoryDocuments(
+                    repos.documents.clone(),
+                )),
+                repos.access.clone(),
+                repos.grants.clone(),
+                push_settings.clone(),
+                push_settings.clone(),
+                Default::default(),
+            ),
+        ),
+        settings: push_settings,
+    };
     let ingestion = IngestionState::new(
         repos.sources,
         repos.ledger,
@@ -117,7 +151,8 @@ pub async fn harness_with(
         ingestion,
         vaults,
         repos.access,
-    );
+    )
+    .with_push(push_state);
     Harness {
         _directory: directory,
         database,

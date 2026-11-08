@@ -65,6 +65,8 @@ pub struct AppState {
     pub client_telemetry: Option<Arc<crate::client_telemetry::ClientTelemetry>>,
     /// Instance permissions of the caller; [`crate::create_router`] binds it to the auth store
     pub callers: Arc<dyn CallerResolver>,
+    /// Push notification devices and delivery; `None` until wired
+    pub push: Option<crate::routes::devices::PushState>,
 }
 
 /// Grants nobody instance rights until the router installs the real resolver
@@ -152,12 +154,19 @@ impl AppState {
             mcp_default: false,
             client_telemetry: None,
             callers: Arc::new(NoInstanceRights),
+            push: None,
         }
     }
 
     /// What /settings shows for `mcp.enabled` until an admin saves a choice.
     pub fn with_mcp_default(mut self, enabled: bool) -> Self {
         self.mcp_default = enabled;
+        self
+    }
+
+    /// Serve the device routes and the push settings card.
+    pub fn with_push(mut self, push: crate::routes::devices::PushState) -> Self {
+        self.push = Some(push);
         self
     }
 

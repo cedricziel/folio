@@ -23,5 +23,11 @@
     {% include "partials/processing_card.html" %}
 
     {% include "partials/mcp_card.html" %}
+
+    {% match push_status %}
+    {% when Some with (push) %}
+    {% include "partials/push_card.html" %}
+    {% when None %}
+    {% endmatch %}
 </section>
 {% endblock %}
