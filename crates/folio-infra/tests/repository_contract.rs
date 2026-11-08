@@ -1823,6 +1823,52 @@ async fn auth_contract(r: &Repositories) {
     );
     assert!(auth.used_refresh_grant("unknown").await.unwrap().is_none());
 
+    // Exchanges consume the grant whether or not the check accepts it, and
+    // store tokens only when it does.
+    let pair = |n: &str| folio_auth::IssuedTokens {
+        access: access(&format!("xa{n}"), "gx", far),
+        refresh: refresh(&format!("xr{n}"), "gx", far),
+    };
+    auth.insert_code(code("c2", far)).await.unwrap();
+    assert!(auth
+        .exchange_code("fresh", "c2", Box::new(|_| None))
+        .await
+        .unwrap()
+        .is_some());
+    assert!(
+        auth.exchange_code("fresh", "c2", Box::new(|_| Some(pair("0"))))
+            .await
+            .unwrap()
+            .is_none(),
+        "a rejected code stays burned"
+    );
+    assert!(auth.find_access_token("xa0").await.unwrap().is_none());
+    auth.insert_code(code("c3", far)).await.unwrap();
+    let taken = auth
+        .exchange_code("fresh", "c3", Box::new(|c| Some(pair(&c.code_hash))))
+        .await
+        .unwrap();
+    assert_eq!(taken.unwrap().grant_id, "grant");
+    assert!(auth.find_access_token("xac3").await.unwrap().is_some());
+    let rotated = auth
+        .exchange_refresh_token("fresh", "xrc3", Box::new(|_| Some(pair("2"))))
+        .await
+        .unwrap();
+    assert_eq!(rotated.unwrap().token_hash, "xrc3");
+    assert!(auth.find_access_token("xa2").await.unwrap().is_some());
+    assert!(auth
+        .exchange_refresh_token("fresh", "xrc3", Box::new(|_| Some(pair("3"))))
+        .await
+        .unwrap()
+        .is_none());
+    assert!(auth.find_access_token("xa3").await.unwrap().is_none());
+    assert_eq!(
+        auth.purge_unused_clients(10_000).await.unwrap(),
+        0,
+        "an exchange that stores tokens marks the client used"
+    );
+    auth.revoke_grant("gx").await.unwrap();
+
     // Revoking any token of a grant takes the whole family, but only for its client.
     auth.insert_refresh_token(refresh("r2", "g1", far))
         .await
