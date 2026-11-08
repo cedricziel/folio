@@ -79,7 +79,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(apple): canonical server identity`.
 
-- [ ] 6.2 Add `HandoffPayload` and the three activity-type constants. The document target reuses #392's `DocumentActivityPayload` keys (`version` Int, `server`, `vault`, `document`) plus `pane`; library adds `list`, saved view adds `savedView`. First write a failing `HandoffPayloadTests`:
+- [x] 6.2 Add `HandoffPayload` and the three activity-type constants. The document target reuses #392's `DocumentActivityPayload` keys (`version` Int, `server`, `vault`, `document`) plus `pane`; library adds `list`, saved view adds `savedView`. First write a failing `HandoffPayloadTests`:
   - round trip
   - a #392 document payload decodes, and the reverse
   - `requiredUserInfoKeys`
