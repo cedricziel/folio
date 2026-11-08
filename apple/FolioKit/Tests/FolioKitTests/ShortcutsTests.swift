@@ -150,6 +150,15 @@ private final class IntentRuns: @unchecked Sendable {
     }
 }
 
+/// How many tags the service held at each flush, so a flush can be shown to follow the work.
+private actor FlushLog {
+    var taggedAtFlush: [Int] = []
+
+    func append(_ count: Int) {
+        taggedAtFlush.append(count)
+    }
+}
+
 @Suite(.serialized) struct IntentTests {
     private let runs = IntentRuns()
 
@@ -268,6 +277,26 @@ private final class IntentRuns: @unchecked Sendable {
         #expect(try await CorrespondentEntityQuery().suggestedEntities().map(\.name) == ["Stadtwerke Köln"])
         #expect(try await DocumentTypeEntityQuery().entities(for: [invoice.id]).map(\.name) == ["Invoice"])
         #expect(try await VaultEntityQuery().suggestedEntities().isEmpty)
+    }
+
+    @Test func performSendsTelemetryAfterItsWorkAndAfterAFailure() async throws {
+        let target = document("Gas bill")
+        let service = await install([target])
+        let flushes = FlushLog()
+        IntentEnvironment.flushRuns {
+            let tagged = await service.tagged.count
+            await flushes.append(tagged)
+        }
+        defer { IntentEnvironment.flushRuns {} }
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        #expect(await flushes.taggedAtFlush == [1])
+
+        IntentEnvironment.use { nil }
+        await #expect(throws: ShortcutError.notSignedIn) {
+            try await GetLatestDocumentIntent().perform()
+        }
+        #expect(await flushes.taggedAtFlush.count == 2)
     }
 
     @Test func notSignedInSaysToOpenTheApp() async {
