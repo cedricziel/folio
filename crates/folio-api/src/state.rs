@@ -38,6 +38,8 @@ pub struct AppState {
     pub entry_repo: Arc<dyn DocumentEntryRepository>,
     /// Uploads sent with an `Idempotency-Key`, safe to retry
     pub keyed_uploads: Arc<IdempotentUploads>,
+    /// Upload tasks that outlive their request; shutdown waits for them
+    pub upload_tasks: tokio_util::task::TaskTracker,
     pub tag_repo: Arc<dyn TagRepository>,
     pub correspondent_repo: Arc<dyn CorrespondentRepository>,
     pub document_type_repo: Arc<dyn DocumentTypeRepository>,
@@ -137,6 +139,7 @@ impl AppState {
             document_repo,
             entry_repo,
             keyed_uploads,
+            upload_tasks: tokio_util::task::TaskTracker::new(),
             tag_repo,
             correspondent_repo,
             document_type_repo,
