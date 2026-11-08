@@ -33,13 +33,20 @@ public actor FolioCatalogCache {
 
     public init() {}
 
-    /// Returns a catalog requested within `maxAge`, else fetches one; `.zero` always starts a new request.
+    /// A request for the vault list this recent is shared even by a caller that asks for `.zero`, so concurrent
+    /// enumerations make one request.
+    private static let vaultJoinWindow: Duration = .seconds(1)
+
+    /// Returns a catalog requested within `maxAge`, else fetches one. With `.zero` a stored catalog is never
+    /// reused, but a request started within ``vaultJoinWindow`` is joined.
     func vaults(
         maxAge: Duration, fetch: @escaping @Sendable () async throws -> VaultCatalog
     ) async throws -> VaultCatalog {
         let now = clock.now
         if let vaultEntry, now - vaultEntry.started < maxAge { return vaultEntry.value }
-        if let vaultRequest, now - vaultRequest.started < maxAge { return try await vaultRequest.task.value }
+        if let vaultRequest, now - vaultRequest.started < max(maxAge, Self.vaultJoinWindow) {
+            return try await vaultRequest.task.value
+        }
         let request = Request(task: Task { try await fetch() }, started: now)
         vaultRequest = request
         defer { if vaultRequest?.started == request.started { vaultRequest = nil } }
@@ -86,9 +93,10 @@ public actor FolioCatalogCache {
 
 /// One catalog cache per sign-in for a whole File Provider process, shared by every provider instance.
 ///
-/// The key is the server and a digest of the stored refresh token. Signing in again, as any account, starts an
-/// empty cache, so the extension never serves the previous account's listings. A token refresh does too, which
-/// costs one refetch. Signed out, nothing is kept.
+/// The key is the server and the sign-in's ``OAuthCredentials/signInID``, which a token refresh keeps. Signing
+/// in again, as any account, starts an empty cache, so the extension never serves the previous account's
+/// listings. Credentials saved before sign-in IDs existed fall back to a digest of their refresh token. Signed
+/// out, nothing is kept.
 public final class FolioCatalogCaches: Sendable {
     private struct Key: Equatable {
         let server: URL
@@ -105,9 +113,7 @@ public final class FolioCatalogCaches: Sendable {
             clear()
             return nil
         }
-        let token = credentials.tokens.refreshToken ?? credentials.tokens.accessToken
-        let digest = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
-        let key = Key(server: server, signIn: digest)
+        let key = Key(server: server, signIn: credentials.signInID?.uuidString ?? Self.digest(credentials.tokens))
         return current.withLock { current in
             if let current, current.key == key { return current.cache }
             let cache = FolioCatalogCache()
@@ -118,5 +124,10 @@ public final class FolioCatalogCaches: Sendable {
 
     public func clear() {
         current.withLock { $0 = nil }
+    }
+
+    private static func digest(_ tokens: OAuthTokens) -> String {
+        let token = tokens.refreshToken ?? tokens.accessToken
+        return SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

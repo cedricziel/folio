@@ -56,7 +56,15 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         }
         // One read of the server keeps the service and the cache it fills on the same server.
         let service = SharedConfiguration.makeService(for: server, downloadDirectory: downloadDirectory)
-        let cache = Self.catalogCaches.cache(for: server, credentials: try? KeychainCredentialStore().load())
+        let credentials: OAuthCredentials?
+        do {
+            credentials = try KeychainCredentialStore().load()
+        } catch {
+            // Lookups still work, uncached; requests report the keychain error themselves.
+            ProviderDiagnostics.failure(operation: "catalog", phase: "credentials", error: error)
+            credentials = nil
+        }
+        let cache = Self.catalogCaches.cache(for: server, credentials: credentials)
         return (FolioCatalog(service: service, cache: cache), service)
     }
 
