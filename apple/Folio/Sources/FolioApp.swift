@@ -1,3 +1,4 @@
+import CoreSpotlight
 import FolioKit
 import SwiftUI
 
@@ -13,6 +14,8 @@ struct FolioApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(model: model, lock: security.lock)
+                // Continuations go to an existing window, the frontmost one, instead of opening another.
+                .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
                 .onChange(of: model.session, initial: true) { _, session in
                     DocumentActivityTracker.shared.sessionChanged(to: session)
@@ -64,6 +67,8 @@ final class AppModel {
     }
     private(set) var isWorking = false
     var operationError: String?
+    /// Handoff, universal-link and Spotlight continuations waiting for a window that can route them.
+    let continuations = ContinuationInbox()
     private var restorationTask: Task<Void, Never>?
     private var restorationGeneration = 0
     private let store: any ServerConfigStore = UserDefaultsServerConfigStore.shared()
@@ -72,13 +77,7 @@ final class AppModel {
 
     func restore() {
         guard !isWorking else { return }
-        let rememberedServer: URL?
-        switch session {
-        case let .signedIn(url), let .expired(url), let .interrupted(url): rememberedServer = url
-        case let .unavailable(server, _): rememberedServer = server
-        case .signedOut, .restoring: rememberedServer = nil
-        }
-        let server = rememberedServer ?? store.load()
+        let server = session.serverURL ?? store.load()
         restorationTask?.cancel()
         restorationGeneration += 1
         let generation = restorationGeneration
@@ -111,6 +110,7 @@ final class AppModel {
         restorationTask?.cancel()
         restorationGeneration += 1
         SpotlightIndex.shared.signedIn(to: url)
+        continuations.signedIn(to: url)
         session = .signedIn(url)
         FileProviderDomain.register()
     }
@@ -148,6 +148,7 @@ final class AppModel {
             do {
                 try await SharedConfiguration.tokenProvider().signOut()
                 FolioTelemetry.shared.stop()
+                continuations.clear()
                 session = .signedOut
                 FileProviderDomain.unregister()
             } catch {
@@ -161,12 +162,30 @@ final class AppModel {
 struct RootView: View {
     let model: AppModel
     let lock: AppLock
+    /// Identifies this window to the continuation inbox.
+    @State private var sceneID = UUID()
     #if os(iOS)
         @State private var showLockSettings = false
     #endif
 
+    private var continuations: ContinuationInbox { model.continuations }
+
     var body: some View {
         content
+            .onContinueUserActivity(HandoffActivityType.document, perform: receiveHandoff)
+            .onContinueUserActivity(HandoffActivityType.library, perform: receiveHandoff)
+            .onContinueUserActivity(HandoffActivityType.savedView, perform: receiveHandoff)
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                guard let url = activity.webpageURL else { return }
+                continuations.receive(.universalLink(url), scene: sceneID)
+            }
+            .onContinueUserActivity(CSSearchableItemActionType) { activity in
+                let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
+                guard let link = identifier.flatMap(DocumentLink.init(spotlightIdentifier:)) else { return }
+                continuations.receive(.spotlight(link), scene: sceneID)
+            }
+            .onDisappear { continuations.sceneClosed(sceneID) }
+            .onChange(of: deliveryState, initial: true) { deliverContinuation() }
             .alert(
                 "Couldn't complete sign-in change",
                 isPresented: Binding(
@@ -184,8 +203,16 @@ struct RootView: View {
         if lock.isLocked {
             AppLockView(lock: lock)
         } else if case let .signedIn(url) = model.session {
-            WorkspaceView(serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut)
-                .id(url)
+            WorkspaceView(
+                serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut,
+                pendingContinuation: continuations.pending?.id,
+                takeContinuation: {
+                    continuations.take(
+                        scene: sceneID, isLocked: lock.isLocked, session: model.session, where: { $0.route != nil }
+                    )?.route
+                }
+            )
+            .id(url)
                 #if os(iOS)
                     .toolbar {
                         ToolbarItem {
@@ -224,6 +251,33 @@ struct RootView: View {
         }
     }
 
+    private struct DeliveryState: Equatable {
+        let pending: UUID?
+        let session: SessionRestoration
+        let isLocked: Bool
+    }
+
+    private var deliveryState: DeliveryState {
+        DeliveryState(pending: continuations.pending?.id, session: model.session, isLocked: lock.isLocked)
+    }
+
+    private func receiveHandoff(_ activity: NSUserActivity) {
+        continuations.receive(
+            .activity(type: activity.activityType, userInfo: activity.userInfo, webpageURL: activity.webpageURL),
+            scene: sceneID)
+    }
+
+    /// Handles everything except opening a target, which waits for the workspace to load its vaults.
+    private func deliverContinuation() {
+        guard
+            let decision = continuations.take(
+                scene: sceneID, isLocked: lock.isLocked, session: model.session, where: { $0.route == nil })
+        else { return }
+        present(HandoffPresentation.from(decision, currentServer: model.session.serverURL))
+    }
+
+    private func present(_ presentation: HandoffPresentation) {}
+
     private func recovery(title: String, message: String, server: URL?, retry: Bool) -> some View {
         ContentUnavailableView {
             Label(title, systemImage: "lock.circle")
@@ -236,5 +290,16 @@ struct RootView: View {
             if model.isWorking { ProgressView() }
         }
         .disabled(model.isWorking)
+    }
+}
+
+extension SessionRestoration {
+    /// The server this session belongs to, if it names one.
+    var serverURL: URL? {
+        switch self {
+        case let .signedIn(url), let .expired(url), let .interrupted(url): url
+        case let .unavailable(server, _): server
+        case .restoring, .signedOut: nil
+        }
     }
 }

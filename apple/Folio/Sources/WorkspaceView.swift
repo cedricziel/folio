@@ -5,6 +5,10 @@ struct WorkspaceView: View {
     let serverURL: URL
     let service: any FolioService
     let onSignOut: () -> Void
+    /// Changes whenever another continuation is waiting for a window.
+    let pendingContinuation: UUID?
+    /// Takes the waiting continuation when it opens a target in this window.
+    let takeContinuation: () -> HandoffRoute?
     @State private var showTaxonomy = false
     @State private var showSavedViewEditor = false
     @State private var editingSavedView: SavedView?
@@ -14,11 +18,14 @@ struct WorkspaceView: View {
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
-        workspace: WorkspaceViewModel? = nil
+        workspace: WorkspaceViewModel? = nil, pendingContinuation: UUID? = nil,
+        takeContinuation: @escaping () -> HandoffRoute? = { nil }
     ) {
         self.serverURL = serverURL
         self.service = service
         self.onSignOut = onSignOut
+        self.pendingContinuation = pendingContinuation
+        self.takeContinuation = takeContinuation
         _workspace = State(initialValue: workspace ?? WorkspaceViewModel(service: service))
     }
 
@@ -149,6 +156,11 @@ struct WorkspaceView: View {
             }
         }
         .task { await workspace.loadVaults() }
+        .onChange(of: ContinuationTrigger(isReady: workspace.isReady, pending: pendingContinuation), initial: true) {
+            _, trigger in
+            guard trigger.isReady, let route = takeContinuation() else { return }
+            Task { await workspace.open(route) }
+        }
         .task(id: workspace.selectedVaultID) { await workspace.loadSavedViews() }
         .sheet(isPresented: $showSavedViewEditor) {
             SavedViewEditor(workspace: workspace, existing: editingSavedView)
@@ -171,7 +183,7 @@ struct WorkspaceView: View {
             Text("Your documents will remain in the library.")
         }
         .alert(
-            "Document unavailable",
+            "Couldn't open this",
             isPresented: Binding(
                 get: { workspace.navigationError != nil },
                 set: {
@@ -185,6 +197,11 @@ struct WorkspaceView: View {
         } message: {
             Text(workspace.navigationError ?? "")
         }
+    }
+
+    private struct ContinuationTrigger: Equatable {
+        let isReady: Bool
+        let pending: UUID?
     }
 
     private var manageSection: some View {

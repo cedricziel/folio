@@ -1,4 +1,3 @@
-import CoreSpotlight
 import FolioKit
 import PhotosUI
 import SwiftUI
@@ -122,12 +121,6 @@ struct InboxView: View {
             guard let request else { return }
             router.clear()
             handle(request)
-        }
-        .onContinueUserActivity(CSSearchableItemActionType) { activity in
-            let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
-            if let link = identifier.flatMap(DocumentLink.init(spotlightIdentifier:)) {
-                handle(.document(link.documentID, vaultID: link.vaultID))
-            }
         }
     }
 
