@@ -55,6 +55,13 @@ jobs:
         working-directory: apple
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Reject screen and device-idiom layout checks
+        run: |
+          # OS 27 SDK builds resize on iPad, iPhone Duo and in iPhone Mirroring (#373).
+          if grep -rnE 'UIScreen\.main|userInterfaceIdiom|UIDevice\.current\.orientation' Folio FolioKit/Sources; then
+            echo "::error::Lay out by size class or container size, not by screen or device."
+            exit 1
+          fi
       - name: Report Apple toolchain
         run: |
           sw_vers

@@ -103,6 +103,9 @@ struct InboxView: View {
                     documentDestination(id)
                 }
             }
+            .onChange(of: showsPreview) { _, showsPreview in
+                session.adaptToLayout(showsPreview: showsPreview)
+            }
         }
         .onChange(of: session.path) { _, path in
             if let id = path.last {
