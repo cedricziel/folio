@@ -86,11 +86,22 @@ private final class TelemetryCapture: @unchecked Sendable {
         #expect(
             Set(first.attributes.keys) == [
                 "service.name", "service.namespace", "service.version", "service.instance.id",
-                "folio.installation.id", "os.type", "os.name", "os.version", "device.manufacturer",
+                "folio.app.component", "folio.installation.id", "os.type", "os.name", "os.version",
+                "device.manufacturer",
                 "device.model.identifier",
                 "host.arch", "telemetry.sdk.name", "telemetry.sdk.language", "telemetry.sdk.version",
             ]
         )
+    }
+
+    @Test(arguments: [
+        ("com.cedricziel.folio", "app"), ("com.cedricziel.folio.share", "share"),
+        ("com.cedricziel.folio.fileprovider", "fileprovider"), ("com.apple.dt.xctest.tool", "app"),
+    ])
+    func componentNamesTheRecordingProcess(bundleIdentifier: String, component: String) {
+        #expect(FolioTelemetry.component(bundleIdentifier: bundleIdentifier) == component)
+        let resource = FolioTelemetry.resource(installationID: UUID(), version: "1", component: component)
+        #expect(resource.attributes["folio.app.component"] == .string(component))
     }
 
     @Test func propagationExcludesOtherOriginsAuthenticationAndExports() {
@@ -338,6 +349,110 @@ private final class TelemetryCapture: @unchecked Sendable {
         #expect(await telemetry.operation("documents.list") { 42 } == 42)
         #expect(telemetry.current == nil)
         #expect(capture.requests.count == 1)
+    }
+
+    // URLSessionInstrumentation swizzles URLSession once per process, and the first configured instance
+    // keeps deciding header injection. This test stops its instance, so it runs after the tests that
+    // check traceparent; the suite is serialized and runs in declaration order.
+    @Test func refreshKeepsRecordingAndSendsWhatTheReplacedRuntimeQueued() async throws {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                return (200, Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8))
+            }
+            return (200, Data("{}".utf8))
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+        )
+        defer { telemetry.stop() }
+        telemetry.refreshInterval = 0
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let first = try #require(telemetry.current)
+        _ = await telemetry.operation("documents.list") { 42 }
+
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let second = try #require(telemetry.current)
+        #expect(second !== first)
+
+        var exported: [String] = []
+        // Under the 5-second batch delay, so only the retiring flush can deliver it in time.
+        for _ in 0..<20 where exported.isEmpty {
+            try await Task.sleep(for: .milliseconds(100))
+            exported = try capture.requests.filter { $0.0.url?.lastPathComponent == "traces" }.flatMap {
+                try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(serializedBytes: $0.1)
+                    .resourceSpans.flatMap(\.scopeSpans).flatMap(\.spans).map(\.name)
+            }
+        }
+        #expect(exported.contains("documents.list"))
+    }
+
+    @Test func refusedRefreshStopsTheRuntime() async throws {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        let status = TelemetryCapture()
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                let refused = status.requests.isEmpty == false
+                return (
+                    refused ? 403 : 200,
+                    Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8)
+                )
+            }
+            return (200, Data("{}".utf8))
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+        )
+        defer { telemetry.stop() }
+        telemetry.refreshInterval = 0
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(telemetry.current != nil)
+
+        status.append(URLRequest(url: baseURL), Data())
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+
+        #expect(telemetry.current == nil)
+    }
+
+    @Test func failedRefreshKeepsTheRuntimeAndRetries() async throws {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        let outage = TelemetryCapture()
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                return (
+                    outage.requests.isEmpty ? 200 : 503,
+                    Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8)
+                )
+            }
+            return (200, Data("{}".utf8))
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+        )
+        defer { telemetry.stop() }
+        telemetry.refreshInterval = 0
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let running = try #require(telemetry.current)
+
+        outage.append(URLRequest(url: baseURL), Data())
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(telemetry.current === running)
+
+        // The failed attempt does not count as a configuration: even with the normal interval, the next call
+        // asks again instead of waiting five minutes.
+        telemetry.refreshInterval = 300
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let configRequests = capture.requests.filter { $0.0.url?.path == "/api/telemetry/config" }
+        #expect(configRequests.count == 3)
     }
 }
 
