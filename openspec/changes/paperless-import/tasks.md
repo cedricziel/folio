@@ -83,7 +83,7 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
   - a tag rename doesn't change fingerprints
   - a document with a dropped value is re-planned
   - a purged document is never re-created
-- [ ] 5.4 Pre-validate values and drop invalid ones with warnings. Failing test first: an `ftp://` URL, a 20 KB note and a duplicate ASN each produce a warning.
+- [x] 5.4 Pre-validate values and drop invalid ones with warnings. Failing test first: an `ftp://` URL, a 20 KB note and a duplicate ASN each produce a warning.
 
 ## 6. Apply phase and driver
 

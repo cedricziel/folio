@@ -78,6 +78,11 @@ impl MetadataOptionInput {
     }
 }
 
+/// The key the vault's unique index compares live field names by
+pub fn name_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
 fn validate_label(value: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 128 {

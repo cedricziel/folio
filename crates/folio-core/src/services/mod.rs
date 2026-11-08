@@ -3,6 +3,7 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+pub mod import;
 mod importer;
 mod ingest;
 mod library;
