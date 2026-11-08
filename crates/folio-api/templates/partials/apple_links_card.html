@@ -1,0 +1,24 @@
+<div class="panel settings-card" id="apple-links">
+    <h2 class="heading">Apple app links</h2>
+    <p class="hint">If you build and sign your own Folio app for iPhone, iPad or Mac, list its app IDs here so this server's document, vault and saved-view links open in that app. The official App Store app does not use this.</p>
+
+    <p>Effective app IDs ({{ apple.source }}): {% if apple.effective.is_empty() %}none, so no association is served.{% else %}{% for id in apple.effective %}<code>{{ id }}</code>{% if !loop.last %}, {% endif %}{% endfor %}{% endif %}<br>
+    Check it at <code>{{ apple.association_url }}</code>.</p>
+
+    {% match apple.error %}
+    {% when Some with (error) %}
+    <div class="f-notice f-notice-danger" role="alert"><p>{{ error }}</p></div>
+    {% when None %}
+    {% endmatch %}
+
+    <form action="/settings/apple" method="post">
+        <div class="field">
+            <label for="apple-app-ids">App IDs, one per line (<code>TEAMID.bundle.id</code>)</label>
+            <textarea class="input" id="apple-app-ids" name="app_ids" rows="3" placeholder="ABCDE12345.com.example.folio">{{ apple.draft }}</textarea>
+            <p class="hint">Leave empty to use <code>apple.app_ids</code> from config.toml or <code>FOLIO_APPLE__APP_IDS</code>; a value set there can only be turned off by removing it and restarting. Devices pick up changes only when Apple's CDN refreshes its copy, which can take a while.</p>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="f-btn f-btn-primary">Save Apple app links</button>
+        </div>
+    </form>
+</div>

@@ -122,6 +122,36 @@ proxy. Leave `/oauth/authorize` behind the proxy: it is the page a person sees.
 To let the proxy's login create Folio sessions too, see
 [Forward auth](auth.md#forward-auth).
 
+## Apple Universal Links
+
+Only for self-built Apple apps; the App Store app ignores this. After setting
+`apple.app_ids` (see [configuration.md](configuration.md#apple-app-links)):
+
+- Serve Folio over public HTTPS with a valid certificate. Apple's CDN fetches
+  `https://<host>/.well-known/apple-app-site-association` without credentials
+  and does not follow redirects, so keep the path out of any single sign-on.
+- Apple only looks at the domain root. If Folio runs under a path prefix such
+  as `https://example.com/folio`, make the proxy forward
+  `/.well-known/apple-app-site-association` at the root to Folio. Folio adds
+  the prefix from `server.public_url` to the patterns itself. With Caddy,
+  next to the rule that already serves Folio under `/folio`:
+
+  ```
+  handle /.well-known/apple-app-site-association {
+      reverse_proxy localhost:3000
+  }
+  ```
+
+- Devices read the file through Apple's CDN, which refreshes on its own
+  schedule. A change can take a while to reach devices, and Folio cannot
+  force it. Check what Folio serves with
+  `curl -i https://<host>/.well-known/apple-app-site-association`.
+- For a server the CDN cannot reach (a private network) or while developing,
+  sign the app for development and add the domain as
+  `applinks:<host>?mode=developer`, then turn on **Associated Domains
+  Development** in the device's developer settings. The device then fetches
+  the file directly.
+
 ## Next steps: Postgres and S3
 
 - Use PostgreSQL instead of SQLite: [database.md](database.md#postgresql).

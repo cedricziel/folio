@@ -2619,16 +2619,48 @@ mod tests {
         );
     }
 
+    /// Records each span as it starts. A job span can outlive the test: its
+    /// sqlx children close on a pool thread that never reports to the test
+    /// subscriber (#395), so the job span may never end and be exported.
+    #[derive(Clone, Debug, Default)]
+    struct StartedSpans(std::sync::Arc<std::sync::Mutex<Vec<opentelemetry_sdk::trace::SpanData>>>);
+
+    impl opentelemetry_sdk::trace::SpanProcessor for StartedSpans {
+        fn on_start(&self, span: &mut opentelemetry_sdk::trace::Span, _: &opentelemetry::Context) {
+            self.0.lock().unwrap().extend(span.exported_data());
+        }
+
+        fn on_end(&self, _: opentelemetry_sdk::trace::SpanData) {}
+
+        fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+
+        fn shutdown_with_timeout(&self, _: Duration) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+    }
+
+    /// A dispatcher that stays registered for the whole test binary. While a
+    /// single dispatcher is registered, tracing-core caches a callsite's
+    /// interest from whichever thread hits it first, so a test without a
+    /// subscriber could disable the job span for the traced test. Two
+    /// registered dispatchers make every rebuild ask the traced test's one.
+    static ANCHOR: std::sync::LazyLock<tracing::Dispatch> = std::sync::LazyLock::new(|| {
+        tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+    });
+
     /// Run an `extract_text` job queued under a remote parent, after `adjust`
-    /// changes its row; return the exported job span.
+    /// changes its row; return the job span as it started.
     async fn traced_job_span(adjust: &str) -> opentelemetry_sdk::trace::SpanData {
         use opentelemetry::propagation::TextMapPropagator;
         use opentelemetry::trace::TracerProvider as _;
         use tracing_subscriber::layer::SubscriberExt;
 
-        let exporter = opentelemetry_sdk::trace::InMemorySpanExporter::default();
+        std::sync::LazyLock::force(&ANCHOR);
+        let started = StartedSpans::default();
         let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-            .with_simple_exporter(exporter.clone())
+            .with_span_processor(started.clone())
             .build();
         let subscriber = tracing_subscriber::registry()
             .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("folio-test")));
@@ -2654,11 +2686,11 @@ mod tests {
             .unwrap();
         let job = f.queue.dequeue().await.unwrap().unwrap();
         f.worker.handle_job(job).await;
-        exporter
-            .get_finished_spans()
-            .unwrap()
-            .into_iter()
+        let spans = started.0.lock().unwrap();
+        spans
+            .iter()
             .find(|span| span.name == "job extract_text")
+            .cloned()
             .expect("a job span")
     }
 
@@ -2691,6 +2723,7 @@ mod tests {
         )
         .await;
         assert_ne!(span.span_context.trace_id().to_string(), TRACED);
+        assert_eq!(span.parent_span_id, opentelemetry::trace::SpanId::INVALID);
         let links: Vec<_> = span
             .links
             .iter()

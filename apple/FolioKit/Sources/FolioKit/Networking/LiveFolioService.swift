@@ -396,6 +396,32 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         try check(response, body: data)
     }
 
+    /// Form posts like the tag routes; an empty value clears the field.
+    public func setCorrespondent(_ correspondentID: Correspondent.ID?, for documentID: Document.ID) async throws {
+        try await call("documents.correspondent") {
+            try await classificationRequest(
+                documentID, path: "correspondent", field: "correspondent_id", value: correspondentID)
+        }
+    }
+
+    public func setDocumentType(_ documentTypeID: DocumentType.ID?, for documentID: Document.ID) async throws {
+        try await call("documents.documentType") {
+            try await classificationRequest(
+                documentID, path: "document_type", field: "document_type_id", value: documentTypeID)
+        }
+    }
+
+    private func classificationRequest(
+        _ documentID: Document.ID, path: String, field: String, value: UUID?
+    ) async throws {
+        var request = URLRequest(url: endpoint("api/documents/\(documentID.uuidString.lowercased())/\(path)"))
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("\(field)=\(value?.uuidString.lowercased() ?? "")".utf8)
+        let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+        try check(response, body: data)
+    }
+
     public func deleteDocument(id: Document.ID) async throws {
         try await call("documents.delete") {
             _ = try await client.deleteDocument(path: .init(id: id.uuidString.lowercased())).noContent

@@ -148,7 +148,7 @@ public final class DocumentListViewModel {
         do {
             let page = try await readPage(request, cursor: cursor, ticket: ticket, knownIDs: Set(documents.map(\.id)))
             guard isCurrent(ticket) else { return }
-            documents.append(contentsOf: page.documents)
+            documents.append(contentsOf: keepingNewer(page.documents))
             nextCursor = page.nextCursor
             rebuildRows()
         } catch {
@@ -226,6 +226,27 @@ public final class DocumentListViewModel {
         }
     }
 
+    /// Takes a document saved in its open detail view, so the row and inbox membership follow it.
+    ///
+    /// The document is also kept as resolved, so its detail stays open after a filed document leaves
+    /// the inbox rows, even when a reload drops it.
+    public func apply(_ updated: Document) {
+        if let current = document(for: updated.id), current.updatedAt > updated.updatedAt { return }
+        resolvedDocument = updated
+        if let index = documents.firstIndex(where: { $0.id == updated.id }) {
+            documents[index] = updated
+            rebuildRows()
+        }
+    }
+
+    /// A page read before a save landed must not undo the save.
+    private func keepingNewer(_ fetched: [Document]) -> [Document] {
+        fetched.map { fresh in
+            guard let known = document(for: fresh.id), known.updatedAt > fresh.updatedAt else { return fresh }
+            return known
+        }
+    }
+
     public func dismissActionError() {
         actionError = nil
     }
@@ -254,7 +275,7 @@ public final class DocumentListViewModel {
             guard isCurrent(ticket) else { return }
             let previousIDs = Set(rows.map(\.id))
             supportsReviewFilters = page.supportsReviewFilters
-            documents = page.documents
+            documents = keepingNewer(page.documents)
             nextCursor = page.nextCursor
             loadedVaultID = page.vaultID
             rowsQuery = request
