@@ -134,30 +134,35 @@ impl PushDeviceRepository for SqlitePushRepository {
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        // A token belongs to one installation of the server; take it from any other row.
+        // A token belongs to one installation of the server; take it from any other row,
+        // and delete only those rows that are left without a token.
+        let mut emptied: Vec<String> = Vec::new();
         for (column, value) in [
             ("alert_token", &r.alert_token),
             ("widget_token", &r.widget_token),
         ] {
             if let Some(value) = value {
-                sqlx::query(sqlx::AssertSqlSafe(format!(
+                let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                     "UPDATE push_devices SET {column} = NULL, {column}_registered_at = NULL \
-                     WHERE {column} = ? AND id <> ?"
+                     WHERE {column} = ? AND id <> ? RETURNING id"
                 )))
                 .bind(value)
                 .bind(&id)
-                .execute(&mut *tx)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(err)?;
+                emptied.extend(ids);
             }
         }
-        sqlx::query(
-            "DELETE FROM push_devices WHERE id <> ? AND alert_token IS NULL AND widget_token IS NULL",
-        )
-        .bind(&id)
-        .execute(&mut *tx)
-        .await
-        .map_err(err)?;
+        for other in &emptied {
+            sqlx::query(
+                "DELETE FROM push_devices WHERE id = ? AND alert_token IS NULL AND widget_token IS NULL",
+            )
+            .bind(other)
+            .execute(&mut *tx)
+            .await
+            .map_err(err)?;
+        }
 
         if existing.is_some() {
             sqlx::query(
