@@ -208,10 +208,9 @@ struct ShareUploadFailureTests {
 
     @Test func keyedConflictsReadTheirCodeAndWait() throws {
         func conflict(_ status: Int, _ headers: [String: String], _ body: String) throws -> KeyedUploadConflict? {
+            let url = try #require(URL(string: "https://folio.example.com"))
             let response = try #require(
-                HTTPURLResponse(
-                    url: #require(URL(string: "https://folio.example.com")), statusCode: status, httpVersion: nil,
-                    headerFields: headers))
+                HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: headers))
             return KeyedUploadConflict(response: response, body: Data(body.utf8))
         }
 
@@ -219,7 +218,8 @@ struct ShareUploadFailureTests {
         #expect(
             try conflict(409, ["Retry-After": "5"], #"{"code":"upload_in_progress"}"#)
                 == .inProgress(retryAfter: .seconds(5)))
-        #expect(try conflict(409, [:], "not json") == .inProgress(retryAfter: nil))
+        #expect(try conflict(409, [:], "not json") == .inProgress(retryAfter: nil), "servers before the codes")
+        #expect(try conflict(409, [:], #"{"code":"something_new"}"#) == nil, "an unknown code keeps its message")
         #expect(try conflict(410, [:], #"{"code":"upload_deleted"}"#) == nil)
     }
 
