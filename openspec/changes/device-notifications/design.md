@@ -134,7 +134,7 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
 ### Decision 5: One alert per device per flush, limits and widgets
 
 - **Sender.** `NotificationSender` ticks every 5 s and is woken by the planner.
-- **Lease.** It claims due devices with a lease (`push_device_state.claimed_until`, set with `UPDATE … WHERE claimed_until < now` on SQLite, `FOR UPDATE SKIP LOCKED` on Postgres). Only one replica sends a device's batch.
+- **Lease.** It claims due devices with a lease (`push_devices.claimed_until`, set with `UPDATE … WHERE claimed_until < now` on SQLite, `FOR UPDATE SKIP LOCKED` on Postgres). Only one replica sends a device's batch.
 - **When a device is due.** Its newest pending row is older than the quiet window (30 s), or its oldest is older than 5 minutes.
 - **Before sending, for each device:**
   1. check grant liveness
@@ -217,7 +217,7 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
     - indexes on `grant_id` and `(user_id, client_id)`, and unique partial indexes on each token
   - `push_document_outcomes(document_id, outcome, created_at)`, primary key `(document_id, outcome)`, FK to documents with cascade
   - `push_pending(device_id, document_id, kind, vault_id, created_at)`, primary key `(device_id, document_id, kind)`, cascading from devices
-  - `push_device_state(device_id, claimed_until, window_started_at, alerts_in_window, backoff_until, widgets_sent_at)`
+  - delivery bookkeeping on the `push_devices` row itself (`claimed_until`, `window_started_at`, `alerts_in_window`, `backoff_until`, `failures`, `widgets_dirty_at`, `widgets_sent_at`, `test_sent_at`), so the lease and the state change in one row
 
   No existing rows change.
 

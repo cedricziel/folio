@@ -786,3 +786,38 @@ private extension DocumentEntry {
         )
     }
 }
+
+extension LiveFolioService: DeviceRegistrationService {
+    public func registerDevice(installationID: String, _ registration: DeviceRegistration) async throws
+        -> DeviceRegistrationResult
+    {
+        try await call("devices.register") {
+            var request = URLRequest(url: endpoint("api/devices/\(installationID)"))
+            request.httpMethod = "PUT"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(registration)
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            try check(response, body: data)
+            let wire = try JSONDecoder().decode(DeviceRegistrationWire.self, from: data)
+            return DeviceRegistrationResult(preferences: wire.device.preferences, pushAvailable: wire.pushAvailable)
+        }
+    }
+
+    public func deleteDevice(installationID: String) async throws {
+        try await call("devices.delete") {
+            var request = URLRequest(url: endpoint("api/devices/\(installationID)"))
+            request.httpMethod = "DELETE"
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            try check(response, body: data)
+        }
+    }
+
+    public func sendTestNotification(installationID: String) async throws {
+        try await call("devices.test") {
+            var request = URLRequest(url: endpoint("api/devices/\(installationID)/test"))
+            request.httpMethod = "POST"
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            try check(response, body: data)
+        }
+    }
+}

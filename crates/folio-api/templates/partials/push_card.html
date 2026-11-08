@@ -1,0 +1,75 @@
+<div class="panel settings-card" id="push-settings">
+    <h2 class="heading">Push notifications</h2>
+    <p class="hint">Tell the Apple app when uploads need review, finish or fail. Alerts only ever say how many documents reached which outcome. See <a href="https://github.com/cedricziel/folio/blob/main/docs/push-notifications.md">push notifications</a>.</p>
+
+    {% if !push_notice.is_empty() %}
+    <div class="f-notice" role="status"><p>{{ push_notice }}</p></div>
+    {% endif %}
+    {% match push.base_url %}
+    {% when Some with (url) %}
+    <div class="f-notice" role="alert"><p>Pushes go to <code>{{ url }}</code>, not to Apple. This is set by <code>push.apns.base_url</code> for testing.</p></div>
+    {% when None %}
+    {% endmatch %}
+    {% match push.last_error %}
+    {% when Some with (problem) %}
+    <div class="f-notice" role="alert"><p>APNs refused the credentials ({{ problem.reason }}) at {{ problem.at.format("%Y-%m-%d %H:%M UTC") }}. Sending is paused until the settings change or 15 minutes pass.</p></div>
+    {% when None %}
+    {% endmatch %}
+    {% match push.problem %}
+    {% when Some with (problem) %}
+    <div class="f-notice" role="status"><p>Not sending: {{ problem }}.</p></div>
+    {% when None %}
+    {% endmatch %}
+
+    <p class="hint">Status: {% if push.available %}sending through APNs{% else %}not sending{% endif %}, transport <code>{{ push.transport }}</code> from {{ push.transport_source.as_str() }}. {{ push_devices }} registered device{% if push_devices != 1 %}s{% endif %}.</p>
+
+    <form action="/settings/push" method="post">
+        <div class="field">
+            <label for="push_transport">Transport</label>
+            <select class="input" id="push_transport" name="transport">
+                <option value="none" {% if push.transport == "none" %}selected{% endif %}>Off</option>
+                <option value="apns" {% if push.transport == "apns" %}selected{% endif %}>Apple Push Notification service</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="push_team_id">Team ID</label>
+            <input class="input" id="push_team_id" name="team_id" autocomplete="off" value="{% match push.team_id %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+        </div>
+        <div class="field">
+            <label for="push_key_id">Key ID</label>
+            <input class="input" id="push_key_id" name="key_id" autocomplete="off" value="{% match push.key_id %}{% when Some with (v) %}{{ v }}{% when None %}{% endmatch %}">
+        </div>
+        <div class="field">
+            <label for="push_topic">Bundle ID</label>
+            <input class="input" id="push_topic" name="topic" autocomplete="off" value="{{ push.topic }}">
+        </div>
+        <div class="field">
+            <label for="push_private_key">Authentication key (.p8)</label>
+            {% if push.can_store_key %}
+            <textarea class="input" id="push_private_key" name="private_key" rows="4" autocomplete="off" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+            {% if push.key_present %}
+            <span class="hint">A key is configured ({{ push.key_source.as_str() }}). Leave blank to keep it.</span>
+            <label class="hint"><input type="checkbox" name="clear_private_key"> Clear the saved key</label>
+            {% endif %}
+            {% else %}
+            <span class="hint">A key can only be saved here when <code>FOLIO_AUTH__SECRET_KEY</code> (or <code>_FILE</code>) is set; otherwise it would be stored next to the secret that unlocks it. Give it as <code>FOLIO_PUSH__APNS__PRIVATE_KEY_FILE</code> instead.{% if push.key_present %} A key is configured ({{ push.key_source.as_str() }}).{% endif %}</span>
+            {% endif %}
+        </div>
+        <div class="field">
+            <label for="push_quiet_window">Wait for more outcomes (seconds)</label>
+            <input class="input" type="number" min="0" max="3600" id="push_quiet_window" name="quiet_window_seconds" value="{{ push.quiet_window_seconds }}">
+        </div>
+        <div class="field">
+            <label for="push_max_alerts">Alerts per device per hour</label>
+            <input class="input" type="number" min="1" max="3600" id="push_max_alerts" name="max_alerts_per_hour" value="{{ push.max_alerts_per_hour }}">
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="f-btn f-btn-primary">Save push settings</button>
+        </div>
+    </form>
+    <form action="/settings/push/test" method="post">
+        <div class="form-actions">
+            <button type="submit" class="f-btn">Send test notification to my devices</button>
+        </div>
+    </form>
+</div>

@@ -14,8 +14,9 @@ From lowest to highest:
 
 The database overrides the other layers only for the keys it manages:
 `ai.openai_api_key`, `ai.anthropic_api_key`, `ocr.*`, `embeddings.*`,
-the `processing.*` toggles and `apple.app_ids`. Everything else is fixed at
-startup by the first three layers.
+the `processing.*` toggles, `apple.app_ids` and `push.*` (except
+`push.apns.base_url`, which is read from configuration only). Everything else
+is fixed at startup by the first three layers.
 
 New databases use startup pipeline values until settings are saved. Upgrades
 preserve existing database rows, including values seeded by earlier releases.
@@ -92,6 +93,14 @@ preserve existing database rows, including values seeded by earlier releases.
 | `ai.anthropic_api_key` | `FOLIO_AI__ANTHROPIC_API_KEY` | unset | Anthropic API key. |
 | `mcp.enabled` | `FOLIO_MCP__ENABLED` | follows `auth.required` | Serve the MCP endpoint at `/mcp`. On when `auth.required` is true, off otherwise because the endpoint is only protected by auth. The `mcp.enabled` database setting overrides it. See [mcp.md](mcp.md). |
 | `mcp.allowed_hosts` | `FOLIO_MCP__ALLOWED_HOSTS` | empty | Comma-separated extra `Host` headers `/mcp` accepts besides loopback. |
+| `push.transport` | `FOLIO_PUSH__TRANSPORT` | `none` | `none` or `apns`. With `none`, the Apple app can register but no notification is sent. The database setting on `/settings` overrides it. See [push-notifications.md](push-notifications.md). |
+| `push.apns.team_id` | `FOLIO_PUSH__APNS__TEAM_ID` | unset | Apple Developer team ID of the key. |
+| `push.apns.key_id` | `FOLIO_PUSH__APNS__KEY_ID` | unset | ID of the APNs authentication key. |
+| `push.apns.topic` | `FOLIO_PUSH__APNS__TOPIC` | `com.cedricziel.folio` | Bundle ID of the app the key may push to. |
+| `push.apns.private_key` | `FOLIO_PUSH__APNS__PRIVATE_KEY` | unset | The `.p8` key in PEM form; prefer `FOLIO_PUSH__APNS__PRIVATE_KEY_FILE`. |
+| `push.apns.base_url` | `FOLIO_PUSH__APNS__BASE_URL` | unset | Send to this URL instead of Apple's servers, over cleartext HTTP/2 for `http://`. For tests against a stub only. Config only, never read from the database. |
+| `push.quiet_window_seconds` | `FOLIO_PUSH__QUIET_WINDOW_SECONDS` | `30` | Wait this long after the last outcome before sending one alert for all of them (never more than 5 minutes after the first). |
+| `push.max_alerts_per_hour` | `FOLIO_PUSH__MAX_ALERTS_PER_HOUR` | `12` | Alerts per device per rolling hour; later outcomes fold into the next alert allowed. |
 | `import.allowed_roots` | `FOLIO_IMPORT__ALLOWED_ROOTS` | empty | Comma-separated server directories an import may read from; through the env variable, a directory can't contain a comma. Empty turns imports off. Config only, not on `/settings`. See [paperless-import.md](paperless-import.md). |
 | `import.max_file_bytes` | `FOLIO_IMPORT__MAX_FILE_BYTES` | `536870912` (512 MB) | Largest original file an import accepts; bigger files fail with `file_too_large`. |
 | `apple.app_ids` | `FOLIO_APPLE__APP_IDS` | empty | Comma-separated Apple app IDs (`TEAMID.bundle.id`) served in `/.well-known/apple-app-site-association`. Startup fails on an invalid entry. |

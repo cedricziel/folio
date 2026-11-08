@@ -3,6 +3,7 @@
 # Starts an ephemeral Folio instance (own port, DB, storage) and prints the
 # path of an env file defining BASE_URL, PID and VERIFY_DIR on stdout.
 # Binary: $FOLIO_BIN, else the debug build (run build.sh first; up.sh builds it if missing).
+# FOLIO_VERIFY_EXTRA_ENV may name a file of extra FOLIO_*=value lines (e.g. push settings).
 # Tear down with down.sh <env-file>.
 set -euo pipefail
 
@@ -19,6 +20,17 @@ mkdir -p "$dir/storage"
 
 # The app serves ./static relative to its working directory.
 ln -s "$repo/static" "$dir/static"
+
+extra=()
+if [ -n "${FOLIO_VERIFY_EXTRA_ENV:-}" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      FOLIO_*=*) extra+=("$line") ;;
+      "" | \#*) ;;
+      *) echo "up.sh: ignoring extra env line: ${line%%=*}" >&2 ;;
+    esac
+  done <"$FOLIO_VERIFY_EXTRA_ENV"
+fi
 
 # Run from $dir with a scrubbed environment: Config::load() reads ./config.toml
 # and dotenvy walks up from the cwd looking for .env, so neither the repo's nor
@@ -38,6 +50,7 @@ ln -s "$repo/static" "$dir/static"
     FOLIO_PROCESSING__AUTO_EMBED="${FOLIO_VERIFY_AUTO_EMBED:-true}" \
     FOLIO_AUTH__REQUIRED="${FOLIO_VERIFY_AUTH_REQUIRED:-false}" \
     FOLIO_APPLE__APP_IDS="${FOLIO_VERIFY_APPLE_APP_IDS:-}" \
+    ${extra[@]+"${extra[@]}"} \
     "$bin"
 ) >"$dir/server.log" 2>&1 &
 pid=$!

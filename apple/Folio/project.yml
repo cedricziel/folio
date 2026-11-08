@@ -45,6 +45,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
+        FolioPushEnabled: $(FOLIO_PUSH)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
@@ -66,8 +67,16 @@ targets:
         ENABLE_OUTGOING_NETWORK_CONNECTIONS: 'YES'
         ENABLE_USER_SELECTED_FILES: readwrite
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        APS_ENVIRONMENT: development
+        # Push notifications (#359) stay off until the App ID has the Push Notifications capability
+        # and the match profiles carry it; then set FOLIO_PUSH to YES (see docs/push-notifications.md).
+        FOLIO_PUSH: 'NO'
+        FOLIO_ENTITLEMENTS_NO: Resources/Folio.entitlements
+        FOLIO_ENTITLEMENTS_YES: Push/FolioPush.entitlements
+        CODE_SIGN_ENTITLEMENTS: $(FOLIO_ENTITLEMENTS_$(FOLIO_PUSH))
       configs:
         Release:
+          APS_ENVIRONMENT: production
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Distribution
           CODE_SIGN_IDENTITY[sdk=macosx*]: Apple Distribution
