@@ -734,6 +734,42 @@ private let documentJSON = """
         try await makeService().scoped(to: vault).addTag(tag, to: document)
     }
 
+    @Test func setsAndClearsClassificationWithFormPostsWithinTheSelectedVault() async throws {
+        let vault = UUID()
+        let document = UUID()
+        let correspondent = UUID()
+        let type = UUID()
+        let service = makeService().scoped(to: vault)
+        let base = "/api/documents/\(document.uuidString.lowercased())"
+        func expectPost(_ path: String, _ form: String) {
+            StubURLProtocol.handler = { request, body in
+                #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
+                #expect(request.httpMethod == "POST")
+                #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/x-www-form-urlencoded")
+                #expect(request.url?.path == base + path)
+                #expect(String(decoding: body ?? Data(), as: UTF8.self) == form)
+                return .init(contentType: "text/html")
+            }
+        }
+        expectPost("/correspondent", "correspondent_id=\(correspondent.uuidString.lowercased())")
+        try await service.setCorrespondent(correspondent, for: document)
+        expectPost("/correspondent", "correspondent_id=")
+        try await service.setCorrespondent(nil, for: document)
+        expectPost("/document_type", "document_type_id=\(type.uuidString.lowercased())")
+        try await service.setDocumentType(type, for: document)
+        expectPost("/document_type", "document_type_id=")
+        try await service.setDocumentType(nil, for: document)
+    }
+
+    @Test func rejectedClassificationReportsTheServerMessage() async {
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 403, body: Data("{\"error\":\"This vault is read-only.\"}".utf8))
+        }
+        await #expect(throws: FolioError.server(status: 403, message: "This vault is read-only.")) {
+            try await makeService().setCorrespondent(UUID(), for: UUID())
+        }
+    }
+
     @Test func entryRequestsRetainVaultRetryKeyAndLiteralText() async throws {
         let vault = UUID()
         let document = UUID()

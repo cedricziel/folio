@@ -583,6 +583,7 @@ async fn sign_out_everywhere_and_revoking_clients() {
         })
         .await
         .unwrap();
+    let stale_code = consent(&mut a, "claude").await;
     let page = a.get("/settings/security").await;
     assert!(page.body.contains("Claude Desktop"));
     let revoked = a
@@ -593,6 +594,14 @@ async fn sign_out_everywhere_and_revoking_clients() {
         .await;
     assert!(revoked.location().contains("client-revoked"));
     assert!(w.store.find_access_token("t").await.unwrap().is_none());
+    let stale = exchange_code(&mut a, &stale_code).await;
+    assert_eq!(stale.status, StatusCode::BAD_REQUEST, "{}", stale.body);
+    assert_eq!(stale.json()["error"], "invalid_grant");
+
+    let fresh_code = consent(&mut a, "claude").await;
+    let fresh = exchange_code(&mut a, &fresh_code).await;
+    assert_eq!(fresh.status, StatusCode::OK, "{}", fresh.body);
+    assert!(fresh.json()["access_token"].is_string());
 
     let out = a
         .form("/settings/security/sessions/revoke-all", &[("csrf", &csrf)])
@@ -603,6 +612,59 @@ async fn sign_out_everywhere_and_revoking_clients() {
         other.get("/settings/security").await.status,
         StatusCode::SEE_OTHER
     );
+}
+
+const OAUTH_REDIRECT: &str = "app:/cb";
+const PKCE_VERIFIER: &str = "a-pkce-verifier-that-is-long-enough-0123456789";
+
+/// Approves the consent screen and returns the authorization code.
+async fn consent(b: &mut Browser, client_id: &str) -> String {
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .extend_pairs([
+            ("response_type", "code"),
+            ("client_id", client_id),
+            ("redirect_uri", OAUTH_REDIRECT),
+            (
+                "code_challenge",
+                &folio_auth::crypto::pkce_challenge(PKCE_VERIFIER),
+            ),
+            ("code_challenge_method", "S256"),
+        ])
+        .finish();
+    let page = b.get(&format!("/oauth/authorize?{query}")).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    let csrf = field(&page.body, "csrf");
+    let mut fields: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
+        .into_owned()
+        .collect();
+    fields.push(("csrf".into(), csrf));
+    fields.push(("decision".into(), "allow".into()));
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let done = b.form("/oauth/authorize", &fields).await;
+    assert_eq!(done.status, StatusCode::SEE_OTHER, "{}", done.body);
+    let location = Url::parse(&done.location()).unwrap();
+    location
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_else(|| panic!("no code in {location}"))
+}
+
+async fn exchange_code(b: &mut Browser, code: &str) -> Resp {
+    b.form(
+        "/oauth/token",
+        &[
+            ("grant_type", "authorization_code"),
+            ("client_id", "claude"),
+            ("code", code),
+            ("code_verifier", PKCE_VERIFIER),
+            ("redirect_uri", OAUTH_REDIRECT),
+        ],
+    )
+    .await
 }
 
 // ---- passkeys ---------------------------------------------------------------

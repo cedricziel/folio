@@ -29,6 +29,12 @@ actor MockFolioService: FolioService {
         guard detailGate == nil else { return }
         await withCheckedContinuation { detailStarted = $0 }
     }
+    /// Lets later reads through while an earlier suspended read keeps waiting.
+    func stopSuspendingDocumentReads() { suspendDetailRequests = false }
+    func setFailDocumentReads(_ error: FolioError?) { failDocumentReads = error }
+    private(set) var documentReads = 0
+    private var failDocumentReads: FolioError?
+
     func releaseDocumentReads() {
         suspendDetailRequests = false
         detailGate?.resume()
@@ -93,6 +99,7 @@ actor MockFolioService: FolioService {
     private var entries: [DocumentEntry] = []
     private var entryReceipts: [UUID: DocumentEntry] = [:]
     private var loseFirstEntryResponse: Bool
+    private var failFirstClassificationSave: Bool
     private var vaultCatalog: VaultCatalog
     nonisolated let vaultServices: [UUID: any FolioService]
     var documentList: [Document] = []
@@ -121,9 +128,11 @@ actor MockFolioService: FolioService {
     init(
         documents: [Document] = [], correspondents: [Correspondent] = [], types: [DocumentType] = [],
         vaults: VaultCatalog = MockFolioService.defaultCatalog, vaultServices: [UUID: any FolioService] = [:],
-        loseFirstEntryResponse: Bool = false
+        tags: [Tag] = [], loseFirstEntryResponse: Bool = false, failFirstClassificationSave: Bool = false
     ) {
         self.loseFirstEntryResponse = loseFirstEntryResponse
+        self.failFirstClassificationSave = failFirstClassificationSave
+        tagList = tags
         vaultCatalog = vaults
         self.vaultServices = vaultServices
         documentList = documents
@@ -303,7 +312,9 @@ actor MockFolioService: FolioService {
     }
 
     func document(id: Document.ID) async throws -> Document {
+        documentReads += 1
         if let failure { throw failure }
+        if let failDocumentReads { throw failDocumentReads }
         guard let document = documentList.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: nil)
         }
@@ -463,6 +474,11 @@ actor MockFolioService: FolioService {
             throw failure
         }
         tagged.append(TagAssignment(tag: tagID, document: documentID))
+        if let tag = tagList.first(where: { $0.id == tagID }) {
+            edit(documentID) { document in
+                if !document.tags.contains(where: { $0.id == tagID }) { document.tags.append(tag) }
+            }
+        }
     }
 
     func removeTag(_ tagID: Tag.ID, from documentID: Document.ID) async throws {
@@ -470,6 +486,34 @@ actor MockFolioService: FolioService {
             throw failure
         }
         untagged.append(TagAssignment(tag: tagID, document: documentID))
+        edit(documentID) { $0.tags.removeAll { $0.id == tagID } }
+    }
+
+    func setCorrespondent(_ correspondentID: Correspondent.ID?, for documentID: Document.ID) async throws {
+        if let failure { throw failure }
+        if failFirstClassificationSave {
+            failFirstClassificationSave = false
+            throw FolioError.unreachable
+        }
+        guard documentList.contains(where: { $0.id == documentID }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        edit(documentID) { $0.correspondentID = correspondentID }
+    }
+
+    func setDocumentType(_ documentTypeID: DocumentType.ID?, for documentID: Document.ID) async throws {
+        if let failure { throw failure }
+        guard documentList.contains(where: { $0.id == documentID }) else {
+            throw FolioError.server(status: 404, message: nil)
+        }
+        edit(documentID) { $0.documentTypeID = documentTypeID }
+    }
+
+    /// Applies a write the way the server does, moving `updatedAt` forward.
+    private func edit(_ documentID: Document.ID, _ change: (inout Document) -> Void) {
+        guard let index = documentList.firstIndex(where: { $0.id == documentID }) else { return }
+        change(&documentList[index])
+        documentList[index].updatedAt = max(Date(), documentList[index].updatedAt.addingTimeInterval(0.001))
     }
 
     func correspondents() async throws -> [Correspondent] {

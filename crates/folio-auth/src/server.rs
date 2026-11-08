@@ -9,7 +9,7 @@ use crate::{
     crypto::{ct_eq, hash_token, random_token, verify_pkce},
     model::{AccessToken, AuthCode, OAuthClient, RefreshToken, SCOPES},
     redirect::{redirect_uri_matches, validate_redirect_uri},
-    store::{AuthError, AuthStore},
+    store::{AuthError, AuthStore, IssuedTokens, RefreshExchange},
 };
 
 pub const CODE_TTL_SECS: i64 = 60;
@@ -389,7 +389,6 @@ impl OAuthServer {
         client_id: &str,
         req: &TokenRequest,
     ) -> Result<Value, OAuthError> {
-        let grant_err = |m: &str| OAuthError::new("invalid_grant", m);
         let code = req
             .code
             .as_deref()
@@ -398,33 +397,19 @@ impl OAuthServer {
             .code_verifier
             .as_deref()
             .ok_or_else(|| OAuthError::new("invalid_request", "code_verifier is required"))?;
-        // Consumed before any check so a failed attempt burns the code.
-        let record = self
-            .store
-            .take_code(&hash_token(code))
+        let mut outcome = None;
+        // The code is consumed before any check, so a failed attempt burns it.
+        let check = |record: &AuthCode| {
+            settle(
+                &mut outcome,
+                check_code(base, client_id, req, verifier, record),
+            )
+        };
+        self.store
+            .exchange_code(client_id, &hash_token(code), Box::new(check))
             .await?
-            .ok_or_else(|| grant_err("invalid or already used code"))?;
-        if record.expires_at <= now() {
-            return Err(grant_err("code expired"));
-        }
-        if !ct_eq(&record.client_id, client_id) {
-            return Err(grant_err("code was issued to another client"));
-        }
-        if req.redirect_uri.as_deref() != Some(record.redirect_uri.as_str()) {
-            return Err(grant_err("redirect_uri does not match"));
-        }
-        if !verify_pkce(verifier, &record.code_challenge) {
-            return Err(grant_err("PKCE verification failed"));
-        }
-        check_resource(base, req.resource.as_deref(), &record.audience)?;
-        self.issue_tokens(
-            client_id,
-            &record.user_id,
-            record.scopes,
-            record.audience,
-            record.grant_id,
-        )
-        .await
+            .ok_or_else(|| invalid_grant("invalid or already used code"))?;
+        outcome.unwrap_or_else(|| Err(invalid_grant("invalid or already used code")))
     }
 
     async fn refresh_grant(
@@ -433,86 +418,28 @@ impl OAuthServer {
         client_id: &str,
         req: &TokenRequest,
     ) -> Result<Value, OAuthError> {
-        let grant_err = |m: &str| OAuthError::new("invalid_grant", m);
         let token = req
             .refresh_token
             .as_deref()
             .ok_or_else(|| OAuthError::new("invalid_request", "refresh_token is required"))?;
         let token_hash = hash_token(token);
-        let Some(record) = self.store.take_refresh_token(&token_hash).await? else {
-            // A rotated token coming back means it leaked: end the whole grant.
-            if let Some(grant_id) = self.store.used_refresh_grant(&token_hash).await? {
-                tracing::warn!("refresh token reuse detected; revoking its grant");
-                self.store.revoke_grant(&grant_id).await?;
-            }
-            return Err(grant_err("invalid refresh token"));
+        let mut outcome = None;
+        let check = |record: &RefreshToken| {
+            settle(&mut outcome, check_refresh(base, client_id, req, record))
         };
-        if record.expires_at <= now() || !ct_eq(&record.client_id, client_id) {
-            return Err(grant_err("invalid refresh token"));
+        match self
+            .store
+            .exchange_refresh_token(client_id, &token_hash, Box::new(check))
+            .await?
+        {
+            RefreshExchange::Rotated(_) => {}
+            RefreshExchange::Replayed => {
+                tracing::warn!("refresh token reuse detected; revoked its grant");
+                return Err(invalid_grant("invalid refresh token"));
+            }
+            RefreshExchange::Unknown => return Err(invalid_grant("invalid refresh token")),
         }
-        check_resource(base, req.resource.as_deref(), &record.audience)?;
-        let scopes = match req.scope.as_deref() {
-            None => record.scopes.clone(),
-            Some(s) => {
-                let requested =
-                    parse_scopes(Some(s)).map_err(|m| OAuthError::new("invalid_scope", m))?;
-                if requested.iter().any(|r| !record.scopes.contains(r)) {
-                    return Err(OAuthError::new("invalid_scope", "cannot widen scope"));
-                }
-                requested
-            }
-        };
-        self.issue_tokens(
-            client_id,
-            &record.user_id,
-            scopes,
-            record.audience,
-            record.grant_id,
-        )
-        .await
-    }
-
-    async fn issue_tokens(
-        &self,
-        client_id: &str,
-        user_id: &str,
-        scopes: Vec<String>,
-        audience: String,
-        grant_id: String,
-    ) -> Result<Value, OAuthError> {
-        let access = random_token();
-        let refresh = random_token();
-        let issued = now();
-        self.store.mark_client_used(client_id, issued).await?;
-        self.store
-            .insert_access_token(AccessToken {
-                token_hash: hash_token(&access),
-                client_id: client_id.to_string(),
-                user_id: user_id.to_string(),
-                scopes: scopes.clone(),
-                audience: audience.clone(),
-                expires_at: issued + ACCESS_TTL_SECS,
-                grant_id: grant_id.clone(),
-            })
-            .await?;
-        self.store
-            .insert_refresh_token(RefreshToken {
-                token_hash: hash_token(&refresh),
-                client_id: client_id.to_string(),
-                user_id: user_id.to_string(),
-                scopes: scopes.clone(),
-                audience,
-                expires_at: issued + REFRESH_TTL_SECS,
-                grant_id,
-            })
-            .await?;
-        Ok(json!({
-            "access_token": access,
-            "token_type": "Bearer",
-            "expires_in": ACCESS_TTL_SECS,
-            "refresh_token": refresh,
-            "scope": scopes.join(" "),
-        }))
+        outcome.unwrap_or_else(|| Err(invalid_grant("invalid refresh token")))
     }
 
     /// Housekeeping for a periodic task: expired codes, tokens and sessions,
@@ -533,5 +460,128 @@ impl OAuthServer {
     /// RFC 7009: unknown tokens are not an error.
     pub async fn revoke(&self, token: &str, client_id: &str) -> Result<(), AuthError> {
         self.store.revoke_token(&hash_token(token), client_id).await
+    }
+}
+
+fn invalid_grant(description: &str) -> OAuthError {
+    OAuthError::new("invalid_grant", description)
+}
+
+/// Validates a taken authorization code against the token request.
+fn check_code(
+    base: &str,
+    client_id: &str,
+    req: &TokenRequest,
+    verifier: &str,
+    record: &AuthCode,
+) -> Result<(IssuedTokens, Value), OAuthError> {
+    if record.expires_at <= now() {
+        return Err(invalid_grant("code expired"));
+    }
+    if !ct_eq(&record.client_id, client_id) {
+        return Err(invalid_grant("code was issued to another client"));
+    }
+    if req.redirect_uri.as_deref() != Some(record.redirect_uri.as_str()) {
+        return Err(invalid_grant("redirect_uri does not match"));
+    }
+    if !verify_pkce(verifier, &record.code_challenge) {
+        return Err(invalid_grant("PKCE verification failed"));
+    }
+    check_resource(base, req.resource.as_deref(), &record.audience)?;
+    Ok(new_tokens(
+        client_id,
+        &record.user_id,
+        record.scopes.clone(),
+        &record.audience,
+        &record.grant_id,
+    ))
+}
+
+/// Validates a rotated refresh token against the token request.
+fn check_refresh(
+    base: &str,
+    client_id: &str,
+    req: &TokenRequest,
+    record: &RefreshToken,
+) -> Result<(IssuedTokens, Value), OAuthError> {
+    if record.expires_at <= now() || !ct_eq(&record.client_id, client_id) {
+        return Err(invalid_grant("invalid refresh token"));
+    }
+    check_resource(base, req.resource.as_deref(), &record.audience)?;
+    let scopes = match req.scope.as_deref() {
+        None => record.scopes.clone(),
+        Some(s) => {
+            let requested =
+                parse_scopes(Some(s)).map_err(|m| OAuthError::new("invalid_scope", m))?;
+            if requested.iter().any(|r| !record.scopes.contains(r)) {
+                return Err(OAuthError::new("invalid_scope", "cannot widen scope"));
+            }
+            requested
+        }
+    };
+    Ok(new_tokens(
+        client_id,
+        &record.user_id,
+        scopes,
+        &record.audience,
+        &record.grant_id,
+    ))
+}
+
+/// A fresh token pair for a grant and the token response that announces it.
+fn new_tokens(
+    client_id: &str,
+    user_id: &str,
+    scopes: Vec<String>,
+    audience: &str,
+    grant_id: &str,
+) -> (IssuedTokens, Value) {
+    let access = random_token();
+    let refresh = random_token();
+    let issued = now();
+    let body = json!({
+        "access_token": access,
+        "token_type": "Bearer",
+        "expires_in": ACCESS_TTL_SECS,
+        "refresh_token": refresh,
+        "scope": scopes.join(" "),
+    });
+    let tokens = IssuedTokens {
+        access: AccessToken {
+            token_hash: hash_token(&access),
+            client_id: client_id.to_string(),
+            user_id: user_id.to_string(),
+            scopes: scopes.clone(),
+            audience: audience.to_string(),
+            expires_at: issued + ACCESS_TTL_SECS,
+            grant_id: grant_id.to_string(),
+        },
+        refresh: RefreshToken {
+            token_hash: hash_token(&refresh),
+            client_id: client_id.to_string(),
+            user_id: user_id.to_string(),
+            scopes,
+            audience: audience.to_string(),
+            expires_at: issued + REFRESH_TTL_SECS,
+            grant_id: grant_id.to_string(),
+        },
+    };
+    (tokens, body)
+}
+
+/// Records the server's verdict on a taken grant and tells the store what to keep.
+fn settle(
+    outcome: &mut Option<Result<Value, OAuthError>>,
+    checked: Result<(IssuedTokens, Value), OAuthError>,
+) -> Option<IssuedTokens> {
+    match checked {
+        Ok((tokens, body)) => {
+            *outcome = Some(Ok(body));
+            Some(tokens)
+        }
+        Err(e) => {
+            *outcome = Some(Err(e));
+            None
+        }
     }
 }
