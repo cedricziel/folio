@@ -28,6 +28,7 @@ import Testing
         workspace.selectSavedView(saved)
 
         #expect(workspace.session.list.query == saved.query)
+        #expect(workspace.session.list.query.scope == .savedView)
         #expect(workspace.session.selection == nil)
         #expect(workspace.session.path.isEmpty)
         #expect(workspace.session.presentation == .grid)

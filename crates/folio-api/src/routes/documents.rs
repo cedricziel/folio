@@ -373,8 +373,8 @@ pub struct UploadDocumentRequest {
     responses(
         (status = 200, description = "The created document, or the one an earlier request with the same Idempotency-Key created", body = Document),
         BadRequest,
-        (status = 409, description = "The Idempotency-Key was already used for a different file (permanent), or its first request is still storing the document. In the second case the response has Retry-After; a request that stopped answering is taken over after at most 2 minutes.", body = crate::error::ErrorResponse),
-        (status = 410, description = "The document an earlier request with this Idempotency-Key created has been deleted", body = crate::error::ErrorResponse),
+        (status = 409, description = "The Idempotency-Key was already used for a different file (code `idempotency_key_mismatch`, permanent), or its first request is still storing the document (code `upload_in_progress`, with Retry-After; a request that stopped answering is taken over after at most 2 minutes).", body = crate::error::ErrorResponse),
+        (status = 410, description = "The document an earlier request with this Idempotency-Key created has been deleted (code `upload_deleted`)", body = crate::error::ErrorResponse),
         PayloadTooLarge,
         InternalError,
     )

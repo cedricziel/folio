@@ -87,7 +87,7 @@ What the server has today:
 
 The `Processed` payload has no run ID, and `finish_embed_stage` emits it for reprocess, re-embed and repair too. So "first completion" is decided by the planner, not by the event:
 
-- `NotificationPlanner: EventConsumer` handles `Processed` with origin `User` or `Workflow`; `Import` is ignored. It also handles `document.processing.*.failed` envelopes.
+- `NotificationPlanner: EventConsumer` handles `Processed` with origin `User` or `Workflow`. For `Import` it records the first outcome but queues nothing, so a later reprocess of an imported document is not taken for its first completion. It also handles `document.processing.*.failed` envelopes.
 - In one transaction it inserts into `push_document_outcomes(document_id, outcome)`, where `outcome` is `completed` or `failed`, with `ON CONFLICT DO NOTHING`.
   - **Row inserted:** this is the document's first completion, or first terminal failure. The planner then writes pending rows.
   - **Row already there:** a reprocess, re-embed, repair or duplicate delivery, so nothing happens.
@@ -134,7 +134,7 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
 ### Decision 5: One alert per device per flush, limits and widgets
 
 - **Sender.** `NotificationSender` ticks every 5 s and is woken by the planner.
-- **Lease.** It claims due devices with a lease (`push_device_state.claimed_until`, set with `UPDATE … WHERE claimed_until < now` on SQLite, `FOR UPDATE SKIP LOCKED` on Postgres). Only one replica sends a device's batch.
+- **Lease.** It claims due devices with a lease (`push_devices.claimed_until`, set with `UPDATE … WHERE claimed_until < now` on SQLite, `FOR UPDATE SKIP LOCKED` on Postgres). Each flush claims under its own holder ID (`claim_holder`), extends the lease before every send, and skips a device whose lease another flush has taken. Releasing and storing state only apply while the holder still matches, so a slow replica can neither end another's lease nor send alongside it.
 - **When a device is due.** Its newest pending row is older than the quiet window (30 s), or its oldest is older than 5 minutes.
 - **Before sending, for each device:**
   1. check grant liveness
@@ -142,7 +142,7 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
   3. apply the hourly cap
   4. build **one** alert across all vaults
 - **After the send.** Sent rows are deleted, and the lease is released. Rows older than 24 h are pruned.
-- **Collapse ID.** It is the batch ID, used only so a retry of the same batch doesn't stack. Batches never replace each other's counts.
+- **Collapse ID.** It is the batch ID (`push_devices.batch_id`), kept across retries until the batch is delivered or dropped, so a retry of an attempt that did reach APNs replaces it instead of stacking. Batches never replace each other's counts.
 - **Priority.** 10 for a single document or any `failed`, otherwise 5. `apns-expiration` is now plus 24 h.
 - **Widgets.** A `widgets` push with `content-changed` goes to the widget token at most every 15 minutes per device when a covered vault's Inbox changes ([WidgetKit push][widget-push]). There are forum reports of iOS 26 accepting widget pushes without reloading. The widget work therefore keeps its timeline reload policy, and pushes are only an extra nudge.
 - **Badge.** Deferred to a follow-up. When it comes, it is an absolute Inbox count across the person's vaults, sent with each alert and reset by the app on open. A background refresh may update it.
@@ -217,7 +217,7 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
     - indexes on `grant_id` and `(user_id, client_id)`, and unique partial indexes on each token
   - `push_document_outcomes(document_id, outcome, created_at)`, primary key `(document_id, outcome)`, FK to documents with cascade
   - `push_pending(device_id, document_id, kind, vault_id, created_at)`, primary key `(device_id, document_id, kind)`, cascading from devices
-  - `push_device_state(device_id, claimed_until, window_started_at, alerts_in_window, backoff_until, widgets_sent_at)`
+  - delivery bookkeeping on the `push_devices` row itself (`claimed_until`, `claim_holder`, `batch_id`, `window_started_at`, `alerts_in_window`, `backoff_until`, `failures`, `widgets_dirty_at`, `widgets_sent_at`, `test_sent_at`), so the lease and the state change in one row
 
   No existing rows change.
 

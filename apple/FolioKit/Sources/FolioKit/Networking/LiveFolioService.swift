@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import OpenAPIRuntime
 import OpenAPIURLSession
+import OpenTelemetryApi
 import UniformTypeIdentifiers
 
 /// Talks to a Folio server. JSON endpoints go through the generated client; file transfer uses
@@ -282,7 +283,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     }
 
     public func documentPage(query: DocumentBrowseQuery, cursor: String?) async throws -> DocumentPage {
-        try await call("documents.browse") {
+        try await call("documents.browse", attributes: query.telemetryAttributes(cursor: cursor)) {
             let filter = query.filter
             let input = Operations.BrowseDocuments.Input.Query(
                 q: query.text.isEmpty ? nil : query.text,
@@ -605,6 +606,11 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let (data, response) = try await authorizedTransfer(request) {
             try await session.upload(for: $0, from: form.body)
         }
+        if idempotencyKey != nil, let http = response as? HTTPURLResponse,
+            let conflict = KeyedUploadConflict(response: http, body: data)
+        {
+            throw conflict
+        }
         try check(response, body: data)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
@@ -681,10 +687,12 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         }
     }
 
-    private func call<T>(_ name: String, _ work: () async throws -> T) async throws -> T {
+    private func call<T>(
+        _ name: String, attributes: [String: AttributeValue] = [:], _ work: () async throws -> T
+    ) async throws -> T {
         // Telemetry sees the transport error before it is mapped, so a span can tell a timeout from a cancel.
         if let telemetry {
-            return try await mappedCall { try await telemetry.operation(name, work) }
+            return try await mappedCall { try await telemetry.operation(name, attributes: attributes, work) }
         }
         return try await mappedCall(work)
     }
@@ -781,5 +789,40 @@ private extension DocumentEntry {
             body: entry.body, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
             createdBy: entry.createdBy, canEdit: raw.value2.canEdit, canDelete: raw.value2.canDelete
         )
+    }
+}
+
+extension LiveFolioService: DeviceRegistrationService {
+    public func registerDevice(installationID: String, _ registration: DeviceRegistration) async throws
+        -> DeviceRegistrationResult
+    {
+        try await call("devices.register") {
+            var request = URLRequest(url: endpoint("api/devices/\(installationID)"))
+            request.httpMethod = "PUT"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(registration)
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            try check(response, body: data)
+            let wire = try JSONDecoder().decode(DeviceRegistrationWire.self, from: data)
+            return DeviceRegistrationResult(preferences: wire.device.preferences, pushAvailable: wire.pushAvailable)
+        }
+    }
+
+    public func deleteDevice(installationID: String) async throws {
+        try await call("devices.delete") {
+            var request = URLRequest(url: endpoint("api/devices/\(installationID)"))
+            request.httpMethod = "DELETE"
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            try check(response, body: data)
+        }
+    }
+
+    public func sendTestNotification(installationID: String) async throws {
+        try await call("devices.test") {
+            var request = URLRequest(url: endpoint("api/devices/\(installationID)/test"))
+            request.httpMethod = "POST"
+            let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
+            try check(response, body: data)
+        }
     }
 }

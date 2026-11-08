@@ -1,24 +1,7 @@
 import Foundation
 
-/// A request plus the multipart body written to disk, which is what background sessions upload from.
-public struct ShareUploadRequest {
-    public let request: URLRequest
-    public let bodyFile: URL
-
-    public static func make(
-        file: UploadFile, serverURL: URL, token: String?, directory: URL, vaultID: UUID? = nil
-    ) throws
-        -> ShareUploadRequest
-    {
-        let form = MultipartForm(file: file)
-        let bodyFile = directory.appending(path: "upload-\(UUID().uuidString).multipart")
-        try form.body.write(to: bodyFile)
-        let request = request(
-            serverURL: serverURL, contentType: form.contentType, token: token, vaultID: vaultID,
-            idempotencyKey: UUID())
-        return ShareUploadRequest(request: request, bodyFile: bodyFile)
-    }
-
+/// The upload request a background share sends with its retained body.
+enum ShareUploadRequest {
     static func request(
         serverURL: URL, contentType: String, token: String?, vaultID: UUID?, idempotencyKey: UUID
     ) -> URLRequest {
@@ -79,7 +62,7 @@ public extension BackgroundUploading {
 /// Each upload is recorded in a `ShareUploadStore` before it starts. Its body stays on disk until the server
 /// accepts it, so rejected, unauthorized and interrupted shares remain visible and can be retried. Every attempt
 /// carries the record's id as `Idempotency-Key`, so a retry after a lost answer returns the first document.
-public final class BackgroundUploader: NSObject, BackgroundUploading, URLSessionTaskDelegate, @unchecked Sendable {
+public final class BackgroundUploader: NSObject, BackgroundUploading, URLSessionDataDelegate, @unchecked Sendable {
     public static let identifierPrefix = "com.cedricziel.folio.share."
 
     public static func makeIdentifier() -> String {
@@ -94,6 +77,9 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     private var session: URLSession!
     private var changeHandler: (@Sendable (ShareUploadRecord) -> Void)?
     private var eventsFinishedHandler: (@Sendable () -> Void)?
+    /// The start of each running task's answer, enough to read the error code of a refusal.
+    private var answers: [Int: Data] = [:]
+    private static let answerLimit = 4096
 
     /// - Parameters:
     ///   - serverURL: Where new shares go; nil for an uploader that only collects the outcome of earlier ones.
@@ -163,7 +149,16 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
 
     public func retry(_ id: UUID) async throws {
         guard store.claim(id) else { throw ShareRetryError.inProgress }
-        defer { store.unclaim(id) }
+        // A token refresh can outlast the claim's timeout; renew it so no other process starts the same share.
+        let renewal = Task { [store] in
+            while (try? await Task.sleep(for: .seconds(ShareUploadStore.claimTimeout / 3))) != nil {
+                _ = store.renewClaim(id)
+            }
+        }
+        defer {
+            renewal.cancel()
+            store.unclaim(id)
+        }
         guard var record = store.record(id), record.canRetry,
             FileManager.default.fileExists(atPath: store.bodyFile(for: id).path)
         else { throw ShareRetryError.unavailable }
@@ -175,6 +170,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
             token = try await tokens.refresh(rejecting: token)
             guard token != nil else { throw FolioError.signInRequired }
         }
+        guard store.renewClaim(id) else { throw ShareRetryError.inProgress }
         record.status = .pending
         record.attempts += 1
         record.updatedAt = .now
@@ -192,7 +188,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     /// interrupted, so they can be retried. Returns how many of its uploads are still running.
     @discardableResult
     public func reconcile(interruptedBefore before: Date) async -> Int {
-        let live = Set(await session.allTasks.compactMap { $0.taskDescription.flatMap(UUID.init(uuidString:)) })
+        let live = Set(await session.allTasks.compactMap { $0.taskDescription.flatMap { ShareTask($0) }?.id })
         for record in store.markInterrupted(sessionIdentifier: identifier, live: live, before: before) {
             onChange?(record)
         }
@@ -210,7 +206,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
             idempotencyKey: record.id
         )
         let task = session.uploadTask(with: request, fromFile: store.bodyFile(for: record.id))
-        task.taskDescription = record.id.uuidString
+        task.taskDescription = ShareTask(id: record.id, attempt: record.attempts).description
         task.resume()
     }
 
@@ -225,19 +221,57 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        let answer = lock.withLock { answers.removeValue(forKey: task.taskIdentifier) }
         guard let description = task.taskDescription else { return }
-        guard let id = UUID(uuidString: description) else {
+        guard let shareTask = ShareTask(description) else {
             // Tasks enqueued by earlier versions carry the path of their body instead of a record.
             try? FileManager.default.removeItem(atPath: description)
             return
         }
-        let failure = ShareUploadFailure.classify(response: task.response, error: error)
-        if let record = store.complete(id, failure: failure) {
+        let failure = ShareUploadFailure.classify(response: task.response, error: error, body: answer)
+        if let record = store.complete(shareTask.id, attempt: shareTask.attempt, failure: failure) {
             onChange?(record)
+        }
+    }
+
+    public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.withLock {
+            let received = answers[dataTask.taskIdentifier, default: Data()]
+            guard received.count < Self.answerLimit else { return }
+            answers[dataTask.taskIdentifier] = received + data.prefix(Self.answerLimit - received.count)
         }
     }
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession _: URLSession) {
         onEventsFinished?()
+    }
+}
+
+/// Which record and attempt a background task uploads, kept in its `taskDescription` so the outcome finds them
+/// after a relaunch.
+struct ShareTask: Equatable, LosslessStringConvertible {
+    let id: UUID
+    /// Nil for tasks started before attempts were recorded.
+    let attempt: Int?
+
+    init(id: UUID, attempt: Int?) {
+        self.id = id
+        self.attempt = attempt
+    }
+
+    init?(_ description: String) {
+        let parts = description.split(separator: " ", omittingEmptySubsequences: false)
+        guard let id = parts.first.flatMap({ UUID(uuidString: String($0)) }) else { return nil }
+        switch parts.count {
+        case 1: self.init(id: id, attempt: nil)
+        case 2:
+            guard let attempt = Int(parts[1]) else { return nil }
+            self.init(id: id, attempt: attempt)
+        default: return nil
+        }
+    }
+
+    var description: String {
+        attempt.map { "\(id.uuidString) \($0)" } ?? id.uuidString
     }
 }

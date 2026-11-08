@@ -35,6 +35,7 @@ struct UploadReviewView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(uploadTitle) {
                         Task {
+                            FolioTelemetry.shared.action(.documentUpload)
                             await model.upload(files)
                             if case .finished = model.state {
                                 onFinished()
@@ -47,6 +48,7 @@ struct UploadReviewView: View {
         }
         .interactiveDismissDisabled(isUploading)
         .frame(minWidth: 320, minHeight: 240)
+        .telemetryScreen(.uploadReview)
     }
 
     private var uploadTitle: String {

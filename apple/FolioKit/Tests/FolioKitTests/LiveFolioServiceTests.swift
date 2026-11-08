@@ -10,6 +10,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         var status = 200
         var contentType = "application/json"
         var body = Data()
+        var headers: [String: String] = [:]
     }
 
     nonisolated(unsafe) static var handler: ((URLRequest, Data?) -> Reply)?
@@ -27,7 +28,7 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         let reply = Self.handler?(request, body) ?? Reply(status: 500)
         let response = HTTPURLResponse(
             url: request.url!, statusCode: reply.status, httpVersion: nil,
-            headerFields: ["Content-Type": reply.contentType]
+            headerFields: reply.headers.merging(["Content-Type": reply.contentType]) { $1 }
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: reply.body)
@@ -369,6 +370,18 @@ private let documentJSON = """
         #expect(page.vaultID == vault)
         #expect(page.nextCursor == "more")
         #expect(page.documents.first?.tags.first?.name == "Taxes")
+    }
+
+    @Test func browseScopeStaysOutOfTheRequest() async throws {
+        let vault = UUID()
+        StubURLProtocol.handler = { request, _ in
+            let items = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
+            #expect(Set(items.map(\.name)) == ["limit", "sort"])
+            #expect(!request.url!.absoluteString.contains("saved_view"))
+            return .init(body: Data("{\"vault_id\":\"\(vault)\",\"documents\":[]}".utf8))
+        }
+        _ = try await makeService().scoped(to: vault).documentPage(
+            query: DocumentBrowseQuery(scope: .savedView), cursor: nil)
     }
 
     @Test func directDocumentLookupKeepsVaultScopeAndTags() async throws {
@@ -831,6 +844,31 @@ private let documentJSON = """
         }
         await #expect(throws: FolioError.server(status: 404, message: "Document not found")) {
             _ = try await makeService().documents(matching: "")
+        }
+    }
+
+    @Test func keyedUploadConflictsAreToldApart() async throws {
+        let file = UploadFile(data: Data("%PDF-1.4".utf8), filename: "scan.pdf", mimeType: "application/pdf")
+        StubURLProtocol.handler = { _, _ in
+            .init(
+                status: 409, body: Data(#"{"error":"busy","code":"upload_in_progress"}"#.utf8),
+                headers: ["Retry-After": "5"])
+        }
+        await #expect(throws: KeyedUploadConflict.inProgress(retryAfter: .seconds(5))) {
+            _ = try await makeService().upload(file, idempotencyKey: UUID())
+        }
+
+        StubURLProtocol.handler = { _, _ in
+            .init(status: 409, body: Data(#"{"error":"used","code":"idempotency_key_mismatch"}"#.utf8))
+        }
+        await #expect(throws: KeyedUploadConflict.keyReused) {
+            _ = try await makeService().upload(file, idempotencyKey: UUID())
+        }
+
+        StubURLProtocol.handler = { _, _ in .init(status: 409, body: Data(#"{"error":"taken"}"#.utf8)) }
+        // Unkeyed uploads keep the plain error.
+        await #expect(throws: FolioError.server(status: 409, message: "taken")) {
+            _ = try await makeService().upload(file)
         }
     }
 

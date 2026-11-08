@@ -55,7 +55,10 @@ struct DocumentDetailView: View {
         .task { await model.loadPreview() }
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
         .task(id: snapshot.document.updatedAt) { await model.refreshMetadata(after: snapshot.document.updatedAt) }
-        .task(id: model.summary) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
+        .task(id: model.summary.indexedFields) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
+        .documentActivity(model.summary, vaultID: vaultID, previewFile: model.previewFile)
+        .documentTransferCommands(model.summary, vaultID: vaultID)
+        .telemetryScreen(.documentDetail)
     }
 
     @ViewBuilder

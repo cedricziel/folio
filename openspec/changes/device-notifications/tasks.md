@@ -2,21 +2,21 @@
 
 Phase 2 lands as stacked PRs:
 
-- **Server** (groups 1–7) on `claude/feat-359-device-notifications`, rebased onto the #306 fix before merge
+- **Server** (groups 1–7) on `claude/feat-359-device-notifications-server`, stacked on the design PR and rebased onto the #306 fix before merge
 - **Apple** (groups 8–10) on a branch stacked on it
 
 Each task is one semantic commit, and each test below is written first and seen to fail.
 
 ## 1. Domain model and storage
 
-- [ ] 1.1 Add the folio-core models:
+- [x] 1.1 Add the folio-core models:
   - `PushDevice`, with per-token registration times
   - `NotificationPreferences`, defaulting to processed off, needs_review and failed on, scope `mine` and vaults `all`
   - `NotificationKind`, `PendingNotification` and `AlertSummary`
 
   Verify with unit tests for the defaults and a JSON round-trip.
 
-- [ ] 1.2 Add the `PushDeviceRepository` port:
+- [x] 1.2 Add the `PushDeviceRepository` port:
   - devices: `upsert`, `list_for_user`, `delete`, `clear_token`
   - first outcomes: `record_first_outcome`, which reports whether the row was new
   - pending notifications: `insert_pending` and `prune`
@@ -33,20 +33,20 @@ Each task is one semantic commit, and each test below is written first and seen 
 
 ## 2. Authorization ownership
 
-- [ ] 2.1 Expose `grant_id` on `AuthContext`. Verify with a validator test: an OAuth bearer has its grant, and a personal token has none.
-- [ ] 2.2 Delete devices inside the auth-store revocation transactions: by `grant_id` in `revoke_grant` and `revoke_token`, which covers refresh reuse, and by `(user_id, client_id)` in `revoke_client_tokens`. Verify with SQLite and Postgres tests for `/oauth/revoke`, Security-page revocation and refresh-token reuse.
-- [ ] 2.3 Add `grant_is_live(grant_id)`, which ignores used and expired tokens. Verify with tests: a grant with only `used = 1` refresh tokens is not live.
+- [x] 2.1 Expose `grant_id` on `AuthContext`. Verify with a validator test: an OAuth bearer has its grant, and a personal token has none.
+- [x] 2.2 Delete devices inside the auth-store revocation transactions: by `grant_id` in `revoke_grant` and `revoke_token`, which covers refresh reuse, and by `(user_id, client_id)` in `revoke_client_tokens`. Verify with SQLite and Postgres tests for `/oauth/revoke`, Security-page revocation and refresh-token reuse.
+- [x] 2.3 Add `grant_is_live(grant_id)`, which ignores used and expired tokens. Verify with tests: a grant with only `used = 1` refresh tokens is not live.
 
 ## 3. Device API (JSON)
 
-- [ ] 3.1 Add `PUT /api/devices/{installation_id}`. It responds `201` or `200` with `push_available`, `403` for a personal token or cookie, and `422` for a bad platform, environment, token, locale or vault. Verify with an API test for each status.
-- [ ] 3.2 Add `GET /api/devices`, which returns no tokens and reports `push_available`, and an idempotent `DELETE /api/devices/{installation_id}`. Verify with API tests, including that deleting another person's installation ID leaves it unchanged.
-- [ ] 3.3 Add `POST /api/devices/{installation_id}/test`, responding `202`, `409` or `429`. Verify with API tests against a recording transport.
-- [ ] 3.4 Regenerate `openapi/openapi.json`. Verify that the OpenAPI drift test passes.
+- [x] 3.1 Add `PUT /api/devices/{installation_id}`. It responds `201` or `200` with `push_available`, `403` for a personal token or cookie, and `422` for a bad platform, environment, token, locale or vault. Verify with an API test for each status.
+- [x] 3.2 Add `GET /api/devices`, which returns no tokens and reports `push_available`, and an idempotent `DELETE /api/devices/{installation_id}`. Verify with API tests, including that deleting another person's installation ID leaves it unchanged.
+- [x] 3.3 Add `POST /api/devices/{installation_id}/test`, responding `202`, `409` or `429`. Verify with API tests against a recording transport.
+- [x] 3.4 Regenerate `openapi/openapi.json`. Verify that the OpenAPI drift test passes.
 
 ## 4. Planning from the outbox
 
-- [ ] 4.1 Implement `NotificationPlanner: EventConsumer`. Verify with unit tests over in-memory fakes.
+- [x] 4.1 Implement `NotificationPlanner: EventConsumer`. Verify with unit tests over in-memory fakes.
   - It handles `Processed` with origin User or Workflow, and `…failed` envelopes.
   - On a first outcome it records the outcome and inserts pending rows in one transaction.
   - It offers a document only to devices registered at or before the document's creation.
@@ -63,12 +63,12 @@ Each task is one semantic commit, and each test below is written first and seen 
   - the vault filter
   - duplicate delivery
 
-- [ ] 4.2 Wire the planner into the dispatcher in `folio-app/src/main.rs`. Verify with an integration test: upload, process with the local pipeline and no AI provider, and find one pending `needs_review` row. Reprocessing the document adds none.
+- [x] 4.2 Wire the planner into the dispatcher in `folio-app/src/main.rs`. Verify with an integration test: upload, process with the local pipeline and no AI provider, and find one pending `needs_review` row. Reprocessing the document adds none.
 
 ## 5. Sending
 
-- [ ] 5.1 Add the `PushTransport` port, the `none` adapter, and the alert templates. The templates produce English and German count text, `thread-id` only for a single vault, `vault` and `document` only when single, the category, and `mutable-content` only with `show_titles`. Verify with unit tests, including that a serialized payload never contains the document title or vault name.
-- [ ] 5.2 Implement `NotificationSender`. Verify with tests on a controllable clock and a recording transport:
+- [x] 5.1 Add the `PushTransport` port, the `none` adapter, and the alert templates. The templates produce English and German count text, `thread-id` only for a single vault, `vault` and `document` only when single, the category, and `mutable-content` only with `show_titles`. Verify with unit tests, including that a serialized payload never contains the document title or vault name.
+- [x] 5.2 Implement `NotificationSender`. Verify with tests on a controllable clock and a recording transport:
   - 200 outcomes in 3 minutes give at most 2 alerts
   - two vaults give one alert without a `thread-id`
   - the cap carries outcomes over
@@ -86,12 +86,12 @@ Each task is one semantic commit, and each test below is written first and seen 
   - the batch collapse ID
   - the 24 h prune
 
-- [ ] 5.3 Handle APNs responses per design Decision 7, including the per-token 410 comparison. Verify with a table-driven test, including a dead alert token whose device refreshed its widget token later.
-- [ ] 5.4 Send widget reload pushes, at most one per device every 15 minutes and outside the alert cap. Verify with a sender test: three Inbox changes in a minute give one `widgets` push.
+- [x] 5.3 Handle APNs responses per design Decision 7, including the per-token 410 comparison. Verify with a table-driven test, including a dead alert token whose device refreshed its widget token later.
+- [x] 5.4 Send widget reload pushes, at most one per device every 15 minutes and outside the alert cap. Verify with a sender test: three Inbox changes in a minute give one `widgets` push.
 
 ## 6. APNs transport
 
-- [ ] 6.1 Add the `ApnsTransport` adapter:
+- [x] 6.1 Add the `ApnsTransport` adapter:
   - an ES256 provider token, re-signed after 50 minutes or when the key changes
   - HTTP/2 to the sandbox and production hosts, or to `push.apns.base_url` (h2c)
   - the headers from Decision 6
@@ -100,11 +100,11 @@ Each task is one semantic commit, and each test below is written first and seen 
 
 ## 7. Settings and end-to-end
 
-- [ ] 7.1 Add `PushConfig` and the `push.*` `SETTINGS` entries: a `_FILE` key, `Redacted` Debug, and `base_url` from configuration only. Document them in `docs/configuration.md`. Verify with config tests and the docs-sync test.
-- [ ] 7.2 Add encrypted settings values (`enc:v1:` with `SecretBox`), refused when `auth.secret_key` comes from the database. Add the effective push config with a 5 s cache. Verify with unit tests for the round-trip, the refusal and precedence.
-- [ ] 7.3 Add the "Push notifications" card, `POST /settings/push` (PKCS#8 P-256 validation, admin only) and `POST /settings/push/test`. The card shows the stub URL warning. Verify with route tests for save, a bad key, the refusal and non-admin `403`.
-- [ ] 7.4 Add an `e2e/` Playwright spec: start an h2c APNs stub, run Folio with `FOLIO_PUSH__TRANSPORT=apns` and `FOLIO_PUSH__APNS__BASE_URL` pointing at it, sign in through OAuth with PKCE, register a device, upload a document and assert that the stub receives one alert without the title. Verify with `make e2e`.
-- [ ] 7.5 Run `make format`, `make lint`, `make test` on SQLite and Postgres, and `make e2e`. Run the `verify` skill on an ephemeral instance against the stub, and extend `.claude/skills/verify` with the push checks.
+- [x] 7.1 Add `PushConfig` and the `push.*` `SETTINGS` entries: a `_FILE` key, `Redacted` Debug, and `base_url` from configuration only. Document them in `docs/configuration.md`. Verify with config tests and the docs-sync test.
+- [x] 7.2 Add encrypted settings values (`enc:v1:` with `SecretBox`), refused when `auth.secret_key` comes from the database. Add the effective push config with a 5 s cache. Verify with unit tests for the round-trip, the refusal and precedence.
+- [x] 7.3 Add the "Push notifications" card, `POST /settings/push` (PKCS#8 P-256 validation, admin only) and `POST /settings/push/test`. The card shows the stub URL warning. Verify with route tests for save, a bad key, the refusal and non-admin `403`.
+- [x] 7.4 Add an `e2e/` Playwright spec: start an h2c APNs stub, run Folio with `FOLIO_PUSH__TRANSPORT=apns` and `FOLIO_PUSH__APNS__BASE_URL` pointing at it, sign in through OAuth with PKCE, register a device, upload a document and assert that the stub receives one alert without the title. Verify with `make e2e`.
+- [x] 7.5 Run `make format`, `make lint`, `make test` on SQLite and Postgres, and `make e2e`. Run the `verify` skill on an ephemeral instance against the stub, and extend `.claude/skills/verify` with the push checks.
 
 ## 8. Apple: registration and permission
 

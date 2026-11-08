@@ -58,6 +58,17 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Second fixture"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    func testOpenDocumentOffersSharing() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        let first = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "First fixture")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
+        first.tap()
+        XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.buttons["share-document"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
     func testWideWindowKeepsDocumentListBesidePreview() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication()
@@ -189,15 +200,17 @@ import XCTest
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
     }
 
-    /// iOS 27.1 reports the bar's back button as `Other` to type queries, so match it by identifier first.
+    /// The iOS 27.1 runtime reports the bar's back button as `Other` to type queries and gives it no identifier,
+    /// so when no bar button is found this swipes back from the leading edge, like a person would.
     private func navigateBack(in app: XCUIApplication) {
-        let bar = app.navigationBars.firstMatch
-        let back = bar.descendants(matching: .any).matching(identifier: "BackButton").firstMatch
+        let back = app.navigationBars.buttons.element(boundBy: 0)
         if back.waitForExistence(timeout: 2) {
             back.tap()
-        } else {
-            bar.buttons.element(boundBy: 0).tap()
+            return
         }
+        let window = app.windows.firstMatch
+        let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
+        edge.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)))
     }
 
     /// Deletes the current value key by key; iOS 27 no longer selects all text on a triple tap.

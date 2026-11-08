@@ -81,7 +81,13 @@ async fn a_key_reused_for_different_content_is_a_conflict() {
         .unwrap();
 
     assert_eq!(other.status(), StatusCode::CONFLICT);
-    assert!(text(other).await.contains("Idempotency-Key"));
+    assert!(other.headers().get("retry-after").is_none());
+    let body = text(other).await;
+    assert!(body.contains("Idempotency-Key"));
+    assert!(
+        body.contains(r#""code":"idempotency_key_mismatch""#),
+        "{body}"
+    );
     assert_eq!(documents(&h).await, 1);
 }
 
@@ -152,6 +158,8 @@ async fn a_key_whose_document_was_deleted_is_gone() {
         .unwrap();
 
     assert_eq!(replay.status(), StatusCode::GONE);
+    let body = text(replay).await;
+    assert!(body.contains(r#""code":"upload_deleted""#), "{body}");
 }
 
 #[tokio::test]
@@ -318,6 +326,8 @@ async fn a_retry_while_the_first_upload_is_storing_says_when_to_try_again() {
 
     assert_eq!(retry.status(), StatusCode::CONFLICT);
     assert!(retry.headers().get("retry-after").is_some());
+    let body = text(retry).await;
+    assert!(body.contains(r#""code":"upload_in_progress""#), "{body}");
     store.release.notify_one();
     assert_eq!(first.await.unwrap().unwrap().status(), StatusCode::OK);
     assert_eq!(documents(&h).await, 1);

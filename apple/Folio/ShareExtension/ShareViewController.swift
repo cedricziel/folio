@@ -11,7 +11,10 @@ struct ShareRoot: View {
     var body: some View {
         Group {
             if let model {
-                ShareView(model: model) { finish() }
+                ShareView(model: model) {
+                    // A queued upload was handed to the background session, so it was submitted too.
+                    finish(model.state == .done || model.state == .queued ? nil : .shareCancel)
+                }
             } else if loaded, let attachments, !attachments.canUpload {
                 VStack(alignment: .leading, spacing: FolioTheme.Spacing.space3) {
                     Text(attachments.files.isEmpty ? "No readable attachments" : "Some attachments could not be read")
@@ -25,7 +28,7 @@ struct ShareRoot: View {
                         }
                     }
                     HStack {
-                        Button("Cancel", role: .cancel) { finish() }
+                        Button("Cancel", role: .cancel) { finish(.shareCancel) }
                         Button("Retry") { attempt += 1 }
                     }
                 }
@@ -44,6 +47,7 @@ struct ShareRoot: View {
                     .padding(FolioTheme.Spacing.space6)
             }
         }
+        .telemetryScreen(.share)
         .task(id: attempt) {
             loaded = false
             let providers = (context?.inputItems as? [NSExtensionItem])?.flatMap { $0.attachments ?? [] } ?? []
@@ -55,7 +59,8 @@ struct ShareRoot: View {
     }
 
     /// Sends recorded telemetry, waiting briefly, before the system suspends the extension.
-    private func finish() {
+    private func finish(_ action: TelemetryAction? = nil) {
+        if let action { FolioTelemetry.shared.action(action) }
         Task {
             await FolioTelemetry.shared.flush(timeout: .milliseconds(1500))
             context?.completeRequest(returningItems: nil)
@@ -81,7 +86,8 @@ struct ShareRoot: View {
         let coordinator = ShareSessionCoordinator.shared
         coordinator.onChange = { [weak model] _ in model?.refreshRetained() }
         Task { [weak model] in
-            await coordinator.recoverInterrupted()
+            // Sessions belong to the app, which reattaches them when it opens.
+            await coordinator.recoverInterrupted(reattachingSessions: false)
             model?.refreshRetained()
         }
         return model

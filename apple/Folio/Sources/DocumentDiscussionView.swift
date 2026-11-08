@@ -95,6 +95,7 @@ struct DocumentDiscussionView: View {
         .interactiveDismissDisabled(model.isEditing || model.isSaving)
         .task { await model.load() }
         .frame(minWidth: 300, minHeight: 400)
+        .telemetryScreen(.documentDiscussion)
     }
 
     private var editor: some View {
