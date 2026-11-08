@@ -149,8 +149,10 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
 /// the same batch again skips uploads and tags that already succeeded.
 ///
 /// Every upload carries its step's `Idempotency-Key`, so an attempt whose answer was lost is answered with the
-/// document the server already created. Tag assignment is idempotent on the server, so a tag whose answer was lost
-/// is simply sent again. A document deleted before its tags were attached is uploaded again under a new key.
+/// document the server already created; a 409 means the first attempt is still storing it, so the key is kept for
+/// the next run. Tag assignment is idempotent on the server, so a tag whose answer was lost is simply sent again. A
+/// document deleted before its tags were attached (404 while tagging, 410 for its key) is uploaded again under a new
+/// key.
 public struct UploadBatchRunner: Sendable {
     private let service: any FolioService
     private let store: any UploadProgressStoring
@@ -220,10 +222,11 @@ public struct UploadBatchRunner: Sendable {
                         documents[index] = document
                         progress.steps[index].documentID = document.id
                         record()
-                    } catch FolioError.server(status: 409, message: let message) {
-                        // The key's document was deleted, or the key is still busy: the next attempt uses a new key.
+                    } catch FolioError.server(status: 410, message: _) where !restarted {
+                        // The document this key created has been deleted since: upload the file again.
+                        restarted = true
                         restart(index)
-                        throw FolioError.server(status: 409, message: message)
+                        continue
                     } catch {
                         record()
                         throw error
