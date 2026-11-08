@@ -18,11 +18,18 @@ enum SessionBoundary: Equatable, Sendable {
 /// One client session shared by the app, its extensions and intents through a file in the App Group container.
 ///
 /// Every use re-reads the file under an exclusive `flock`, so a rotation or sign-out by one process is seen by
-/// the others on their next read, and two processes can't both rotate an expired session. Names follow
-/// OpenTelemetry semantic conventions v1.45.0 (`session.*`, Development status).
+/// the others on their next read, and two processes can't both rotate an expired session. Only the app marks the
+/// record signed in; sign-out clears that and the session together, so an extension still running afterwards
+/// can't create a session that the next account would adopt. Names follow OpenTelemetry semantic conventions
+/// v1.45.0 (`session.*`, Development status).
 final class TelemetrySession: @unchecked Sendable {
     static let inactivity: TimeInterval = 30 * 60
     static let maximum: TimeInterval = 4 * 60 * 60
+
+    struct State: Codable, Equatable {
+        var signedIn = false
+        var session: Record?
+    }
 
     struct Record: Codable, Equatable {
         var id: String
@@ -42,7 +49,7 @@ final class TelemetrySession: @unchecked Sendable {
     private let lockURL: URL?
     private let now: @Sendable () -> Date
     private let lock = NSLock()
-    private var memory: Record?
+    private var memory = State()
 
     /// Without a directory the session lives in this process only.
     init(directory: URL?, now: @escaping @Sendable () -> Date = { Date() }) {
@@ -53,15 +60,26 @@ final class TelemetrySession: @unchecked Sendable {
 
     /// The live session ID, without counting as activity.
     func current() -> String? {
-        withRecord(write: false) { record, now in
-            guard let session = record, Self.expiry(session, at: now) == nil else { return nil }
+        withState(write: false) { state, now in
+            guard state.signedIn, let session = state.session, Self.expiry(session, at: now) == nil else {
+                return nil
+            }
             return session.id
         }
     }
 
+    /// Marks the shared record signed in. Called by the app once it holds a signed-in session.
+    func signIn() {
+        withState(write: true) { state, _ in state.signedIn = true }
+    }
+
     /// Records user activity: extends the live session, or ends an expired one and starts the next.
-    func touch() -> (id: String, boundaries: [SessionBoundary]) {
-        withRecord(write: true) { record, now in
+    /// While signed out there is no session to extend or start.
+    func touch() -> (id: String?, boundaries: [SessionBoundary]) {
+        withState(write: true) { state, now in
+            guard state.signedIn else { return (id: nil, boundaries: []) }
+            var record = state.session
+            defer { state.session = record }
             if let session = record, Self.expiry(session, at: now) == nil {
                 record?.lastActivityAt = now
                 return (id: session.id, boundaries: [])
@@ -79,11 +97,13 @@ final class TelemetrySession: @unchecked Sendable {
         }
     }
 
-    /// Ends the session and forgets it, so the next one is not linked to it.
+    /// Ends the session and forgets it, so the next one is not linked to it. Sign-out also marks the record
+    /// signed out, so no process can start another session until the app signs in again.
     func end(_ reason: SessionEndReason) -> [SessionBoundary] {
-        withRecord(write: true) { record, now in
-            let live = record.flatMap { Self.expiry($0, at: now) == nil ? $0 : nil }
-            record = nil
+        withState(write: true) { state, now in
+            let live = state.session.flatMap { Self.expiry($0, at: now) == nil ? $0 : nil }
+            state.session = nil
+            if reason == .signOut { state.signedIn = false }
             return live.map { [SessionBoundary.end(id: $0.id, reason: reason, at: now)] } ?? []
         }
     }
@@ -96,13 +116,13 @@ final class TelemetrySession: @unchecked Sendable {
         return nil
     }
 
-    private func withRecord<T>(write: Bool, _ body: (inout Record?, Date) -> T) -> T {
+    private func withState<T>(write: Bool, _ body: (inout State, Date) -> T) -> T {
         lock.withLock {
             withFileLock {
-                var record = read()
-                let original = record
-                let result = body(&record, now())
-                if write, record != original { save(record) }
+                var state = read()
+                let original = state
+                let result = body(&state, now())
+                if write, state != original { save(state) }
                 return result
             }
         }
@@ -118,21 +138,20 @@ final class TelemetrySession: @unchecked Sendable {
         return body()
     }
 
-    private func read() -> Record? {
+    /// A missing or unreadable record reads as signed out, until the app signs in.
+    private func read() -> State {
         guard let fileURL else { return memory }
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(Record.self, from: data)
+        guard let data = try? Data(contentsOf: fileURL) else { return State() }
+        return (try? JSONDecoder().decode(State.self, from: data)) ?? State()
     }
 
-    private func save(_ record: Record?) {
+    private func save(_ state: State) {
         guard let fileURL else {
-            memory = record
+            memory = state
             return
         }
-        if let record, let data = try? JSONEncoder().encode(record) {
+        if let data = try? JSONEncoder().encode(state) {
             try? data.write(to: fileURL, options: .atomic)
-        } else {
-            try? FileManager.default.removeItem(at: fileURL)
         }
     }
 }

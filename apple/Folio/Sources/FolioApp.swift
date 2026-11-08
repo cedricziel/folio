@@ -96,7 +96,10 @@ final class AppModel {
                 session = restored
                 if case .signedIn = restored { FileProviderDomain.register() }
             }
-            if case .signedIn = restored { FileProviderDomain.signalChanges() }
+            if case .signedIn = restored {
+                FolioTelemetry.shared.signedIn()
+                FileProviderDomain.signalChanges()
+            }
         }
     }
 
@@ -109,6 +112,7 @@ final class AppModel {
         restorationGeneration += 1
         SpotlightIndex.shared.signedIn(to: url)
         session = .signedIn(url)
+        FolioTelemetry.shared.signedIn()
         FileProviderDomain.register()
     }
 

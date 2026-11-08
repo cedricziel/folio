@@ -211,6 +211,12 @@ public final class FolioTelemetry: @unchecked Sendable {
         await flush(timeout: .milliseconds(1500))
     }
 
+    /// Allows sessions again after the app has a signed-in account. Extensions never call this, so one that is still
+    /// running after sign-out can't start a session the next account would adopt.
+    public func signedIn() {
+        sessions.signIn()
+    }
+
     /// Records that the person is using Folio: extends the shared session, or starts the next one.
     public func activity() {
         record(sessions.touch().boundaries)

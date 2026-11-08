@@ -360,6 +360,7 @@ private final class TelemetryCapture: @unchecked Sendable {
     private func recordingTelemetry(
         sessions: TelemetrySession = TelemetrySession(directory: nil)
     ) -> (FolioTelemetry, TelemetryCapture) {
+        sessions.signIn()
         let capture = TelemetryCapture()
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [TelemetryURLProtocol.self]

@@ -215,6 +215,10 @@ processes apart.
   Provider callbacks never extend, rotate or start a session.
 - **File Provider.** It stamps a live session but never starts one; Files
   traffic with no live session carries no `session.id`.
+- **Signed out.** Only the app marks the shared record signed in. Sign-out
+  clears that together with the session, so an extension still running
+  afterwards can neither keep the old session nor start one the next account
+  would adopt.
 - **Events.** `session.start` (with `session.previous_id` after a timeout or
   the 4-hour limit), `session.end` with `folio.session.end_reason`,
   `folio.screen.view` with `app.screen.name`, and `folio.action` with

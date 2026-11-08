@@ -24,55 +24,61 @@ private func sharedDirectory() throws -> URL {
 struct TelemetrySessionTests {
     private let clock = TestClock()
 
-    private func store(_ directory: URL? = nil) -> TelemetrySession {
+    /// A store over `directory` (or memory), signed in unless the test is about signing out.
+    private func store(_ directory: URL? = nil, signedIn: Bool = true) -> TelemetrySession {
         let clock = clock
-        return TelemetrySession(directory: directory, now: { clock.now })
+        let sessions = TelemetrySession(directory: directory, now: { clock.now })
+        if signedIn { sessions.signIn() }
+        return sessions
     }
 
-    @Test func activityKeepsOneSession() {
+    @Test func activityKeepsOneSession() throws {
         let sessions = store()
         let first = sessions.touch()
-        #expect(first.boundaries == [.start(id: first.id, previousID: nil)])
+        let id = try #require(first.id)
+        #expect(first.boundaries == [.start(id: id, previousID: nil)])
         for _ in 0..<6 {
             clock.advance(10 * 60)
             let next = sessions.touch()
-            #expect(next.id == first.id)
+            #expect(next.id == id)
             #expect(next.boundaries.isEmpty)
         }
     }
 
-    @Test func inactivityEndsTheSessionAndLinksTheNext() {
+    @Test func inactivityEndsTheSessionAndLinksTheNext() throws {
         let sessions = store()
-        let first = sessions.touch()
+        let first = try #require(sessions.touch().id)
         let lastActivity = clock.now
         clock.advance(TelemetrySession.inactivity + 1)
         let next = sessions.touch()
-        #expect(next.id != first.id)
+        let nextID = try #require(next.id)
+        #expect(nextID != first)
         #expect(
             next.boundaries == [
-                .end(id: first.id, reason: .timeout, at: lastActivity), .start(id: next.id, previousID: first.id),
+                .end(id: first, reason: .timeout, at: lastActivity), .start(id: nextID, previousID: first),
             ])
     }
 
-    @Test func fourHoursEndTheSessionDespiteActivity() {
+    @Test func fourHoursEndTheSessionDespiteActivity() throws {
         let sessions = store()
-        let first = sessions.touch()
+        let first = try #require(sessions.touch().id)
         for _ in 0..<11 {
             clock.advance(20 * 60)
-            #expect(sessions.touch().id == first.id)
+            #expect(sessions.touch().id == first)
         }
         clock.advance(20 * 60)
         let next = sessions.touch()
-        #expect(next.boundaries.first == .end(id: first.id, reason: .maxDuration, at: clock.now - 20 * 60))
-        #expect(next.boundaries.last == .start(id: next.id, previousID: first.id))
+        let nextID = try #require(next.id)
+        #expect(next.boundaries.first == .end(id: first, reason: .maxDuration, at: clock.now - 20 * 60))
+        #expect(next.boundaries.last == .start(id: nextID, previousID: first))
     }
 
-    @Test func clockSetBackExpiresTheSession() {
+    @Test func clockSetBackExpiresTheSession() throws {
         let sessions = store()
-        let first = sessions.touch()
+        let first = try #require(sessions.touch().id)
         clock.advance(-60 * 60)
         let next = sessions.touch()
-        #expect(next.id != first.id)
+        #expect(next.id != first)
         guard case .end(_, let reason, _)? = next.boundaries.first else {
             Issue.record("expected the old session to end")
             return
@@ -80,35 +86,47 @@ struct TelemetrySessionTests {
         #expect(reason == .timeout)
     }
 
-    @Test func readingNeverStartsOrExtendsASession() {
+    @Test func readingNeverStartsOrExtendsASession() throws {
         let sessions = store()
         #expect(sessions.current() == nil)
-        let first = sessions.touch()
+        let first = try #require(sessions.touch().id)
         clock.advance(20 * 60)
-        #expect(sessions.current() == first.id)
+        #expect(sessions.current() == first)
         clock.advance(11 * 60)
         #expect(sessions.current() == nil)
     }
 
     @Test(arguments: [SessionEndReason.signOut, .serverChange])
-    func endingForgetsTheSessionWithoutLinkingTheNext(reason: SessionEndReason) {
+    func endingForgetsTheSessionWithoutLinkingTheNext(reason: SessionEndReason) throws {
         let sessions = store()
-        let first = sessions.touch()
-        #expect(sessions.end(reason) == [.end(id: first.id, reason: reason, at: clock.now)])
+        let first = try #require(sessions.touch().id)
+        #expect(sessions.end(reason) == [.end(id: first, reason: reason, at: clock.now)])
         #expect(sessions.current() == nil)
+        sessions.signIn()
         let next = sessions.touch()
-        #expect(next.boundaries == [.start(id: next.id, previousID: nil)])
+        let nextID = try #require(next.id)
+        #expect(next.boundaries == [.start(id: nextID, previousID: nil)])
+    }
+
+    @Test func noSessionStartsBeforeTheAppSignsIn() throws {
+        let directory = try sharedDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let share = store(directory, signedIn: false)
+        #expect(share.touch().id == nil)
+        #expect(share.current() == nil)
+        _ = store(directory)
+        #expect(share.touch().id != nil)
     }
 
     @Test func anotherProcessAdoptsTheLiveSession() throws {
         let directory = try sharedDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let app = store(directory)
-        let share = store(directory)
-        let started = app.touch()
+        let share = store(directory, signedIn: false)
+        let started = try #require(app.touch().id)
         clock.advance(5 * 60)
         let joined = share.touch()
-        #expect(joined.id == started.id)
+        #expect(joined.id == started)
         #expect(joined.boundaries.isEmpty)
     }
 
@@ -116,38 +134,44 @@ struct TelemetrySessionTests {
         let directory = try sharedDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let app = store(directory)
-        let fileProvider = store(directory)
-        let first = app.touch()
-        #expect(fileProvider.current() == first.id)
+        let fileProvider = store(directory, signedIn: false)
+        let first = try #require(app.touch().id)
+        #expect(fileProvider.current() == first)
         clock.advance(TelemetrySession.inactivity + 1)
         #expect(fileProvider.current() == nil)
-        let next = app.touch()
-        #expect(fileProvider.current() == next.id)
+        let next = try #require(app.touch().id)
+        #expect(fileProvider.current() == next)
     }
 
-    @Test func anExtensionRunningAcrossSignOutDoesNotCarryTheOldSession() throws {
+    @Test func anExtensionStillRunningAfterSignOutCannotStartASessionTheNextAccountAdopts() throws {
         let directory = try sharedDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let app = store(directory)
-        let share = store(directory)
-        let old = app.touch()
-        #expect(share.touch().id == old.id)
+        let share = store(directory, signedIn: false)
+        let old = try #require(app.touch().id)
+        #expect(share.touch().id == old)
+
         _ = app.end(.signOut)
+        // Still running after sign-out: it neither keeps the old session nor writes a new one.
+        #expect(share.touch().id == nil)
+        #expect(share.current() == nil)
+
+        app.signIn()
         let signedIn = app.touch()
-        let next = share.touch()
-        #expect(next.id == signedIn.id)
-        #expect(next.id != old.id)
-        #expect(signedIn.boundaries == [.start(id: signedIn.id, previousID: nil)])
+        let next = try #require(signedIn.id)
+        #expect(next != old)
+        #expect(signedIn.boundaries == [.start(id: next, previousID: nil)])
+        #expect(share.touch().id == next)
     }
 
     @Test func concurrentRotationsInTwoProcessesStartOneSession() async throws {
         let directory = try sharedDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let app = store(directory)
-        let share = store(directory)
+        let share = store(directory, signedIn: false)
         _ = app.touch()
         clock.advance(TelemetrySession.inactivity + 1)
-        let results = await withTaskGroup(of: (String, [SessionBoundary]).self) { group in
+        let results = await withTaskGroup(of: (String?, [SessionBoundary]).self) { group in
             for index in 0..<40 {
                 let sessions = index.isMultiple(of: 2) ? app : share
                 group.addTask {
@@ -155,11 +179,12 @@ struct TelemetrySessionTests {
                     return (result.id, result.boundaries)
                 }
             }
-            var all: [(String, [SessionBoundary])] = []
+            var all: [(String?, [SessionBoundary])] = []
             for await result in group { all.append(result) }
             return all
         }
-        #expect(Set(results.map { $0.0 }).count == 1)
+        #expect(Set(results.compactMap { $0.0 }).count == 1)
+        #expect(results.allSatisfy { $0.0 != nil })
         let starts = results.flatMap { $0.1 }.filter {
             if case .start = $0 { return true }
             return false
