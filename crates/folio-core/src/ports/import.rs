@@ -19,6 +19,9 @@ pub trait PaperlessReader: Send + Sync {
 
     /// Streams every record without holding the whole library in memory.
     /// Taxonomy may arrive interleaved with documents, so callers join by ID.
+    /// A live source can yield a document again, with its notes and values,
+    /// when it changes while being read; the later records replace the
+    /// earlier ones, and their `modified` is never older.
     async fn scan(&self) -> Result<RecordStream, PaperlessReadError>;
 
     async fn open_original(
@@ -368,6 +371,11 @@ impl PaperlessChecksum {
     }
 }
 
+/// The Paperless REST API exposes neither a version's `version_index` nor
+/// its own `modified`: from it, `index` is the version's position among the
+/// root's versions (1 for the oldest, in Paperless's own order) and the
+/// version's `modified` is its `added`. Neither is fit for a fingerprint or
+/// for comparing a version across sources; order versions by `index` only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaperlessVersionInfo {
     pub root_document: i64,

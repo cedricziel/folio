@@ -36,12 +36,12 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 - [x] 3.1 Add the `PaperlessReader` port and the streaming export adapter, with the 2.20 and 3.x fixtures. Failing test first: the expected records, and a password hash never appears in any record.
 - [x] 3.2 Add the root guard. Failing test first: `..`, symlinks outside the root, `/imports-x`, and missing paths, all with the same error.
 - [x] 3.3 Add the original-file guard. Failing test first: `../etc/passwd`, `/etc/passwd` and a symlinked original yield `unsafe_path` without being opened.
-- [ ] 3.4 REST adapter, part 1: client with token auth, API version 9, a same-origin redirect policy and fixed error reasons, plus paginated taxonomy and document records. Failing test first, against `wiremock`: the records equal the export fixture's for the same library, and a cross-origin redirect yields `redirected` without sending the token.
-- [ ] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
+- [x] 3.4 REST adapter, part 1: client with token auth, API version 9, a same-origin redirect policy and fixed error reasons, plus paginated taxonomy and document records. Failing test first, against `wiremock`: the records equal the export fixture's for the same library, and a cross-origin redirect yields `redirected` without sending the token.
+- [x] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
   - a page failure or a count mismatch yields an error, not a set
   - a document modified mid-listing isn't skipped
   - a 429 followed by a 200 succeeds
-- [ ] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
+- [x] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
 
 ## 4. Paperless source
 

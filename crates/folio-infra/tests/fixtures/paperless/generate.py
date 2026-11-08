@@ -228,7 +228,7 @@ def note(pk, document, text, created, deleted_at=None):
 
 def document(pk, title, filename, created, *, checksum, correspondent=None, document_type=None,
              tags=(), asn=None, content="", deleted_at=None, mime="application/pdf",
-             root=None, version_index=None, version_label=None, v3=False):
+             root=None, version_index=None, version_label=None, added=None, v3=False):
     fields = {
         **soft_delete(deleted_at),
         "owner": 1,
@@ -242,8 +242,8 @@ def document(pk, title, filename, created, *, checksum, correspondent=None, docu
         "archive_checksum": None,
         "page_count": 1,
         "created": created,
-        "modified": "2024-03-01T12:30:45.678Z",
-        "added": f"{created}T09:15:00.250Z",
+        "modified": added or "2024-03-01T12:30:45.678Z",
+        "added": added or f"{created}T09:15:00.250Z",
         "filename": filename,
         "archive_filename": None,
         "original_filename": filename,
@@ -274,9 +274,10 @@ def originals(v3):
                  deleted_at="2025-06-01T08:00:00Z", content="Pizza", body=b"%PDF-1.4\n% flyer\n%%EOF\n"),
             dict(pk=4, title="Lease", base="2024-03-10 Lease", created="2024-03-10", document_type=2,
                  content="Lease agreement", body=b"%PDF-1.4\n% lease draft\n%%EOF\n"),
-            dict(pk=5, title="Lease", base="2024-03-10 Lease_01", created="2024-03-10", document_type=2,
+            # Like upstream's consumer, a version copies only the root's title, created and owner
+            dict(pk=5, title="Lease", base="2024-03-10 Lease_01", created="2024-03-10",
                  root=4, version_index=1, version_label="signed", content="Lease agreement signed",
-                 body=b"%PDF-1.4\n% lease signed\n%%EOF\n"),
+                 added="2024-03-12T10:59:30.125Z", body=b"%PDF-1.4\n% lease signed\n%%EOF\n"),
         ]
     return docs
 
