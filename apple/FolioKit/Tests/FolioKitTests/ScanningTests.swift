@@ -21,12 +21,7 @@ private func isOnMainThread() -> Bool {
     Thread.isMainThread
 }
 
-/// Stands in for a slow render that occupies its thread.
-private func blockThread(for seconds: TimeInterval) {
-    Thread.sleep(forTimeInterval: seconds)
-}
-
-struct PDFBuilderTests {
+@Suite(.timeLimit(.minutes(1))) struct PDFBuilderTests {
     @Test func buildsOnePDFPagePerImage() throws {
         let data = try PDFBuilder.makePDF(from: [
             page(width: 600, height: 800), page(width: 800, height: 600),
@@ -107,7 +102,7 @@ struct UploadFileTests {
     }
 }
 
-@MainActor struct ScanReviewViewModelTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct ScanReviewViewModelTests {
     @Test func scanUploadsToItsChosenVault() async {
         let vault = Vault(id: UUID(), name: "Household", role: .contributor)
         let target = MockFolioService()
@@ -187,12 +182,17 @@ struct UploadFileTests {
         #expect(model.state == .filed)
     }
 
-    /// Fails if rendering blocks the main actor: a one-second render would show up as a one-second hitch.
-    @Test func mainActorStaysResponsiveDuringASlowRender() async throws {
+    /// A render on the main actor would stall it for the whole render; off it, the main actor keeps ticking.
+    @Test func mainActorStaysResponsiveWhileRenderingAScan() async throws {
+        let (renderTimes, recorder) = AsyncStream<Duration>.makeStream()
         let model = ScanReviewViewModel(
-            pages: [page(width: 10, height: 10)], service: MockFolioService(),
+            pages: letterScan(pages: 12), service: MockFolioService(),
             renderPDF: { images in
-                blockThread(for: 1)
+                let start = ContinuousClock.now
+                defer {
+                    recorder.yield(start.duration(to: .now))
+                    recorder.finish()
+                }
                 return try PDFBuilder.makePDF(from: images)
             }
         )
@@ -208,10 +208,14 @@ struct UploadFileTests {
             ticks += 1
         } while model.state == .filing
         await filing.value
+        var recorded = renderTimes.makeAsyncIterator()
+        let render = try #require(await recorded.next())
 
-        reportMeasurement("Main actor during a 1 s scan render: \(ticks) ticks, worst hitch \(worstHitch)")
+        reportMeasurement(
+            "Main actor during a 12-page scan render of \(render): \(ticks) ticks, worst hitch \(worstHitch)"
+        )
         #expect(model.state == .filed)
-        #expect(worstHitch < .milliseconds(250))
+        #expect(worstHitch < render / 2)
     }
 
     @Test func uploadsEveryPageInScanOrder() async throws {
@@ -244,7 +248,7 @@ struct UploadFileTests {
     var finished = 0
 }
 
-@MainActor struct ScanCompletionTests {
+@Suite(.timeLimit(.minutes(1))) @MainActor struct ScanCompletionTests {
     private func startFilingA(on service: MockFolioService, inbox: Inbox) async -> ScanReviewViewModel {
         let scanA = ScannedPages(images: [page(width: 10, height: 10)])
         inbox.showing = scanA

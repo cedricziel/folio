@@ -50,7 +50,7 @@ final class ScanRenderPerformanceTests: XCTestCase {
     }
 }
 
-struct ScanRenderCostTests {
+@Suite(.timeLimit(.minutes(1))) struct ScanRenderCostTests {
     @Test func reportsTheCostOfRenderingAnEightPageScan() async throws {
         let scan = ScanImages(images: letterScan(pages: 8))
         let clock = ContinuousClock()

@@ -53,7 +53,7 @@ private final class FailingRotationStore: CredentialStore, @unchecked Sendable {
     func clear() { lock.withLock { credentials = nil } }
 }
 
-@Suite(.serialized) struct OAuthRecoveryTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct OAuthRecoveryTests {
     private let clock = Date(timeIntervalSince1970: 1_800_000_000)
 
     private func credentials() -> OAuthCredentials {
