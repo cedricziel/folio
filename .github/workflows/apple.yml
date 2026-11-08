@@ -61,6 +61,8 @@ jobs:
           bundler-cache: true
       - run: brew install xcodegen
       - run: bundle exec fastlane test
+      - name: Check the official build's identifiers
+        run: scripts/check-build-settings.sh
       - name: Test navigation on iPhone and iPad
         timeout-minutes: 25
         run: |

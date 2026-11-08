@@ -1,3 +1,4 @@
 Folio.xcodeproj
 Resources/*.plist
 Resources/*.entitlements
+Config/Local.xcconfig
