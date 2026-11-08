@@ -346,7 +346,7 @@ async fn reembed_all(
     for document_id in &ids {
         if let Err(e) = state
             .job_queue
-            .enqueue(JobType::generate_embedding(*document_id))
+            .enqueue_untraced(JobType::generate_embedding(*document_id))
             .await
         {
             error!("Failed to enqueue re-embedding for {}: {}", document_id, e);

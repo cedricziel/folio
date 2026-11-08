@@ -8,6 +8,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::watch;
 use tokio::time::sleep;
 use tracing::{debug, error, info, info_span, warn, Instrument};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use folio_core::events::{DocumentEvent, EventOrigin};
 use folio_core::models::{ProcessingStage, ProcessingStatus, VaultId};
@@ -72,6 +73,25 @@ async fn run_with_lease<T>(
         result = work => Some(result),
     }
 }
+
+/// A first attempt that runs right away continues the trace that queued it.
+/// Retries and delayed jobs start their own trace with a link back, so a
+/// request's trace does not keep growing for hours.
+fn relate_to_queuing_trace(span: &tracing::Span, job: &Job) {
+    let Some(trace) = &job.trace else { return };
+    let immediate = job.scheduled_at - job.created_at <= PARENT_WINDOW;
+    if job.attempts <= 1 && immediate {
+        if let Err(e) = span.set_parent(trace.to_parent()) {
+            debug!(job.id = %job.id, "Cannot continue the queuing trace: {e}");
+        }
+    } else if let Some(queued) = trace.span_context() {
+        span.add_link(queued);
+    }
+}
+
+/// Longest delay between queuing and scheduled start for which a job still
+/// joins the queuing trace
+const PARENT_WINDOW: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
 
 async fn renew_claim(queue: &JobQueue, job: &Job, timeout: Duration) -> bool {
     match tokio::time::timeout(timeout, queue.renew(job)).await {
@@ -297,6 +317,7 @@ impl Worker {
             job.attempt = job.attempts,
             document.id = job.job_type.document_id().map(tracing::field::display),
         );
+        relate_to_queuing_trace(&span, &job);
         let started = Instant::now();
         let Some(result) = run_with_lease(
             &self.queue,
@@ -2596,5 +2617,85 @@ mod tests {
             RunStatus::Pending,
             "the webhook is still in flight"
         );
+    }
+
+    /// Run an `extract_text` job queued under a remote parent, after `adjust`
+    /// changes its row; return the exported job span.
+    async fn traced_job_span(adjust: &str) -> opentelemetry_sdk::trace::SpanData {
+        use opentelemetry::propagation::TextMapPropagator;
+        use opentelemetry::trace::TracerProvider as _;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let exporter = opentelemetry_sdk::trace::InMemorySpanExporter::default();
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("folio-test")));
+        let _default = tracing::subscriber::set_default(subscriber);
+
+        let f = fixture("OCR").await;
+        let request = info_span!("request");
+        let headers = std::collections::HashMap::from([(
+            "traceparent".to_string(),
+            format!("00-{TRACED}-1234567812345678-01"),
+        )]);
+        let _ = request.set_parent(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new().extract(&headers),
+        );
+        f.queue
+            .enqueue(JobType::extract_text(f.doc_id))
+            .instrument(request)
+            .await
+            .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(adjust.to_string()))
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        let job = f.queue.dequeue().await.unwrap().unwrap();
+        f.worker.handle_job(job).await;
+        exporter
+            .get_finished_spans()
+            .unwrap()
+            .into_iter()
+            .find(|span| span.name == "job extract_text")
+            .expect("a job span")
+    }
+
+    const TRACED: &str = "11223344556677881122334455667788";
+
+    #[tokio::test]
+    async fn a_first_attempt_continues_the_trace_that_queued_it() {
+        let span = traced_job_span("SELECT 1").await;
+        assert_eq!(span.span_context.trace_id().to_string(), TRACED);
+        assert!(span.links.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_retry_starts_a_new_trace_linked_to_the_one_that_queued_it() {
+        let span = traced_job_span("UPDATE jobs SET attempts = 1").await;
+        assert_ne!(span.span_context.trace_id().to_string(), TRACED);
+        assert_eq!(span.parent_span_id, opentelemetry::trace::SpanId::INVALID);
+        let links: Vec<_> = span
+            .links
+            .iter()
+            .map(|link| link.span_context.trace_id().to_string())
+            .collect();
+        assert_eq!(links, [TRACED]);
+    }
+
+    #[tokio::test]
+    async fn a_delayed_job_starts_a_new_trace_linked_to_the_one_that_queued_it() {
+        let span = traced_job_span(
+            "UPDATE jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-1 hour')",
+        )
+        .await;
+        assert_ne!(span.span_context.trace_id().to_string(), TRACED);
+        let links: Vec<_> = span
+            .links
+            .iter()
+            .map(|link| link.span_context.trace_id().to_string())
+            .collect();
+        assert_eq!(links, [TRACED]);
     }
 }

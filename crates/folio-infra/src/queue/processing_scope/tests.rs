@@ -427,6 +427,7 @@ async fn root_enqueue_rolls_back_job_and_supersession(db: &Database) {
                 JobType::process_document(f.document),
                 Utc::now(),
                 DEFAULT_MAX_ATTEMPTS,
+                None,
             )
             .await
             .unwrap();
@@ -439,6 +440,7 @@ async fn root_enqueue_rolls_back_job_and_supersession(db: &Database) {
                 JobType::process_document(f.document),
                 Utc::now(),
                 DEFAULT_MAX_ATTEMPTS,
+                None,
             )
             .await
             .unwrap();
@@ -466,6 +468,7 @@ async fn child_enqueue_rolls_back_assignment_with_job(db: &Database) {
                     JobType::extract_text(f.document),
                     Utc::now(),
                     DEFAULT_MAX_ATTEMPTS,
+                    None,
                 )
                 .await
                 .unwrap();
@@ -478,6 +481,7 @@ async fn child_enqueue_rolls_back_assignment_with_job(db: &Database) {
                     JobType::extract_text(f.document),
                     Utc::now(),
                     DEFAULT_MAX_ATTEMPTS,
+                    None,
                 )
                 .await
                 .unwrap();

@@ -15,6 +15,7 @@ pub(crate) async fn insert_job(
     job_type: JobType,
     scheduled_at: DateTime<Utc>,
     max_attempts: i32,
+    trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
     let plan =
         super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
@@ -34,8 +35,8 @@ pub(crate) async fn insert_job(
 
     sqlx::query(
         r#"
-        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id)
-        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at, origin_vault_id, correlation_id, causation_id, processing_group_id, trace_parent, trace_state)
+        VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(id.to_string())
@@ -49,6 +50,8 @@ pub(crate) async fn insert_job(
     .bind(lineage.correlation_id.to_string())
     .bind(lineage.causation_id.map(|id| id.to_string()))
     .bind(plan.group_id.map(|id| id.to_string()))
+    .bind(trace.map(|trace| trace.traceparent.as_str()))
+    .bind(trace.and_then(|trace| trace.tracestate.as_deref()))
     .execute(&mut *conn)
     .await
     .map_err(|e| Error::Repository(format!("Failed to enqueue job: {}", e)))?;
@@ -76,36 +79,49 @@ impl SqliteJobQueue {
     }
 
     /// Enqueue a new job
-    #[instrument(skip(self))]
-    pub async fn enqueue(&self, job_type: JobType) -> Result<Uuid> {
-        self.enqueue_delayed(job_type, Utc::now()).await
+    #[instrument(skip(self, trace))]
+    pub async fn enqueue(
+        &self,
+        job_type: JobType,
+        trace: Option<super::JobTraceContext>,
+    ) -> Result<Uuid> {
+        self.enqueue_delayed(job_type, Utc::now(), trace).await
     }
 
     /// Enqueue a job to run at a specific time
-    #[instrument(skip(self))]
+    #[instrument(skip(self, trace))]
     pub async fn enqueue_delayed(
         &self,
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
+        trace: Option<super::JobTraceContext>,
     ) -> Result<Uuid> {
-        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS)
+        self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS, trace)
             .await
     }
 
     /// Enqueue a job with its own retry budget
-    #[instrument(skip(self))]
+    #[instrument(skip(self, trace))]
     pub async fn enqueue_with_max_attempts(
         &self,
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
+        trace: Option<super::JobTraceContext>,
     ) -> Result<Uuid> {
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(|error| Error::Repository(error.to_string()))?;
-        let id = insert_job(&mut tx, job_type, scheduled_at, max_attempts).await?;
+        let id = insert_job(
+            &mut tx,
+            job_type,
+            scheduled_at,
+            max_attempts,
+            trace.as_ref(),
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|error| Error::Repository(error.to_string()))?;
@@ -119,7 +135,7 @@ impl SqliteJobQueue {
         let class_filter = class.map_or("TRUE", JobClass::condition);
 
         // Find and claim the next pending job
-        let row: Option<(String, String, String, i32, i32, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, Option<i64>)> =
+        let row: Option<(String, String, String, i32, i32, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, Option<String>)> =
             sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 r#"
                 UPDATE jobs
@@ -137,7 +153,7 @@ impl SqliteJobQueue {
                     ORDER BY scheduled_at ASC
                     LIMIT 1
                 )
-                RETURNING id, job_type, payload, attempts, max_attempts, error, created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at
+                RETURNING id, job_type, payload, attempts, max_attempts, error, created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at, trace_parent, trace_state
                 "#,
             )))
             .bind(now.to_rfc3339())
@@ -164,6 +180,8 @@ impl SqliteJobQueue {
                 completed_at,
                 claim_id,
                 lease_expires_at,
+                trace_parent,
+                trace_state,
             )) => {
                 let job_type: JobType = serde_json::from_str(&payload)
                     .map_err(|e| Error::Repository(format!("Failed to deserialize job: {}", e)))?;
@@ -172,6 +190,7 @@ impl SqliteJobQueue {
                     id: Uuid::parse_str(&id).unwrap(),
                     claim_id: claim_id.and_then(|id| Uuid::parse_str(&id).ok()),
                     lease_expires_at,
+                    trace: super::JobTraceContext::from_columns(trace_parent, trace_state),
                     job_type,
                     status: JobStatus::Processing,
                     attempts,
@@ -311,10 +330,13 @@ impl SqliteJobQueue {
             Option<String>,
             Option<String>,
             Option<i64>,
+            Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             r#"
             SELECT id, job_type, payload, status, attempts, max_attempts, error,
-                   created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at
+                   created_at, updated_at, scheduled_at, started_at, completed_at, claim_id, lease_expires_at,
+                   trace_parent, trace_state
             FROM jobs
             WHERE payload LIKE ?
             AND status IN ('pending', 'processing')
@@ -335,6 +357,7 @@ impl SqliteJobQueue {
                 id: Uuid::parse_str(&row.0).unwrap(),
                 claim_id: row.12.and_then(|id| Uuid::parse_str(&id).ok()),
                 lease_expires_at: row.13,
+                trace: super::JobTraceContext::from_columns(row.14, row.15),
                 job_type,
                 status: JobStatus::from(row.3),
                 attempts: row.4,
