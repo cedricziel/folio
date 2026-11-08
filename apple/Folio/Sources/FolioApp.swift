@@ -107,6 +107,7 @@ final class AppModel {
     func connected(to url: URL) {
         restorationTask?.cancel()
         restorationGeneration += 1
+        SpotlightIndex.shared.signedIn(to: url)
         session = .signedIn(url)
         FileProviderDomain.register()
     }

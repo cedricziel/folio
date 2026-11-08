@@ -166,9 +166,11 @@ public final class DocumentListViewModel {
             if !lookupsLoaded { await loadLookups() }
             let document = try await fetched
             guard document.id == id else { throw FolioError.unreadableResponse }
+            if document.deletedAt != nil { spotlight.remove(documentID: id) }
             guard !Task.isCancelled, ticket == latestLookup else { return }
             resolvedDocument = document
         } catch {
+            if case .server(status: 404, _)? = error as? FolioError { spotlight.remove(documentID: id) }
             guard !Task.isCancelled, ticket == latestLookup else { return }
             lookupError = (id, error.localizedDescription)
         }
