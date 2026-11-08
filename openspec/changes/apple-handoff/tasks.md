@@ -106,7 +106,7 @@ Server and Apple sections are independent and can land in either order; within e
   Commit `feat(apple): Handoff routing resolver`.
 
 - [x] 6.5 Add `HandoffPresentation.from(_:currentServer:)`. First write a failing `HandoffPresentationTests`: every decision maps to the spec'd presentation, the other-server alert text names both hosts, and `.hold` / `.ignore` map to nothing. Commit `feat(apple): map Handoff decisions to presentations`.
-- [ ] 6.6 Add `ContinuationInbox`. First write a failing `ContinuationInboxTests`:
+- [x] 6.6 Add `ContinuationInbox`. First write a failing `ContinuationInboxTests`:
   - `take` returns nil while locked or on `.hold`, and re-decides after a session change
   - the last item wins
   - an item is delivered to the receiving scene exactly once, and to any scene after `sceneClosed` for the receiving `sceneID`
