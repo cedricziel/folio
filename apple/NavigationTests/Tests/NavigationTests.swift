@@ -51,7 +51,7 @@ import XCTest
         XCTAssertTrue(first.waitForExistence(timeout: 10), app.debugDescription)
         first.tap()
         XCTAssertTrue(app.navigationBars["First fixture"].waitForExistence(timeout: 5), app.debugDescription)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        navigateBack(in: app)
         let second = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
         XCTAssertTrue(second.waitForExistence(timeout: 5), app.debugDescription)
         second.tap()
@@ -111,7 +111,7 @@ import XCTest
         XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
         XCTAssertEqual(app.staticTexts["metadata-Type"].label, "Invoice")
         markReviewed(app)
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        navigateBack(in: app)
         let kept = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
         XCTAssertTrue(kept.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(row.waitForNonExistence(timeout: 5), "A filed document leaves the inbox.")
@@ -187,6 +187,17 @@ import XCTest
 
     private func picker(_ label: String, in app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+    }
+
+    /// iOS 27.1 reports the bar's back button as `Other` to type queries, so match it by identifier first.
+    private func navigateBack(in app: XCUIApplication) {
+        let bar = app.navigationBars.firstMatch
+        let back = bar.descendants(matching: .any).matching(identifier: "BackButton").firstMatch
+        if back.waitForExistence(timeout: 2) {
+            back.tap()
+        } else {
+            bar.buttons.element(boundBy: 0).tap()
+        }
     }
 
     /// Deletes the current value key by key; iOS 27 no longer selects all text on a triple tap.
