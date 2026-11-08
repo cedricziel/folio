@@ -36,39 +36,39 @@ impl UploadReceiptRepository for PostgresUploadReceiptRepository {
             .execute(&self.pool)
             .await
             .map_err(error)?;
-        sqlx::query(
-            "DELETE FROM document_upload_receipts WHERE document_id IS NULL AND created_at < $1",
-        )
-        .bind(now - UPLOAD_CLAIM_TIMEOUT)
-        .execute(&self.pool)
-        .await
-        .map_err(error)?;
-        let inserted = sqlx::query("INSERT INTO document_upload_receipts (vault_id, actor_scope, idempotency_key, request_fingerprint, created_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING")
-            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key).bind(fingerprint).bind(now)
+        let (document, token) = (Id::new_v4(), Id::new_v4());
+        let inserted = sqlx::query("INSERT INTO document_upload_receipts (vault_id, actor_scope, idempotency_key, request_fingerprint, document_id, claim_token, claimed_at, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7) ON CONFLICT DO NOTHING")
+            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key).bind(fingerprint).bind(document).bind(token).bind(now)
             .execute(&self.pool).await.map_err(error)?;
         if inserted.rows_affected() == 1 {
-            return Ok(UploadClaim::Claimed);
+            return Ok(UploadClaim::Claimed { document, token });
         }
-        let (previous, document): (String, Option<Id>) = sqlx::query_as("SELECT request_fingerprint, document_id FROM document_upload_receipts WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3")
+        let taken: Option<(Id,)> = sqlx::query_as("UPDATE document_upload_receipts SET claim_token = $1, claimed_at = $2 WHERE vault_id = $3 AND actor_scope = $4 AND idempotency_key = $5 AND request_fingerprint = $6 AND completed_at IS NULL AND claimed_at < $7 RETURNING document_id")
+            .bind(token).bind(now).bind(key.vault.0).bind(&key.actor_scope).bind(key.key).bind(fingerprint).bind(now - UPLOAD_CLAIM_TIMEOUT)
+            .fetch_optional(&self.pool).await.map_err(error)?;
+        if let Some((document,)) = taken {
+            return Ok(UploadClaim::Claimed { document, token });
+        }
+        let (previous, document, completed): (String, Id, Option<DateTime<Utc>>) = sqlx::query_as("SELECT request_fingerprint, document_id, completed_at FROM document_upload_receipts WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3")
             .bind(key.vault.0).bind(&key.actor_scope).bind(key.key)
             .fetch_one(&self.pool).await.map_err(error)?;
-        Ok(match document {
+        Ok(match completed {
             _ if previous != fingerprint => UploadClaim::Mismatch,
-            Some(id) => UploadClaim::Completed(id),
-            None => UploadClaim::InProgress,
+            Some(_) => UploadClaim::Completed(document),
+            None => UploadClaim::InProgress(document),
         })
     }
 
-    async fn complete(&self, key: &UploadReceiptKey, document: Id) -> Result<()> {
-        sqlx::query("UPDATE document_upload_receipts SET document_id = $1 WHERE vault_id = $2 AND actor_scope = $3 AND idempotency_key = $4")
-            .bind(document).bind(key.vault.0).bind(&key.actor_scope).bind(key.key)
+    async fn complete(&self, key: &UploadReceiptKey, token: Id) -> Result<bool> {
+        let updated = sqlx::query("UPDATE document_upload_receipts SET completed_at = now() WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3 AND claim_token = $4 AND completed_at IS NULL")
+            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key).bind(token)
             .execute(&self.pool).await.map_err(error)?;
-        Ok(())
+        Ok(updated.rows_affected() == 1)
     }
 
-    async fn release(&self, key: &UploadReceiptKey) -> Result<()> {
-        sqlx::query("DELETE FROM document_upload_receipts WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3 AND document_id IS NULL")
-            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key)
+    async fn abandon(&self, key: &UploadReceiptKey, token: Id) -> Result<()> {
+        sqlx::query("UPDATE document_upload_receipts SET claimed_at = 'epoch' WHERE vault_id = $1 AND actor_scope = $2 AND idempotency_key = $3 AND claim_token = $4 AND completed_at IS NULL")
+            .bind(key.vault.0).bind(&key.actor_scope).bind(key.key).bind(token)
             .execute(&self.pool).await.map_err(error)?;
         Ok(())
     }

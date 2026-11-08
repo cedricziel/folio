@@ -1917,7 +1917,17 @@
             "description": "The vault or resource is not visible"
           },
           "409": {
-            "description": "The Idempotency-Key belongs to a different upload, is still in progress, or its document was deleted",
+            "description": "The Idempotency-Key was already used for a different file, or its first request is still storing the document; retry shortly",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The document an earlier request with this Idempotency-Key created has been deleted",
             "content": {
               "application/json": {
                 "schema": {

@@ -12,13 +12,14 @@ use axum::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
-use chrono::Utc;
 use folio_core::models::{
     Correspondent, Document, DocumentSource, DocumentStatus, DocumentType, SourceKind,
     UpdateDocument, UserId, VaultId,
 };
-use folio_core::ports::{keys, upload_fingerprint, StoredObject, UploadClaim, UploadReceiptKey};
+use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
+use folio_core::ports::{keys, StoredObject, UploadReceiptKey};
 use folio_core::services::NewUpload;
+use folio_core::services::UploadOutcome;
 use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
@@ -566,7 +567,7 @@ pub(crate) async fn store_upload(
     mut multipart: Multipart,
     source: SourceKind,
     idempotency_key: Option<Uuid>,
-) -> ApiResult<Document> {
+) -> ApiResult<StoredUpload> {
     debug!("Starting document upload");
 
     let mut title: Option<String> = None;
@@ -593,6 +594,9 @@ pub(crate) async fn store_upload(
                 }
             }
             "file" => {
+                if file_data.is_some() {
+                    return Err(ApiError::bad_request("Upload exactly one file per request"));
+                }
                 filename = field.file_name().map(|s| s.to_string());
                 mime_type = field.content_type().map(|s| s.to_string());
                 file_data = Some(
@@ -612,94 +616,75 @@ pub(crate) async fn store_upload(
         .or_else(|| filename.clone())
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
-    let filename = filename.unwrap_or_else(|| "upload".to_string());
-
-    let receipt =
-        match idempotency_key {
-            Some(key) => {
-                let receipt = UploadReceiptKey {
-                    vault,
-                    actor_scope: uploaded_by
-                        .as_ref()
-                        .map(|user| format!("user:{}", user.as_str()))
-                        .unwrap_or_else(|| "system".into()),
-                    key,
-                };
-                let fingerprint = upload_fingerprint(&filename, &mime_type, &title, &file_data);
-                match state
-                    .upload_receipts
-                    .claim(&receipt, &fingerprint, Utc::now())
-                    .await?
-                {
-                    UploadClaim::Claimed => Some(receipt),
-                    UploadClaim::Completed(id) => return replayed_upload(state, vault, id).await,
-                    UploadClaim::Mismatch => {
-                        return Err(ApiError::new(
-                            StatusCode::CONFLICT,
-                            "This Idempotency-Key was already used for a different upload",
-                        ))
-                    }
-                    UploadClaim::InProgress => return Err(ApiError::new(
-                        StatusCode::CONFLICT,
-                        "An upload with this Idempotency-Key is still in progress; retry shortly",
-                    )),
-                }
-            }
-            None => None,
-        };
-
-    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
-    let imported = state
-        .importer
-        .import(
-            vault,
-            NewUpload {
-                title: Some(title),
-                filename,
-                mime_type: Some(mime_type),
-                data: file_data,
-                source: DocumentSource::of(source),
-                tag_ids: Vec::new(),
-                uploaded_by,
-            },
-        )
-        .await;
-    let document = match (imported, receipt) {
-        (Ok(document), Some(receipt)) => {
-            state
-                .upload_receipts
-                .complete(&receipt, document.id)
-                .await?;
-            document
-        }
-        (Ok(document), None) => document,
-        (Err(e), receipt) => {
-            if let Some(receipt) = receipt {
-                if let Err(release) = state.upload_receipts.release(&receipt).await {
-                    error!("Failed to release upload receipt: {}", release);
-                }
-            }
-            return Err(e.into());
-        }
+    let upload = NewUpload {
+        title: Some(title),
+        filename: filename.unwrap_or_else(|| "upload".to_string()),
+        mime_type: Some(mime_type),
+        data: file_data,
+        source: DocumentSource::of(source),
+        tag_ids: Vec::new(),
+        uploaded_by: uploaded_by.clone(),
     };
 
-    folio_infra::telemetry::metrics().documents_changed(1);
+    // A client that disconnects drops this handler; the spawned task still finishes the import and records it,
+    // so the client's retry finds the document instead of storing it again.
+    let state = state.clone();
+    let (actor, lineage) = (current_actor(), current_lineage());
+    let stored = tokio::spawn(with_actor(
+        actor,
+        with_lineage(lineage, async move {
+            match idempotency_key {
+                Some(key) => {
+                    let key = UploadReceiptKey {
+                        vault,
+                        actor_scope: uploaded_by
+                            .as_ref()
+                            .map(|user| format!("user:{}", user.as_str()))
+                            .unwrap_or_else(|| "system".into()),
+                        key,
+                    };
+                    state.keyed_uploads.upload(key, upload).await
+                }
+                // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
+                None => state
+                    .importer
+                    .import(vault, upload)
+                    .await
+                    .map(UploadOutcome::Created),
+            }
+        }),
+    ))
+    .await
+    .map_err(|e| {
+        error!("Upload task failed: {}", e);
+        ApiError::internal("Upload failed")
+    })??;
 
-    Ok(document)
+    match stored {
+        UploadOutcome::Created(document) => {
+            folio_infra::telemetry::metrics().documents_changed(1);
+            Ok(StoredUpload::Created(document))
+        }
+        UploadOutcome::Replayed(document) => Ok(StoredUpload::Replayed(document)),
+        UploadOutcome::Deleted => Err(ApiError::new(
+            StatusCode::GONE,
+            "The document uploaded with this Idempotency-Key has been deleted",
+        )),
+    }
 }
 
-/// The document an earlier request with the same `Idempotency-Key` created
-async fn replayed_upload(state: &AppState, vault: VaultId, id: Uuid) -> ApiResult<Document> {
-    state
-        .document_repo
-        .find_by_id(vault, id)
-        .await?
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::CONFLICT,
-                "The document uploaded with this Idempotency-Key no longer exists",
-            )
-        })
+/// A stored upload, or the one an earlier request with the same `Idempotency-Key` stored
+pub(crate) enum StoredUpload {
+    Created(Document),
+    Replayed(Document),
+}
+
+impl StoredUpload {
+    pub(crate) fn into_document(self) -> Document {
+        match self {
+            Self::Created(document) | Self::Replayed(document) => document,
+        }
+    }
 }
 
 /// Reads the optional `Idempotency-Key` header; a value must be a nonnil UUID
@@ -731,9 +716,14 @@ async fn upload_document(
     multipart: Multipart,
 ) -> ApiResult<Response> {
     let key = idempotency_key(&headers)?;
-    let document =
-        store_upload(&state, vault, uploader, multipart, SourceKind::Upload, key).await?;
-    let html = DocumentStreams::added(&state, document).await?.into_html();
+    let html =
+        match store_upload(&state, vault, uploader, multipart, SourceKind::Upload, key).await? {
+            StoredUpload::Created(document) => {
+                DocumentStreams::added(&state, document).await?.into_html()
+            }
+            // The first request already added this row; adding it again would show the document twice.
+            StoredUpload::Replayed(_) => String::new(),
+        };
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())
 }
