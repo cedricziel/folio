@@ -396,6 +396,138 @@ private final class TelemetryCapture: @unchecked Sendable {
         Dictionary(attributes.map { ($0.key, $0.value.stringValue) }, uniquingKeysWith: { first, _ in first })
     }
 
+    private func sharedContainer() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "telemetry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    /// A Folio process: its own telemetry, sharing the session record and settings cache through `container`.
+    private func process(
+        in container: URL, session: URLSession, sessions: TelemetrySession? = nil
+    ) -> FolioTelemetry {
+        FolioTelemetry(
+            session: session, installationStore: TestInstallationIDStore(),
+            sessions: sessions ?? TelemetrySession(directory: container),
+            configCache: TelemetryConfigCache(directory: container))
+    }
+
+    @Test func aNewProcessWithCachedSettingsRecordsItsFirstRequest() async throws {
+        let container = try sharedContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let capture = TelemetryCapture()
+        let outage = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                return (
+                    outage.requests.isEmpty ? 200 : 503,
+                    Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8)
+                )
+            }
+            return (200, Data("{}".utf8))
+        }
+        TelemetrySession(directory: container).signIn()
+        let app = process(in: container, session: URLSession(configuration: config))
+        await app.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+
+        // The extension starts while the server can't answer its settings request.
+        outage.append(URLRequest(url: baseURL), Data())
+        let fileProvider = process(in: container, session: URLSession(configuration: config))
+        defer { fileProvider.stop() }
+        fileProvider.start(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let network = URLSession(configuration: config)
+        _ = try await fileProvider.operation("fileprovider.enumerate") {
+            try await network.data(from: baseURL.appending(path: "api/documents"))
+        }
+        let runtime = try #require(fileProvider.current)
+        await Task.detached { runtime.flush() }.value
+
+        let span = try #require(exportedSpans(capture).first { $0.name == "fileprovider.enumerate" })
+        let request = try #require(capture.requests.first { $0.0.url?.path == "/api/documents" })
+        let parent = try #require(request.0.value(forHTTPHeaderField: "traceparent"))
+        #expect(parent.contains(span.traceID.map { String(format: "%02x", $0) }.joined()))
+    }
+
+    @Test func cachedSettingsAreNeverUsedForAnotherServerOrAfterSignOut() async throws {
+        let container = try sharedContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        let enabled = TelemetryCapture()
+        TelemetryURLProtocol.handler = { request, _ in
+            guard request.url?.path == "/api/telemetry/config", enabled.requests.isEmpty else { return (503, Data()) }
+            return (200, Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8))
+        }
+        let sessions = TelemetrySession(directory: container)
+        sessions.signIn()
+        let app = process(in: container, session: URLSession(configuration: config), sessions: sessions)
+        await app.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        enabled.append(URLRequest(url: baseURL), Data())
+        let cache = TelemetryConfigCache(directory: container)
+        #expect(cache.enabled(for: baseURL))
+
+        let otherServer = process(in: container, session: URLSession(configuration: config))
+        defer { otherServer.stop() }
+        otherServer.start(baseURL: URL(string: "https://other.example")!, tokenProvider: TelemetryToken())
+        #expect(otherServer.current == nil)
+
+        // Another process signed out, and this cache entry outlived it.
+        _ = TelemetrySession(directory: container).end(.signOut)
+        let afterOtherSignOut = process(in: container, session: URLSession(configuration: config))
+        afterOtherSignOut.start(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(afterOtherSignOut.current == nil)
+
+        sessions.signIn()
+        app.stop()
+        #expect(!cache.enabled(for: baseURL))
+        sessions.signIn()
+        let afterSignOut = process(in: container, session: URLSession(configuration: config))
+        afterSignOut.start(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(afterSignOut.current == nil)
+    }
+
+    @Test func aServerThatDisablesTheRelayClearsTheCachedSettings() async throws {
+        let container = try sharedContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        let disabled = TelemetryCapture()
+        TelemetryURLProtocol.handler = { request, _ in
+            let enabled = disabled.requests.isEmpty
+            return (
+                200,
+                Data(#"{"enabled":\#(enabled),"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8)
+            )
+        }
+        TelemetrySession(directory: container).signIn()
+        let app = process(in: container, session: URLSession(configuration: config))
+        defer { app.stop() }
+        app.refreshInterval = 0
+        await app.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(TelemetryConfigCache(directory: container).enabled(for: baseURL))
+
+        disabled.append(URLRequest(url: baseURL), Data())
+        await app.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(!TelemetryConfigCache(directory: container).enabled(for: baseURL))
+    }
+
+    @Test func cachedSettingsExpireAndIgnoreAClockSetBack() throws {
+        let container = try sharedContainer()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let clock = MovableClock()
+        let cache = TelemetryConfigCache(directory: container, now: { clock.now })
+        cache.accept(baseURL)
+        #expect(cache.enabled(for: baseURL))
+        clock.advance(TelemetryConfigCache.lifetime + 1)
+        #expect(!cache.enabled(for: baseURL))
+        cache.accept(baseURL)
+        clock.advance(-60)
+        #expect(!cache.enabled(for: baseURL))
+    }
+
     @Test func screenAndSessionStartBeforeConfigurationAreExportedOnceReady() async throws {
         let (telemetry, capture) = recordingTelemetry()
         defer { telemetry.stop() }
@@ -481,9 +613,6 @@ private final class TelemetryCapture: @unchecked Sendable {
         #expect(events.contains("session.end"))
     }
 
-    // URLSessionInstrumentation swizzles URLSession once per process, and the first configured instance
-    // keeps deciding header injection. This test stops its instance, so it runs after the tests that
-    // check traceparent; the suite is serialized and runs in declaration order.
     @Test func refreshKeepsRecordingAndSendsWhatTheReplacedRuntimeQueued() async throws {
         let capture = TelemetryCapture()
         let config = URLSessionConfiguration.ephemeral

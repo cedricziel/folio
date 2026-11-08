@@ -39,11 +39,14 @@ final class TelemetrySession: @unchecked Sendable {
 
     /// The App Group record in Folio's own processes. Anything else, such as a test runner, keeps the session in
     /// memory and never touches an installed app's state.
-    static let shared = TelemetrySession(
-        directory: Bundle.main.bundleIdentifier?.hasPrefix("com.cedricziel.folio") == true
+    static let shared = TelemetrySession(directory: sharedDirectory)
+
+    /// The App Group container in Folio's own processes, nil anywhere else.
+    static var sharedDirectory: URL? {
+        Bundle.main.bundleIdentifier?.hasPrefix("com.cedricziel.folio") == true
             ? FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedConfiguration.appGroup)
             : nil
-    )
+    }
 
     private let fileURL: URL?
     private let lockURL: URL?
@@ -66,6 +69,11 @@ final class TelemetrySession: @unchecked Sendable {
             }
             return session.id
         }
+    }
+
+    /// Whether the app holds a signed-in account, as far as the shared record knows.
+    func isSignedIn() -> Bool {
+        withState(write: false) { state, _ in state.signedIn }
     }
 
     /// Marks the shared record signed in. Called by the app once it holds a signed-in session.

@@ -24,8 +24,10 @@ public final class FolioTelemetry: @unchecked Sendable {
     private var lastConfiguration = Date.distantPast
     private var lastFlush = ContinuousClock.Instant.now - .seconds(60)
     private var flushPending = false
-    private var instrumentation: URLSessionInstrumentation?
+    /// A runtime started from cached settings, until this process's own settings request confirms it.
+    private var provisional: TelemetryRuntime?
     private let installationIdentity: InstallationIdentity
+    private let configCache: TelemetryConfigCache
     private let session: URLSession
     // Session and screen belong to the process, not to a runtime that each reconfigure replaces.
     private let sessions: TelemetrySession
@@ -38,21 +40,51 @@ public final class FolioTelemetry: @unchecked Sendable {
         session: URLSession? = nil,
         installationStore: any InstallationIDStore = KeychainInstallationIDStore()
     ) {
-        self.init(session: session, installationStore: installationStore, sessions: .shared)
+        self.init(session: session, installationStore: installationStore, sessions: .shared, configCache: .shared)
     }
 
-    init(session: URLSession?, installationStore: any InstallationIDStore, sessions: TelemetrySession) {
+    init(
+        session: URLSession?, installationStore: any InstallationIDStore, sessions: TelemetrySession,
+        configCache: TelemetryConfigCache = TelemetryConfigCache(directory: nil)
+    ) {
         installationIdentity = InstallationIdentity(store: installationStore)
+        self.configCache = configCache
         self.session =
             session ?? URLSession(configuration: .ephemeral, delegate: TelemetryRedirectGuard(), delegateQueue: nil)
         self.sessions = sessions
         _ = Self.contextInstalled
     }
 
-    /// Starts configuration without delaying app or extension startup.
+    /// Starts configuration without delaying app or extension startup. Settings this server accepted recently
+    /// start recording at once, so a new extension process traces its first request.
     public func start(baseURL: URL, tokenProvider: any BearerTokenProvider) {
         guard let ticket = reserve(baseURL: baseURL, tokenProvider: tokenProvider) else { return }
+        restore(baseURL: baseURL, tokenProvider: tokenProvider, ticket: ticket)
         Task { await configure(baseURL: baseURL, tokenProvider: tokenProvider, ticket: ticket) }
+    }
+
+    /// Never for another server or while signed out: the cache is keyed by server, and the shared session record
+    /// says whether the app still holds an account.
+    private func restore(baseURL: URL, tokenProvider: any BearerTokenProvider, ticket: UUID) {
+        guard current == nil, sessions.isSignedIn(), configCache.enabled(for: baseURL),
+            let installation = installationIdentity.resolve()
+        else { return }
+        let next = TelemetryRuntime(
+            baseURL: baseURL,
+            transport: TelemetryHTTPClient(baseURL: baseURL, provider: tokenProvider, session: session),
+            resource: Self.resource(installationID: installation))
+        let installed = lock.withLock {
+            guard generation == ticket, runtime == nil else { return false }
+            runtime = next
+            provisional = next
+            TelemetryInstrumentation.shared.route(to: self, tracer: next.tracer)
+            return true
+        }
+        guard installed else {
+            next.shutdown()
+            return
+        }
+        announce(next, replacing: nil)
     }
 
     /// Fetches the authenticated relay settings. Failures leave telemetry disabled.
@@ -80,6 +112,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 runtime?.transport.disable()
                 let previous = runtime
                 runtime = nil
+                provisional = nil
                 if let previous { Task.detached { previous.shutdown() } }
             }
             configuredURL = baseURL
@@ -99,12 +132,26 @@ public final class FolioTelemetry: @unchecked Sendable {
             let (data, _) = try await transport.data(for: request)
             let config = try JSONDecoder().decode(TelemetryConfiguration.self, from: data)
             guard config.enabled, config.serviceNamespace == "folio", config.endpoint == "/api/telemetry" else {
+                configCache.clear(baseURL)
                 let disabled = lock.withLock { () -> TelemetryRuntime? in
                     guard generation == ticket else { return nil }
-                    defer { runtime = nil }
+                    defer {
+                        runtime = nil
+                        provisional = nil
+                    }
                     return runtime
                 }
                 if let disabled { Task.detached { disabled.shutdown() } }
+                return
+            }
+            let confirmed = lock.withLock { () -> TelemetryRuntime? in
+                guard generation == ticket, let restored = provisional, restored === runtime else { return nil }
+                provisional = nil
+                return restored
+            }
+            if let confirmed {
+                remember(baseURL)
+                confirmed.event("folio.telemetry.configured")
                 return
             }
             guard let installation = installationIdentity.resolve() else {
@@ -120,31 +167,8 @@ public final class FolioTelemetry: @unchecked Sendable {
                 guard generation == ticket else { return false }
                 retired = runtime
                 runtime = next
-                if instrumentation == nil {
-                    instrumentation = URLSessionInstrumentation(
-                        configuration: .init(
-                            shouldRecordPayload: { _ in false },
-                            shouldInstrument: { [weak self] in self?.allows($0) ?? false },
-                            spanCustomization: { [weak self] request, builder in
-                                for (key, value) in self?.stamp() ?? [:] {
-                                    builder.setAttribute(key: key, value: value)
-                                }
-                                let route = TelemetryRequestPolicy.route(request.url)
-                                builder.setAttribute(
-                                    key: "url.full", value: TelemetryRequestPolicy.redactedURL(request.url))
-                                builder.setAttribute(key: "url.path", value: route)
-                                if let parent = OpenTelemetryApi.OpenTelemetry.instance.contextProvider.activeSpan {
-                                    builder.setParent(parent)
-                                }
-                            },
-                            shouldInjectTracingHeaders: { [weak self] in self?.allows($0) ?? false },
-                            tracer: next.tracer, semanticConvention: .stable
-                        ))
-                } else {
-                    var config = instrumentation!.configuration
-                    config.tracer = next.tracer
-                    instrumentation!.configuration = config
-                }
+                provisional = nil
+                TelemetryInstrumentation.shared.route(to: self, tracer: next.tracer)
                 return true
             }
             if let retired { Task.detached { retired.retire() } }
@@ -152,16 +176,9 @@ public final class FolioTelemetry: @unchecked Sendable {
                 next.shutdown()
                 return
             }
+            remember(baseURL)
             next.event("folio.telemetry.configured")
-            // What happened before export was possible: session boundaries, and the screen on show.
-            let (queued, screen) = lock.withLock { () -> ([SessionBoundary], TelemetryScreen?) in
-                defer { pendingBoundaries = [] }
-                return (pendingBoundaries, currentScreen)
-            }
-            for boundary in queued { next.boundary(boundary) }
-            if retired == nil, let screen {
-                next.uiEvent("folio.screen.view", attributes: stamp(["app.screen.name": .string(screen.rawValue)]))
-            }
+            announce(next, replacing: retired)
         } catch {
             // Optional observability must never block sign-in or document access. A server that refuses the
             // settings request (401, 403, no token) stops collection. Any other failure, such as a 5xx while the
@@ -169,28 +186,51 @@ public final class FolioTelemetry: @unchecked Sendable {
             let refused =
                 (error as? TelemetryHTTPStatus).map { [401, 403].contains($0.code) } ?? false
                 || (error as? URLError)?.code == .userAuthenticationRequired
+            if refused { configCache.clear(baseURL) }
             let stale = lock.withLock { () -> TelemetryRuntime? in
                 guard generation == ticket else { return nil }
                 guard refused else {
                     lastConfiguration = .distantPast
                     return nil
                 }
-                defer { runtime = nil }
+                defer {
+                    runtime = nil
+                    provisional = nil
+                }
                 return runtime
             }
             if let stale { Task.detached { stale.shutdown() } }
         }
     }
 
+    /// Caches accepted settings for the next process, unless the app has signed out in the meantime.
+    private func remember(_ baseURL: URL) {
+        if sessions.isSignedIn() { configCache.accept(baseURL) }
+    }
+
+    /// Sends what happened before export was possible: session boundaries, and the screen on show.
+    private func announce(_ next: TelemetryRuntime, replacing retired: TelemetryRuntime?) {
+        let (queued, screen) = lock.withLock { () -> ([SessionBoundary], TelemetryScreen?) in
+            defer { pendingBoundaries = [] }
+            return (pendingBoundaries, currentScreen)
+        }
+        for boundary in queued { next.boundary(boundary) }
+        if retired == nil, let screen {
+            next.uiEvent("folio.screen.view", attributes: stamp(["app.screen.name": .string(screen.rawValue)]))
+        }
+    }
+
     /// Stops collection immediately and discards queued exports on sign-out.
     public func stop() {
         _ = sessions.end(.signOut)
+        configCache.clear()
         let previous = lock.withLock {
             pendingBoundaries = []
             currentScreen = nil
             generation = UUID()
             configuredURL = nil
             configuredProvider = nil
+            provisional = nil
             let previous = runtime
             previous?.transport.disable()
             runtime = nil
@@ -377,9 +417,20 @@ public final class FolioTelemetry: @unchecked Sendable {
 
     var current: TelemetryRuntime? { lock.withLock { runtime } }
 
-    private func allows(_ request: URLRequest) -> Bool {
+    fileprivate func allows(_ request: URLRequest) -> Bool {
         guard let runtime = current else { return false }
         return TelemetryRequestPolicy.allows(request.url, origin: runtime.baseURL)
+    }
+
+    fileprivate func customize(_ request: URLRequest, _ builder: any SpanBuilder) {
+        for (key, value) in stamp() {
+            builder.setAttribute(key: key, value: value)
+        }
+        builder.setAttribute(key: "url.full", value: TelemetryRequestPolicy.redactedURL(request.url))
+        builder.setAttribute(key: "url.path", value: TelemetryRequestPolicy.route(request.url))
+        if let parent = OpenTelemetryApi.OpenTelemetry.instance.contextProvider.activeSpan {
+            builder.setParent(parent)
+        }
     }
 
     /// Which Folio process records: the app, or the extension named by its bundle identifier suffix.
@@ -431,6 +482,37 @@ public final class FolioTelemetry: @unchecked Sendable {
                 "device.manufacturer": .string("Apple"), "device.model.identifier": .string(model),
                 "host.arch": .string(architecture),
             ]))
+    }
+}
+
+/// URLSession is swizzled once per process, so one instrumentation serves whichever instance installed a runtime last.
+private final class TelemetryInstrumentation: @unchecked Sendable {
+    static let shared = TelemetryInstrumentation()
+
+    private let lock = NSLock()
+    private weak var owner: FolioTelemetry?
+    private var instrumentation: URLSessionInstrumentation?
+
+    private var target: FolioTelemetry? { lock.withLock { owner } }
+
+    func route(to owner: FolioTelemetry, tracer: Tracer) {
+        lock.withLock {
+            self.owner = owner
+            if let instrumentation {
+                var config = instrumentation.configuration
+                config.tracer = tracer
+                instrumentation.configuration = config
+                return
+            }
+            instrumentation = URLSessionInstrumentation(
+                configuration: .init(
+                    shouldRecordPayload: { _ in false },
+                    shouldInstrument: { [weak self] in self?.target?.allows($0) ?? false },
+                    spanCustomization: { [weak self] request, builder in self?.target?.customize(request, builder) },
+                    shouldInjectTracingHeaders: { [weak self] in self?.target?.allows($0) ?? false },
+                    tracer: tracer, semanticConvention: .stable
+                ))
+        }
     }
 }
 
