@@ -1854,6 +1854,19 @@
         "operationId": "uploadDocument",
         "parameters": [
           {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional nonnil UUID kept across retries of one upload. Repeating it with the same file returns the document the first request created, for 7 days",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
             "name": "X-Folio-Vault",
             "in": "header",
             "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
@@ -1875,7 +1888,7 @@
         },
         "responses": {
           "200": {
-            "description": "The created document",
+            "description": "The created document, or the one an earlier request with the same Idempotency-Key created",
             "content": {
               "application/json": {
                 "schema": {
@@ -1902,6 +1915,16 @@
           },
           "404": {
             "description": "The vault or resource is not visible"
+          },
+          "409": {
+            "description": "The Idempotency-Key belongs to a different upload, is still in progress, or its document was deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "413": {
             "description": "The upload exceeds the 50 MB limit",
