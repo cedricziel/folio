@@ -76,7 +76,7 @@ Alternative considered: compare the OAuth `issuer` from `/.well-known/oauth-auth
 | `.unavailable(server: url?, _)`, same, or `nil` | `.hold` | `.hold` |
 | `.unavailable(server: url, _)`, other | `.otherServer(host, web)` | n/a |
 
-An unparseable universal link, or a malformed payload that has a `webpageURL`, gives `.openInBrowser(URL)` in every state. Anything else gives `.ignore`. `.hold` keeps the item in the inbox, and it is decided again on every session change. Only `.signedOut` (an explicit sign-out included) discards it. This matches the spec's "Continuation waits for the same server's session" and "Continuation never changes the account" requirements.
+An unparseable universal link, or a malformed payload that has a `webpageURL`, gives `.openInBrowser(URL)` in every state. Anything else gives `.ignore`. `.hold` keeps the item in the inbox, and it is decided again on every session change. Only `AppModel.signOut()` (`inbox.clear()`) discards it. Any other transition to `.signedOut` (for example, restoration finding no credentials after `FolioSessionChanged`) re-decides the held item, which becomes `.signIn(prefill:)`. This matches the spec's "Continuation waits for the same server's session" and "Continuation never changes the account" requirements.
 
 `HandoffRoute` maps 1:1 onto existing workspace calls. Vault and document availability are not checked by the resolver. They need the network, and `WorkspaceViewModel.open` and the document destination already produce the spec'd "vault no longer available" and "Document unavailable" states. Two additions are needed: `open` takes a `pane` so the discussion sheet is presented, and a saved-view route reports a missing saved view.
 
@@ -86,9 +86,9 @@ Universal-link parsing (`HandoffLink.parse(URL)`) finds the last `/vaults/{uuid}
 
 ### 5. One continuation inbox per app, handled in one existing window
 
-`AppModel` owns a single `ContinuationInbox` (FolioKit, `@MainActor @Observable`), so there is one per app process, not one per window. The inbox holds at most one pending item (last one wins), tagged with the scene that received it. `RootView` installs `.onContinueUserActivity` for the three Folio types, `NSUserActivityTypeBrowsingWeb` and `CSSearchableItemActionType`; each calls `inbox.receive(_:scene:)`. The `WindowGroup` content gets `.handlesExternalEvents(preferring: ["*"], allowing: ["*"])`. With that, the system delivers each continuation to the frontmost existing window instead of opening a new one, on macOS and on iPad with several scenes. `RootView` stays mounted in every state (locked, signed out, signed in), unlike `InboxView`. The Spotlight handler moves out of `InboxView`.
+`AppModel` owns a single `ContinuationInbox` (FolioKit, `@MainActor @Observable`), so there is one per app process, not one per window. The inbox holds at most one pending item (last one wins), tagged with the scene that received it. A scene's identity is a per-window `@State private var sceneID = UUID()` in `RootView`, passed to `receive(_:scene:)` and `take(scene:…)`. `.onDisappear` calls `inbox.sceneClosed(sceneID)`. `RootView` installs `.onContinueUserActivity` for the three Folio types, `NSUserActivityTypeBrowsingWeb` and `CSSearchableItemActionType`; each calls `inbox.receive(_:scene:)`. The `WindowGroup` content gets `.handlesExternalEvents(preferring: ["*"], allowing: ["*"])`. With that, the system delivers each continuation to the frontmost existing window instead of opening a new one, on macOS and on iPad with several scenes. `RootView` stays mounted in every state (locked, signed out, signed in), unlike `InboxView`. The Spotlight handler moves out of `InboxView`.
 
-`take(scene:isLocked:session:)` returns `nil` while locked or while the decision is `.hold`. Otherwise it returns the item only to the scene that received it; if that scene has closed, any scene may take it. It removes the item on return, so each continuation is handled exactly once. The workspace in the receiving window takes it when `workspace.isReady` (the vault catalog has loaded), when `lock.isLocked` changes to false, and when the session changes. `OnboardingView` takes `.signIn` decisions to prefill the address. `AppModel.connected(to:)` re-decides, and the route is dropped if the server differs. `signOut()` calls `inbox.clear()`.
+`take(scene:isLocked:session:)` returns `nil` while locked or while the decision is `.hold`. Otherwise it returns the item only to the scene that received it; once `sceneClosed` has been called for that `sceneID`, any scene may take it. It removes the item on return, so each continuation is handled exactly once. The workspace in the receiving window takes it when `workspace.isReady` (the vault catalog has loaded), when `lock.isLocked` changes to false, and when the session changes. `OnboardingView` takes `.signIn` decisions to prefill the address. `AppModel.connected(to:)` re-decides, and the route is dropped if the server differs. `signOut()` calls `inbox.clear()`.
 
 Alternative considered: keep handlers in `InboxView` and add a lock check. Rejected because `InboxView` does not exist while locked or signed out, which is exactly when the item must be held.
 
@@ -177,7 +177,7 @@ Other teams can build Folio only if these come from variables:
 - **FolioKit** reads the app group and callback scheme from Info.plist, the way `SharedConfiguration` already reads `FolioKeychainGroup`. `UserDefaultsServerConfigStore.appGroup` and `OAuthConfiguration.callbackScheme` / `redirectURI` become lookups of `FolioAppGroup` / `FolioCallbackScheme`, falling back to today's literals when the key is absent (unit tests, SwiftPM). The OAuth redirect URI becomes `<scheme>:/oauth/callback`. The server registers clients dynamically, so it needs no change.
 - **`Config/Local.xcconfig.example`** documents the overrides a self-builder sets:
   - `FOLIO_DEVELOPMENT_TEAM`, `FOLIO_BUNDLE_ID`, `FOLIO_APP_GROUP`
-  - `FOLIO_RELEASE_SIGN_STYLE = Automatic`, with the six `FOLIO_PROFILE_*` and `FOLIO_RELEASE_IDENTITY` set empty
+  - `FOLIO_RELEASE_SIGN_STYLE = Automatic`, `FOLIO_RELEASE_IDENTITY = Apple Development`, and the six `FOLIO_PROFILE_*` set empty
   - `FOLIO_ASSOCIATED_DOMAINS = folio.example.com`
   - `FOLIO_APP_ENTITLEMENTS = Resources/Folio-Local.entitlements`
 
@@ -186,7 +186,7 @@ Other teams can build Folio only if these come from variables:
 - **Fastlane**: `generate_project` is a private helper in `apple/fastlane/Fastfile`. The official lanes and `lane :test` (and therefore CI) all call it. It runs the script only `if File.exist?("#{APPLE_DIR}/Folio/Config/Local.xcconfig")`, so CI never depends on a local file. Self-builders can run `xcodegen generate && apple/scripts/associated-domains.sh` directly.
 - **Verification**: a script compares `xcodebuild -showBuildSettings` for the Folio, FolioShare and FolioFileProvider targets in two cases:
   - without `Local.xcconfig`: the resolved values equal today's literals (`com.cedricziel.folio*`, team `WPW3QSLZ2F`, the match profiles, `Resources/Folio.entitlements`)
-  - with `Config/Local.xcconfig.example` copied in: the overridden values
+  - with `Config/Local.xcconfig.example` copied in: the overridden values, with Release resolving to Automatic signing, `Apple Development` and empty profile specifiers
 
   CI runs the first case.
 - Private/LAN servers cannot be fetched by Apple's CDN. The README documents `applinks:host?mode=developer` for development-signed builds with Associated Domains Development enabled on the device.
