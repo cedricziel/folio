@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block screen %}saved_views{% endblock %}
 {% block title %}Saved views - Folio{% endblock %}
 {% block content %}
 <section class="page">
@@ -7,7 +8,7 @@
   {% if views.is_empty() %}<p class="lede">No saved views yet. Save a search and its filters to use them on any device.</p>{% endif %}
   <div class="f-list">
     {% for view in views %}
-    <a class="f-row" href="{{ "/saved-views"|vault_url }}/{{ view.id }}">
+    <a class="f-row" data-folio-action="saved_view.open" href="{{ "/saved-views"|vault_url }}/{{ view.id }}">
       <div class="row-main"><h2 class="f-row-title">{{ view.name }}</h2><p class="f-row-sub">{% if view.visibility == ViewVisibility::Shared %}Shared with this vault{% else %}Only you{% endif %}</p></div>
     </a>
     {% endfor %}

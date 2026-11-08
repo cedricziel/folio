@@ -29,6 +29,18 @@ On shutdown (SIGTERM or Ctrl+C) Folio flushes pending data before exiting.
   `http.request.method`, `http.route`, `url.path`,
   `http.response.status_code` and `user_agent.original`. A W3C `traceparent`
   header from the caller is continued.
+- `GET /`, `GET /documents`, `GET /documents/search` and the search palette's
+  `GET /api/documents/search` spans also carry
+  `folio.browse.scope` (`inbox`, `all` or `search`) and
+  `folio.browse.filters`, the sorted kinds of filter in use (`reviewed`,
+  `document_date`, `correspondent`, `document_type`, `tag`, `text`). Filter
+  values are never recorded, and a taxonomy filter counts only when it is an ID,
+  as the page itself ignores anything else.
+- HTML responses, error pages included, carry
+  `Server-Timing: traceparent;desc="00-<trace>-<span>-<flags>"`, naming the
+  request span and its sampled flag so a browser page load can join its trace.
+  JSON API responses don't. A back or forward navigation ignores it, since the
+  browser may replay a cached response.
 - One `job {type}` span per background job attempt with `job.id`,
   `job.type`, `job.attempt` and `document.id`; work done by the job is nested
   inside it.
@@ -136,3 +148,51 @@ Keep read/query credentials separate. SDK exporters send actual OTLP requests;
 Swift SDKs use protobuf and browser SDKs use JSON. Neither client receives the
 SignalDB key. The Swift transport obtains the current Folio OAuth token and
 stops sending after sign-out.
+
+## Client sessions, screens and actions
+
+Browser telemetry groups a person's activity into sessions. While a session is
+live, every browser span and log record carries `session.id`, a random UUID.
+It is never a resource or metric attribute and is never sent to the server
+outside telemetry export.
+
+- **Lifetime.** A session ends after 30 minutes without activity, after 4
+  hours, or on sign-out. Screen views and actions count as activity; network
+  requests and Turbo frame fetches don't. A clock set back ends the session.
+- **Sharing.** Tabs share one session through `localStorage`. With storage
+  blocked, each page keeps its own.
+- **Boundaries.** `session.start` and `session.end` log events mark them.
+  `session.end` carries `folio.session.end_reason` (`timeout`,
+  `max_duration` or `sign_out`). A session that follows a `timeout` or
+  `max_duration` has `session.previous_id`. Sign-out flushes `session.end`
+  best-effort before the logout request; the sign-in page then forgets the
+  session, so the next one isn't linked.
+- **Screens.** Each page declares its screen in
+  `<meta name="folio-screen">`. A `folio.screen.view` log event with
+  `app.screen.name` fires when the screen changes, and later spans and logs
+  carry the current `app.screen.name`. Names come from a fixed list in
+  `web/telemetry-session.mjs`; anything else becomes `other`.
+- **Actions.** Elements marked `data-folio-action`, and scripts that dispatch a
+  `folio:action` event, record a `folio.action` log event with
+  `folio.action.name`; uploads add `folio.upload.source` (`picker` or `drop`).
+  Names outside the list are ignored. Nothing else is read from the page.
+  Logs and traces are flushed right away only for forms that leave the page
+  and for sign-out; everything else goes out with the next batch.
+- **Limits.** A repeated screen within a second is dropped, and each page sends
+  at most 60 screen and action events per minute. The excess is counted in
+  `folio.telemetry.ui_events.dropped`.
+- **Page loads.** The first `folio.navigation` span of a full page load uses
+  the server's `Server-Timing` traceparent as its parent, so it shares the
+  server request's trace. Turbo visits already propagate `traceparent`.
+
+The attribute names follow OpenTelemetry semantic conventions v1.45.0, where
+`session.*` and `app.screen.name` are still in Development.
+
+To follow one person's session in SignalDB (`homelab`/`apps`):
+
+1. Find recent sessions: log events named `session.start` for
+   `service.name=folio-web`.
+2. List the breadcrumbs: log records with that `session.id`, ordered by time
+   (`folio.screen.view`, `folio.action`, `session.end`).
+3. Reach the server: take the trace IDs of spans with that `session.id` and
+   look up `service.name=folio-server` spans with the same trace IDs.

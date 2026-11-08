@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block screen %}document.detail{% endblock %}
 {% import "partials/icons.html" as icons %}
 
 {% block title %}{{ document.title }} - Folio{% endblock %}
@@ -14,15 +15,15 @@
             </div>
             <div class="doc-actions">
                 {% if document.file_path.is_some() %}
-                <a href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
+                <a data-folio-action="document.download" href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
                 {% if document|can_edit_document %}
-                <form action="{{ "/documents"|vault_url }}/{{ document.id }}/reprocess" method="post" data-turbo="false">
+                <form data-folio-action="document.reprocess" action="{{ "/documents"|vault_url }}/{{ document.id }}/reprocess" method="post" data-turbo="false">
                     <button type="submit" class="f-btn {% if failed %}f-btn-primary{% else %}f-btn-quiet{% endif %}">{{ icons::refresh() }} Read again</button>
                 </form>
                 {% endif %}
                 {% endif %}
                 {% if document|can_edit_document %}
-                <form action="{{ "/documents"|vault_url }}/{{ document.id }}/delete" method="post"
+                <form data-folio-action="document.delete" action="{{ "/documents"|vault_url }}/{{ document.id }}/delete" method="post"
                       data-controller="confirm"
                       data-confirm-message-value="Move '{{ document.title }}' to Trash? You can restore it later."
                       data-action="submit->confirm#confirm">
@@ -64,7 +65,7 @@
                 <dl class="f-meta-list">
                     <dt>From</dt>
                     <dd>
-                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">
+                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">
                             <select name="correspondent_id" class="select" aria-label="From" {% if !(document|can_edit_document) %}disabled{% endif %} data-hotkey="edit" onchange="this.form.requestSubmit()">
                                 {% match correspondent %}{% when Some with (corr) %}{% if corr.deleted_at.is_some() %}<option value="{{ corr.id }}" selected disabled>{{ corr.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
@@ -77,7 +78,7 @@
 
                     <dt>Type</dt>
                     <dd>
-                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">
+                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">
                             <select name="document_type_id" class="select" aria-label="Type" {% if !(document|can_edit_document) %}disabled{% endif %} onchange="this.form.requestSubmit()">
                                 {% match document_type %}{% when Some with (dtype) %}{% if dtype.deleted_at.is_some() %}<option value="{{ dtype.id }}" selected disabled>{{ dtype.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
@@ -91,7 +92,7 @@
                     <dt>Document date</dt>
                     <dd>
                         {% if document|can_edit_document %}
-                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">
+                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">
                             <input type="date" name="document_date" class="input" aria-label="Document date" min="0001-01-01" max="9999-12-31" value="{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}{% endmatch %}">
                             <button type="submit" class="f-btn f-btn-quiet">Save date</button>
                             <button type="submit" class="f-btn f-btn-quiet" name="clear" value="true">Clear date</button>
@@ -112,7 +113,7 @@
                         </span>
                         {% when None %}<span class="f-meta">Not reviewed</span>{% endmatch %}
                         {% if document|can_edit_document %}
-                        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/review" method="post" data-turbo="false" data-controller="document-review" data-action="submit->document-review#submit">
+                        <form data-folio-action="document.review" action="{{ "/documents"|vault_url }}/{{ document.id }}/review" method="post" data-turbo="false" data-controller="document-review" data-action="submit->document-review#submit">
                             <input type="hidden" name="reviewed" value="{{ document.reviewed_at.is_none() }}">
                             <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">{% if document.reviewed_at.is_some() %}Mark unreviewed{% else %}Mark reviewed{% endif %}</button>
                             <p role="alert" data-document-review-target="error" hidden></p>
