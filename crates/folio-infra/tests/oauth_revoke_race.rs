@@ -104,6 +104,8 @@ enum Revoke {
     Disconnect,
     /// An already rotated refresh token comes back, which ends its grant.
     Replay,
+    /// The client revokes a token of the grant (RFC 7009).
+    TokenRevocation,
 }
 
 async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>, how: Revoke) {
@@ -136,6 +138,7 @@ async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>, how
                 .await
                 .unwrap(),
             Revoke::Replay => assert!(rotate(&server, &client.client_id, &first).await.is_none()),
+            Revoke::TokenRevocation => server.revoke(&first, &client.client_id).await.unwrap(),
         }
         revoked.store(true, Ordering::SeqCst);
         let last = rotator
@@ -224,6 +227,23 @@ async fn postgres_refresh_rotation_never_outlives_a_replay() {
         return;
     };
     refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::Replay).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_refresh_rotation_never_outlives_a_token_revocation() {
+    let (_dir, db) = common::sqlite_database().await;
+    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::TokenRevocation)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn postgres_refresh_rotation_never_outlives_a_token_revocation() {
+    let Some((_container, db)) = common::postgres_database("PostgreSQL (OAuth revoke race)").await
+    else {
+        return;
+    };
+    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::TokenRevocation)
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

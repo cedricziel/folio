@@ -138,8 +138,10 @@ pub trait AuthStore: Send + Sync {
     async fn used_refresh_grant(&self, token_hash: &str) -> Result<Option<String>, AuthError>;
     /// Deletes every access and refresh token of a grant.
     async fn revoke_grant(&self, grant_id: &str) -> Result<(), AuthError>;
-    /// Revokes the grant of an access or refresh token issued to `client_id`.
-    /// Unknown tokens and tokens of other clients are ignored.
+    /// Revokes the grant of an access or refresh token issued to `client_id`,
+    /// serialized with that client's token exchanges like
+    /// [`Self::revoke_client_tokens`]. Unknown tokens and tokens of other
+    /// clients are ignored.
     async fn revoke_token(&self, token_hash: &str, client_id: &str) -> Result<(), AuthError>;
 
     async fn insert_oidc_login(&self, login: OidcLogin) -> Result<(), AuthError>;

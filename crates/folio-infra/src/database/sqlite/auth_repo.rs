@@ -697,24 +697,29 @@ impl AuthStore for SqliteAuthStore {
                 "DELETE FROM oauth_refresh_tokens WHERE token_hash = $1",
             ),
         ];
+        // Rotations of the grant hold the same lock, so none can outlive this.
+        let mut tx = self.begin_locked(client_id).await?;
         for (select, delete) in lookups {
             let found: Option<String> = sqlx::query_scalar(select)
                 .bind(token_hash)
                 .bind(client_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await
                 .map_err(err)?;
             if let Some(grant_id) = found {
                 // Tokens from before grants existed are revoked on their own.
                 sqlx::query(delete)
                     .bind(token_hash)
-                    .execute(&self.pool)
+                    .execute(&mut *tx)
                     .await
                     .map_err(err)?;
-                return self.revoke_grant(&grant_id).await;
+                if !grant_id.is_empty() {
+                    Self::delete_grant(&mut tx, &grant_id).await?;
+                }
+                break;
             }
         }
-        Ok(())
+        tx.commit().await.map_err(err)
     }
 
     async fn insert_oidc_login(&self, login: OidcLogin) -> Result<(), AuthError> {
