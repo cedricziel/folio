@@ -10,11 +10,12 @@ public enum DocumentTransfer {
     public static let fileTypes: [UTType] = [.pdf, .png, .jpeg, .heic, .tiff]
 
     public static func contentType(mimeType: String?, filename: String?) -> UTType {
-        if let mimeType, let type = UTType(mimeType: mimeType.lowercased()), type != .data {
+        // Unknown MIME types and extensions come back as dynamic types, which say nothing about the content.
+        if let mimeType, let type = UTType(mimeType: mimeType.lowercased()), type != .data, !type.isDynamic {
             return type
         }
         let ext = (filename.map { ($0 as NSString).pathExtension } ?? "").lowercased()
-        if !ext.isEmpty, let type = UTType(filenameExtension: ext) {
+        if !ext.isEmpty, let type = UTType(filenameExtension: ext), !type.isDynamic {
             return type
         }
         return .data
