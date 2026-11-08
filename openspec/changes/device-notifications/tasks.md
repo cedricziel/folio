@@ -2,90 +2,129 @@
 
 Phase 2 lands as stacked PRs:
 
-- **Server** (groups 1–7) on `claude/feat-359-device-notifications`
-- **Apple** (groups 8–10) on a branch stacked on it
+- **Server** (groups 1–7) on `claude/feat-359-device-notifications`, rebased onto the #306 fix before merge
+- **Apple** (groups 8–9) on a branch stacked on it
 
 Each task is one semantic commit, and each test below is written first and seen to fail.
 
 ## 1. Domain model and storage
 
-- [ ] 1.1 Add `PushDevice`, `NotificationPreferences` (defaults: processed off, needs_review on, failed on, show_titles off, vaults all), `NotificationKind` and `PendingNotification` to folio-core models. Verify with a unit test for the preference defaults and JSON round-trip.
-- [ ] 1.2 Add the `PushDeviceRepository` port: `upsert`, `list_for_user`, `delete`, `delete_for_grants`, `clear_token`, `insert_pending` (idempotent), `due_devices`, `take_pending`, `state`/`update_state`, `prune_pending`. Add migration `20261108160000_push_devices.sql` in `migrations/sqlite/` and `migrations/postgres/`. Verify with repository tests on SQLite and Postgres: upsert replaces tokens, a token moving to another user deletes the old row, a duplicate `insert_pending` is a no-op, and deleting a user cascades.
+- [ ] 1.1 Add the folio-core models:
+  - `PushDevice`, with per-token registration times
+  - `NotificationPreferences`, defaulting to processed off, needs_review and failed on, scope `mine` and vaults `all`
+  - `NotificationKind`, `PendingNotification` and `AlertSummary`
 
-## 2. Grant ownership and revocation
+  Verify with unit tests for the defaults and a JSON round-trip.
 
-- [ ] 2.1 Expose `grant_id` on `folio_auth::AuthContext` from the access-token row. Verify with a validator test that an OAuth bearer carries its grant, and a personal token none.
-- [ ] 2.2 Add `GrantRevocationListener` (folio-auth trait) and call it from `revoke_grant`, `revoke_token`, `revoke_client_tokens` and the refresh-reuse path. Implement it in folio-core with `delete_for_grants`. Verify with a test that revoking through `/oauth/revoke` and the Security page deletes the grant's devices.
-- [ ] 2.3 Add `grant_is_live(grant_id)` to the auth store. Verify with a test that it is false after revocation and after every token in the grant has expired.
+- [ ] 1.2 Add the `PushDeviceRepository` port:
+  - devices: `upsert`, `list_for_user`, `delete`, `clear_token`
+  - first outcomes: `record_first_outcome`, which reports whether the row was new
+  - pending notifications: `insert_pending` and `prune`
+  - the sender's lease: `claim_due_devices`, `take_pending` and `release`
+  - device state
+
+  Add migration `20261108160000_push_devices.sql` to `migrations/sqlite/` and `migrations/postgres/`. Verify with repository tests on SQLite and Postgres:
+  - an upsert updates only the sent token's registration time
+  - a token moving to another user deletes the old row
+  - `record_first_outcome` is true once
+  - `(device, document, kind)` dedupes
+  - two concurrent claims never return the same device
+  - deleting a user or a document cascades
+
+## 2. Authorization ownership
+
+- [ ] 2.1 Expose `grant_id` on `AuthContext`. Verify with a validator test: an OAuth bearer has its grant, and a personal token has none.
+- [ ] 2.2 Delete devices inside the auth-store revocation transactions: by `grant_id` in `revoke_grant` and `revoke_token`, which covers refresh reuse, and by `(user_id, client_id)` in `revoke_client_tokens`. Verify with SQLite and Postgres tests for `/oauth/revoke`, Security-page revocation and refresh-token reuse.
+- [ ] 2.3 Add `grant_is_live(grant_id)`, which ignores used and expired tokens. Verify with tests: a grant with only `used = 1` refresh tokens is not live.
 
 ## 3. Device API (JSON)
 
-- [ ] 3.1 Add `PUT /api/devices/{installation_id}` with utoipa docs. It returns `201` or `200`, `403` for personal tokens and cookies, and `422` for a bad platform, environment, token or vault, and the response includes `push_available`. Verify with API tests for each status code.
-- [ ] 3.2 Add `GET /api/devices` (no tokens in the body) and an idempotent `DELETE /api/devices/{installation_id}` (`204`, never touching another person's device). Verify with API tests.
-- [ ] 3.3 Add `POST /api/devices/{installation_id}/test` (`202`, `409` without push, `429` after one test a minute). Verify with API tests using a recording fake transport.
+- [ ] 3.1 Add `PUT /api/devices/{installation_id}`. It responds `201` or `200` with `push_available`, `403` for a personal token or cookie, and `422` for a bad platform, environment, token, locale or vault. Verify with an API test for each status.
+- [ ] 3.2 Add `GET /api/devices`, which returns no tokens and reports `push_available`, and an idempotent `DELETE /api/devices/{installation_id}`. Verify with API tests, including that deleting another person's installation ID leaves it unchanged.
+- [ ] 3.3 Add `POST /api/devices/{installation_id}/test`, responding `202`, `409` or `429`. Verify with API tests against a recording transport.
 - [ ] 3.4 Regenerate `openapi/openapi.json`. Verify that the OpenAPI drift test passes.
 
-## 4. Planning notifications from the outbox
+## 4. Planning from the outbox
 
-- [ ] 4.1 Implement `NotificationPlanner: EventConsumer`:
-  - `Processed` with `reviewed_at` gives `processed`; without it, `needs_review`
-  - `document.processing.*.failed` gives `failed`
-  - `retry_scheduled` is ignored
+- [ ] 4.1 Implement `NotificationPlanner: EventConsumer`. Verify with unit tests over in-memory fakes.
+  - It handles `Processed` with origin User or Workflow, and `…failed` envelopes.
+  - On a first outcome it records the outcome and inserts pending rows in one transaction.
+  - It offers a document only to devices registered at or before the document's creation.
+  - Its audience is the uploader under `mine`, and `can(EditDocument { uploaded_by })` under `editable`, in the vault from `origin_vault()`.
 
-  Insert pending rows for devices with the kind enabled, a role in the vault and a matching vault filter. Verify with unit tests over an in-memory repository and fake `AccessPolicy`, covering each kind, a retry, a revoked vault, a group member, the vault filter and duplicate delivery.
+  The tests cover:
+  - first upload
+  - reprocess and re-embed of a notified document
+  - re-embed of a document older than the device
+  - imports
+  - a retry that is still scheduled
+  - a viewer under `editable`
+  - group edit access
+  - the vault filter
+  - duplicate delivery
 
-- [ ] 4.2 Wire the planner into the dispatcher consumers in `folio-app/src/main.rs`. Verify with an integration test that uploads, processes with the local pipeline (no AI provider), and finds one pending `needs_review` row per device.
+- [ ] 4.2 Wire the planner into the dispatcher in `folio-app/src/main.rs`. Verify with an integration test: upload, process with the local pipeline and no AI provider, and find one pending `needs_review` row. Reprocessing the document adds none.
 
-## 5. Sending, coalescing and limits
+## 5. Sending
 
-- [ ] 5.1 Add the `PushTransport` port and the `none` adapter, plus the pure payload builder (generic localized text, `thread-id`, collapse ID within 64 bytes, category, `mutable-content` only with `show_titles`, document ID only for a single document, never a title). Verify with unit tests, including one that the serialized payload never contains the document title.
-- [ ] 5.2 Implement `NotificationSender`:
-  - quiet window and 5-minute ceiling
-  - hourly cap with carry-over
-  - grant liveness and vault role re-check
-  - dropping reviewed `needs_review` rows
-  - a 24 h prune
+- [ ] 5.1 Add the `PushTransport` port, the `none` adapter, and the alert templates. The templates produce English and German count text, `thread-id` only for a single vault, `vault` and `document` only when single, and the category. Verify with unit tests, including that a serialized payload never contains the document title or vault name.
+- [ ] 5.2 Implement `NotificationSender`. Verify with tests on a controllable clock and a recording transport:
+  - 200 outcomes in 3 minutes give at most 2 alerts
+  - two vaults give one alert without a `thread-id`
+  - the cap carries outcomes over
+  - a reviewed, trashed or no-longer-editable document is dropped
+  - a revoked grant sends nothing and deletes the device
+  - two sender instances send exactly once
 
-  Verify with tests on a controllable clock and a recording transport: 200 outcomes in 3 minutes give at most 2 alerts, the cap holds and carries over, reviewing before the send drops the row, and a revoked grant sends nothing and deletes the device.
+  The behavior under test:
+  - claimed device leases
+  - the quiet window and the 5-minute ceiling
+  - one alert across vaults
+  - the hourly cap
+  - checks for grant liveness, edit access, trash and review
+  - priority 10 for a single document or a failure
+  - the batch collapse ID
+  - the 24 h prune
 
-- [ ] 5.3 Add response handling per design Decision 7: token clearing on 410 using the timestamp, 400 token errors, `ExpiredProviderToken` re-sign, unhealthy transport on other 403s, 429 and 5xx backoff. Verify with a table-driven test over the transport outcomes.
-- [ ] 5.4 Add widget reload pushes (one per device every 15 minutes at most, `content-changed` only, outside the alert cap). Verify with a sender test where three Inbox changes in a minute give one widgets push.
+- [ ] 5.3 Handle APNs responses per design Decision 7, including the per-token 410 comparison. Verify with a table-driven test, including a dead alert token whose device refreshed its widget token later.
+- [ ] 5.4 Send widget reload pushes, at most one per device every 15 minutes and outside the alert cap. Verify with a sender test: three Inbox changes in a minute give one `widgets` push.
 
-## 6. Transports
+## 6. APNs transport
 
 - [ ] 6.1 Add the `ApnsTransport` adapter:
-  - ES256 provider token via `p256`, cached and re-signed after 50 minutes, and immediately on key change
-  - HTTP/2 client, sandbox and production hosts
-  - all headers per Decision 6
+  - an ES256 provider token, re-signed after 50 minutes or when the key changes
+  - HTTP/2 to the sandbox and production hosts, or to `push.apns.base_url` (h2c)
+  - the headers from Decision 6
 
-  Verify with unit tests on the JWT claims and signature, and with an h2c stub server test that checks headers and the mapping of 200, 410, 400 and 403 responses.
+  Verify with unit tests on the JWT, and with an in-process h2c stub test that checks headers and the mapping of 200, 410, 400 and 403.
 
-- [ ] 6.2 Add the `RelayTransport` adapter for the relay contract in design Decision 1. Verify with a stub HTTP server test of request shape, bearer token and status mapping.
+## 7. Settings and end-to-end
 
-## 7. Settings
-
-- [ ] 7.1 Add `PushConfig` and the `push.*` `SETTINGS` entries with `_FILE` secrets and `Redacted` Debug, and document them in `docs/configuration.md`. Verify with config parsing tests and the existing docs-sync test.
-- [ ] 7.2 Add encrypted settings values (`enc:v1:` via `SecretBox`), and an effective push config with a 5 s cache where the database wins and empty database secrets fall back to the config. Verify with unit tests for encrypted and plain round-trips and for precedence.
-- [ ] 7.3 Add the "Push notifications" card on `/settings`, `POST /settings/push` (PKCS#8 P-256 validation, admin only) and `POST /settings/push/test`. The card shows key presence, sources, the last credential error and the device count. Verify with route tests for save, a bad key, non-admin `403` and the Turbo Stream response, and with a new `e2e/` Playwright spec for the card.
-- [ ] 7.4 Run `make format`, `make lint`, `make test` (SQLite and Postgres) and `make e2e`. Run the `verify` skill on an ephemeral instance, with registration and test send against the h2c stub as the APNs base URL. Extend `.claude/skills/verify` with the push checks.
+- [ ] 7.1 Add `PushConfig` and the `push.*` `SETTINGS` entries: a `_FILE` key, `Redacted` Debug, and `base_url` from configuration only. Document them in `docs/configuration.md`. Verify with config tests and the docs-sync test.
+- [ ] 7.2 Add encrypted settings values (`enc:v1:` with `SecretBox`), refused when `auth.secret_key` comes from the database. Add the effective push config with a 5 s cache. Verify with unit tests for the round-trip, the refusal and precedence.
+- [ ] 7.3 Add the "Push notifications" card, `POST /settings/push` (PKCS#8 P-256 validation, admin only) and `POST /settings/push/test`. The card shows the stub URL warning. Verify with route tests for save, a bad key, the refusal and non-admin `403`.
+- [ ] 7.4 Add an `e2e/` Playwright spec: start an h2c APNs stub, run Folio with `FOLIO_PUSH__TRANSPORT=apns` and `FOLIO_PUSH__APNS__BASE_URL` pointing at it, sign in through OAuth with PKCE, register a device, upload a document and assert that the stub receives one alert without the title. Verify with `make e2e`.
+- [ ] 7.5 Run `make format`, `make lint`, `make test` on SQLite and Postgres, and `make e2e`. Run the `verify` skill on an ephemeral instance against the stub, and extend `.claude/skills/verify` with the push checks.
 
 ## 8. Apple: registration and permission
 
-- [ ] 8.1 Copy the regenerated OpenAPI into `apple/FolioKit/Sources/FolioAPI/openapi.json`, and add `registerDevice`, `listDevices`, `deleteDevice` and `sendTestNotification` to `FolioService`. Verify with FolioKit tests against `MockFolioService` and a URLProtocol stub.
-- [ ] 8.2 Add `PushRegistration`: build-config environment, re-registering on token, preference or server change, and deleting before revoke in `AppModel.signOut()` and the reconnect path. Add `aps-environment` to `project.yml`. Verify with unit tests on a fake registrar and service, including that sign-out sends `DELETE` before revoke and clears delivered notifications.
-- [ ] 8.3 Add the permission flow: `.provisional` on first sign-in, and the full prompt with a pre-prompt after the first finished upload or scan. Add Settings → Notifications with the three toggles, the title opt-in (with the App lock note), a test button, and the `push_available: false` explanation. Verify with view-model unit tests.
+- [ ] 8.1 Copy the regenerated OpenAPI into `apple/FolioKit/Sources/FolioAPI/openapi.json`, and add `registerDevice`, `listDevices`, `deleteDevice` and `sendTestNotification` to `FolioService`. Verify with FolioKit tests against `MockFolioService`.
+- [ ] 8.2 Add `PushRegistration`:
+  - environment from the build configuration, plus locale and preferences
+  - re-registers when the token, preferences or server change
+  - all token refreshes go through the existing provider under `oauthRefreshLock`
+  - `DELETE` before revoke in `AppModel.signOut()` and the reconnect path, then delivered notifications are cleared
+
+  Add `aps-environment` to `project.yml`. Verify with unit tests on fakes, including the order of `DELETE` and revoke on sign-out.
+
+- [ ] 8.3 Add the permission flow (`.provisional` on first sign-in, the full prompt after the first finished upload or scan) and Settings → Notifications (three toggles, scope, test button and an explanation of `push_available: false`). Verify with view-model tests.
 
 ## 9. Apple: handling and actions
 
-- [ ] 9.1 Add `NotificationRouter`: categories `FOLIO_DOCUMENT` (Open, Mark reviewed with `.authenticationRequired`) and `FOLIO_INBOX`, with `hiddenPreviewsBodyPlaceholder`. Taps route through `IntentRouter` to the document or Inbox, falling back to the Inbox on no access. `willPresent` suppresses the banner on the matching Inbox. Verify with unit tests that parse sample payloads into routes and actions.
-- [ ] 9.2 Make Mark reviewed call the review endpoint and remove the delivered notification. Verify with a unit test on the mock service.
-
-## 10. Apple: title opt-in extension
-
-- [ ] 10.1 Add the `FolioNotificationService` target (shared keychain group and App Group). It fetches the document title for `mutable-content` alerts within 5 s and falls back to the generic text. Verify with a unit test of its content builder over a mock service that succeeds, fails and times out.
-- [ ] 10.2 Confirm that Apple CI (the Swift gate) is green and that `make format`, `make lint` and `make test` still pass for the server.
+- [ ] 9.1 Add `NotificationRouter`: categories `FOLIO_DOCUMENT` (Open, and Mark reviewed with `.authenticationRequired`) and `FOLIO_INBOX`, with `hiddenPreviewsBodyPlaceholder`. It routes through `IntentRouter`, falling back to the Inbox, and `willPresent` suppresses the banner on the matching Inbox. Verify with unit tests that parse sample payloads.
+- [ ] 9.2 Make Mark reviewed call the review endpoint and remove the delivered notification. Verify with a unit test on the mock service, and confirm that Apple CI (the Swift gate) passes.
 
 ## Workflow follow-up
 
-- Archive the change as the last commit of the final PR (`openspec archive device-notifications`).
-- Follow-up issues: background-refresh fallback for `push_available: false`, Inbox badge, and the project-run relay service.
+- Archive the change as the last commit of the final PR.
+- Follow-ups: the relay adapter once the owner decides, the Inbox badge (absolute count, reset on open), and background refresh for widgets and the badge.
