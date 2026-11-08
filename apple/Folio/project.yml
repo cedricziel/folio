@@ -8,7 +8,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: 0.10.0
+    MARKETING_VERSION: 0.11.0
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: 'YES'
     DEVELOPMENT_TEAM: WPW3QSLZ2F
@@ -181,12 +181,14 @@ targets:
             - NSExtensionFileProviderActionIdentifier: com.cedricziel.folio.keep-downloaded
               NSExtensionFileProviderActionName: Keep Downloaded
               NSExtensionFileProviderActionActivationRule: >-
-                SUBQUERY(fileproviderItems, $item, $item.userInfo.canKeepDownloaded == YES
-                AND $item.userInfo.keptDownloaded == NO).@count > 0
+                SUBQUERY(fileproviderItems, $item,
+                $item.userInfo.canKeepDownloaded == YES AND
+                $item.userInfo.keptDownloaded == NO).@count > 0
             - NSExtensionFileProviderActionIdentifier: com.cedricziel.folio.allow-eviction
               NSExtensionFileProviderActionName: Don't Keep Downloaded
               NSExtensionFileProviderActionActivationRule: >-
-                SUBQUERY(fileproviderItems, $item, $item.userInfo.keptDownloaded == YES).@count > 0
+                SUBQUERY(fileproviderItems, $item, $item.userInfo.keptDownloaded
+                == YES).@count > 0
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.fileprovider
