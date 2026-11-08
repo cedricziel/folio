@@ -75,6 +75,17 @@ jobs:
           rm "$local_entitlements"
           FOLIO_ASSOCIATED_DOMAINS= scripts/associated-domains.sh
           test ! -e "$local_entitlements"
+      - name: Follow the self-build checklist with the example configuration
+        run: |
+          cleanup() {
+            rm -f Folio/Config/Local.xcconfig Folio/Resources/Folio-Local.entitlements
+            (cd Folio && xcodegen generate --quiet)
+          }
+          trap cleanup EXIT
+          cp Folio/Config/Local.xcconfig.example Folio/Config/Local.xcconfig
+          cd Folio && xcodegen generate && ../scripts/associated-domains.sh && cd ..
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains' Folio/Resources/Folio-Local.entitlements
+          scripts/check-build-settings.sh --local
       - name: Test navigation on iPhone and iPad
         timeout-minutes: 25
         run: |

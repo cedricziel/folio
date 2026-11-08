@@ -150,7 +150,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 8. Self-builder docs
 
-- [ ] 8.1 Write `apple/README.md` "Handoff and Universal Links". Cover:
+- [x] 8.1 Write `apple/README.md` "Handoff and Universal Links". Cover:
   - Handoff requirements (same Apple Account, Bluetooth and Wi-Fi, Handoff enabled)
   - that the official App Store build supports app→app and app→browser but **not** browser→app, and why
   - an honest self-builder checklist:

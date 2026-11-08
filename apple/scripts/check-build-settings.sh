@@ -2,6 +2,7 @@
 # Checks that the generated Folio project resolves the identifiers it should.
 #
 #   check-build-settings.sh            official build: no Local.xcconfig, today's identifiers
+#   check-build-settings.sh --local    your Config/Local.xcconfig: the values it sets
 #   check-build-settings.sh --example  Config/Local.xcconfig.example copied in as Local.xcconfig
 #
 # Needs xcodegen and Xcode. Regenerates apple/Folio/Folio.xcodeproj.
@@ -12,18 +13,23 @@ local_config="$folio_dir/Config/Local.xcconfig"
 mode="${1:-official}"
 failures=0
 
+# Prints KEY's value from Local.xcconfig, or DEFAULT when the file does not set it.
+local_value() {
+    local value
+    value="$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*\\(.*\\)$/\\1/p" "$local_config" | tail -n 1)"
+    if grep -q "^[[:space:]]*$1[[:space:]]*=" "$local_config"; then
+        printf '%s' "${value%"${value##*[![:space:]]}"}"
+    else
+        printf '%s' "$2"
+    fi
+}
+
 case "$mode" in
 official)
     if [ -e "$local_config" ]; then
-        echo "error: $local_config exists; the official check needs it absent." >&2
+        echo "error: $local_config exists; check it with --local, or move it away for the official check." >&2
         exit 2
     fi
-    team=WPW3QSLZ2F
-    bundle=com.cedricziel.folio
-    app_group=group.com.cedricziel.folio
-    app_entitlements=Resources/Folio.entitlements
-    sign_style=Manual
-    identity="Apple Distribution"
     ;;
 --example)
     if [ -e "$local_config" ]; then
@@ -32,18 +38,40 @@ official)
     fi
     cp "$folio_dir/Config/Local.xcconfig.example" "$local_config"
     trap 'rm -f "$local_config"' EXIT
-    team=ABCDE12345
-    bundle=com.example.folio
-    app_group=group.com.example.folio
-    app_entitlements=Resources/Folio-Local.entitlements
-    sign_style=Automatic
-    identity="Apple Development"
+    ;;
+--local)
+    if [ ! -e "$local_config" ]; then
+        echo "error: $local_config does not exist; copy Config/Local.xcconfig.example first." >&2
+        exit 2
+    fi
     ;;
 *)
-    echo "usage: $0 [--example]" >&2
+    echo "usage: $0 [--local | --example]" >&2
     exit 2
     ;;
 esac
+
+team=WPW3QSLZ2F
+bundle=com.cedricziel.folio
+app_group=group.com.cedricziel.folio
+app_entitlements=Resources/Folio.entitlements
+sign_style=Manual
+identity="Apple Distribution"
+if [ -e "$local_config" ]; then
+    team="$(local_value FOLIO_DEVELOPMENT_TEAM "$team")"
+    bundle="$(local_value FOLIO_BUNDLE_ID "$bundle")"
+    app_group="$(local_value FOLIO_APP_GROUP "$app_group")"
+    app_entitlements="$(local_value FOLIO_APP_ENTITLEMENTS "$app_entitlements")"
+    sign_style="$(local_value FOLIO_RELEASE_SIGN_STYLE "$sign_style")"
+    identity="$(local_value FOLIO_RELEASE_IDENTITY "$identity")"
+fi
+
+# The Release profile for a target and SDK: Local.xcconfig's value, or the official match profile.
+profile_for() {
+    local key="FOLIO_PROFILE_$1_$2" official="match AppStore $bundle$3"
+    [ "$2" = MACOS ] && official="$official macos"
+    if [ -e "$local_config" ]; then local_value "$key" "$official"; else printf '%s' "$official"; fi
+}
 
 (cd "$folio_dir" && xcodegen generate --quiet)
 
@@ -78,15 +106,15 @@ if [ "$mode" = official ] &&
     failures=$((failures + 1))
 fi
 
-# target  bundle-id-suffix  entitlements  profile-key-suffix
+# target  bundle-id-suffix  entitlements  profile-key
 targets=(
-    "Folio||$app_entitlements|"
-    "FolioShare|.share|Resources/FolioShare.entitlements|.share"
-    "FolioFileProvider|.fileprovider|Resources/FolioFileProvider.entitlements|.fileprovider"
+    "Folio||$app_entitlements|APP"
+    "FolioShare|.share|Resources/FolioShare.entitlements|SHARE"
+    "FolioFileProvider|.fileprovider|Resources/FolioFileProvider.entitlements|FILEPROVIDER"
 )
 
 for entry in "${targets[@]}"; do
-    IFS='|' read -r target suffix entitlements profile_suffix <<<"$entry"
+    IFS='|' read -r target suffix entitlements profile_key <<<"$entry"
     for sdk in iphoneos macosx; do
         for configuration in Debug Release; do
             settings="$(cd "$folio_dir" && xcodebuild -showBuildSettings -project Folio.xcodeproj \
@@ -98,12 +126,8 @@ for entry in "${targets[@]}"; do
             expect "$label CODE_SIGN_ENTITLEMENTS" "$(setting CODE_SIGN_ENTITLEMENTS <<<"$settings")" "$entitlements"
             expect "$label FOLIO_APP_GROUP" "$(setting FOLIO_APP_GROUP <<<"$settings")" "$app_group"
             [ "$configuration" = Release ] || continue
-            if [ "$mode" = official ]; then
-                profile="match AppStore $bundle$profile_suffix"
-                [ "$sdk" = macosx ] && profile="$profile macos"
-            else
-                profile=""
-            fi
+            if [ "$sdk" = macosx ]; then platform=MACOS; else platform=IOS; fi
+            profile="$(profile_for "$profile_key" "$platform" "$suffix")"
             expect "$label CODE_SIGN_STYLE" "$(setting CODE_SIGN_STYLE <<<"$settings")" "$sign_style"
             expect "$label CODE_SIGN_IDENTITY" "$(setting CODE_SIGN_IDENTITY <<<"$settings")" "$identity"
             expect "$label PROVISIONING_PROFILE_SPECIFIER" \
