@@ -24,15 +24,21 @@ else
   ! grep -qi '^set-cookie' "$out/headers" || fail "unexpected Set-Cookie"
   python3 - "$out/body" "$FOLIO_VERIFY_APPLE_APP_IDS" <<'PY'
 import json, sys
+
+def check(ok, message):
+    if not ok:
+        print(f"apple-links: FAIL: {message}", file=sys.stderr)
+        sys.exit(1)
+
 body = json.load(open(sys.argv[1]))
 u = "????????-????-????-????-????????????"
 expected_ids = [i.strip() for i in sys.argv[2].split(",") if i.strip()]
 detail = body["applinks"]["details"][0]
-assert detail["appIDs"] == expected_ids, detail["appIDs"]
+check(detail["appIDs"] == expected_ids, f"appIDs {detail['appIDs']}")
 patterns = [c["/"] for c in detail["components"]]
-assert patterns == [f"/vaults/{u}/documents/{u}", f"/vaults/{u}/saved-views/{u}", f"/vaults/{u}/"], patterns
+check(patterns == [f"/vaults/{u}/documents/{u}", f"/vaults/{u}/saved-views/{u}", f"/vaults/{u}/"], f"components {patterns}")
 raw = json.dumps(body)
-assert "*" not in raw and "exclude" not in raw, raw
+check("*" not in raw and "exclude" not in raw, f"wildcard or exclude in {raw}")
 PY
 fi
 
