@@ -438,12 +438,12 @@ actor MockFolioService: FolioService {
         try await store(file, idempotencyKey: nil)
     }
 
-    /// Like the server: a key seen before returns its document, or 409 once that document was deleted.
+    /// Like the server: a key seen before returns its document, or 410 once that document was deleted.
     func upload(_ file: UploadFile, idempotencyKey: UUID) async throws -> Document {
         uploadKeys.append(idempotencyKey)
         if let earlier = keyedUploads[idempotencyKey] {
             if deletedDocumentIDs.contains(earlier.id) {
-                throw FolioError.server(status: 409, message: nil)
+                throw FolioError.server(status: 410, message: nil)
             }
             return earlier
         }

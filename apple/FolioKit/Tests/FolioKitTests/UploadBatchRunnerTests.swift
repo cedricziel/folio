@@ -111,6 +111,23 @@ struct UploadBatchRunnerTests {
         #expect(await service.tagged.map(\.document) == [replacement])
     }
 
+    @Test func aKeyWhoseDocumentWasDeletedUploadsTheFileAgain() async throws {
+        let service = MockFolioService()
+        let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
+        await service.setLoseUploadResponses(true)
+        _ = try? await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+        let lost = try #require(await service.documents(matching: "").first)
+        await service.markDeleted(lost.id)
+
+        await service.setLoseUploadResponses(false)
+        let documents = try await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+
+        #expect(await service.uploads.count == 2)
+        let replacement = try #require(documents.first?.id)
+        #expect(replacement != lost.id)
+        #expect(await service.tagged.map(\.document) == [replacement])
+    }
+
     @Test func aBatchAlreadyRunningElsewhereIsNotStartedTwice() async throws {
         let service = MockFolioService()
         let store = InMemoryUploadProgressStore()
