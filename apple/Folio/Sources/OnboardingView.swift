@@ -3,8 +3,11 @@ import SwiftUI
 
 struct OnboardingView: View {
     @State private var onboarding: OnboardingViewModel
+    /// The server a continuation came from, offered as the address to sign in to.
+    let prefill: URL?
 
-    init(model: AppModel) {
+    init(model: AppModel, prefill: URL? = nil) {
+        self.prefill = prefill
         _onboarding = State(
             initialValue: OnboardingViewModel(
                 store: UserDefaultsServerConfigStore.shared(),
@@ -76,5 +79,8 @@ struct OnboardingView: View {
         .frame(maxWidth: 440)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.paper)
+        .onChange(of: prefill, initial: true) { _, server in
+            if let server { onboarding.prefill(server) }
+        }
     }
 }

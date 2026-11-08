@@ -234,7 +234,7 @@ struct RootView: View {
             case .restoring:
                 ProgressView("Restoring sign-in…")
             case .signedOut:
-                OnboardingView(model: model)
+                OnboardingView(model: model, prefill: signInPrefill)
             case let .expired(url):
                 recovery(
                     title: "Sign in again", message: "Your session has expired or was revoked. Sign in again.",
@@ -259,6 +259,14 @@ struct RootView: View {
 
     private var deliveryState: DeliveryState {
         DeliveryState(pending: continuations.pending?.id, session: model.session, isLocked: lock.isLocked)
+    }
+
+    private var signInPrefill: URL? {
+        if case let .signIn(server, _) = continuations.decision(isLocked: lock.isLocked, session: model.session) {
+            server
+        } else {
+            nil
+        }
     }
 
     private func receiveHandoff(_ activity: NSUserActivity) {
