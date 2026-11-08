@@ -32,7 +32,7 @@ struct DocumentReviewTests {
         let service = MockFolioService()
         let original = Document(title: "Letter", reviewed: false, canReviewDocument: true)
         await service.setDocuments([original])
-        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        let model = DocumentDetailViewModel(document: original, service: service)
         await service.setFailure(.unreachable)
         await #expect(throws: FolioError.self) { try await model.saveReview(true) }
         #expect(model.document.reviewed == false)

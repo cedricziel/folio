@@ -5,11 +5,13 @@ import UIKit
 typealias Document = FolioKit.Document
 
 @main struct FixtureApp: App {
+    private static let documents = [
+        Document(title: "First fixture", originalFilename: "first.pdf"),
+        Document(title: "Second fixture", originalFilename: "second.pdf"),
+    ]
     let service = MockFolioService(
-        documents: [
-            Document(title: "First fixture", originalFilename: "first.pdf"),
-            Document(title: "Second fixture", originalFilename: "second.pdf"),
-        ], loseFirstEntryResponse: ProcessInfo.processInfo.arguments.contains("--discussion-save-failure"))
+        documents: FixtureApp.documents,
+        loseFirstEntryResponse: ProcessInfo.processInfo.arguments.contains("--discussion-save-failure"))
 
     var body: some Scene {
         WindowGroup {
@@ -26,8 +28,26 @@ typealias Document = FolioKit.Document
                     serverURL: URL(string: "https://unused.invalid")!,
                     service: service, onSignOut: {}
                 )
+                .overlay(alignment: .bottomTrailing) {
+                    if ProcessInfo.processInfo.arguments.contains("--remote-edit") {
+                        Button("Simulate remote edit") { simulateRemoteEdit() }
+                            .buttonStyle(.borderedProminent)
+                            .padding()
+                    }
+                }
             }
         }
+    }
+}
+
+extension FixtureApp {
+    /// Changes the first document on the server, as finished processing would, without telling the app.
+    private func simulateRemoteEdit() {
+        var documents = Self.documents
+        documents[0].title = "Electricity bill"
+        documents[0].pageCount = 3
+        documents[0].updatedAt = Date()
+        Task { await service.setDocuments(documents) }
     }
 }
 

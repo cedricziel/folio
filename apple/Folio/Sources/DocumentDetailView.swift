@@ -2,13 +2,23 @@ import FolioKit
 import SwiftUI
 
 struct DocumentDetailView: View {
-    @State var model: DocumentDetailViewModel
+    /// What the document list currently knows about this document.
+    struct Snapshot: Equatable {
+        let document: Document
+        let lookups: DocumentLookups
+    }
+
+    @State private var model: DocumentDetailViewModel
     @State private var showingDiscussion = false
     @State private var editingDate = false
+    let snapshot: Snapshot
     let vaultID: UUID
 
-    init(model: DocumentDetailViewModel, vaultID: UUID) {
-        _model = State(initialValue: model)
+    init(snapshot: Snapshot, service: any FolioService, vaultID: UUID) {
+        _model = State(
+            initialValue: DocumentDetailViewModel(
+                document: snapshot.document, lookups: snapshot.lookups, service: service))
+        self.snapshot = snapshot
         self.vaultID = vaultID
     }
 
@@ -30,9 +40,13 @@ struct DocumentDetailView: View {
                 try await model.saveDocumentDate(date)
             }
         }
+        .onChange(of: snapshot) { _, snapshot in
+            model.update(document: snapshot.document, lookups: snapshot.lookups)
+        }
         .task { await model.loadPreview() }
-        .task { await model.refreshMetadata() }
-        .task { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
+        // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
+        .task(id: snapshot.document.updatedAt) { await model.refreshMetadata() }
+        .task(id: model.summary) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
     }
 
     @ViewBuilder
@@ -75,6 +89,7 @@ struct DocumentDetailView: View {
                                 .font(field.isRecord ? FolioTheme.Typography.meta : FolioTheme.Typography.body)
                                 .foregroundStyle(Color.ink)
                                 .textSelection(.enabled)
+                                .accessibilityIdentifier("metadata-\(field.label)")
                         }
                     }
                 }
