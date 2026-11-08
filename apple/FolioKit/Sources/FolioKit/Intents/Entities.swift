@@ -72,8 +72,15 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
 public struct DocumentEntityQuery: EntityStringQuery {
     public init() {}
 
+    /// Documents gone from the vault their id names leave Spotlight. An id without a vault is looked up in the
+    /// default vault, where other vaults' documents miss, and one the server couldn't answer for keeps its entry.
     public func entities(for identifiers: [DocumentEntityID]) async throws -> [DocumentEntity] {
-        try await IntentEnvironment.run { try await $0.documents(ids: identifiers) }.map(DocumentEntity.init)
+        let resolution = try await IntentEnvironment.run { try await $0.resolve(ids: identifiers) }
+        let gone = resolution.missing.filter { $0.vaultID != nil }.map(\.documentID)
+        if !gone.isEmpty {
+            IntentEnvironment.spotlight.remove(documentIDs: gone, fallbackServer: IntentEnvironment.serverURL())
+        }
+        return resolution.found.map(DocumentEntity.init)
     }
 
     public func entities(matching string: String) async throws -> [DocumentEntity] {

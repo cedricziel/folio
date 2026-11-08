@@ -241,6 +241,10 @@ actor MockFolioService: FolioService {
         uploadGate = nil
     }
 
+    private var failingDocumentIDs: Set<Document.ID> = []
+
+    func setFailingDocuments(_ ids: Set<Document.ID>) { failingDocumentIDs = ids }
+
     func setDocuments(_ documents: [Document]) {
         documentList = documents
     }
@@ -348,6 +352,7 @@ actor MockFolioService: FolioService {
         documentReads += 1
         if let failure { throw failure }
         if let failDocumentReads { throw failDocumentReads }
+        if failingDocumentIDs.contains(id) { throw FolioError.server(status: 500, message: nil) }
         guard let document = documentList.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: nil)
         }

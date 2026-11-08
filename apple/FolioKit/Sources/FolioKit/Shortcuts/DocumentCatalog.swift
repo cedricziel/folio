@@ -101,11 +101,11 @@ public struct DocumentTransferFile: Sendable {
 public struct DocumentCatalog: Sendable {
     private let service: any FolioService
     private let calendar: Calendar
-    /// The vault `service` is scoped to; nil is the server's default vault.
-    private let vaultID: UUID?
     private let progress: any UploadProgressStoring
     private let uploads: UploadBatchRunner
     private let uploadScope: String
+    /// The vault `service` is scoped to; nil is the server's default vault.
+    private let vaultID: UUID?
 
     /// - Parameters:
     ///   - progress: Where unfinished uploads are remembered, so running the Shortcut again resumes them.
@@ -113,14 +113,15 @@ public struct DocumentCatalog: Sendable {
     public init(
         service: any FolioService, calendar: Calendar = .current,
         progress: any UploadProgressStoring = FileUploadProgressStore.shared,
-        uploadScope: String = SharedConfiguration.serverURL()?.absoluteString ?? "", vaultID: UUID? = nil
+        uploadScope: String = SharedConfiguration.serverURL()?.absoluteString ?? "",
+        vaultID: UUID? = nil
     ) {
         self.service = service
         self.calendar = calendar
-        self.vaultID = vaultID
         self.progress = progress
         uploads = UploadBatchRunner(service: service, store: progress)
         self.uploadScope = uploadScope
+        self.vaultID = vaultID
     }
 
     /// The same catalog in another vault; nil keeps this one.

@@ -224,6 +224,170 @@ struct SpotlightIndexTests {
         #expect(await fake.items.isEmpty)
     }
 
+    @Test func removalBeforeASessionIsRestoredUsesTheGivenServer() async {
+        let fake = FakeSpotlightIndex()
+        let first = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await first.sessionChanged(to: .signedIn(serverA)).value
+        let gone = summary("Gone")
+        await first.donate(gone, vaultID: vault)
+
+        let relaunched = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await relaunched.remove(documentIDs: [gone.id]).value
+        #expect(await fake.documentIDs == [gone.id])
+
+        await relaunched.remove(documentIDs: [gone.id], fallbackServer: serverA).value
+        #expect(await fake.items.isEmpty)
+    }
+
+    @Test func listedDocumentsAreIndexedOnceUntilTheyChange() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let a = summary("A"), b = summary("B")
+
+        await spotlight.index([a, b], vaultID: vault).value
+        await spotlight.index([a, b], vaultID: vault).value
+        var renamed = b
+        renamed.title = "B, renamed"
+        await spotlight.index([a, renamed], vaultID: vault).value
+
+        #expect(await fake.documentIDs == [a.id, b.id])
+        #expect(await fake.calls.filter { if case .index = $0 { true } else { false } }.count == 2)
+        #expect(await fake.items.values.first { $0.documentID == b.id }?.summary.title == "B, renamed")
+    }
+
+    @Test func listIndexingStopsAddingDocumentsAtTheLimit() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults(), libraryLimit: 2)
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let a = summary("A"), b = summary("B"), c = summary("C")
+
+        await spotlight.index([a, b, c], vaultID: vault).value
+        var renamed = a
+        renamed.title = "A, renamed"
+        await spotlight.index([renamed, c], vaultID: vault).value
+
+        #expect(await fake.documentIDs == [a.id, b.id])
+        #expect(await fake.items.values.first { $0.documentID == a.id }?.summary.title == "A, renamed")
+    }
+
+    @Test func theLimitHoldsAcrossLaunchesOnTheSameServer() async {
+        let defaults = scopeDefaults()
+        let fake = FakeSpotlightIndex()
+        let first = SpotlightIndex(index: fake, defaults: defaults, libraryLimit: 2)
+        await first.sessionChanged(to: .signedIn(serverA)).value
+        let a = summary("A"), b = summary("B"), c = summary("C")
+        await first.index([a, b], vaultID: vault).value
+
+        let relaunched = SpotlightIndex(index: fake, defaults: defaults, libraryLimit: 2)
+        await relaunched.sessionChanged(to: .signedIn(serverA)).value
+        var renamed = a
+        renamed.title = "A, renamed"
+        await relaunched.index([c, renamed], vaultID: vault).value
+
+        #expect(await fake.documentIDs == [a.id, b.id])
+        #expect(await fake.items.values.first { $0.documentID == a.id }?.summary.title == "A, renamed")
+    }
+
+    @Test func removingOrClearingFreesRoomUnderTheLimit() async {
+        let defaults = scopeDefaults()
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: defaults, libraryLimit: 1)
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let a = summary("A"), b = summary("B"), c = summary("C")
+        await spotlight.index([a], vaultID: vault).value
+
+        await spotlight.remove(documentID: a.id).value
+        await spotlight.index([b], vaultID: vault).value
+        #expect(await fake.documentIDs == [b.id])
+
+        await spotlight.sessionChanged(to: .signedOut).value
+        let relaunched = SpotlightIndex(index: fake, defaults: defaults, libraryLimit: 1)
+        await relaunched.signedIn(to: serverA).value
+        await relaunched.sessionChanged(to: .signedIn(serverA)).value
+        await relaunched.index([c], vaultID: vault).value
+        #expect(await fake.documentIDs == [c.id])
+    }
+
+    @Test func anotherServerStartsWithAnEmptyLimit() async {
+        let defaults = scopeDefaults()
+        let fake = FakeSpotlightIndex()
+        let first = SpotlightIndex(index: fake, defaults: defaults, libraryLimit: 1)
+        await first.sessionChanged(to: .signedIn(serverA)).value
+        await first.index([summary("On A")], vaultID: vault).value
+
+        let switched = SpotlightIndex(index: fake, defaults: defaults, libraryLimit: 1)
+        await switched.sessionChanged(to: .signedIn(serverB)).value
+        let onB = summary("On B")
+        await switched.index([onB], vaultID: vault).value
+
+        #expect(await fake.documentIDs == [onB.id])
+    }
+
+    @Test func listIndexingUnderAStaleScopeIsDropped() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let accountA = spotlight.currentScope
+
+        await spotlight.signedIn(to: serverA).value
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await spotlight.index([summary("From account A")], vaultID: vault, scope: accountA).value
+        await spotlight.index([summary("No scope")], vaultID: vault, scope: nil).value
+
+        #expect(accountA != nil)
+        #expect(await fake.items.isEmpty)
+    }
+
+    @Test func listIndexingNeedsASignedInSessionAndRestartsAfterSignOut() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        let a = summary("A")
+
+        await spotlight.index([a], vaultID: vault).value
+        #expect(await fake.items.isEmpty)
+
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await spotlight.index([a], vaultID: vault).value
+        await spotlight.sessionChanged(to: .signedOut).value
+        await spotlight.index([a], vaultID: vault).value
+        #expect(await fake.items.isEmpty)
+
+        await spotlight.signedIn(to: serverA).value
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await spotlight.index([a], vaultID: vault).value
+        #expect(await fake.documentIDs == [a.id])
+    }
+
+    @Test func listIndexingInFlightDuringSignOutDoesNotSurviveIt() async throws {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await fake.holdNextIndex()
+
+        let indexing = spotlight.index([summary("Late")], vaultID: vault)
+        try await until { await fake.heldIndexCalls == 1 }
+        let signOut = spotlight.sessionChanged(to: .signedOut)
+        await fake.release()
+        await indexing.value
+        await signOut.value
+
+        #expect(await fake.items.isEmpty)
+    }
+
+    @Test func removedDocumentIsIndexedAgainWhenListedAgain() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let restored = summary("Restored")
+
+        await spotlight.index([restored], vaultID: vault).value
+        await spotlight.remove(documentID: restored.id).value
+        await spotlight.index([restored], vaultID: vault).value
+
+        #expect(await fake.documentIDs == [restored.id])
+    }
+
     @Test func cancelledDonationIsDropped() async {
         let fake = FakeSpotlightIndex()
         let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
@@ -326,6 +490,67 @@ struct SpotlightIndexTests {
         await spotlight.idle()
 
         #expect(await fake.documentIDs == [doc.id])
+    }
+
+    @Test func loadingTheListIndexesItsDocumentsWithNames() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let sender = Correspondent(name: "Stadtwerke")
+        let first = Document(title: "Gas bill", correspondentID: sender.id)
+        let second = Document(title: "Water bill")
+        let service = MockFolioService(correspondents: [sender])
+        let listVault = UUID()
+        await service.setPages([
+            "|": DocumentPage(vaultID: listVault, documents: [first], nextCursor: "next"),
+            "|next": DocumentPage(vaultID: listVault, documents: [second]),
+        ])
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1), spotlight: spotlight)
+
+        await model.load()
+        await spotlight.idle()
+        #expect(await fake.documentIDs == [first.id])
+        let item = await fake.items.values.first
+        #expect(item?.summary.correspondent == "Stadtwerke")
+        #expect(item.flatMap { DocumentLink(spotlightIdentifier: $0.identifier) }?.vaultID == listVault)
+
+        await model.loadNextPage()
+        await spotlight.idle()
+        #expect(await fake.documentIDs == [first.id, second.id])
+    }
+
+    @Test func listFetchedBeforeAnAccountSwitchIsNotIndexedForTheNewAccount() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let service = MockFolioService(documents: [Document(title: "Account A's letter")])
+        await service.suspendDocuments()
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1), spotlight: spotlight)
+
+        let load = Task { await model.load() }
+        await service.waitForDocumentRequest()
+        await spotlight.sessionChanged(to: .signedOut).value
+        await spotlight.signedIn(to: serverA).value
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await service.releaseDocuments()
+        await load.value
+        await spotlight.idle()
+
+        #expect(model.rows.count == 1)
+        #expect(await fake.items.isEmpty)
+    }
+
+    @Test func listIndexingIsDroppedWithoutASession() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        let model = DocumentListViewModel(
+            service: MockFolioService(documents: [Document(title: "Private")]), searchDebounce: .milliseconds(1),
+            spotlight: spotlight)
+
+        await model.load()
+        await spotlight.idle()
+
+        #expect(await fake.items.isEmpty)
     }
 
     @Test func signOutThroughTheSessionStoreClearsSpotlight() async throws {
