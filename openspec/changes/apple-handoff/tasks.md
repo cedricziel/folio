@@ -13,7 +13,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(core): validate Apple app IDs`.
 
-- [ ] 1.2 Add `Config.apple: AppleConfig { app_ids }` in `crates/folio-infra/src/config.rs` as a TOML array. Register `FOLIO_APPLE__APP_IDS` in the env-setting table with the existing `ValueKind::List` (the comma-list parsing already used for `import_roots` and forward-auth), with no custom deserialiser. Validate the entries in `Config::validate`. First write failing config tests:
+- [x] 1.2 Add `Config.apple: AppleConfig { app_ids }` in `crates/folio-infra/src/config.rs` as a TOML array. Register `FOLIO_APPLE__APP_IDS` in the env-setting table with the existing `ValueKind::List` (the comma-list parsing already used for `import_roots` and forward-auth), with no custom deserialiser. Validate the entries in `Config::validate`. First write failing config tests:
   - a TOML array is parsed
   - an env comma list is parsed and overrides TOML
   - an invalid entry fails startup with a message naming `apple.app_ids`

@@ -94,6 +94,7 @@ preserve existing database rows, including values seeded by earlier releases.
 | `mcp.allowed_hosts` | `FOLIO_MCP__ALLOWED_HOSTS` | empty | Comma-separated extra `Host` headers `/mcp` accepts besides loopback. |
 | `import.allowed_roots` | `FOLIO_IMPORT__ALLOWED_ROOTS` | empty | Comma-separated server directories an import may read from; through the env variable, a directory can't contain a comma. Empty turns imports off. Config only, not on `/settings`. See [paperless-import.md](paperless-import.md). |
 | `import.max_file_bytes` | `FOLIO_IMPORT__MAX_FILE_BYTES` | `536870912` (512 MB) | Largest original file an import accepts; bigger files fail with `file_too_large`. |
+| `apple.app_ids` | `FOLIO_APPLE__APP_IDS` | empty | Comma-separated Apple app IDs (`TEAMID.bundle.id`) served in `/.well-known/apple-app-site-association`. Startup fails on an invalid entry. |
 
 Ingestion sources have names of your choosing, so they are not listed above:
 `FOLIO_INGEST__FOLDERS__<NAME>__<KEY>`, `FOLIO_INGEST__EMAIL__<NAME>__<KEY>` and

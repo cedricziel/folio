@@ -19,7 +19,7 @@ use figment::{
     Figment,
 };
 use folio_core::models::{
-    EmailConfig, EmbeddingSettings, FolderConfig, Id, IngestionSourceDef, OcrSettings,
+    AppleAppId, EmailConfig, EmbeddingSettings, FolderConfig, Id, IngestionSourceDef, OcrSettings,
     PaperlessConfig, ProcessingSettings, SourceConfig, SourceOrigin, VaultId,
 };
 use folio_core::redact::Redacted;
@@ -46,6 +46,7 @@ pub struct Config {
     pub auth: AuthConfig,
     pub mcp: McpConfig,
     pub import: ImportConfig,
+    pub apple: AppleConfig,
 }
 
 /// Automatic ingestion, configured per named source
@@ -495,6 +496,16 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
 }
 
+/// Apple app IDs whose apps may open this server's web links (Universal Links)
+///
+/// The `apple.app_ids` DB setting replaces this list when it is non-empty.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AppleConfig {
+    /// `TEAMID.bundle.id` entries; empty serves no app site association.
+    pub app_ids: Vec<String>,
+}
+
 /// Server directories an import may read, and the size limit for one file
 ///
 /// Config-only: which server paths the app reads is a deployment decision.
@@ -835,11 +846,20 @@ pub const SETTINGS: &[Setting] = &[
         env: "FOLIO_IMPORT__MAX_FILE_BYTES",
         kind: ValueKind::Int,
     },
+    Setting {
+        key: "apple.app_ids",
+        env: "FOLIO_APPLE__APP_IDS",
+        kind: ValueKind::List,
+    },
 ];
 
 impl Config {
     /// Rejects combinations that are unsafe to run. Called once at startup.
     pub fn validate(&self) -> Result<(), String> {
+        for id in &self.apple.app_ids {
+            id.parse::<AppleAppId>()
+                .map_err(|e| format!("apple.app_ids (FOLIO_APPLE__APP_IDS): {e}"))?;
+        }
         if !self.auth.required {
             return Ok(());
         }
@@ -1330,6 +1350,57 @@ vault = "{VAULT}"
             load(&[("FOLIO_MCP__ENABLED", "true")]).mcp.enabled,
             Some(true)
         );
+    }
+
+    #[test]
+    fn apple_app_ids_default_to_empty() {
+        assert!(load(&[]).apple.app_ids.is_empty());
+    }
+
+    #[test]
+    fn apple_app_ids_load_from_a_toml_array() {
+        let config = load_toml(
+            "[apple]\napp_ids = [\"ABCDE12345.com.example.folio\", \"ABCDE12345.com.example.beta\"]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.apple.app_ids,
+            [
+                "ABCDE12345.com.example.folio",
+                "ABCDE12345.com.example.beta"
+            ]
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn apple_app_ids_env_list_overrides_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[apple]\napp_ids = [\"FGHIJ67890.org.toml\"]\n").unwrap();
+        let config = Config::load_with(
+            path.to_str().unwrap(),
+            env(&[(
+                "FOLIO_APPLE__APP_IDS",
+                "ABCDE12345.com.example.folio, ABCDE12345.com.example.folio.beta",
+            )]),
+        )
+        .unwrap();
+        assert_eq!(
+            config.apple.app_ids,
+            [
+                "ABCDE12345.com.example.folio",
+                "ABCDE12345.com.example.folio.beta"
+            ]
+        );
+    }
+
+    #[test]
+    fn invalid_apple_app_id_fails_startup_naming_the_setting() {
+        let config = load(&[("FOLIO_APPLE__APP_IDS", "com.example.folio")]);
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("apple.app_ids"), "{err}");
+        assert!(err.contains("com.example.folio"), "{err}");
     }
 
     #[test]
