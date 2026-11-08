@@ -37,7 +37,6 @@ public enum TelemetryAction: String, CaseIterable, Sendable {
     case discussionPost = "discussion.post"
     case browseScopeChange = "browse.scope.change"
     case browseFilterChange = "browse.filter.change"
-    case browseSortChange = "browse.sort.change"
     case browseLoadMore = "browse.load_more"
     case browseRefresh = "browse.refresh"
     case searchSubmit = "search.submit"

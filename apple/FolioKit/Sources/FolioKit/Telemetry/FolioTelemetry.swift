@@ -260,20 +260,21 @@ public final class FolioTelemetry: @unchecked Sendable {
 
     /// Sends session boundaries and a UI event now, or keeps the latest boundaries until a runtime is ready.
     private func record(_ boundaries: [SessionBoundary], event: (String, [String: AttributeValue])? = nil) {
-        let target = lock.withLock { () -> (TelemetryRuntime, Bool, Int)? in
-            guard let runtime else {
-                pendingBoundaries.append(contentsOf: boundaries)
-                if pendingBoundaries.count > 8 { pendingBoundaries.removeFirst(pendingBoundaries.count - 8) }
-                return nil
-            }
-            let allowed = event == nil || limiter.allow(at: .now)
-            return (runtime, allowed, limiter.takeDropped())
-        }
-        guard let target else { return }
-        let (runtime, allowed, dropped) = target
-        for boundary in boundaries { runtime.boundary(boundary) }
-        if let event, allowed { runtime.uiEvent(event.0, attributes: stamp(event.1)) }
-        if dropped > 0 { runtime.dropped(dropped) }
+        guard
+            let target = lock.withLock({ () -> (TelemetryRuntime, Bool, Int)? in
+                guard let active = self.runtime else {
+                    pendingBoundaries.append(contentsOf: boundaries)
+                    if pendingBoundaries.count > 8 { pendingBoundaries.removeFirst(pendingBoundaries.count - 8) }
+                    return nil
+                }
+                let allowed = event == nil || limiter.allow(at: .now)
+                return (active, allowed, limiter.takeDropped())
+            })
+        else { return }
+        let (active, allowed, dropped) = target
+        for boundary in boundaries { active.boundary(boundary) }
+        if let event, allowed { active.uiEvent(event.0, attributes: stamp(event.1)) }
+        if dropped > 0 { active.dropped(dropped) }
     }
 
     /// The live session and current screen, under `attributes`, for spans and log records. Never metrics.
