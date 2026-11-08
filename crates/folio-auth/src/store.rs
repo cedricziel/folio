@@ -26,6 +26,17 @@ pub struct IssuedTokens {
 /// rejects the grant: it stays consumed and no tokens are stored.
 pub type GrantCheck<'a, G> = Box<dyn FnOnce(&G) -> Option<IssuedTokens> + Send + 'a>;
 
+/// What happened to a refresh token presented for rotation.
+#[derive(Debug, Clone)]
+pub enum RefreshExchange {
+    /// The token was unused and is now rotated.
+    Rotated(RefreshToken),
+    /// The token was already rotated. It leaked, so its whole grant was revoked.
+    Replayed,
+    /// No such token.
+    Unknown,
+}
+
 #[async_trait]
 pub trait AuthStore: Send + Sync {
     async fn count_users(&self) -> Result<i64, AuthError>;
@@ -81,6 +92,9 @@ pub trait AuthStore: Send + Sync {
     /// returns, marking `client_id` used, in one transaction serialized with
     /// [`Self::revoke_client_tokens`] for that client. Tokens issued here
     /// therefore never outlive a disconnect. Returns the taken code.
+    ///
+    /// The tokens must belong to `client_id`. If storing them or committing
+    /// fails, the whole transaction rolls back and the code stays usable.
     async fn exchange_code(
         &self,
         client_id: &str,
@@ -112,12 +126,14 @@ pub trait AuthStore: Send + Sync {
         -> Result<Option<RefreshToken>, AuthError>;
     /// Rotates the refresh token like [`Self::take_refresh_token`] and stores
     /// the tokens `check` returns, with the guarantees of [`Self::exchange_code`].
+    /// A token that was already rotated revokes its grant under the lock of the
+    /// client that owns it, so a rotation racing the replay cannot survive it.
     async fn exchange_refresh_token(
         &self,
         client_id: &str,
         token_hash: &str,
         check: GrantCheck<'_, RefreshToken>,
-    ) -> Result<Option<RefreshToken>, AuthError>;
+    ) -> Result<RefreshExchange, AuthError>;
     /// The grant of a refresh token that was already rotated, to detect reuse.
     async fn used_refresh_grant(&self, token_hash: &str) -> Result<Option<String>, AuthError>;
     /// Deletes every access and refresh token of a grant.
@@ -149,7 +165,8 @@ pub trait AuthStore: Send + Sync {
     /// Deletes every token and pending authorization code the client holds for
     /// the user. Serialized with the exchanges of the same client, so a token
     /// exchange either finishes before it (and loses its tokens) or starts after
-    /// it (and finds its grant gone).
+    /// it (and finds its grant gone). Consent is not serialized: a user who
+    /// approves the client while disconnecting it may end up with a fresh code.
     async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError>;
 
     async fn get_totp(&self, user_id: &str) -> Result<Option<TotpRecord>, AuthError>;
