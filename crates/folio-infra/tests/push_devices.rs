@@ -166,6 +166,26 @@ async fn contract(db: &Database) {
     );
     assert_eq!(push.count_devices().await.unwrap(), 2);
 
+    // Another person's device without tokens is not touched by a registration
+    user(&*auth, "carol").await;
+    let mut tokenless = registration("carol", "watch", "app", "g6");
+    tokenless.alert_token = None;
+    push.upsert(tokenless).await.unwrap();
+    push.upsert(registration("alice", "spare-device", "app", "g1"))
+        .await
+        .unwrap();
+    assert!(
+        push.find(&UserId::from("carol"), "watch")
+            .await
+            .unwrap()
+            .is_some(),
+        "only rows whose token moved may be deleted"
+    );
+    push.delete(&UserId::from("alice"), "spare-device")
+        .await
+        .unwrap();
+    push.delete(&UserId::from("carol"), "watch").await.unwrap();
+
     // First outcomes and pending rows
     let doc = document(&repos, vault).await;
     let now = Utc::now();

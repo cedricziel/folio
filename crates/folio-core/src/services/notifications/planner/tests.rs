@@ -12,13 +12,14 @@ use crate::processing_events::{
     ProcessingReason,
 };
 use crate::services::notifications::fakes::{
-    device, document, MemoryDevices, MemoryDocuments, Roles,
+    device, document, MemoryDevices, MemoryDocuments, Recorder, Roles,
 };
 
 struct World {
     devices: Arc<MemoryDevices>,
     documents: Arc<MemoryDocuments>,
     roles: Arc<Roles>,
+    transport: Arc<Recorder>,
     planner: NotificationPlanner,
     vault: VaultId,
 }
@@ -27,16 +28,19 @@ fn world() -> World {
     let devices = Arc::new(MemoryDevices::default());
     let documents = Arc::new(MemoryDocuments::default());
     let roles = Arc::new(Roles::default());
+    let transport = Arc::new(Recorder::default());
     let planner = NotificationPlanner::new(
         devices.clone(),
         documents.clone(),
         roles.clone(),
+        transport.clone(),
         Arc::new(Notify::new()),
     );
     World {
         devices,
         documents,
         roles,
+        transport,
         planner,
         vault: VaultId::new(),
     }
@@ -406,4 +410,55 @@ async fn inbox_changes_mark_readers_widgets() {
         .unwrap()
         .widgets_dirty_at
         .is_none());
+}
+
+#[tokio::test]
+async fn contributor_access_is_judged_per_uploader() {
+    let w = world();
+    let editable = NotificationPreferences {
+        scope: NotificationScope::Editable,
+        ..Default::default()
+    };
+    let dave = editor(&w, "dave");
+    w.devices.set_preferences(dave.id, editable);
+    w.roles
+        .grant(&dave.user_id, w.vault, VaultRole::Contributor);
+    let own = upload(&w, "dave");
+    let other = upload(&w, "alice");
+
+    // Dave may edit his own upload, so the cache must not carry that over to Alice's.
+    w.planner
+        .consume(&processed(&own, EventOrigin::User))
+        .await
+        .unwrap();
+    let mut both = processed(&other, EventOrigin::User);
+    both.id = 3;
+    w.planner.consume(&both).await.unwrap();
+
+    assert_eq!(
+        kinds_for(&w, &dave),
+        vec![(own.id, NotificationKind::NeedsReview)]
+    );
+}
+
+#[tokio::test]
+async fn nothing_is_queued_while_push_is_off_but_first_outcomes_are_still_recorded() {
+    let w = world();
+    let alice = editor(&w, "alice");
+    let doc = upload(&w, "alice");
+    *w.transport.available.lock().unwrap() = false;
+
+    w.planner
+        .consume(&processed(&doc, EventOrigin::User))
+        .await
+        .unwrap();
+    assert!(kinds_for(&w, &alice).is_empty(), "no backlog builds up");
+
+    // Turning push on later must not make a reprocess look like a first completion.
+    *w.transport.available.lock().unwrap() = true;
+    w.planner
+        .consume(&processed(&doc, EventOrigin::User))
+        .await
+        .unwrap();
+    assert!(kinds_for(&w, &alice).is_empty());
 }

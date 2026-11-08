@@ -17,7 +17,7 @@ use crate::models::{
     Access, Document, DocumentOutcome, Id, NotificationKind, NotificationScope,
     PendingNotification, PushDevice, UserId, VaultAction, VaultId,
 };
-use crate::ports::{AccessPolicy, DocumentLookup, PushDeviceRepository};
+use crate::ports::{AccessPolicy, DocumentLookup, PushDeviceRepository, PushTransport};
 use crate::services::EventConsumer;
 
 const FAILED_STAGES: [&str; 2] = [
@@ -74,6 +74,7 @@ pub struct NotificationPlanner {
     devices: Arc<dyn PushDeviceRepository>,
     documents: Arc<dyn DocumentLookup>,
     access: Arc<dyn AccessPolicy>,
+    transport: Arc<dyn PushTransport>,
     wake: Arc<Notify>,
 }
 
@@ -82,12 +83,14 @@ impl NotificationPlanner {
         devices: Arc<dyn PushDeviceRepository>,
         documents: Arc<dyn DocumentLookup>,
         access: Arc<dyn AccessPolicy>,
+        transport: Arc<dyn PushTransport>,
         wake: Arc<Notify>,
     ) -> Self {
         Self {
             devices,
             documents,
             access,
+            transport,
             wake,
         }
     }
@@ -110,7 +113,7 @@ impl NotificationPlanner {
                 DocumentOutcome::Completed => NotificationKind::NeedsReview,
             };
             let now = Utc::now();
-            let mut editors: HashMap<UserId, bool> = HashMap::new();
+            let mut editors = EditCache::new();
             for device in devices {
                 if self
                     .should_hear(device, document, kind, &mut editors)
@@ -148,7 +151,7 @@ impl NotificationPlanner {
         device: &PushDevice,
         document: &Document,
         kind: NotificationKind,
-        editors: &mut HashMap<UserId, bool>,
+        editors: &mut EditCache,
     ) -> Result<bool> {
         let preferences = &device.preferences;
         if !preferences.wants(kind)
@@ -198,14 +201,22 @@ impl NotificationPlanner {
     }
 }
 
-/// Whether `user` may edit `document`, cached per user for one batch
+/// The answer to "may this user edit documents of this uploader in this vault"
+pub(crate) type EditCache = HashMap<(UserId, VaultId, Option<UserId>), bool>;
+
+/// Whether `user` may edit `document`, cached per user, vault and uploader for one batch
 pub(crate) async fn may_edit(
     access: &dyn AccessPolicy,
     user: &UserId,
     document: &Document,
-    cache: &mut HashMap<UserId, bool>,
+    cache: &mut EditCache,
 ) -> Result<bool> {
-    if let Some(allowed) = cache.get(user) {
+    let key = (
+        user.clone(),
+        document.vault_id,
+        document.uploaded_by.clone(),
+    );
+    if let Some(allowed) = cache.get(&key) {
         return Ok(*allowed);
     }
     let allowed = access
@@ -218,7 +229,7 @@ pub(crate) async fn may_edit(
         )
         .await?;
     let allowed = matches!(allowed, Access::Allowed(_));
-    cache.insert(user.clone(), allowed);
+    cache.insert(key, allowed);
     Ok(allowed)
 }
 
@@ -228,11 +239,16 @@ impl EventConsumer for NotificationPlanner {
         let Some(trigger) = trigger(event) else {
             return Ok(());
         };
-        let devices = self.devices.list_all().await?;
-        if devices.is_empty() {
-            return Ok(());
+        // While push is off, first outcomes are still recorded, so turning it on later
+        // neither sends a backlog nor mistakes a reprocess for a first completion.
+        let devices = if self.transport.available().await {
+            self.devices.list_all().await?
+        } else {
+            Vec::new()
+        };
+        if !devices.is_empty() {
+            self.mark_widgets(trigger.vault, &devices).await?;
         }
-        self.mark_widgets(trigger.vault, &devices).await?;
         self.plan(trigger, &devices).await
     }
 }

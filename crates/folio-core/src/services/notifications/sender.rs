@@ -1,6 +1,5 @@
 //! Sends what the planner queued: one alert per device per flush
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
@@ -9,7 +8,7 @@ use tokio::sync::{watch, Notify};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use super::planner::may_edit;
+use super::planner::{may_edit, EditCache};
 use super::templates::{test_payload, widgets_payload, AlertSummary};
 use crate::error::Result;
 use crate::models::{Id, NotificationKind, NotificationScope, PushDevice, PushTokenKind, UserId};
@@ -231,7 +230,7 @@ impl NotificationSender {
     ) -> Result<(AlertSummary, Vec<(Id, NotificationKind)>)> {
         let mut summary = AlertSummary::default();
         let mut stale = Vec::new();
-        let mut editors: HashMap<UserId, bool> = HashMap::new();
+        let mut editors = EditCache::new();
         let preferences = &device.preferences;
         for item in self.devices.pending(device.id).await? {
             let document = self

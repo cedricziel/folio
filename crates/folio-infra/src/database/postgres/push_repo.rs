@@ -107,27 +107,30 @@ impl PushDeviceRepository for PostgresPushRepository {
         .map_err(err)?;
         let id = existing.unwrap_or_else(Uuid::new_v4);
 
-        // A token belongs to one installation of the server; take it from any other row.
+        // A token belongs to one installation of the server; take it from any other row,
+        // and delete only those rows that are left without a token.
+        let mut emptied: Vec<Uuid> = Vec::new();
         for (column, value) in [
             ("alert_token", &r.alert_token),
             ("widget_token", &r.widget_token),
         ] {
             if let Some(value) = value {
-                sqlx::query(sqlx::AssertSqlSafe(format!(
+                let ids: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                     "UPDATE push_devices SET {column} = NULL, {column}_registered_at = NULL \
-                     WHERE {column} = $1 AND id <> $2"
+                     WHERE {column} = $1 AND id <> $2 RETURNING id"
                 )))
                 .bind(value)
                 .bind(id)
-                .execute(&mut *tx)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(err)?;
+                emptied.extend(ids);
             }
         }
         sqlx::query(
-            "DELETE FROM push_devices WHERE id <> $1 AND alert_token IS NULL AND widget_token IS NULL",
+            "DELETE FROM push_devices WHERE id = ANY($1) AND alert_token IS NULL AND widget_token IS NULL",
         )
-        .bind(id)
+        .bind(&emptied)
         .execute(&mut *tx)
         .await
         .map_err(err)?;
