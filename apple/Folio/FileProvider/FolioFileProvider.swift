@@ -14,10 +14,12 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     private let service: (any FolioService)?
     private let temporaryDirectory: (() throws -> URL)?
     private let localMetadata: LocalItemMetadataStore
+    private let cache: FolioCatalogCache?
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         service = nil
+        cache = nil
         temporaryDirectory = nil
         localMetadata =
             (try? LocalItemMetadataStore.file(domain: domain)).map(LocalItemMetadataStore.shared(file:)) ?? .scratch()
@@ -26,10 +28,11 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
 
     init(
         domain: NSFileProviderDomain, service: any FolioService, temporaryDirectory: (() throws -> URL)? = nil,
-        localMetadata: LocalItemMetadataStore = .scratch()
+        localMetadata: LocalItemMetadataStore = .scratch(), cache: FolioCatalogCache? = nil
     ) {
         self.domain = domain
         self.service = service
+        self.cache = cache
         self.temporaryDirectory = temporaryDirectory
         self.localMetadata = localMetadata
         super.init()
@@ -42,10 +45,13 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     func invalidate() {}
 
     private func catalog(downloadDirectory: URL? = nil) throws -> (FolioCatalog, any FolioService) {
-        guard let service = service ?? SharedConfiguration.makeService(downloadDirectory: downloadDirectory) else {
-            throw NSFileProviderError(.notAuthenticated)
+        if let service {
+            return (FolioCatalog(service: service, cache: cache), service)
         }
-        return (FolioCatalog(service: service), service)
+        guard let server = SharedConfiguration.serverURL(),
+            let service = SharedConfiguration.makeService(downloadDirectory: downloadDirectory)
+        else { throw NSFileProviderError(.notAuthenticated) }
+        return (FolioCatalog(service: service, cache: ProcessCatalogCache.cache(for: server)), service)
     }
 
     func item(
@@ -439,6 +445,21 @@ extension FolioItemID {
             self = .folder(.root)
         } else {
             self.init(rawValue: providerIdentifier.rawValue)
+        }
+    }
+}
+
+/// One catalog cache per server for the whole extension process, shared by every provider instance.
+private enum ProcessCatalogCache {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var current: (server: URL, cache: FolioCatalogCache)?
+
+    static func cache(for server: URL) -> FolioCatalogCache {
+        lock.withLock {
+            if let current, current.server == server { return current.cache }
+            let cache = FolioCatalogCache()
+            current = (server, cache)
+            return cache
         }
     }
 }
