@@ -37,6 +37,9 @@ struct InboxView: View {
     @State private var pendingUploads: UploadBatch?
     @State private var pageTask: Task<Void, Never>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if os(iOS)
+        @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
     @FocusState private var searchFocused: Bool
     private let router = IntentRouter.shared
 
@@ -271,8 +274,13 @@ struct InboxView: View {
         }
         .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted, perform: receiveDrop)
         .safeAreaInset(edge: .top, spacing: 0) {
-            if uploads.state != .idle {
-                uploadNotice.transition(.opacity)
+            VStack(spacing: 0) {
+                if case let .failed(message) = list.phase, !list.rows.isEmpty {
+                    reloadFailure(message)
+                }
+                if uploads.state != .idle {
+                    uploadNotice.transition(.opacity)
+                }
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: uploads.state != .idle)
@@ -281,7 +289,9 @@ struct InboxView: View {
             DocumentReviewFilters(filter: list.filter) { list.filter = $0 }
         }
         #if os(iOS)
-            .safeAreaInset(edge: .bottom) { scanButton }
+            .safeAreaInset(edge: .bottom) {
+                if horizontalSizeClass == .compact { scanButton }
+            }
             .fullScreenCover(isPresented: $showScanner) {
                 DocumentScanner(
                     onFinish: { pages in
@@ -474,7 +484,7 @@ struct InboxView: View {
             Text("Reading your inbox…")
                 .font(FolioTheme.Typography.body)
                 .foregroundStyle(Color.inkMuted)
-        case let .failed(message):
+        case let .failed(message) where list.rows.isEmpty:
             ContentUnavailableView {
                 Label("Couldn't load documents", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(Color.danger)
@@ -500,6 +510,19 @@ struct InboxView: View {
         default:
             EmptyView()
         }
+    }
+
+    private func reloadFailure(_ message: String) -> some View {
+        HStack {
+            Label("Couldn't refresh. \(message)", systemImage: "exclamationmark.triangle")
+            Spacer()
+            Button("Try again") { Task { await list.load() } }
+                .buttonStyle(.borderless)
+        }
+        .font(FolioTheme.Typography.bodySm)
+        .foregroundStyle(Color.danger)
+        .padding(FolioTheme.Spacing.space3)
+        .background(Color.dangerTint)
     }
 
     @ViewBuilder
@@ -542,11 +565,22 @@ struct InboxView: View {
                     systemImage: "line.3.horizontal.decrease"
                 ) { showReviewFilters = true }
             }
-            Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
-                .help("Upload files (\u{2318}O)")
+            #if os(iOS)
+                Menu("Add", systemImage: "plus") {
+                    if DocumentScanner.isSupported {
+                        Button("Scan document", systemImage: "doc.viewfinder") { showScanner = true }
+                    }
+                    Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
+                    Button("Photos", systemImage: "photo") { showPhotosPicker = true }
+                }
                 .disabled(!canAcceptImport)
-            Button("Photos", systemImage: "photo") { showPhotosPicker = true }
-                .disabled(!canAcceptImport)
+            #else
+                Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
+                    .help("Upload files (\u{2318}O)")
+                    .disabled(!canAcceptImport)
+                Button("Photos", systemImage: "photo") { showPhotosPicker = true }
+                    .disabled(!canAcceptImport)
+            #endif
             Menu("Server", systemImage: "gearshape") {
                 Text(serverURL.absoluteString)
                 Button("Sign out", action: onSignOut)
