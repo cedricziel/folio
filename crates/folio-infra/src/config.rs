@@ -46,6 +46,7 @@ pub struct Config {
     pub auth: AuthConfig,
     pub mcp: McpConfig,
     pub import: ImportConfig,
+    pub push: PushConfig,
 }
 
 /// Automatic ingestion, configured per named source
@@ -495,6 +496,68 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
 }
 
+/// Push notifications to the Apple app
+///
+/// Database settings on `/settings` override these, except `apns.base_url`,
+/// which is configuration only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PushConfig {
+    /// `none` or `apns`
+    pub transport: String,
+    pub apns: ApnsConfig,
+    pub quiet_window_seconds: u64,
+    pub max_alerts_per_hour: u64,
+}
+
+impl Default for PushConfig {
+    fn default() -> Self {
+        Self {
+            transport: "none".into(),
+            apns: ApnsConfig::default(),
+            quiet_window_seconds: 30,
+            max_alerts_per_hour: 12,
+        }
+    }
+}
+
+/// Token-based APNs credentials
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApnsConfig {
+    pub team_id: Option<String>,
+    pub key_id: Option<String>,
+    pub topic: String,
+    /// The `.p8` key in PEM form
+    pub private_key: Option<String>,
+    /// Replaces Apple's hosts, for tests against a local HTTP/2 stub
+    pub base_url: Option<String>,
+}
+
+impl Default for ApnsConfig {
+    fn default() -> Self {
+        Self {
+            team_id: None,
+            key_id: None,
+            topic: "com.cedricziel.folio".into(),
+            private_key: None,
+            base_url: None,
+        }
+    }
+}
+
+impl fmt::Debug for ApnsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApnsConfig")
+            .field("team_id", &self.team_id)
+            .field("key_id", &self.key_id)
+            .field("topic", &self.topic)
+            .field("private_key", &Redacted(&self.private_key))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
+
 /// Server directories an import may read, and the size limit for one file
 ///
 /// Config-only: which server paths the app reads is a deployment decision.
@@ -824,6 +887,46 @@ pub const SETTINGS: &[Setting] = &[
         key: "mcp.allowed_hosts",
         env: "FOLIO_MCP__ALLOWED_HOSTS",
         kind: ValueKind::List,
+    },
+    Setting {
+        key: "push.transport",
+        env: "FOLIO_PUSH__TRANSPORT",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.team_id",
+        env: "FOLIO_PUSH__APNS__TEAM_ID",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.key_id",
+        env: "FOLIO_PUSH__APNS__KEY_ID",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.topic",
+        env: "FOLIO_PUSH__APNS__TOPIC",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.private_key",
+        env: "FOLIO_PUSH__APNS__PRIVATE_KEY",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.base_url",
+        env: "FOLIO_PUSH__APNS__BASE_URL",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.quiet_window_seconds",
+        env: "FOLIO_PUSH__QUIET_WINDOW_SECONDS",
+        kind: ValueKind::Int,
+    },
+    Setting {
+        key: "push.max_alerts_per_hour",
+        env: "FOLIO_PUSH__MAX_ALERTS_PER_HOUR",
+        kind: ValueKind::Int,
     },
     Setting {
         key: "import.allowed_roots",

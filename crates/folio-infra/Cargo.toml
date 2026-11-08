@@ -61,6 +61,10 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
+# ES256 provider tokens for APNs
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+base64 = { workspace = true }
+
 # Symlink-free opens under an import directory
 rustix = { version = "1", features = ["fs"] }
 
@@ -82,7 +86,7 @@ version = "7"
 optional = true
 
 [dev-dependencies]
-axum = { workspace = true }
+axum = { workspace = true, features = ["http2"] }
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 testcontainers-modules = { version = "0.15", features = ["postgres"] }
 wiremock = "0.6"
