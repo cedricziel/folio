@@ -22,6 +22,7 @@ public final class TransferFileCache: Sendable {
     private let now: @Sendable () -> Date
     private let entries = OSAllocatedUnfairLock(initialState: [DocumentEntityID: Entry]())
     private let server = OSAllocatedUnfairLock<URL?>(initialState: nil)
+    private let swept = OSAllocatedUnfairLock(initialState: false)
 
     public init(
         directory: URL, maxAge: TimeInterval = 600, maxFiles: Int = 8, now: @escaping @Sendable () -> Date = Date.init
@@ -99,6 +100,7 @@ public final class TransferFileCache: Sendable {
     /// Keeps files only while one server stays signed in; a sign-out, an expired session or another server
     /// deletes them. Interruptions keep them, as the same session may come back.
     public func sessionChanged(to session: SessionRestoration) {
+        sweepLeftoversOnce()
         switch session {
         case let .signedIn(url):
             let changed = server.withLock { server in
@@ -118,6 +120,30 @@ public final class TransferFileCache: Sendable {
     public func signedIn(to url: URL) {
         server.withLock { $0 = url }
         removeAll()
+    }
+
+    /// Downloads from earlier launches aren't tracked in memory, so the first session update of a launch
+    /// applies the age and count limits to the folders they left behind.
+    private func sweepLeftoversOnce() {
+        let first = swept.withLock { swept in
+            defer { swept = true }
+            return !swept
+        }
+        guard first else { return }
+        let tracked = entries.withLock { Set($0.values.map { $0.url.deletingLastPathComponent().standardizedFileURL }) }
+        let folders =
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.contentModificationDateKey]))?
+            .filter { !tracked.contains($0.standardizedFileURL) } ?? []
+        let cutoff = now().addingTimeInterval(-maxAge)
+        let dated = folders.map { folder in
+            (folder, (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                ?? .distantPast)
+        }
+        .sorted { $0.1 > $1.1 }
+        for (index, (folder, modified)) in dated.enumerated() where modified < cutoff || index >= maxFiles {
+            try? FileManager.default.removeItem(at: folder)
+        }
     }
 
     private func remove(_ url: URL) {
