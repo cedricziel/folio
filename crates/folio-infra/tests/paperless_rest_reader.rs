@@ -444,7 +444,7 @@ async fn a_document_modified_mid_listing_is_read_again() {
     // page 2 by number would then start at document 4 and skip 3
     listing_page(
         &server,
-        &[first.clone()],
+        std::slice::from_ref(&first),
         doc_page(&[doc_json(1, 1), doc_json(2, 2)], true),
     )
     .await;
@@ -482,7 +482,7 @@ async fn a_run_sharing_one_modified_time_is_read_by_id() {
     // Bulk edits stamp many documents with one `modified`; this run fills
     // more than a page
     let run = doc_page(&[doc_json(1, 1), doc_json(2, 1)], true);
-    listing_page(&server, &[first.clone()], run.clone()).await;
+    listing_page(&server, std::slice::from_ref(&first), run.clone()).await;
     listing_page(
         &server,
         &[first.clone(), ("modified__gte", modified(1))],
