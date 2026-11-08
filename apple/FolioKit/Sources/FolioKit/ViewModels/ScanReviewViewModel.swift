@@ -37,14 +37,17 @@ public final class ScanReviewViewModel {
     private let service: any FolioService
     private let defaultTitle: String
     public let destination: VaultDestinationViewModel?
+    private let renderPDF: @Sendable ([CGImage]) throws -> Data
     private(set) var filing: Task<Void, Never>?
 
     public init(
         pages: [CGImage], service: any FolioService, now: Date = Date(),
-        destination: VaultDestinationViewModel? = nil
+        destination: VaultDestinationViewModel? = nil,
+        renderPDF: @escaping @Sendable ([CGImage]) throws -> Data = PDFBuilder.makePDF(from:)
     ) {
         self.pages = pages
         self.service = service
+        self.renderPDF = renderPDF
         self.destination = destination
         defaultTitle = "Scan \(FolioFormat.isoDay(now)) \(Self.time(now))"
         title = defaultTitle
@@ -77,12 +80,15 @@ public final class ScanReviewViewModel {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = name.isEmpty ? defaultTitle : name
         do {
-            let pdf = try PDFBuilder.makePDF(from: pages)
+            let pdf = try await PDFBuilder.render(ScanImages(images: pages), using: renderPDF)
+            try Task.checkCancellation()
             let file = UploadFile(
                 data: pdf, filename: "\(title).pdf", mimeType: "application/pdf", title: title
             )
             _ = try await service.upload(file)
             state = .filed
+        } catch is CancellationError {
+            state = .idle
         } catch {
             state = .failed(error.localizedDescription)
         }

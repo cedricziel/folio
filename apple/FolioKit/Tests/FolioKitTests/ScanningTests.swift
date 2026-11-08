@@ -36,6 +36,29 @@ struct PDFBuilderTests {
     @Test func refusesAnEmptyScan() {
         #expect(throws: PDFBuilder.Failure.noPages) { try PDFBuilder.makePDF(from: []) }
     }
+
+    @Test func stopsRenderingOnceCancelled() async {
+        let pages = ScanImages(images: [page(width: 10, height: 10)])
+        let render = Task.detached { () throws -> Data in
+            while !Task.isCancelled { await Task.yield() }
+            return try PDFBuilder.makePDF(from: pages.images)
+        }
+        render.cancel()
+        await #expect(throws: CancellationError.self) { try await render.value }
+    }
+
+    @Test func backgroundRenderMatchesTheDirectRenderPageForPage() async throws {
+        let images = [page(width: 600, height: 800), page(width: 800, height: 600), page(width: 500, height: 1500)]
+        let direct = try #require(PDFDocument(data: try PDFBuilder.makePDF(from: images)))
+        let background = try #require(PDFDocument(data: try await PDFBuilder.render(ScanImages(images: images))))
+
+        #expect(background.pageCount == direct.pageCount)
+        for index in 0..<direct.pageCount {
+            #expect(
+                background.page(at: index)?.bounds(for: .mediaBox) == direct.page(at: index)?.bounds(for: .mediaBox)
+            )
+        }
+    }
 }
 
 struct UploadFileTests {
@@ -117,6 +140,39 @@ struct UploadFileTests {
         model.title = "  "
         await model.fileIt()
         #expect(await service.uploads.first?.title?.hasPrefix("Scan 2025-03-14") == true)
+    }
+
+    @Test func rendersThePDFOffTheMainThread() async {
+        let (renderedOnMain, recorder) = AsyncStream<Bool>.makeStream()
+        let model = ScanReviewViewModel(
+            pages: [page(width: 10, height: 10)], service: MockFolioService(),
+            renderPDF: { images in
+                recorder.yield(Thread.isMainThread)
+                recorder.finish()
+                return try PDFBuilder.makePDF(from: images)
+            }
+        )
+
+        await model.fileIt()
+
+        var recorded = renderedOnMain.makeAsyncIterator()
+        #expect(await recorded.next() == false)
+        #expect(model.state == .filed)
+    }
+
+    @Test func uploadsEveryPageInScanOrder() async throws {
+        let service = MockFolioService()
+        let model = ScanReviewViewModel(
+            pages: [page(width: 600, height: 800), page(width: 800, height: 600), page(width: 500, height: 1500)],
+            service: service
+        )
+
+        await model.fileIt()
+
+        let upload = try #require(await service.uploads.first)
+        let pdf = try #require(PDFDocument(data: upload.data))
+        let heights = (0..<pdf.pageCount).compactMap { pdf.page(at: $0)?.bounds(for: .mediaBox).height }
+        #expect(heights == [793, 446, 1785])
     }
 
     @Test func uploadFailureKeepsThePagesForRetry() async {
@@ -203,5 +259,32 @@ struct UploadFileTests {
 
         #expect(inbox.finished == 0)
         #expect(inbox.showing != nil)
+    }
+
+    @Test func cancellingWhileRenderingNeverUploads() async {
+        let service = MockFolioService()
+        let inbox = Inbox()
+        let (started, starter) = AsyncStream<Void>.makeStream()
+        let release = DispatchSemaphore(value: 0)
+        let model = ScanReviewViewModel(
+            pages: [page(width: 10, height: 10)], service: service,
+            renderPDF: { images in
+                starter.yield()
+                _ = release.wait(timeout: .now() + 10)
+                return try PDFBuilder.makePDF(from: images)
+            }
+        )
+        model.file { inbox.finished += 1 }
+        let filing = model.filing
+        var renderStarted = started.makeAsyncIterator()
+        _ = await renderStarted.next()
+
+        model.cancelFiling()
+        release.signal()
+        await filing?.value
+
+        #expect(await service.uploads.isEmpty)
+        #expect(inbox.finished == 0)
+        #expect(model.state == .idle)
     }
 }
