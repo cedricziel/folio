@@ -204,7 +204,7 @@ struct UploadFileTests {
         } while model.state == .filing
         await filing.value
 
-        print("Main actor during a 1 s render: \(ticks) ticks, worst hitch \(worstHitch)")
+        reportMeasurement("Main actor during a 1 s scan render: \(ticks) ticks, worst hitch \(worstHitch)")
         #expect(model.state == .filed)
         #expect(worstHitch < .milliseconds(250))
     }
