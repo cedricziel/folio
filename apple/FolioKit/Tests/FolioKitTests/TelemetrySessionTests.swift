@@ -199,7 +199,8 @@ struct TelemetrySessionTests {
         #expect(allowed == 60)
         #expect(limiter.takeDropped() == 40)
         #expect(limiter.takeDropped() == 0)
-        #expect(limiter.allow(at: start + .seconds(61)))
+        let allowedLater = limiter.allow(at: start + .seconds(61))
+        #expect(allowedLater)
     }
 
     @Test func vocabularyMatchesTheSpecification() {
