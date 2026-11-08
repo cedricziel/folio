@@ -22,7 +22,7 @@ function pageBody(pathname: string) {
   const screen = (name: string) =>
     `<meta name="folio-screen" content="${name}">`;
   if (pathname === "/")
-    return `${screen("inbox")}<h1>Folio</h1><a data-folio-action="document.open" href="/documents/${documentId}">private-title</a>`;
+    return `${screen("inbox")}<h1>Folio</h1><a data-folio-action="document.open" href="/documents/${documentId}">private-title</a><form action="/logout" method="post" data-turbo="false" data-folio-action="auth.sign_out"><button>Sign out</button></form>`;
   if (pathname.startsWith("/documents/"))
     return `${screen("document.detail")}<h1>Folio</h1><form data-folio-action="document.delete" action="${pathname}/delete" method="post" data-turbo="false"><button>Delete</button></form><button data-folio-action="document.secret">Unlisted</button>`;
   if (pathname === "/trash") return `${screen("trash")}<h1>Folio</h1>`;
@@ -84,6 +84,11 @@ const test = base.extend<{ receiver: Receiver }>({
           response.end();
           return;
         }
+        if (request.method === "POST" && pathname === "/logout") {
+          response.writeHead(303, { location: "/login" });
+          response.end();
+          return;
+        }
         response.setHeader("content-type", "text/html");
         response.setHeader(
           "server-timing",
@@ -102,6 +107,8 @@ const test = base.extend<{ receiver: Receiver }>({
     try {
       await use(receiver);
     } finally {
+      // The page can still hold a keep-alive connection; don't let it stall teardown past the test timeout.
+      server.closeAllConnections();
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );
@@ -416,4 +423,40 @@ test("follows one session across screens and actions without IDs or contents", a
   expect(exported).not.toContain("private-title");
   expect(exported).not.toContain("document.secret");
   expect(exported).not.toMatch(/"stringValue":"[^"]*\?/);
+});
+
+test("signing out ends the session and the next one is not linked to it", async ({
+  page,
+  receiver,
+}) => {
+  await page.goto(receiver.origin);
+  await expect
+    .poll(() =>
+      logRecords(receiver).some((record) => record.eventName === "folio.screen.view"),
+    )
+    .toBe(true);
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.waitForURL("**/login");
+  await page.goto(receiver.origin);
+
+  const sessionEvents = () =>
+    logRecords(receiver)
+      .filter((record) => record.eventName?.startsWith("session."))
+      .map((record) => ({ name: record.eventName, ...attributes(record.attributes) }));
+  await expect.poll(sessionEvents, { timeout: 20_000 }).toHaveLength(3);
+  const [first, end, next] = sessionEvents();
+  expect(first).toMatchObject({ name: "session.start" });
+  expect(end).toMatchObject({
+    name: "session.end",
+    "session.id": first["session.id"],
+    "folio.session.end_reason": "sign_out",
+  });
+  expect(next.name).toBe("session.start");
+  expect(next["session.id"]).not.toBe(first["session.id"]);
+  expect(next["session.previous_id"]).toBeUndefined();
+  expect(
+    logRecords(receiver).filter(
+      (record) => attributes(record.attributes)["folio.action.name"] === "auth.sign_out",
+    ),
+  ).toHaveLength(1);
 });
