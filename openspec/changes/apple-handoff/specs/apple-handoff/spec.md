@@ -1,0 +1,200 @@
+# Spec Delta
+
+## Purpose
+
+Lets a user continue the Folio screen they are looking at on another of their Apple devices, or in a browser on a device without the app, without leaving the server they are signed in to.
+
+## ADDED Requirements
+
+### Requirement: Screens that offer Handoff
+
+The Apple app SHALL advertise a Handoff activity while one of these is visible and unlocked: a document's detail, a document's discussion, the vault library (Inbox or All documents), or a saved view. The search, upload or scan review, classifications and settings screens SHALL NOT advertise one.
+
+#### Scenario: Viewing a document
+
+- **WHEN** the user has a document's detail open on an iPhone signed in to a server
+- **THEN** a nearby iPad or Mac signed in to the same iCloud account offers to continue that document in Folio
+
+#### Scenario: Viewing the discussion
+
+- **WHEN** the user has a document's discussion open
+- **THEN** the advertised activity identifies the same document and asks the receiver to open its discussion
+
+#### Scenario: Browsing a vault or saved view
+
+- **WHEN** the user is on the Inbox, All documents or a saved view of a vault
+- **THEN** the advertised activity identifies that vault and that list or saved view
+
+#### Scenario: Searching
+
+- **WHEN** the user is typing or reviewing a search
+- **THEN** no activity carries the search text and the activity for the underlying list stays as it was
+
+### Requirement: Activity types are declared
+
+The Apple app SHALL declare each activity type it advertises or accepts in its `NSUserActivityTypes`: `com.cedricziel.folio.document`, `com.cedricziel.folio.library` and `com.cedricziel.folio.saved-view`. It SHALL ignore activities of any other custom type.
+
+#### Scenario: Declared type arrives
+
+- **WHEN** another device hands over a `com.cedricziel.folio.document` activity
+- **THEN** the app is offered for continuation and receives it
+
+#### Scenario: Unknown type arrives
+
+- **WHEN** an activity with an undeclared Folio type arrives
+- **THEN** the app does not navigate
+
+### Requirement: Payload identifies server and target
+
+Each activity's user info SHALL carry payload version `1`, the sender's canonical server base URL, and the vault ID. A document activity also carries the document ID and an optional `discussion` pane. A library activity carries `inbox` or `all`. A saved-view activity carries the saved-view ID. All IDs are lowercase UUID strings.
+
+#### Scenario: Round trip
+
+- **WHEN** a payload is encoded into user info and decoded on another device
+- **THEN** the decoded server, vault, target and pane equal the originals
+
+#### Scenario: Malformed or newer payload
+
+- **WHEN** user info lacks a required key, holds an invalid UUID or URL, or carries a version other than `1`
+- **THEN** decoding fails, the app does not navigate, and it opens the activity's web page URL if one is present
+
+### Requirement: Handoff reveals no document content
+
+Activities SHALL NOT carry document, vault or saved-view names, document content, search text or credentials in the user info, title or keywords. Each activity SHALL be eligible for Handoff only: not for search, public indexing or prediction.
+
+#### Scenario: Inspecting an advertised activity
+
+- **WHEN** the app advertises an activity for a document titled "Tax return 2025"
+- **THEN** neither its user info nor its title contains that title, and its search, public-indexing and prediction eligibility are all false
+
+### Requirement: Server identity is compared canonically
+
+The app SHALL treat two server URLs as the same server when their canonical forms are equal. Canonical form: lowercased scheme and host, default port (80 for http, 443 for https) removed, user info, query and fragment removed, and trailing slashes trimmed from a path that is otherwise compared case-sensitively.
+
+#### Scenario: Equivalent spellings
+
+- **WHEN** the payload names `https://Folio.Example.com:443/` and the receiver is signed in to `https://folio.example.com`
+- **THEN** the servers match
+
+#### Scenario: Different scheme, port or path
+
+- **WHEN** the two URLs differ in scheme, in a non-default port, or in the path prefix (e.g. `/folio` vs `/`)
+- **THEN** the servers do not match
+
+### Requirement: Continuation on the same server opens the target
+
+When the receiver is signed in to the payload's server, it SHALL select the payload's vault and open the target. A document opens its detail (with the discussion presented when requested), a library opens Inbox or All documents, and a saved view opens that saved view.
+
+#### Scenario: Continue a document
+
+- **WHEN** a document activity arrives and the receiver is signed in to the same server with access to the vault
+- **THEN** the app selects that vault and shows the document's detail
+
+#### Scenario: Continue a discussion
+
+- **WHEN** a document activity with the `discussion` pane arrives
+- **THEN** the app shows the document's detail with its discussion presented
+
+#### Scenario: Continue a saved view that no longer exists
+
+- **WHEN** a saved-view activity names a saved view the receiver cannot load
+- **THEN** the app opens that vault's library and reports that the saved view is unavailable
+
+### Requirement: Inaccessible vault or document is reported
+
+If the vault is not in the receiver's vault list, the app SHALL report that the vault is no longer available and stay where it was. If the document cannot be loaded, because it was deleted, trashed or access was revoked, the app SHALL show its document-unavailable state in that vault.
+
+#### Scenario: Vault access revoked
+
+- **WHEN** a document activity names a vault the receiver's account can no longer see
+- **THEN** the app shows "This vault is no longer available." and keeps its current vault
+
+#### Scenario: Document trashed
+
+- **WHEN** a document activity names a document that has since been moved to Trash
+- **THEN** the app opens the vault and shows the document as unavailable without offering to restore it
+
+### Requirement: Continuation without a matching session falls back safely
+
+The app SHALL NOT sign out or switch servers because of a continuation. If it is signed out, it SHALL show sign-in prefilled with the payload's server and open the target after sign-in to that server. If it is signed in to another server, it SHALL offer to open the web page URL in a browser instead.
+
+#### Scenario: Receiver signed out
+
+- **WHEN** a document activity from `https://folio.example.com` arrives on a signed-out device
+- **THEN** the sign-in screen shows that server address and, once the user signs in to it, the document opens
+
+#### Scenario: Sign-in to a different server instead
+
+- **WHEN** the user edits the prefilled address and signs in to another server
+- **THEN** the held continuation is discarded and the app opens normally
+
+#### Scenario: Receiver on another server
+
+- **WHEN** a document activity from server A arrives on a device signed in to server B
+- **THEN** the app stays signed in to B, explains the document is on A's host, and offers "Open in Browser" for the activity's web page URL
+
+### Requirement: Activities fall back to the web page
+
+Each activity SHALL set its web page URL to the same target on the sender's server: `{server}/vaults/{vault_id}/documents/{document_id}` for a document or discussion, `{server}/vaults/{vault_id}/` (Inbox) or `{server}/vaults/{vault_id}/?view=all` for a library, and `{server}/vaults/{vault_id}/saved-views/{saved_view_id}` for a saved view. `{server}` keeps any path prefix.
+
+#### Scenario: Device without the app
+
+- **WHEN** a document activity is handed to a Mac without Folio installed
+- **THEN** the Mac offers to open `{server}/vaults/{vault_id}/documents/{document_id}` in the browser
+
+#### Scenario: Browser is not signed in
+
+- **WHEN** that page is opened in a browser without a Folio session
+- **THEN** the server sends it to `/login` and returns it to the same page after sign-in
+
+### Requirement: Stable web URLs for handed-over targets
+
+The server SHALL keep serving the HTML pages that activities link to: `GET /vaults/{vault_id}/documents/{id}` (document detail), `GET /vaults/{vault_id}/` and `GET /vaults/{vault_id}/?view=all` (Inbox and All documents), and `GET /vaults/{vault_id}/saved-views/{id}` (saved view). Each answers 200 for an accessible target and 404 for a missing or inaccessible one. An unauthenticated GET redirects to `/login?next=<path>`.
+
+#### Scenario: Accessible document
+
+- **WHEN** a signed-in member requests `GET /vaults/{vault_id}/documents/{id}` for an active document in that vault
+- **THEN** the response is 200 with the document detail page
+
+#### Scenario: Trashed document
+
+- **WHEN** the same URL names a document in Trash
+- **THEN** the response is 404
+
+#### Scenario: Not signed in
+
+- **WHEN** a request without a session asks for `GET /vaults/{vault_id}/saved-views/{id}`
+- **THEN** the response redirects to `/login?next=%2Fvaults%2F{vault_id}%2Fsaved-views%2F{id}`
+
+### Requirement: Activities follow the session
+
+The app SHALL stop advertising an activity when it signs out, when the selected vault changes away from the activity's vault, and when the advertised screen closes. After a vault switch, only the new vault's screen is advertised.
+
+#### Scenario: Sign out
+
+- **WHEN** the user signs out while a document activity is advertised
+- **THEN** no Folio activity remains advertised
+
+#### Scenario: Vault switch
+
+- **WHEN** the user switches from vault A to vault B
+- **THEN** activities naming vault A are no longer offered and the library activity names vault B
+
+### Requirement: Universal links route like Handoff
+
+A self-built app with associated domains SHALL accept universal links for the web URLs above and route them through the same rules as Handoff. It derives the server from the link's scheme, host, port and the path before `/vaults/`. A link it cannot parse SHALL open in a browser view inside the app instead of navigating.
+
+#### Scenario: Tapping a document link
+
+- **WHEN** a link `https://folio.example.com/vaults/{vault_id}/documents/{id}` opens a self-built app signed in to `https://folio.example.com`
+- **THEN** the app opens that document
+
+#### Scenario: Link under a path prefix
+
+- **WHEN** a link `https://example.com/folio/vaults/{vault_id}/documents/{id}` arrives
+- **THEN** the server is `https://example.com/folio` for matching
+
+#### Scenario: Link to an unsupported page
+
+- **WHEN** a universal link names a path the app does not route, such as a document's download URL
+- **THEN** the app presents the URL in an in-app browser view and does not navigate
