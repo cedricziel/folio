@@ -124,7 +124,7 @@ public struct HandoffPayload: Equatable, Sendable {
         #if canImport(ObjectiveC)
             // Swift numbers and Booleans bridge to NSNumber here, so this one check covers both.
             guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-                !CFNumberIsFloatType(number)
+                !CFNumberIsFloatType(number as CFNumber)
             else { return nil }
             return number.intValue
         #else

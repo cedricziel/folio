@@ -60,6 +60,33 @@ final class PDFPreviewTests: XCTestCase {
         XCTAssertEqual(reader.currentPage, 3)
     }
 
+    func testARepeatedContinuationMovesBackToItsPage() throws {
+        let reader = position()
+        let url = URL(fileURLWithPath: "/tmp/three-pages.pdf")
+        let document = try threePages()
+        reader.open(url, request: PDFPageRequest(page: 2)) { document }
+        XCTAssertEqual(reader.currentPage, 2)
+
+        reader.view.go(to: try XCTUnwrap(document.page(at: 2)))
+        XCTAssertEqual(reader.currentPage, 3)
+        reader.open(url, request: PDFPageRequest(page: 2)) { XCTFail("reloaded the open file"); return document }
+
+        XCTAssertEqual(reader.currentPage, 2)
+    }
+
+    func testTheSameRequestDoesNotMoveTheReaderAgain() throws {
+        let reader = position()
+        let url = URL(fileURLWithPath: "/tmp/three-pages.pdf")
+        let document = try threePages()
+        let request = PDFPageRequest(page: 2)
+        reader.open(url, request: request) { document }
+
+        reader.view.go(to: try XCTUnwrap(document.page(at: 2)))
+        reader.open(url, request: request) { document }
+
+        XCTAssertEqual(reader.currentPage, 3)
+    }
+
     func testPublishesPageChanges() async throws {
         var reported: [Int] = []
         let changed = expectation(description: "page 3 reported")

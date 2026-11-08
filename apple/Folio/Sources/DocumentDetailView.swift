@@ -14,8 +14,8 @@ struct DocumentDetailView: View {
     @State private var classifying = false
     /// The PDF preview's current page, handed over with the document.
     @State private var page: Int?
-    /// The page a continued document asked for, applied once when the PDF loads.
-    @State private var initialPage: Int?
+    /// The page the latest continuation asked for; each continuation is a new request.
+    @State private var pageRequest: PDFPageRequest?
     let snapshot: Snapshot
     let vaultID: UUID
     /// Hands saved edits back to the list so its rows and inbox follow them.
@@ -73,7 +73,7 @@ struct DocumentDetailView: View {
         .onChange(of: continuation, initial: true) { _, continuation in
             guard let continuation else { return }
             if continuation.pane == .discussion { showingDiscussion = true }
-            initialPage = continuation.page
+            pageRequest = PDFPageRequest(page: continuation.page)
             onContinued()
         }
     }
@@ -87,7 +87,7 @@ struct DocumentDetailView: View {
                 .foregroundStyle(Color.inkMuted)
         case let .ready(url):
             if isPDF(url) {
-                PDFPreview(url: url, initialPage: initialPage) { page = $0 }
+                PDFPreview(url: url, pageRequest: pageRequest) { page = $0 }
             } else {
                 QuickLookPreview(url: url)
             }

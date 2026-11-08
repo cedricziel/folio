@@ -2,6 +2,13 @@ import FolioKit
 import PDFKit
 import SwiftUI
 
+/// One request to show a page. Each continuation makes a new one, so asking again for the page the
+/// document was opened at still moves there after the reader scrolled away.
+struct PDFPageRequest: Equatable {
+    let id = UUID()
+    let page: Int?
+}
+
 /// A PDF view that says when it has laid out, so a requested page can wait for real bounds.
 final class ReadingPDFView: PDFView {
     var onLayout: (() -> Void)?
@@ -28,6 +35,7 @@ final class PDFReadingPosition: NSObject {
     var onPageChange: (Int) -> Void
     private(set) var url: URL?
     private var pendingPage: Int?
+    private var lastRequest: PDFPageRequest?
 
     init(view: ReadingPDFView = ReadingPDFView(), onPageChange: @escaping (Int) -> Void) {
         self.view = view
@@ -50,6 +58,18 @@ final class PDFReadingPosition: NSObject {
         view.document = document
         guard document != nil else { return }
         show(page: initialPage)
+    }
+
+    /// Shows the file at `url`, loading it with `document` only when it is not the one already shown, and
+    /// honours `request` once: a request already applied does not move the view again.
+    func open(_ url: URL, request: PDFPageRequest?, document: () -> PDFDocument?) {
+        if self.url != url {
+            lastRequest = request
+            load(document(), from: url, initialPage: request?.page)
+        } else if let request, request != lastRequest {
+            lastRequest = request
+            show(page: request.page)
+        }
     }
 
     /// Moves to `page` (clamped), now if the view has laid out, otherwise at its first layout.
@@ -83,33 +103,16 @@ final class PDFReadingPosition: NSObject {
 /// A PDF shown with PDFKit, so Handoff can carry and restore its page. Other files use QuickLook.
 struct PDFPreview {
     let url: URL
-    let initialPage: Int?
+    let pageRequest: PDFPageRequest?
     let onPageChange: (Int) -> Void
 
-    final class Coordinator {
-        let position: PDFReadingPosition
-        var requestedPage: Int?
-
-        init(position: PDFReadingPosition) {
-            self.position = position
-        }
+    func makeCoordinator() -> PDFReadingPosition {
+        PDFReadingPosition(onPageChange: onPageChange)
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(position: PDFReadingPosition(onPageChange: onPageChange))
-    }
-
-    private func update(_ coordinator: Coordinator) {
-        let position = coordinator.position
+    private func update(_ position: PDFReadingPosition) {
         position.onPageChange = onPageChange
-        if position.url != url {
-            coordinator.requestedPage = initialPage
-            position.load(PDFDocument(url: url), from: url, initialPage: initialPage)
-        } else if let initialPage, initialPage != coordinator.requestedPage {
-            // A continuation to the document already open still moves to its page.
-            coordinator.requestedPage = initialPage
-            position.show(page: initialPage)
-        }
+        position.open(url, request: pageRequest) { PDFDocument(url: url) }
     }
 }
 
@@ -117,7 +120,7 @@ struct PDFPreview {
     extension PDFPreview: UIViewRepresentable {
         func makeUIView(context: Context) -> PDFView {
             update(context.coordinator)
-            return context.coordinator.position.view
+            return context.coordinator.view
         }
 
         func updateUIView(_: PDFView, context: Context) {
@@ -128,7 +131,7 @@ struct PDFPreview {
     extension PDFPreview: NSViewRepresentable {
         func makeNSView(context: Context) -> PDFView {
             update(context.coordinator)
-            return context.coordinator.position.view
+            return context.coordinator.view
         }
 
         func updateNSView(_: PDFView, context: Context) {
