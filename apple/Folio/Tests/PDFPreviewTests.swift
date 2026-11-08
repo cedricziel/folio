@@ -19,7 +19,7 @@ final class PDFPreviewTests: XCTestCase {
     }
 
     private func position(reporting pages: @escaping (Int) -> Void = { _ in }) -> PDFReadingPosition {
-        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        let view = ReadingPDFView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
         return PDFReadingPosition(view: view, onPageChange: pages)
     }
 
@@ -39,6 +39,25 @@ final class PDFPreviewTests: XCTestCase {
         let reader = position()
         reader.load(try threePages(), initialPage: nil)
         XCTAssertEqual(reader.currentPage, 1)
+    }
+
+    func testWaitsForLayoutBeforeMovingToThePage() throws {
+        let reader = PDFReadingPosition(view: ReadingPDFView(frame: .zero), onPageChange: { _ in })
+        reader.load(try threePages(), initialPage: 2)
+
+        reader.view.frame = CGRect(x: 0, y: 0, width: 300, height: 200)
+        reader.view.layout()
+
+        XCTAssertEqual(reader.currentPage, 2)
+    }
+
+    func testALaterRequestForTheOpenDocumentMovesToItsPage() throws {
+        let reader = position()
+        reader.load(try threePages(), initialPage: 1)
+
+        reader.show(page: 3)
+
+        XCTAssertEqual(reader.currentPage, 3)
     }
 
     func testPublishesPageChanges() async throws {

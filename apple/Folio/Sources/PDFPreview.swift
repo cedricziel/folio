@@ -2,19 +2,39 @@ import FolioKit
 import PDFKit
 import SwiftUI
 
-/// Keeps a PDF view's reading position: opens a document once at a requested page, clamped to the
-/// loaded file, and reports the 1-based page whenever it changes.
+/// A PDF view that says when it has laid out, so a requested page can wait for real bounds.
+final class ReadingPDFView: PDFView {
+    var onLayout: (() -> Void)?
+
+    #if os(iOS)
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            onLayout?()
+        }
+    #else
+        override func layout() {
+            super.layout()
+            onLayout?()
+        }
+    #endif
+}
+
+/// Keeps a PDF view's reading position: opens a document at a requested page, clamped to the loaded
+/// file, and reports the 1-based page whenever it changes. A requested page waits until the view has
+/// non-zero bounds, since PDFKit cannot scroll to a page before it has laid out.
 @MainActor
 final class PDFReadingPosition: NSObject {
-    let view: PDFView
+    let view: ReadingPDFView
     var onPageChange: (Int) -> Void
     private(set) var url: URL?
+    private var pendingPage: Int?
 
-    init(view: PDFView = PDFView(), onPageChange: @escaping (Int) -> Void) {
+    init(view: ReadingPDFView = ReadingPDFView(), onPageChange: @escaping (Int) -> Void) {
         self.view = view
         self.onPageChange = onPageChange
         super.init()
         view.autoScales = true
+        view.onLayout = { [weak self] in self?.applyPendingPage() }
         NotificationCenter.default.addObserver(
             self, selector: #selector(pageChanged), name: .PDFViewPageChanged, object: view)
     }
@@ -28,9 +48,21 @@ final class PDFReadingPosition: NSObject {
     func load(_ document: PDFDocument?, from url: URL? = nil, initialPage: Int?) {
         self.url = url
         view.document = document
-        guard let document else { return }
+        guard document != nil else { return }
+        show(page: initialPage)
+    }
+
+    /// Moves to `page` (clamped), now if the view has laid out, otherwise at its first layout.
+    func show(page: Int?) {
+        pendingPage = page ?? 1
+        applyPendingPage()
+    }
+
+    private func applyPendingPage() {
+        guard let requested = pendingPage, let document = view.document, !view.bounds.isEmpty else { return }
+        pendingPage = nil
         view.layoutDocumentView()
-        let page = ReadingPosition.clamp(page: initialPage, pageCount: document.pageCount)
+        let page = ReadingPosition.clamp(page: requested, pageCount: document.pageCount)
         if let target = document.page(at: page - 1) { view.go(to: target) }
         publish()
     }
@@ -54,14 +86,30 @@ struct PDFPreview {
     let initialPage: Int?
     let onPageChange: (Int) -> Void
 
-    func makeCoordinator() -> PDFReadingPosition {
-        PDFReadingPosition(onPageChange: onPageChange)
+    final class Coordinator {
+        let position: PDFReadingPosition
+        var requestedPage: Int?
+
+        init(position: PDFReadingPosition) {
+            self.position = position
+        }
     }
 
-    private func update(_ position: PDFReadingPosition) {
+    func makeCoordinator() -> Coordinator {
+        Coordinator(position: PDFReadingPosition(onPageChange: onPageChange))
+    }
+
+    private func update(_ coordinator: Coordinator) {
+        let position = coordinator.position
         position.onPageChange = onPageChange
-        guard position.url != url else { return }
-        position.load(PDFDocument(url: url), from: url, initialPage: position.url == nil ? initialPage : nil)
+        if position.url != url {
+            coordinator.requestedPage = initialPage
+            position.load(PDFDocument(url: url), from: url, initialPage: initialPage)
+        } else if let initialPage, initialPage != coordinator.requestedPage {
+            // A continuation to the document already open still moves to its page.
+            coordinator.requestedPage = initialPage
+            position.show(page: initialPage)
+        }
     }
 }
 
@@ -69,7 +117,7 @@ struct PDFPreview {
     extension PDFPreview: UIViewRepresentable {
         func makeUIView(context: Context) -> PDFView {
             update(context.coordinator)
-            return context.coordinator.view
+            return context.coordinator.position.view
         }
 
         func updateUIView(_: PDFView, context: Context) {
@@ -80,7 +128,7 @@ struct PDFPreview {
     extension PDFPreview: NSViewRepresentable {
         func makeNSView(context: Context) -> PDFView {
             update(context.coordinator)
-            return context.coordinator.view
+            return context.coordinator.position.view
         }
 
         func updateNSView(_: PDFView, context: Context) {
