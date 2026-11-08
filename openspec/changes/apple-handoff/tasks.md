@@ -167,7 +167,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 - [ ] 9.1 Run `make format`, `make lint` and `make test`. All pass.
 - [ ] 9.2 Run `cd apple && bundle exec fastlane test` (FolioKit `swift test`, iOS and macOS builds, `FolioAuthTests`) and `apple/scripts/check-build-settings.sh`. All pass, and CI's `apple.yml` on macos-26 is green.
-- [ ] 9.3 Use the `verify` skill against an ephemeral instance with `FOLIO_APPLE__APP_IDS=ABCDE12345.com.example.folio`:
+- [x] 9.3 Use the `verify` skill against an ephemeral instance with `FOLIO_APPLE__APP_IDS=ABCDE12345.com.example.folio`:
   - `curl -i /.well-known/apple-app-site-association` returns 200 with the masked components, and 404 without the variable
   - `/settings` shows the section with the CDN note
 
