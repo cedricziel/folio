@@ -124,7 +124,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Also write a failing configure test: user info matches the codec, `webpageURL` matches `HandoffLink`, `isEligibleForHandoff` is true, and search, public-indexing and prediction eligibility are false. For documents, configure extends #392's `DocumentActivityTracker.configure`. Commit `feat(apple): decide and configure the advertised activity`.
 
-- [ ] 6.8 Extend `WorkspaceViewModel.open` with a `pane`, and add a saved-view route. First write failing `WorkspaceTests`:
+- [x] 6.8 Extend `WorkspaceViewModel.open` with a `pane`, and add a saved-view route. First write failing `WorkspaceTests`:
   - `.discussion` exposes a pending discussion presentation
   - an unknown vault keeps the current vault and sets "This vault is no longer available."
   - a missing saved view falls back to the vault library with an error
