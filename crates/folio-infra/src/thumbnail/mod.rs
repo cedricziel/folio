@@ -36,7 +36,7 @@ impl ThumbnailService {
     }
 
     /// Generate a thumbnail for a document and return its object key
-    #[instrument(skip(self, data))]
+    #[instrument(skip(self, data, text_content))]
     pub async fn generate(
         &self,
         document_id: Uuid,

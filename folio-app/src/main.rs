@@ -267,6 +267,7 @@ async fn main() -> Result<()> {
         repos.saved_views,
         document_repo.clone(),
         entry_repo,
+        repos.upload_receipts,
         tag_repo,
         correspondent_repo,
         document_type_repo,

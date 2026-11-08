@@ -18,6 +18,7 @@ mod ingest_repo;
 mod outbox;
 mod search;
 mod settings_repo;
+mod upload_receipts;
 mod vault_repo;
 mod workflow_repo;
 
@@ -45,6 +46,7 @@ pub use outbox::{
 };
 pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
+pub use upload_receipts::SqliteUploadReceiptRepository;
 pub use vault_repo::SqliteVaultRepository;
 pub use workflow_repo::SqliteWorkflowRepository;
 

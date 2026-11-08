@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.1](https://github.com/cedricziel/folio/compare/v0.11.0...v0.11.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **apple:** drop earlier results when a load for a new search fails ([c60ba7b](https://github.com/cedricziel/folio/commit/c60ba7b1b530f68fa5bd95c76cb7d07ec0107d55))
+* **apple:** iPad document list loading, errors and add actions ([#374](https://github.com/cedricziel/folio/issues/374)) ([b0093dd](https://github.com/cedricziel/folio/commit/b0093dd3a2c61d057e02fa90dab2bd981b1c3462))
+* **apple:** keep documents visible when a refresh fails; move Add actions to the iPad toolbar ([fefdd43](https://github.com/cedricziel/folio/commit/fefdd431e84751cc9de7b4f562319487c7b40850))
+* **apple:** show list reload indicator above the documents ([8d8c4f1](https://github.com/cedricziel/folio/commit/8d8c4f1667a777ef42c656e49d643541817a907e))
+* **infra:** stop recording settings values as span attributes ([c662280](https://github.com/cedricziel/folio/commit/c662280912ed072921798a737ef28967c41334e9))
+* **infra:** stop recording settings values as span attributes ([#382](https://github.com/cedricziel/folio/issues/382)) ([2b8b70e](https://github.com/cedricziel/folio/commit/2b8b70ea0ea15b2d261172a92622929add98d813))
+
 ## [0.11.0](https://github.com/cedricziel/folio/compare/v0.10.0...v0.11.0) (2026-11-08)
 
 
