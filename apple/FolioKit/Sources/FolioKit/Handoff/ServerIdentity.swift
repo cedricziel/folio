@@ -35,6 +35,11 @@ public struct ServerIdentity: Hashable, Sendable, CustomStringConvertible {
         "\(scheme)://\(displayHost)\(path)"
     }
 
+    /// The canonical base URL: no user info, query or fragment.
+    public var url: URL? {
+        URL(string: description)
+    }
+
     private static func canonicalHost(_ raw: String) -> String? {
         var host = raw
         if host.hasPrefix("[") && host.hasSuffix("]") {

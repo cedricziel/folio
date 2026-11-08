@@ -34,8 +34,10 @@ public struct HandoffPayload: Equatable, Sendable {
     public let vaultID: UUID
     public let target: HandoffTarget
 
+    /// Keeps only the server's canonical form, so user info, a query or a fragment in the session's URL
+    /// never travels to another device.
     public init(server: URL, vaultID: UUID, target: HandoffTarget) {
-        self.server = server
+        self.server = ServerIdentity(server)?.url ?? server
         self.vaultID = vaultID
         self.target = target
     }

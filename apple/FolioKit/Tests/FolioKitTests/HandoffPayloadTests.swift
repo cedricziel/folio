@@ -119,6 +119,19 @@ struct HandoffPayloadTests {
                 == .document(document, pane: nil, page: nil))
     }
 
+    @Test func credentialsInTheServerURLNeverTravel() throws {
+        let leaky = try #require(URL(string: "https://me:secret@Folio.Example.com:443/folio/?token=x#top"))
+        let payload = HandoffPayload(server: leaky, vaultID: vault, target: .library(.inbox))
+        #expect(payload.server.absoluteString == "https://folio.example.com/folio")
+        #expect(payload.userInfo["server"] as? String == "https://folio.example.com/folio")
+
+        var info = payload.userInfo
+        info["server"] = leaky.absoluteString
+        let decoded = HandoffPayload(activityType: HandoffActivityType.library, userInfo: info)
+        #expect(decoded?.server.absoluteString == "https://folio.example.com/folio")
+        #expect(decoded.flatMap(HandoffLink.webURL(for:))?.user == nil)
+    }
+
     @Test func unknownExtrasAreIgnored() {
         var info = payloads[0].userInfo
         info["pane"] = "history"
