@@ -77,13 +77,13 @@ public final class FolioTelemetry: @unchecked Sendable {
             guard generation == ticket, runtime == nil else { return false }
             runtime = next
             provisional = next
-            TelemetryInstrumentation.shared.route(to: self, tracer: next.tracer)
             return true
         }
         guard installed else {
             next.shutdown()
             return
         }
+        TelemetryInstrumentation.shared.route(to: self, tracer: next.tracer)
         announce(next, replacing: nil)
     }
 
@@ -168,7 +168,6 @@ public final class FolioTelemetry: @unchecked Sendable {
                 retired = runtime
                 runtime = next
                 provisional = nil
-                TelemetryInstrumentation.shared.route(to: self, tracer: next.tracer)
                 return true
             }
             if let retired { Task.detached { retired.retire() } }
@@ -176,6 +175,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 next.shutdown()
                 return
             }
+            TelemetryInstrumentation.shared.route(to: self, tracer: next.tracer)
             remember(baseURL)
             next.event("folio.telemetry.configured")
             announce(next, replacing: retired)
@@ -489,29 +489,32 @@ public final class FolioTelemetry: @unchecked Sendable {
 private final class TelemetryInstrumentation: @unchecked Sendable {
     static let shared = TelemetryInstrumentation()
 
+    /// Installed on first use while no lock is held: installing swizzles URLSession for the whole process, and
+    /// requests on other threads call back into `target` meanwhile.
+    private static let installed = URLSessionInstrumentation(
+        configuration: .init(
+            shouldRecordPayload: { _ in false },
+            shouldInstrument: { TelemetryInstrumentation.shared.target?.allows($0) ?? false },
+            spanCustomization: { request, builder in
+                TelemetryInstrumentation.shared.target?.customize(request, builder)
+            },
+            shouldInjectTracingHeaders: { TelemetryInstrumentation.shared.target?.allows($0) ?? false },
+            semanticConvention: .stable
+        ))
+
     private let lock = NSLock()
     private weak var owner: FolioTelemetry?
-    private var instrumentation: URLSessionInstrumentation?
 
     private var target: FolioTelemetry? { lock.withLock { owner } }
 
+    /// Call without holding the owner's lock.
     func route(to owner: FolioTelemetry, tracer: Tracer) {
+        let instrumentation = Self.installed
         lock.withLock {
             self.owner = owner
-            if let instrumentation {
-                var config = instrumentation.configuration
-                config.tracer = tracer
-                instrumentation.configuration = config
-                return
-            }
-            instrumentation = URLSessionInstrumentation(
-                configuration: .init(
-                    shouldRecordPayload: { _ in false },
-                    shouldInstrument: { [weak self] in self?.target?.allows($0) ?? false },
-                    spanCustomization: { [weak self] request, builder in self?.target?.customize(request, builder) },
-                    shouldInjectTracingHeaders: { [weak self] in self?.target?.allows($0) ?? false },
-                    tracer: tracer, semanticConvention: .stable
-                ))
+            var config = instrumentation.configuration
+            config.tracer = tracer
+            instrumentation.configuration = config
         }
     }
 }

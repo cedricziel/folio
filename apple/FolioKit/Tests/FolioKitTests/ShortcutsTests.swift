@@ -167,6 +167,7 @@ private actor FlushLog {
         IntentEnvironment.use { service }
         let runs = runs
         IntentEnvironment.recordRuns { runs.append($0) }
+        IntentEnvironment.flushRuns {}
         return service
     }
 
