@@ -200,7 +200,11 @@ struct VaultScopeTests {
         #expect(manager.undoActionName == "Add Tag")
         manager.undo()
 
-        let reverted = await reverts.first { _ in true }
+        var reverted: TagChange?
+        for await revert in reverts {
+            reverted = revert
+            break
+        }
         #expect(reverted == change.reverted)
     }
 
