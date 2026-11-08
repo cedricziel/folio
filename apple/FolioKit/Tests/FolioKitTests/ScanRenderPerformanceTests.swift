@@ -21,11 +21,13 @@ final class ScanRenderPerformanceTests: XCTestCase {
         return context.makeImage()!
     }
 
-    func testRenderingAnEightPageScan() throws {
+    func testRenderingAnEightPageScan() {
         let options = XCTMeasureOptions()
         options.iterationCount = 5
+        var rendered: Data?
         measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()], options: options) {
-            XCTAssertNoThrow(try PDFBuilder.makePDF(from: scan))
+            rendered = try? PDFBuilder.makePDF(from: scan)
         }
+        XCTAssertNotNil(rendered)
     }
 }
