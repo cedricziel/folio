@@ -46,7 +46,7 @@ The Apple app SHALL declare each activity type it advertises or accepts in its `
 
 ### Requirement: Payload identifies server and target
 
-Each activity's user info SHALL carry payload version `1`, the sender's canonical server base URL, and the vault ID. A document activity also carries the document ID and an optional `discussion` pane. A library activity carries `inbox` or `all`. A saved-view activity carries the saved-view ID. All IDs are lowercase UUID strings.
+Each activity's user info SHALL carry `version` (integer `1`), `server` (the sender's server base URL), and `vault`. A document activity adds `document` and an optional `pane` = `discussion`. A library activity adds `list` = `inbox` or `all`. A saved-view activity adds `savedView`. All IDs are lowercase UUID strings.
 
 #### Scenario: Round trip
 
@@ -55,17 +55,17 @@ Each activity's user info SHALL carry payload version `1`, the sender's canonica
 
 #### Scenario: Malformed or newer payload
 
-- **WHEN** user info lacks a required key, holds an invalid UUID or URL, or carries a version other than `1`
+- **WHEN** user info lacks a required key, holds an invalid UUID, a URL that is not http(s) with a host, or a `version` other than `1`
 - **THEN** decoding fails, the app does not navigate, and it opens the activity's web page URL if one is present
 
 ### Requirement: Handoff reveals no document content
 
-Activities SHALL NOT carry document, vault or saved-view names, document content, search text or credentials in the user info, title or keywords. Each activity SHALL be eligible for Handoff only: not for search, public indexing or prediction.
+Activity user info and keywords SHALL NOT carry document, vault or saved-view names, document content, search text or credentials. The title MAY be the visible document's title, which only the user's own devices see, and is never used for routing. Activities SHALL NOT be eligible for search, public indexing or prediction.
 
 #### Scenario: Inspecting an advertised activity
 
 - **WHEN** the app advertises an activity for a document titled "Tax return 2025"
-- **THEN** neither its user info nor its title contains that title, and its search, public-indexing and prediction eligibility are all false
+- **THEN** its user info and keywords do not contain that title, and its search, public-indexing and prediction eligibility are all false
 
 ### Requirement: Server identity is compared canonically
 
