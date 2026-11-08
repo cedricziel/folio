@@ -88,7 +88,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(apple): versioned Handoff payload`.
 
-- [ ] 6.3 Add `HandoffLink.webURL(for:)` and `HandoffLink.parse(_:)`. First write a failing `HandoffLinkTests`:
+- [x] 6.3 Add `HandoffLink.webURL(for:)` and `HandoffLink.parse(_:)`. First write a failing `HandoffLinkTests`:
   - web URLs for every target, with and without a `/folio` prefix
   - parsing them back (round trip)
   - `…/documents/{id}/download`, `…/entries`, `/login` and a non-UUID segment are rejected
