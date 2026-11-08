@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.11.0](https://github.com/cedricziel/folio/compare/v0.10.0...v0.11.0) (2026-11-08)
+
+
+### Features
+
+* **apple:** date documents in Files and Finder by the date on the document ([3a1534c](https://github.com/cedricziel/folio/commit/3a1534cfab65c70dd5a1e93448b7efbf64108b39))
+* **apple:** date documents in Files and Finder by the date on the document ([#349](https://github.com/cedricziel/folio/issues/349)) ([aedb902](https://github.com/cedricziel/folio/commit/aedb9029e261734cbf8e8a76efd5cbbc7414fd13))
+* **apple:** keep Recents, Finder tags and favorites on Folio files ([ecbb388](https://github.com/cedricziel/folio/commit/ecbb3886d3679349e5f1904b62be4c00f82fe2df))
+* **apple:** keep Recents, Finder tags, favorites and Keep Downloaded on Folio files ([#347](https://github.com/cedricziel/folio/issues/347)) ([e143bce](https://github.com/cedricziel/folio/commit/e143bce8cc5c00c52da1988b287c5b348de31f8b))
+* **apple:** offer Keep Downloaded for Folio files and folders on macOS ([d191af3](https://github.com/cedricziel/folio/commit/d191af3425ac0b62c598cd6427c914f2de39d2b3))
+* record document file sizes and show them in Files and Finder ([2b6665e](https://github.com/cedricziel/folio/commit/2b6665e61e8489f42563655d5acab9f6a941359b))
+* record document file sizes and show them in Files and Finder ([#348](https://github.com/cedricziel/folio/issues/348)) ([7979fcb](https://github.com/cedricziel/folio/commit/7979fcb53e6d94bf2f227a60976b91bd87671d9c))
+
+
+### Bug Fixes
+
+* **apple:** don't fail an upload over its local metadata ([eff1154](https://github.com/cedricziel/folio/commit/eff11544baf8eb8772c52e039993f7afdbadc6f8))
+* **apple:** give File Provider folders real dates instead of 1970 ([6c72494](https://github.com/cedricziel/folio/commit/6c7249461cee4ea1f85d44e4b4bda22681f858c0))
+* **apple:** keep favorite ranks to iOS, where the API exists ([d1ed212](https://github.com/cedricziel/folio/commit/d1ed212e8eeccfede3bc072718d20c39eb86771f))
+* **apple:** keep local metadata through uploads and overlapping instances ([50bf455](https://github.com/cedricziel/folio/commit/50bf455871f116ca720e2d2fb18b2d747c9228cc))
+* **apple:** real folder dates and a refreshing Files tree ([#345](https://github.com/cedricziel/folio/issues/345)) ([5e86aed](https://github.com/cedricziel/folio/commit/5e86aedcdb7584f340bb5f09b8441f4f6559702d))
+* **apple:** refresh the Files tree whenever the app becomes active ([ca18bdc](https://github.com/cedricziel/folio/commit/ca18bdc80b722d27300a958769b73f485fac9441))
+* make the file size backfill cheap per batch and resilient ([ca70bf1](https://github.com/cedricziel/folio/commit/ca70bf1c80a433f6378d04e6d15957fe46cd739b))
+
 ## [0.10.0](https://github.com/cedricziel/folio/compare/v0.9.1...v0.10.0) (2026-11-08)
 
 
