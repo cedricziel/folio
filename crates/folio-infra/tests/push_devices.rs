@@ -222,15 +222,23 @@ async fn contract(db: &Database) {
     let quiet = Duration::seconds(30);
     let ceiling = Duration::minutes(5);
     let lease = Duration::seconds(60);
+    let holder = Uuid::new_v4();
     assert!(push
-        .claim_due(now + Duration::seconds(10), quiet, ceiling, lease, 10)
+        .claim_due(
+            now + Duration::seconds(10),
+            quiet,
+            ceiling,
+            lease,
+            10,
+            holder
+        )
         .await
         .unwrap()
         .is_empty());
     let later = now + Duration::seconds(31);
     let (a, b) = tokio::join!(
-        push.claim_due(later, quiet, ceiling, lease, 10),
-        push.claim_due(later, quiet, ceiling, lease, 10)
+        push.claim_due(later, quiet, ceiling, lease, 10, holder),
+        push.claim_due(later, quiet, ceiling, lease, 10, holder)
     );
     let mut claimed = a.unwrap();
     claimed.extend(b.unwrap());
@@ -246,26 +254,92 @@ async fn contract(db: &Database) {
         failures: 1,
         ..Default::default()
     };
-    push.release(first.id, &state).await.unwrap();
+    assert!(push.release(first.id, holder, &state).await.unwrap());
     let stored = push.state(first.id).await.unwrap();
     assert_eq!(stored.alerts_in_window, 3);
     assert_eq!(stored.failures, 1);
     assert!(
-        push.claim_due(later, quiet, ceiling, lease, 10)
+        push.claim_due(later, quiet, ceiling, lease, 10, holder)
             .await
             .unwrap()
             .is_empty(),
         "backing off"
     );
     assert_eq!(
-        push.claim_due(later + Duration::minutes(2), quiet, ceiling, lease, 10)
+        push.claim_due(
+            later + Duration::minutes(2),
+            quiet,
+            ceiling,
+            lease,
+            10,
+            holder
+        )
+        .await
+        .unwrap(),
+        vec![first.id]
+    );
+    assert!(push
+        .release(first.id, holder, &PushDeviceState::default())
+        .await
+        .unwrap());
+    // A lease that ran out goes to the next claim; its old holder can neither
+    // extend nor end it, so a slow sender never sends alongside the new one.
+    let slow = Uuid::new_v4();
+    let fast = Uuid::new_v4();
+    let start = later + Duration::minutes(3);
+    assert_eq!(
+        push.claim_due(start, quiet, ceiling, lease, 10, slow)
             .await
             .unwrap(),
         vec![first.id]
     );
-    push.release(first.id, &PushDeviceState::default())
+    let overrun = start + lease + Duration::seconds(1);
+    assert_eq!(
+        push.claim_due(overrun, quiet, ceiling, lease, 10, fast)
+            .await
+            .unwrap(),
+        vec![first.id]
+    );
+    assert!(!push.renew(first.id, slow, overrun + lease).await.unwrap());
+    assert!(push.renew(first.id, fast, overrun + lease).await.unwrap());
+    let batch = Uuid::new_v4();
+    assert!(!push
+        .release(
+            first.id,
+            slow,
+            &PushDeviceState {
+                failures: 9,
+                ..Default::default()
+            },
+        )
         .await
-        .unwrap();
+        .unwrap());
+    assert!(
+        push.claim_due(overrun, quiet, ceiling, lease, 10, slow)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the new holder keeps its lease"
+    );
+    assert!(push
+        .release(
+            first.id,
+            fast,
+            &PushDeviceState {
+                batch_id: Some(batch),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap());
+    let stored = push.state(first.id).await.unwrap();
+    assert_eq!(stored.failures, 0, "the stale holder wrote nothing");
+    assert_eq!(
+        stored.batch_id,
+        Some(batch),
+        "the batch id survives a release"
+    );
+
     push.remove_pending(first.id, &[(doc, NotificationKind::NeedsReview)])
         .await
         .unwrap();
@@ -274,13 +348,14 @@ async fn contract(db: &Database) {
     // Widgets and test notifications
     push.mark_widgets_dirty(&[first.id], now).await.unwrap();
     assert_eq!(
-        push.claim_widget_due(now, Duration::minutes(15), lease, 10)
+        push.claim_widget_due(now, Duration::minutes(15), lease, 10, holder)
             .await
             .unwrap(),
         vec![first.id]
     );
     push.release(
         first.id,
+        holder,
         &PushDeviceState {
             widgets_sent_at: Some(now),
             ..Default::default()
@@ -289,7 +364,7 @@ async fn contract(db: &Database) {
     .await
     .unwrap();
     assert!(push
-        .claim_widget_due(now, Duration::minutes(15), lease, 10)
+        .claim_widget_due(now, Duration::minutes(15), lease, 10, holder)
         .await
         .unwrap()
         .is_empty());

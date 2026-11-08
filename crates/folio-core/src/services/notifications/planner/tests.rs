@@ -236,6 +236,25 @@ async fn imports_never_notify() {
 }
 
 #[tokio::test]
+async fn a_reprocess_after_an_import_does_not_notify() {
+    let w = world();
+    let alice = editor(&w, "alice");
+    let doc = upload(&w, "alice");
+
+    w.planner
+        .consume(&processed(&doc, EventOrigin::Import))
+        .await
+        .unwrap();
+    // The import's completion was the first; a later reprocess is not.
+    w.planner
+        .consume(&processed(&doc, EventOrigin::User))
+        .await
+        .unwrap();
+
+    assert!(kinds_for(&w, &alice).is_empty());
+}
+
+#[tokio::test]
 async fn terminal_failures_notify_once_and_retries_never() {
     let w = world();
     let alice = editor(&w, "alice");

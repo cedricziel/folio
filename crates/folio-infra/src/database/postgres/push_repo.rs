@@ -317,9 +317,10 @@ impl PushDeviceRepository for PostgresPushRepository {
         ceiling: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>> {
         sqlx::query_scalar(
-            "UPDATE push_devices SET claimed_until = $1
+            "UPDATE push_devices SET claimed_until = $1, claim_holder = $6
              WHERE id IN (
                 SELECT d.id FROM push_devices d
                 WHERE d.id IN (
@@ -337,6 +338,7 @@ impl PushDeviceRepository for PostgresPushRepository {
         .bind(now - quiet)
         .bind(now - ceiling)
         .bind(i64::from(limit))
+        .bind(holder)
         .fetch_all(&self.pool)
         .await
         .map_err(err)
@@ -348,9 +350,10 @@ impl PushDeviceRepository for PostgresPushRepository {
         min_interval: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>> {
         sqlx::query_scalar(
-            "UPDATE push_devices SET claimed_until = $1
+            "UPDATE push_devices SET claimed_until = $1, claim_holder = $5
              WHERE id IN (
                 SELECT id FROM push_devices
                 WHERE widget_token IS NOT NULL AND widgets_dirty_at IS NOT NULL
@@ -365,6 +368,7 @@ impl PushDeviceRepository for PostgresPushRepository {
         .bind(now)
         .bind(now - min_interval)
         .bind(i64::from(limit))
+        .bind(holder)
         .fetch_all(&self.pool)
         .await
         .map_err(err)
@@ -403,7 +407,7 @@ impl PushDeviceRepository for PostgresPushRepository {
     async fn state(&self, device: Uuid) -> Result<PushDeviceState> {
         let row = sqlx::query(
             "SELECT window_started_at, alerts_in_window, backoff_until, failures,
-                widgets_dirty_at, widgets_sent_at, test_sent_at
+                widgets_dirty_at, widgets_sent_at, test_sent_at, batch_id
              FROM push_devices WHERE id = $1",
         )
         .bind(device)
@@ -421,19 +425,34 @@ impl PushDeviceRepository for PostgresPushRepository {
             widgets_dirty_at: row.get("widgets_dirty_at"),
             widgets_sent_at: row.get("widgets_sent_at"),
             test_sent_at: row.get("test_sent_at"),
+            batch_id: row.get("batch_id"),
         })
     }
 
-    async fn release(&self, device: Uuid, state: &PushDeviceState) -> Result<()> {
+    async fn renew(&self, device: Uuid, holder: Uuid, until: DateTime<Utc>) -> Result<bool> {
+        let renewed = sqlx::query(
+            "UPDATE push_devices SET claimed_until = $1 WHERE id = $2 AND claim_holder = $3",
+        )
+        .bind(until)
+        .bind(device)
+        .bind(holder)
+        .execute(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(renewed.rows_affected() == 1)
+    }
+
+    async fn release(&self, device: Uuid, holder: Uuid, state: &PushDeviceState) -> Result<bool> {
         // Widgets dirtied after the state was read stay dirty.
-        sqlx::query(
-            "UPDATE push_devices SET claimed_until = NULL, window_started_at = $1,
+        let released = sqlx::query(
+            "UPDATE push_devices SET claimed_until = NULL, claim_holder = NULL, batch_id = $8,
+                window_started_at = $1,
                 alerts_in_window = $2, backoff_until = $3, failures = $4, widgets_sent_at = $5,
                 widgets_dirty_at = CASE
                     WHEN $6::timestamptz IS NULL
                      AND widgets_dirty_at > COALESCE($5::timestamptz, '-infinity') THEN widgets_dirty_at
                     ELSE $6 END
-             WHERE id = $7",
+             WHERE id = $7 AND claim_holder = $9",
         )
         .bind(state.window_started_at)
         .bind(state.alerts_in_window as i32)
@@ -442,10 +461,12 @@ impl PushDeviceRepository for PostgresPushRepository {
         .bind(state.widgets_sent_at)
         .bind(state.widgets_dirty_at)
         .bind(device)
+        .bind(state.batch_id)
+        .bind(holder)
         .execute(&self.pool)
         .await
         .map_err(err)?;
-        Ok(())
+        Ok(released.rows_affected() == 1)
     }
 
     async fn mark_delivered(&self, device: Uuid, at: DateTime<Utc>) -> Result<()> {

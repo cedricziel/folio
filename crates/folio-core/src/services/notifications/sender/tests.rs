@@ -288,6 +288,7 @@ async fn two_senders_send_once() {
             Duration::minutes(5),
             Duration::seconds(60),
             10,
+            Uuid::new_v4(),
         )
         .await
         .unwrap();
@@ -593,4 +594,119 @@ async fn refused_credentials_stop_the_rest_of_the_batch() {
     }
     // Both claims were released, so the next flush delivers both.
     assert_eq!(w.sender.flush(now + Duration::seconds(1)).await.unwrap(), 2);
+}
+
+/// Queue a review notification for `device` about a new upload of its owner's
+async fn queue_for(w: &World, device: &PushDevice, at: DateTime<Utc>) {
+    let doc = document(w.vault, Some(device.user_id.as_str()), at);
+    w.documents.put(doc.clone());
+    w.devices
+        .record_first_outcome(
+            doc.id,
+            DocumentOutcome::Completed,
+            &[PendingNotification {
+                device_id: device.id,
+                document_id: doc.id,
+                kind: NotificationKind::NeedsReview,
+                vault_id: w.vault,
+                created_at: at,
+            }],
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_retried_alert_keeps_its_collapse_id() {
+    let w = world();
+    queue(&w, w.vault, NotificationKind::NeedsReview, w.start).await;
+    w.transport.answer(PushOutcome::Retry {
+        reason: "timeout".into(),
+    });
+
+    let now = w.start + Duration::minutes(1);
+    w.sender.flush(now).await.unwrap();
+    w.sender.flush(now + Duration::hours(1)).await.unwrap();
+    queue(
+        &w,
+        w.vault,
+        NotificationKind::NeedsReview,
+        now + Duration::hours(2),
+    )
+    .await;
+    w.sender.flush(now + Duration::hours(3)).await.unwrap();
+
+    let ids: Vec<_> = w
+        .transport
+        .sent()
+        .into_iter()
+        .map(|m| m.collapse_id.unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3);
+    assert_eq!(
+        ids[0], ids[1],
+        "the retry may replace an alert that got through"
+    );
+    assert_ne!(ids[1], ids[2], "a delivered batch is done");
+}
+
+/// Hands the second device's lease to another sender while the first one sends.
+struct SlowSend {
+    inner: Arc<Recorder>,
+    devices: Arc<MemoryDevices>,
+    at: DateTime<Utc>,
+}
+
+#[async_trait::async_trait]
+impl PushTransport for SlowSend {
+    async fn available(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, message: &PushMessage) -> PushOutcome {
+        if self.inner.sent().is_empty() {
+            self.devices
+                .claim_due(
+                    self.at,
+                    Duration::seconds(30),
+                    Duration::minutes(5),
+                    Duration::seconds(60),
+                    10,
+                    Uuid::new_v4(),
+                )
+                .await
+                .unwrap();
+        }
+        self.inner.send(message).await
+    }
+}
+
+#[tokio::test]
+async fn a_sender_that_lost_its_lease_sends_no_more() {
+    let w = world();
+    let bob = device("bob", w.start - Duration::days(1));
+    w.devices.add(bob.clone());
+    w.roles.grant(&bob.user_id, w.vault, VaultRole::Editor);
+    queue_for(&w, &w.alice, w.start).await;
+    queue_for(&w, &bob, w.start).await;
+    let now = w.start + Duration::minutes(1);
+    let slow = NotificationSender::new(
+        w.devices.clone(),
+        w.documents.clone(),
+        w.roles.clone(),
+        w.grants.clone(),
+        Arc::new(SlowSend {
+            inner: w.transport.clone(),
+            devices: w.devices.clone(),
+            at: now + Duration::seconds(61),
+        }),
+        Arc::new(PushLimits::default()),
+        SenderConfig::default(),
+    );
+
+    assert_eq!(slow.flush(now).await.unwrap(), 1);
+    assert_eq!(w.transport.sent().len(), 1, "the new holder sends the rest");
+    let remaining = w.devices.pending(w.alice.id).await.unwrap().len()
+        + w.devices.pending(bob.id).await.unwrap().len();
+    assert_eq!(remaining, 1);
 }
