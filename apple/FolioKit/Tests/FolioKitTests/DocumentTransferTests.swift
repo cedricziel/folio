@@ -345,6 +345,49 @@ struct TransferFileCacheTests {
         #expect(FileManager.default.fileExists(atPath: stored[2].path))
     }
 
+    @Test func downloadsLeftByAnEarlierLaunchAgeOutWhenTheSessionResumes() throws {
+        let directory = scratch().appending(path: "cache", directoryHint: .isDirectory)
+        let clock = TestClock()
+        func leftover(_ name: String, age: TimeInterval) throws -> URL {
+            let folder = directory.appending(path: name, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(name.utf8).write(to: folder.appending(path: "\(name).pdf"))
+            try FileManager.default.setAttributes(
+                [.modificationDate: clock.now.addingTimeInterval(-age)], ofItemAtPath: folder.path)
+            return folder
+        }
+        let stale = try leftover("stale", age: 601)
+        let older = try leftover("older", age: 30)
+        let newer = try leftover("newer", age: 20)
+        let newest = try leftover("newest", age: 10)
+        let cache = TransferFileCache(directory: directory, maxAge: 600, maxFiles: 2, now: { clock.now })
+
+        cache.sessionChanged(to: .signedIn(server))
+
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(!FileManager.default.fileExists(atPath: older.path))
+        #expect(FileManager.default.fileExists(atPath: newer.path))
+        #expect(FileManager.default.fileExists(atPath: newest.path))
+    }
+
+    @Test func theLeftoverSweepRunsOncePerLaunch() throws {
+        let directory = scratch().appending(path: "cache", directoryHint: .isDirectory)
+        let clock = TestClock()
+        let cache = TransferFileCache(directory: directory, maxAge: 600, now: { clock.now })
+        cache.sessionChanged(to: .signedIn(server))
+        let download = scratch().appending(path: "kept.pdf")
+        try Data("kept".utf8).write(to: download)
+        let stored = try cache.store(download, for: DocumentEntityID(documentID: UUID()))
+        try FileManager.default.setAttributes(
+            [.modificationDate: clock.now.addingTimeInterval(-601)],
+            ofItemAtPath: stored.deletingLastPathComponent().path)
+
+        cache.sessionChanged(to: .interrupted(server))
+        cache.sessionChanged(to: .signedIn(server))
+
+        #expect(FileManager.default.fileExists(atPath: stored.path))
+    }
+
     @Test func signOutAnotherServerOrAnInteractiveSignInDeleteEveryDownload() throws {
         let root = scratch()
         let cache = TransferFileCache(directory: root.appending(path: "cache"))
