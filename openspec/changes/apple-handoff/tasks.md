@@ -115,7 +115,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(apple): hold continuations until the app can route them`.
 
-- [ ] 6.7 Add `HandoffAdvertiser.payload(for:)` and `HandoffActivity.configure(_:payload:)`. First write a failing `HandoffAdvertiserTests`:
+- [x] 6.7 Add `HandoffAdvertiser.payload(for:)` and `HandoffActivity.configure(_:payload:)`. First write a failing `HandoffAdvertiserTests`:
   - a selected document wins over the library
   - `pane` is `.discussion` exactly when `showingDiscussion` is true
   - nil when locked or not signed in
