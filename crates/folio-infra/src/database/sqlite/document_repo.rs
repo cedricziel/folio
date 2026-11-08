@@ -149,7 +149,7 @@ fn parse_optional_uuid(s: Option<String>) -> Result<Option<Uuid>> {
 }
 
 /// Columns of `documents` read into a [`DocumentRow`]
-const DOC_COLS: &str = "id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path,
+const DOC_COLS: &str = "id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path, file_size,
     mime_type, correspondent_id, document_type_id, page_count, source_type, source_meta,
     ocr_status, embed_status, deleted_at, purge_requested_at, created_at, updated_at, document_date, reviewed_at, reviewed_by, review_origin";
 
@@ -222,6 +222,7 @@ struct DocumentRow {
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
+    file_size: Option<i64>,
     mime_type: Option<String>,
     correspondent_id: Option<String>,
     document_type_id: Option<String>,
@@ -260,6 +261,7 @@ impl TryFrom<DocumentRow> for Document {
             content: row.content,
             original_filename: row.original_filename,
             file_path: row.file_path,
+            file_size: row.file_size.map(|size| size as u64),
             mime_type: row.mime_type,
             correspondent_id: parse_optional_uuid(row.correspondent_id)?,
             document_type_id: parse_optional_uuid(row.document_type_id)?,
@@ -1063,6 +1065,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             content,
             original_filename: existing.original_filename,
             file_path: existing.file_path,
+            file_size: existing.file_size,
             mime_type: existing.mime_type,
             correspondent_id,
             document_type_id,
@@ -1321,7 +1324,13 @@ impl DocumentRepository for SqliteDocumentRepository {
         self.commit(tx).await
     }
 
-    async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
+    async fn finalize_upload(
+        &self,
+        vault: VaultId,
+        id: Id,
+        file_path: &str,
+        file_size: u64,
+    ) -> Result<()> {
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -1331,10 +1340,12 @@ impl DocumentRepository for SqliteDocumentRepository {
             .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
             .ok_or_else(|| not_found("Document", id))?;
         if !pending && existing_path.as_deref() == Some(file_path) {
-            return Ok(());
+            sqlx::query("UPDATE documents SET file_size = ? WHERE id = ? AND vault_id = ? AND file_size IS NULL")
+                .bind(file_size as i64).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+            return self.commit(tx).await;
         }
-        sqlx::query("UPDATE documents SET file_path = ?, upload_pending = FALSE, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
-            .bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        sqlx::query("UPDATE documents SET file_path = ?, file_size = ?, upload_pending = FALSE, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
+            .bind(file_path).bind(file_size as i64).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if pending {
             self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
                 .await?;
@@ -1343,10 +1354,44 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
-        let result = sqlx::query("UPDATE documents SET file_path = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND file_path IS NOT ?").bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(file_path).execute(&self.pool).await.map_err(map_sqlx_error)?;
+        let result = sqlx::query("UPDATE documents SET file_path = ?, file_size = NULL, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL AND file_path IS NOT ?").bind(file_path).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).bind(file_path).execute(&self.pool).await.map_err(map_sqlx_error)?;
         if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
             return Err(not_found("Document", id));
         }
+        Ok(())
+    }
+
+    async fn list_missing_file_size(&self, after: Option<Id>, limit: u32) -> Result<Vec<Document>> {
+        // The backfill never reads the OCR text, so it is not loaded
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {} FROM documents WHERE file_path IS NOT NULL AND file_size IS NULL AND purge_requested_at IS NULL AND id > ? ORDER BY id LIMIT ?",
+            DOC_COLS.replace(" content,", " NULL AS content,")
+        )))
+        .bind(after.map(|id| id.to_string()).unwrap_or_default())
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.into_iter().map(Document::try_from).collect()
+    }
+
+    async fn set_file_size(
+        &self,
+        vault: VaultId,
+        id: Id,
+        file_path: &str,
+        size: u64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE documents SET file_size = ? WHERE id = ? AND vault_id = ? AND file_path = ?",
+        )
+        .bind(size as i64)
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(file_path)
+        .execute(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
         Ok(())
     }
 
@@ -2257,6 +2302,7 @@ impl SqliteDocumentRepository {
             content: params.content,
             original_filename: params.original_filename,
             file_path: None,
+            file_size: None,
             mime_type: params.mime_type,
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,

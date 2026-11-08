@@ -282,6 +282,10 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
         node.created
     }
 
+    var documentSize: NSNumber? {
+        node.document?.fileSize.map { NSNumber(value: $0) }
+    }
+
     var itemVersion: NSFileProviderItemVersion {
         let stamp = Data(String(node.modified.timeIntervalSince1970).utf8)
         return NSFileProviderItemVersion(contentVersion: stamp, metadataVersion: FolioSyncState.metadataVersion(node))

@@ -139,7 +139,7 @@ async fn remap_by_name(
 macro_rules! select_documents {
     ($tail:literal) => {
         concat!(
-            "SELECT id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path, ",
+            "SELECT id, vault_id, uploaded_by, created_by, updated_by, title, content, original_filename, file_path, file_size, ",
             "mime_type, ",
             "correspondent_id, document_type_id, page_count, source_type, source_meta, ",
             "ocr_status, embed_status, deleted_at, purge_requested_at, ",
@@ -165,6 +165,7 @@ struct DocumentRow {
     content: Option<String>,
     original_filename: Option<String>,
     file_path: Option<String>,
+    file_size: Option<i64>,
     mime_type: Option<String>,
     correspondent_id: Option<Uuid>,
     document_type_id: Option<Uuid>,
@@ -203,6 +204,7 @@ impl TryFrom<DocumentRow> for Document {
             content: row.content,
             original_filename: row.original_filename,
             file_path: row.file_path,
+            file_size: row.file_size.map(|size| size as u64),
             mime_type: row.mime_type,
             correspondent_id: row.correspondent_id,
             document_type_id: row.document_type_id,
@@ -1003,6 +1005,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             content,
             original_filename: existing.original_filename,
             file_path: existing.file_path,
+            file_size: existing.file_size,
             mime_type: existing.mime_type,
             correspondent_id,
             document_type_id,
@@ -1246,16 +1249,24 @@ impl DocumentRepository for PostgresDocumentRepository {
         self.commit(tx).await
     }
 
-    async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
+    async fn finalize_upload(
+        &self,
+        vault: VaultId,
+        id: Id,
+        file_path: &str,
+        file_size: u64,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         let (pending, existing_path): (bool, Option<String>) = sqlx::query_as("SELECT upload_pending, file_path FROM documents WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL FOR UPDATE")
             .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?
             .ok_or_else(|| not_found("Document", id))?;
         if !pending && existing_path.as_deref() == Some(file_path) {
-            return Ok(());
+            sqlx::query("UPDATE documents SET file_size = $1 WHERE id = $2 AND vault_id = $3 AND file_size IS NULL")
+                .bind(file_size as i64).bind(id).bind(vault.0).execute(&mut *tx).await.map_err(repo_err)?;
+            return self.commit(tx).await;
         }
-        sqlx::query("UPDATE documents SET file_path = $1, upload_pending = FALSE, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4")
-            .bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
+        sqlx::query("UPDATE documents SET file_path = $1, file_size = $6, upload_pending = FALSE, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4")
+            .bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(file_size as i64)
         .execute(&mut *tx).await.map_err(repo_err)?;
         if pending {
             self.emit_in(&mut tx, DocumentEvent::Created { document_id: id })
@@ -1265,10 +1276,46 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {
-        let result = sqlx::query("UPDATE documents SET file_path = $1, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL AND file_path IS DISTINCT FROM $1").bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).execute(&self.pool).await.map_err(repo_err)?;
+        let result = sqlx::query("UPDATE documents SET file_path = $1, file_size = NULL, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4 AND deleted_at IS NULL AND file_path IS DISTINCT FROM $1").bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).execute(&self.pool).await.map_err(repo_err)?;
         if result.rows_affected() == 0 && self.find_by_id(vault, id).await?.is_none() {
             return Err(not_found("Document", id));
         }
+        Ok(())
+    }
+
+    async fn list_missing_file_size(&self, after: Option<Id>, limit: u32) -> Result<Vec<Document>> {
+        // The backfill never reads the OCR text, so it is not loaded
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(
+            select_documents!(
+                "WHERE file_path IS NOT NULL AND file_size IS NULL AND purge_requested_at IS NULL AND id > $1 ORDER BY id LIMIT $2"
+            )
+            .replace(" content,", " NULL AS content,"),
+        ))
+        .bind(after.unwrap_or(Uuid::nil()))
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        rows.into_iter().map(Document::try_from).collect()
+    }
+
+    async fn set_file_size(
+        &self,
+        vault: VaultId,
+        id: Id,
+        file_path: &str,
+        size: u64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE documents SET file_size = $1 WHERE id = $2 AND vault_id = $3 AND file_path = $4",
+        )
+        .bind(size as i64)
+        .bind(id)
+        .bind(vault.0)
+        .bind(file_path)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
         Ok(())
     }
 
@@ -2030,6 +2077,7 @@ impl PostgresDocumentRepository {
             content: params.content,
             original_filename: params.original_filename,
             file_path: None,
+            file_size: None,
             mime_type: params.mime_type,
             correspondent_id: params.correspondent_id,
             document_type_id: params.document_type_id,
