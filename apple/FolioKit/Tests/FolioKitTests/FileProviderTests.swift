@@ -411,3 +411,80 @@ struct FolioCatalogTests {
         #expect(nodes.allSatisfy { $0.parent == .folder(.root) || ids.contains($0.parent) })
     }
 }
+
+struct FolioCatalogCacheTests {
+    private let vault = MockFolioService.defaultVault.id
+    private let letters = (1...3).map { Document(title: "Letter \($0)", originalFilename: "letter-\($0).pdf") }
+
+    @Test func itemLookupsReuseTheListingAnEnumerationFetched() async throws {
+        let source = MockFolioService(documents: letters)
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+
+        let listed = try await catalog.children(of: .scoped(vault, .all))
+        for node in listed {
+            #expect(try await catalog.node(for: node.id) == node)
+        }
+
+        #expect(await source.queries.count == 1)
+    }
+
+    @Test func concurrentLookupsShareOneListing() async throws {
+        let source = MockFolioService(documents: letters)
+        await source.suspendDocuments()
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+        let ids = letters.map { FolioItemID.document($0.id, in: .scoped(vault, .inbox)) }
+
+        async let first = catalog.node(for: ids[0])
+        async let second = catalog.node(for: ids[1])
+        async let third = catalog.node(for: ids[2])
+        await source.waitForDocumentRequest()
+        await source.releaseDocuments()
+        let found = try await [first, second, third]
+
+        #expect(found.compactMap { $0?.id } == ids)
+        #expect(await source.queries.count == 1)
+    }
+
+    @Test func aMissingItemDoesNotRefetchARecentListing() async throws {
+        let source = MockFolioService(documents: letters)
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+
+        _ = try await catalog.children(of: .scoped(vault, .all))
+        #expect(try await catalog.node(for: .document(UUID(), in: .scoped(vault, .all))) == nil)
+
+        #expect(await source.queries.count == 1)
+    }
+
+    @Test func enumerationsAlwaysAskTheServer() async throws {
+        let source = MockFolioService(documents: letters)
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+
+        _ = try await catalog.children(of: .scoped(vault, .all))
+        _ = try await catalog.children(of: .scoped(vault, .all))
+
+        #expect(await source.queries.count == 2)
+    }
+
+    @Test func anUploadMakesTheNextLookupListTheFolderAgain() async throws {
+        let source = MockFolioService(documents: letters)
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+        let file = UploadFile(data: Data(), filename: "new.pdf", mimeType: "application/pdf")
+
+        _ = try await catalog.children(of: .scoped(vault, .inbox))
+        _ = try await catalog.upload(file, to: .scoped(vault, .inbox))
+        _ = try await catalog.node(for: .document(letters[0].id, in: .scoped(vault, .inbox)))
+
+        #expect(await source.queries.count == 2)
+    }
+
+    @Test func withoutACacheEveryLookupListsTheFolder() async throws {
+        let source = MockFolioService(documents: letters)
+        let catalog = FolioCatalog(service: source)
+
+        for letter in letters {
+            _ = try await catalog.node(for: .document(letter.id, in: .scoped(vault, .all)))
+        }
+
+        #expect(await source.queries.count == letters.count)
+    }
+}
