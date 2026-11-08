@@ -216,18 +216,23 @@ struct UploadBatchRunnerTests {
         #expect(store.load("current") == progress)
     }
 
-    @Test func aLongRunRenewsItsLock() async throws {
+    @Test(.timeLimit(.minutes(1))) func aLongRunRenewsItsLock() async throws {
         let service = MockFolioService()
-        await service.setUploadDelay(.milliseconds(400))
+        await service.suspendUploads()
         let store = RenewalCountingStore()
-        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(50))
+        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(10))
 
-        _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        // The upload stays open until a renewal has happened, however slowly the timer runs.
+        let run = Task { try await runner.run([file("a.pdf")], tagIDs: [], scope: "s") }
+        await service.waitForUploadRequest()
+        await store.waitForRenewal()
+        await service.releaseUploads()
+        _ = try await run.value
         let renewals = store.renewals
 
-        #expect(renewals > 0)
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(store.renewals == renewals, "renewal stops with the run")
+        // A renewal already past its sleep when the run ends may still land; none may follow it.
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(store.renewals <= renewals + 1, "renewal stops with the run")
     }
 
     @Test func fileStoreRenewalKeepsARunningBatchFromBeingTakenOver() throws {
@@ -358,13 +363,33 @@ private final class RenewalCountingStore: UploadProgressStoring, @unchecked Send
     private let base = InMemoryUploadProgressStore()
     private let mutex = NSLock()
     private var count = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     var renewals: Int { mutex.withLock { count } }
+
+    /// Returns once the lock has been renewed at least once.
+    func waitForRenewal() async {
+        await withCheckedContinuation { waiter in
+            let renewed = mutex.withLock {
+                if count > 0 { return true }
+                waiters.append(waiter)
+                return false
+            }
+            if renewed { waiter.resume() }
+        }
+    }
 
     func load(_ key: String) -> UploadBatchProgress? { base.load(key) }
     func save(_ progress: UploadBatchProgress, for key: String) { base.save(progress, for: key) }
     func remove(_ key: String) { base.remove(key) }
     func lock(_ key: String) -> Bool { base.lock(key) }
-    func renew(_: String) { mutex.withLock { count += 1 } }
+    func renew(_: String) {
+        let waiting = mutex.withLock {
+            count += 1
+            defer { waiters = [] }
+            return waiters
+        }
+        waiting.forEach { $0.resume() }
+    }
     func unlock(_ key: String) { base.unlock(key) }
 }
