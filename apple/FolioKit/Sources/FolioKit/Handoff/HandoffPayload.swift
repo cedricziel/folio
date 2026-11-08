@@ -87,7 +87,7 @@ public struct HandoffPayload: Equatable, Sendable {
     /// host, or another `version`. Unknown keys, an unknown `pane` and a `page` that is not an integer
     /// are ignored; `page` is optional within version 1.
     public init?(activityType: String, userInfo: [AnyHashable: Any]?) {
-        guard let userInfo, userInfo["version"] as? Int == Self.version,
+        guard let userInfo, Self.integer(userInfo["version"]) == Self.version,
             let address = userInfo["server"] as? String, let server = URL(string: address),
             ServerIdentity(server) != nil,
             let vault = Self.uuid(userInfo["vault"])
@@ -98,7 +98,7 @@ public struct HandoffPayload: Equatable, Sendable {
             guard let document = Self.uuid(userInfo["document"]) else { return nil }
             target = .document(
                 document, pane: (userInfo["pane"] as? String).flatMap(HandoffPane.init(rawValue:)),
-                page: userInfo["page"] as? Int)
+                page: Self.integer(userInfo["page"]))
         case HandoffActivityType.library:
             guard let list = (userInfo["list"] as? String).flatMap(HandoffList.init(rawValue:)) else { return nil }
             target = .library(list)
@@ -115,6 +115,25 @@ public struct HandoffPayload: Equatable, Sendable {
     public var documentActivity: DocumentActivityPayload? {
         guard case let .document(id, _, _) = target else { return nil }
         return DocumentActivityPayload(server: server, vaultID: vaultID, documentID: id)
+    }
+
+    /// An integer, and only an integer: user info arrives as NSNumber, which bridges Booleans and
+    /// floating-point values to `Int` too.
+    static func integer(_ value: Any?) -> Int? {
+        guard let value else { return nil }
+        #if canImport(ObjectiveC)
+            // Swift numbers and Booleans bridge to NSNumber here, so this one check covers both.
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                !CFNumberIsFloatType(number)
+            else { return nil }
+            return number.intValue
+        #else
+            if value is Bool || value is Double || value is Float { return nil }
+            if let number = value as? NSNumber, ["c", "B", "f", "d"].contains(String(cString: number.objCType)) {
+                return nil
+            }
+            return value as? Int
+        #endif
     }
 
     private static func uuid(_ value: Any?) -> UUID? {

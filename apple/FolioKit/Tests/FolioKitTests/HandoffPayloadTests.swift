@@ -87,7 +87,7 @@ struct HandoffPayloadTests {
             info["server"] = address
             #expect(HandoffPayload(activityType: type, userInfo: info) == nil, "server \(address)")
         }
-        for version in [0, 2] as [Any] + ["1"] {
+        for version in [0, 2, true, NSNumber(value: 1.0), NSNumber(value: true)] as [Any] + ["1"] {
             var info = payload.userInfo
             info["version"] = version
             #expect(HandoffPayload(activityType: type, userInfo: info) == nil, "version \(version)")
@@ -106,7 +106,7 @@ struct HandoffPayloadTests {
 
     @Test func pagesThatAreNotIntegersAreDropped() {
         let base = payloads[0].userInfo
-        let values: [Any?] = [nil, "7", 2.5]
+        let values: [Any?] = [nil, "7", 2.5, true, NSNumber(value: 7.0), NSNumber(value: true)]
         for value in values {
             var info = base
             info["page"] = value
