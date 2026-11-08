@@ -980,7 +980,8 @@ fn tool_error(err: Error) -> String {
         Error::NotFound { .. }
         | Error::Validation(_)
         | Error::Duplicate { .. }
-        | Error::Conflict(_) => err.to_string(),
+        | Error::Conflict(_)
+        | Error::Forbidden(_) => err.to_string(),
         other => {
             tracing::error!("MCP tool failed: {other}");
             "internal error while accessing the archive".to_string()

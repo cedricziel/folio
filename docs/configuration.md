@@ -96,9 +96,17 @@ preserve existing database rows, including values seeded by earlier releases.
 | `import.max_file_bytes` | `FOLIO_IMPORT__MAX_FILE_BYTES` | `536870912` (512 MB) | Largest original file an import accepts; bigger files fail with `file_too_large`. |
 
 Ingestion sources have names of your choosing, so they are not listed above:
-`FOLIO_INGEST__FOLDERS__<NAME>__<KEY>` and `FOLIO_INGEST__EMAIL__<NAME>__<KEY>`
-(for example `FOLIO_INGEST__FOLDERS__INBOX__PATH=/consume`). `_FILE` works on
-them too. See [ingestion](ingestion.md).
+`FOLIO_INGEST__FOLDERS__<NAME>__<KEY>`, `FOLIO_INGEST__EMAIL__<NAME>__<KEY>` and
+`FOLIO_INGEST__PAPERLESS__<NAME>__<KEY>` (for example
+`FOLIO_INGEST__FOLDERS__INBOX__PATH=/consume`). `_FILE` works on them too. See
+[ingestion](ingestion.md).
+
+A `[ingest.paperless.<name>]` section takes `url`, `token` or `token_file`,
+`vault` (the vault ID, required), `sync_mode` (`once`, `new_only` or `mirror`,
+default `mirror`), `poll_interval_secs` (default `900`, at least `60`),
+`default_currency` and `enabled`. Folio refuses to start when a section has no
+`vault`, has invalid settings, or shares its vault with another section. See
+[paperless-import.md](paperless-import.md#in-configtoml).
 
 Other variables read directly: `FOLIO_CONFIG` (config file path) and `RUST_LOG`
 (log filter).

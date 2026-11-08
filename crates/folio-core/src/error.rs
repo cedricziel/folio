@@ -24,6 +24,10 @@ pub enum Error {
     #[error("Conflict: {0}")]
     Conflict(String),
 
+    /// The caller may not do this, whatever the input
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     #[error("Repository error: {0}")]
     Repository(String),
 

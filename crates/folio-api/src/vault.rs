@@ -244,6 +244,10 @@ async fn resolve(
         role,
         vaults,
         user: user.cloned(),
+        token_scopes: request
+            .extensions()
+            .get::<AuthContext>()
+            .map(|ctx| ctx.scopes.clone()),
     })
 }
 

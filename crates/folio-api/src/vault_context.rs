@@ -17,6 +17,8 @@ pub struct VaultContext {
     pub role: VaultRole,
     pub vaults: Vec<VaultSummary>,
     pub user: Option<UserId>,
+    /// Scopes of the bearer token, or `None` for a browser session or no sign-in
+    pub token_scopes: Option<Vec<String>>,
 }
 
 tokio::task_local! {

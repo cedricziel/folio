@@ -166,3 +166,53 @@ pub async fn text(response: axum::response::Response) -> String {
 pub fn get(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
 }
+
+/// A signed-in account with `role` in the harness vault; returns its session cookie
+pub async fn vault_session(
+    h: &Harness,
+    name: &str,
+    role: folio_core::models::VaultRole,
+    is_admin: bool,
+) -> String {
+    h.auth_store
+        .create_user(folio_auth::User {
+            id: name.into(),
+            username: name.into(),
+            password_hash: "!".into(),
+            created_at: 1,
+            email: None,
+            display_name: None,
+            is_admin,
+            is_owner: false,
+            auth_source: "local".into(),
+            external_id: None,
+        })
+        .await
+        .unwrap();
+    let user = folio_core::models::UserId::from(name);
+    h.members
+        .grant(
+            h.vault,
+            &folio_core::models::Principal::User(user.clone()),
+            role,
+            None,
+        )
+        .await
+        .unwrap();
+    h.vault_repository
+        .set_default(&user, h.vault)
+        .await
+        .unwrap();
+    let token = format!("vault-session-{name}");
+    h.auth_store
+        .create_session(folio_auth::Session {
+            id_hash: folio_auth::crypto::hash_token(&token),
+            user_id: name.into(),
+            expires_at: i64::MAX / 2,
+            created_at: 1,
+            user_agent: None,
+        })
+        .await
+        .unwrap();
+    format!("folio_session={token}")
+}

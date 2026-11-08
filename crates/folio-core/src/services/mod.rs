@@ -8,6 +8,7 @@ mod importer;
 mod ingest;
 mod library;
 mod outbox_dispatcher;
+mod paperless_sources;
 mod vaults;
 mod workflow_engine;
 
@@ -19,6 +20,9 @@ pub use library::{
 };
 pub use outbox_dispatcher::{
     retry_delay, BroadcastConsumer, DispatcherConfig, EventConsumer, OutboxDispatcher,
+};
+pub use paperless_sources::{
+    authorize_paperless, ensure_paperless_slot, split_shadowed_paperless, PAPERLESS_SLOT_TAKEN,
 };
 pub use vaults::{VaultService, PERSONAL_NAME};
 pub use workflow_engine::WorkflowEngine;

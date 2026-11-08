@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use folio_core::error::Result;
 use folio_core::models::IngestionSourceDef;
-use folio_core::models::VaultId;
+use folio_core::models::{Caller, UserId, VaultId};
 use folio_core::ports::{
-    CorrespondentRepository, DocumentEntryRepository, DocumentImporter, DocumentRepository,
-    DocumentStore, DocumentTypeRepository, EmbeddingService, HealthCheck, IngestLedger,
-    IngestOutcomeReader, IngestionSourceFactory, OcrService, OutboxStore, SearchResult,
-    SearchService, SettingsRepository, SourceRepository, TagRepository, WorkflowRepository,
+    CallerResolver, CorrespondentRepository, DocumentEntryRepository, DocumentImporter,
+    DocumentRepository, DocumentStore, DocumentTypeRepository, EmbeddingService, HealthCheck,
+    IngestLedger, IngestOutcomeReader, IngestionSourceFactory, OcrService, OutboxStore,
+    SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
+    WorkflowRepository,
 };
 use folio_core::services::{Importer, SearchServiceFacade, VaultService};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
@@ -62,6 +63,18 @@ pub struct AppState {
     /// Whether `/mcp` is served while the `mcp.enabled` setting is unset
     pub mcp_default: bool,
     pub client_telemetry: Option<Arc<crate::client_telemetry::ClientTelemetry>>,
+    /// Instance permissions of the caller; [`crate::create_router`] binds it to the auth store
+    pub callers: Arc<dyn CallerResolver>,
+}
+
+/// Grants nobody instance rights until the router installs the real resolver
+struct NoInstanceRights;
+
+#[async_trait::async_trait]
+impl CallerResolver for NoInstanceRights {
+    async fn resolve(&self, user: Option<&UserId>) -> Result<Caller> {
+        Ok(Caller::unprivileged(user.cloned()))
+    }
 }
 
 impl IngestionState {
@@ -138,6 +151,7 @@ impl AppState {
             access,
             mcp_default: false,
             client_telemetry: None,
+            callers: Arc::new(NoInstanceRights),
         }
     }
 

@@ -45,15 +45,15 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 4. Paperless source
 
-- [ ] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
+- [x] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
   - the validation errors
   - a URL change with the placeholder fails
   - config without `vault` fails at load
   - the drift test passes
-- [ ] 4.2 Add the `Caller` value and the `CallerResolver` port. Implement them in folio-infra from folio-auth, with `auth.required = false` mapping to an admin. Failing test first: an admin, a non-admin owner, and auth disabled each resolve as expected.
-- [ ] 4.3 Apply the admin-plus-owner guard to every `paperless` source operation, JSON and HTML: create, update, toggle, delete, restore, test and try-connection. Add 409 for a second source, with config winning. Failing tests first: 403 for each operation by a non-admin owner, with no outbound request made (wiremock records none), and 409 cases.
+- [x] 4.2 Add the `Caller` value and the `CallerResolver` port. Implement them in folio-infra from folio-auth, with `auth.required = false` mapping to an admin. Failing test first: an admin, a non-admin owner, and auth disabled each resolve as expected.
+- [x] 4.3 Apply the admin-plus-owner guard to every `paperless` source operation, JSON and HTML: create, update, toggle, delete, restore, test and try-connection. Add 409 for a second source, with config winning. Failing tests first: 403 for each operation by a non-admin owner, with no outbound request made (wiremock records none), and 409 cases.
 - [ ] 4.4 Extend `/test` with the version, the document count, `superuser` and the reason. Update `SourceTestResult` in OpenAPI and regenerate. Failing test first: each reason, and `superuser: false` for a limited token.
-- [ ] 4.5 Add the Paperless variant of the HTML source form (URL, token, sync mode, interval). Failing test first: a route test renders and submits it. Verify it with the screen tour.
+- [x] 4.5 Add the Paperless variant of the HTML source form (URL, token, sync mode, interval). Failing test first: a route test renders and submits it. Verify it with the screen tour.
 - [ ] 4.6 Register the Paperless source with `IngestScheduler`:
   - the first poll is the only first-run trigger, and `once_done` is respected
   - an active run skips the poll without reporting `Conflict`

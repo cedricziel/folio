@@ -114,7 +114,7 @@ impl MetadataValue {
             }
             Self::Decimal(value) => Ok(Self::Decimal(canonical_decimal(&value)?)),
             Self::Money { amount, currency } => {
-                if currency.len() != 3 || !currency.bytes().all(|b| b.is_ascii_uppercase()) {
+                if !is_currency_code(&currency) {
                     return invalid("Currency must contain three uppercase ASCII letters");
                 }
                 Ok(Self::Money {
@@ -136,10 +136,7 @@ impl MetadataValue {
                 validate_text(&value, 8_192, true)?;
                 let parsed = url::Url::parse(&value)
                     .map_err(|_| Error::Validation("URL must be absolute HTTP or HTTPS".into()))?;
-                if !matches!(parsed.scheme(), "http" | "https")
-                    || parsed.host_str().is_none()
-                    || !parsed.username().is_empty()
-                    || parsed.password().is_some()
+                if !is_http_url_without_credentials(&parsed)
                     || value.chars().any(char::is_whitespace)
                 {
                     return invalid(
@@ -196,4 +193,17 @@ fn canonical_decimal(value: &str) -> Result<String> {
 
 fn invalid<T>(message: &str) -> Result<T> {
     Err(Error::Validation(message.into()))
+}
+
+/// Three uppercase ASCII letters, the shape of an ISO 4217 code
+pub(crate) fn is_currency_code(code: &str) -> bool {
+    code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase())
+}
+
+/// An absolute `http` or `https` URL with a host and no user info
+pub(crate) fn is_http_url_without_credentials(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+        && url.host_str().is_some_and(|host| !host.is_empty())
+        && url.username().is_empty()
+        && url.password().is_none()
 }

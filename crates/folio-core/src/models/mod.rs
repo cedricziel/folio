@@ -1,5 +1,6 @@
 //! Domain models
 
+mod caller;
 mod correspondent;
 mod document;
 mod document_date;
@@ -27,6 +28,7 @@ mod workflow;
 mod workflow_event_conditions;
 mod workflow_trigger;
 
+pub use caller::Caller;
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{
     CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
@@ -49,8 +51,9 @@ pub use import_run::{
 pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
-    IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
-    SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus, REDACTED,
+    IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PaperlessConfig,
+    PaperlessSyncMode, PollReport, SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus,
+    PAPERLESS_MAX_URL_LEN, PAPERLESS_MIN_POLL_SECS, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{

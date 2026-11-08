@@ -14,11 +14,13 @@ use uuid::Uuid;
 
 use folio_core::models::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestionSourceDef, IngestionSourceInput,
-    MailAfterImport, MailBody, MailSecurity, SourceConfig, SourceOrigin, REDACTED,
+    MailAfterImport, MailBody, MailSecurity, PaperlessConfig, PaperlessSyncMode, SourceConfig,
+    SourceOrigin, REDACTED,
 };
 
 use super::sources::{
-    all_sources, find, find_retained, prepare_input, require_managed, run_test, SourceListQuery,
+    all_sources, claim_paperless_slot, find, find_retained, guard_paperless, prepare_input,
+    require_managed, require_paperless_admin, run_test, same_url, SourceListQuery,
 };
 use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
@@ -51,6 +53,8 @@ struct Row {
     summary: String,
     enabled: bool,
     read_only: bool,
+    /// A Paperless source the caller may see but not change or test
+    admin_only: bool,
     last_run: Option<String>,
     last_result: Option<String>,
     error: Option<String>,
@@ -60,6 +64,8 @@ struct Row {
 #[template(path = "sources.html")]
 struct ListTemplate {
     deleted: bool,
+    /// The caller may connect Paperless and the vault has no Paperless source yet
+    can_add_paperless: bool,
     sidebar: Sidebar,
     title: String,
     rows: Vec<Row>,
@@ -70,20 +76,17 @@ fn summary(def: &IngestionSourceDef) -> String {
     match &def.config {
         SourceConfig::Folder(f) => f.path.clone(),
         SourceConfig::Email(e) => format!("{}@{}:{}", e.username, e.host, e.port),
+        SourceConfig::Paperless(p) => p.url.clone(),
     }
 }
 
 async fn rows(
-    DefaultVault(vault): DefaultVault,
     state: &AppState,
+    definitions: Vec<IngestionSourceDef>,
     deleted: bool,
+    paperless_admin: bool,
 ) -> ApiResult<Vec<Row>> {
     let mut rows = Vec::new();
-    let definitions = if deleted {
-        state.ingestion.managed.list_deleted(vault).await?
-    } else {
-        all_sources(DefaultVault(vault), state).await?
-    };
     for def in definitions {
         let status = state.ingestion.managed.status(def.id).await?;
         rows.push(Row {
@@ -100,9 +103,11 @@ async fn rows(
             kind: match def.config {
                 SourceConfig::Folder(_) => "Folder",
                 SourceConfig::Email(_) => "Email",
+                SourceConfig::Paperless(_) => "Paperless",
             },
             summary: summary(&def),
             read_only: def.origin == SourceOrigin::Config,
+            admin_only: def.config.is_paperless() && !paperless_admin,
             enabled: def.enabled,
             last_run: status
                 .as_ref()
@@ -124,18 +129,36 @@ async fn rows(
     Ok(rows)
 }
 
+async fn list_template(
+    vault: VaultId,
+    state: &AppState,
+    deleted: bool,
+    notice: Option<Notice>,
+) -> ApiResult<ListTemplate> {
+    let paperless_admin = require_paperless_admin(state).await.is_ok();
+    let active = all_sources(DefaultVault(vault), state).await?;
+    let has_paperless = active.iter().any(|def| def.config.is_paperless());
+    let definitions = if deleted {
+        state.ingestion.managed.list_deleted(vault).await?
+    } else {
+        active
+    };
+    Ok(ListTemplate {
+        deleted,
+        can_add_paperless: paperless_admin && !has_paperless,
+        sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
+        title: "Sources - Folio".into(),
+        rows: rows(state, definitions, deleted, paperless_admin).await?,
+        notice,
+    })
+}
+
 async fn list_page(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Query(query): Query<SourceListQuery>,
 ) -> ApiResult<Html<String>> {
-    render(ListTemplate {
-        deleted: query.deleted,
-        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
-        title: "Sources - Folio".into(),
-        rows: rows(DefaultVault(vault), &state, query.deleted).await?,
-        notice: None,
-    })
+    render(list_template(vault, &state, query.deleted, None).await?)
 }
 
 async fn test_saved(
@@ -144,17 +167,13 @@ async fn test_saved(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     let result = run_test(&state, &def).await;
-    render(ListTemplate {
-        deleted: false,
-        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
-        title: "Sources - Folio".into(),
-        rows: rows(DefaultVault(vault), &state, false).await?,
-        notice: Some(Notice {
-            danger: !result.ok,
-            text: format!("{}: {}", def.name, result.message),
-        }),
-    })
+    let notice = Notice {
+        danger: !result.ok,
+        text: format!("{}: {}", def.name, result.message),
+    };
+    render(list_template(vault, &state, false, Some(notice)).await?)
 }
 
 /// Form fields for both source kinds; the unused kind's fields stay empty
@@ -185,22 +204,30 @@ struct FormValues {
     mail_body: String,
     mail_after_import: String,
     move_to: String,
+    // paperless; the poll interval shares `poll_interval_secs` with mail
+    url: String,
+    token: String,
+    sync_mode: String,
+    default_currency: String,
     /// Set by the "Test connection" button
     test: Option<String>,
 }
 
 impl FormValues {
     fn blank(kind: &str) -> Self {
-        let config = if kind == "email" {
-            SourceConfig::Email(
+        let config = match kind {
+            "email" => SourceConfig::Email(
                 serde_json::from_value(serde_json::json!({"host": "", "username": ""}))
                     .expect("mail defaults deserialize"),
-            )
-        } else {
-            SourceConfig::Folder(
+            ),
+            "paperless" => SourceConfig::Paperless(
+                serde_json::from_value(serde_json::json!({"url": ""}))
+                    .expect("paperless defaults deserialize"),
+            ),
+            _ => SourceConfig::Folder(
                 serde_json::from_value(serde_json::json!({"path": ""}))
                     .expect("folder defaults deserialize"),
-            )
+            ),
         };
         Self::from_config(&config, "", true)
     }
@@ -256,6 +283,17 @@ impl FormValues {
                 // The stored password never reaches the page; the mask stands for it.
                 if e.password.is_some() {
                     v.password = REDACTED.into();
+                }
+            }
+            SourceConfig::Paperless(p) => {
+                v.kind = "paperless".into();
+                v.url = p.url.clone();
+                v.sync_mode = p.sync_mode.as_str().into();
+                v.poll_interval_secs = p.poll_interval_secs.to_string();
+                v.default_currency = p.default_currency.clone().unwrap_or_default();
+                // Like the mail password, the token never reaches the page.
+                if p.token.is_some() || p.token_file.is_some() {
+                    v.token = REDACTED.into();
                 }
             }
         }
@@ -317,6 +355,15 @@ impl FormValues {
                 },
                 move_to: Some(self.move_to.trim().to_string()).filter(|m| !m.is_empty()),
             }),
+            "paperless" => SourceConfig::Paperless(PaperlessConfig {
+                url: self.url.trim().to_string(),
+                token: Some(self.token).filter(|t| !t.is_empty()),
+                token_file: None,
+                sync_mode: PaperlessSyncMode::parse(&self.sync_mode),
+                poll_interval_secs: number(&self.poll_interval_secs, "Check interval")?,
+                default_currency: Some(self.default_currency.trim().to_ascii_uppercase())
+                    .filter(|c| !c.is_empty()),
+            }),
             _ => return Err("Choose a source type.".to_string()),
         };
         Ok(IngestionSourceInput {
@@ -325,6 +372,40 @@ impl FormValues {
             config,
         })
     }
+
+    /// Common intervals, plus the stored one when it is none of them
+    fn paperless_intervals(&self) -> Vec<IntervalOption> {
+        let current: u64 = self.poll_interval_secs.trim().parse().unwrap_or(900);
+        let option = |secs: u64, label: String| IntervalOption {
+            secs,
+            label,
+            selected: secs == current,
+        };
+        let mut options: Vec<_> = [
+            (60, "minute"),
+            (300, "5 minutes"),
+            (900, "15 minutes"),
+            (1800, "30 minutes"),
+            (3600, "hour"),
+            (21600, "6 hours"),
+            (86400, "day"),
+        ]
+        .into_iter()
+        .map(|(secs, label)| option(secs, format!("Every {label}")))
+        .collect();
+        if !options.iter().any(|o| o.selected) {
+            let at = options.partition_point(|o| o.secs < current);
+            options.insert(at, option(current, format!("Every {current} seconds")));
+        }
+        options
+    }
+}
+
+/// A choice in the Paperless "check for changes" select
+struct IntervalOption {
+    secs: u64,
+    label: String,
+    selected: bool,
 }
 
 #[derive(Template)]
@@ -377,6 +458,9 @@ async fn new_page(
     State(state): State<AppState>,
     axum::extract::Query(q): axum::extract::Query<NewQuery>,
 ) -> ApiResult<Html<String>> {
+    if q.kind.as_deref() == Some("paperless") {
+        require_paperless_admin(&state).await?;
+    }
     form(
         vault,
         &state,
@@ -393,6 +477,7 @@ async fn edit_page(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Html<String>> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     require_managed(&def)?;
     form(
         vault,
@@ -433,71 +518,92 @@ async fn try_connection(
     })
 }
 
+/// Validate and store the form; the error message is shown above the form
+async fn save(
+    state: &AppState,
+    vault: VaultId,
+    values: FormValues,
+    existing: Option<&IngestionSourceDef>,
+) -> Result<(), String> {
+    let mut input = values.into_input()?;
+    let id = existing.map(|def| def.id);
+    let stored: Result<_, folio_core::error::Error> = async {
+        prepare_input(&mut input, existing)?;
+        claim_paperless_slot(state, vault, &input.config, id).await?;
+        match id {
+            Some(id) => state.ingestion.managed.update(vault, id, input).await,
+            None => state.ingestion.managed.create(vault, input).await,
+        }
+    }
+    .await;
+    stored.map(drop).map_err(|e| e.to_string())
+}
+
+/// A re-rendered form never echoes a typed token: it shows the mask where
+/// saving would keep the stored token, and an empty field otherwise
+fn hide_token(values: &mut FormValues, existing: Option<&IngestionSourceDef>) {
+    if values.kind != "paperless" {
+        return;
+    }
+    let keeps_stored = match existing.map(|def| &def.config) {
+        Some(SourceConfig::Paperless(old)) => {
+            old.token.is_some()
+                && PaperlessConfig::normalize_url(&values.url).is_ok_and(|url| same_url(old, &url))
+        }
+        _ => false,
+    };
+    values.token = if keeps_stored {
+        REDACTED.into()
+    } else {
+        String::new()
+    };
+}
+
 async fn create(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Form(values): Form<FormValues>,
+    Form(mut values): Form<FormValues>,
 ) -> ApiResult<Response> {
-    if values.test.is_some() {
-        let notice = try_connection(&state, values.clone(), None).await;
-        return Ok(form(vault, &state, None, values, notice)
-            .await?
-            .into_response());
+    if values.kind == "paperless" {
+        require_paperless_admin(&state).await?;
     }
-    let saved = match values.clone().into_input() {
-        Ok(mut input) => match prepare_input(&mut input, None) {
-            Ok(()) => state
-                .ingestion
-                .managed
-                .create(vault, input)
-                .await
-                .map_err(|e| e.to_string()),
-            Err(e) => Err(e.to_string()),
-        },
-        Err(message) => Err(message),
+    let notice = if values.test.is_some() {
+        try_connection(&state, values.clone(), None).await
+    } else {
+        match save(&state, vault, values.clone(), None).await {
+            Ok(()) => return Ok(Redirect::to("/settings/sources").into_response()),
+            Err(message) => danger(message),
+        }
     };
-    match saved {
-        Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(form(vault, &state, None, values, danger(message))
-            .await?
-            .into_response()),
-    }
+    hide_token(&mut values, None);
+    Ok(form(vault, &state, None, values, notice)
+        .await?
+        .into_response())
 }
 
 async fn update(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Form(values): Form<FormValues>,
+    Form(mut values): Form<FormValues>,
 ) -> ApiResult<Response> {
     let existing = find(vault, &state, id).await?;
+    if existing.config.is_paperless() || values.kind == "paperless" {
+        require_paperless_admin(&state).await?;
+    }
     require_managed(&existing)?;
-    if values.test.is_some() {
-        let notice = try_connection(&state, values.clone(), Some(&existing)).await;
-        return Ok(form(vault, &state, Some(id.to_string()), values, notice)
-            .await?
-            .into_response());
-    }
-    let saved = match values.clone().into_input() {
-        Ok(mut input) => match prepare_input(&mut input, Some(&existing)) {
-            Ok(()) => state
-                .ingestion
-                .managed
-                .update(vault, id, input)
-                .await
-                .map_err(|e| e.to_string()),
-            Err(e) => Err(e.to_string()),
-        },
-        Err(message) => Err(message),
+    let notice = if values.test.is_some() {
+        try_connection(&state, values.clone(), Some(&existing)).await
+    } else {
+        match save(&state, vault, values.clone(), Some(&existing)).await {
+            Ok(()) => return Ok(Redirect::to("/settings/sources").into_response()),
+            Err(message) => danger(message),
+        }
     };
-    match saved {
-        Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(
-            form(vault, &state, Some(id.to_string()), values, danger(message))
-                .await?
-                .into_response(),
-        ),
-    }
+    hide_token(&mut values, Some(&existing));
+    Ok(form(vault, &state, Some(id.to_string()), values, notice)
+        .await?
+        .into_response())
 }
 
 async fn toggle(
@@ -506,6 +612,7 @@ async fn toggle(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     require_managed(&def)?;
     state
         .ingestion
@@ -529,6 +636,7 @@ async fn delete(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
     let def = find_retained(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     require_managed(&def)?;
     state.ingestion.managed.delete(vault, id).await?;
     Ok(Redirect::to("/settings/sources"))
@@ -539,7 +647,7 @@ async fn restore(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Redirect> {
-    state.ingestion.managed.restore(vault, id).await?;
+    super::sources::restore(&state, vault, id).await?;
     Ok(Redirect::to("/settings/sources"))
 }
 
