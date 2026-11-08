@@ -165,8 +165,15 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                 var file = try UploadFile(contentsOf: url)
                 file.filename = filename
                 let node = try await catalog.upload(file, to: destination)
-                let local = try localMetadata.update(
-                    with: itemTemplate, fields: fields, for: node.id.providerIdentifier)
+                // The upload already happened, so failing here would make the system upload it again
+                let local: LocalItemMetadata
+                do {
+                    local = try localMetadata.update(
+                        with: itemTemplate, fields: fields, for: node.id.providerIdentifier)
+                } catch {
+                    ProviderDiagnostics.failure(operation: "createItem", phase: "local-metadata", error: error)
+                    local = localMetadata.metadata(for: node.id.providerIdentifier)
+                }
                 completionHandler(FolioProviderItem(node, local: local), [], false, nil)
             } catch {
                 completionHandler(nil, [], false, error.providerError)
