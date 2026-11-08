@@ -47,6 +47,20 @@ Activity types are fixed reverse-DNS strings, not derived from the bundle ID. Ha
 
 PR #392 (transferable documents) adds `DocumentActivityPayload` (`com.cedricziel.folio.document`, keys `version` = Int 1, `server`, `vault`, `document`, validated on decode) and `DocumentActivityTracker`, which already writes the document activity in `DocumentDetailView` with Handoff turned off. Handoff extends that payload instead of defining a parallel one: `HandoffPayload { server: URL, vault: UUID, target: .document(UUID, pane: .discussion?) | .library(.inbox | .all) | .savedView(UUID) }`, where the `.document` case encodes to exactly #392's keys plus an optional `pane`, so both decoders accept each other's documents. Library and saved-view activities use the same `version`/`server`/`vault` keys plus `list` or `savedView`. `requiredUserInfoKeys` = `["version", "server", "vault"]` plus the target key. The sender writes its signed-in URL. Canonicalisation happens on comparison (Decision 3), so #392's `server.absoluteString` is compatible as-is. This is chosen over a `Codable` blob in a single `Data` key because it is inspectable in tests, works with `requiredUserInfoKeys`, and an unknown future key is simply ignored. A different `version` fails decoding, and the app falls back to `webpageURL` (spec: "Malformed or newer payload"). `title` stays as #392 sets it (the document title, for the system's on-screen awareness). It travels only between the user's own devices and is never read for routing; user info and keywords carry no names. A closed draft of continuation logic (`DocumentHandoff`, PR #394 on `claude/feat-175-handoff`) covers version and server validation, cold-launch restore and sign-out withdrawal with tests. The implementer may port it into `HandoffResolver` / `ContinuationInbox` where it matches this design.
 
+### 2a. Reading position: PDFKit for PDFs, start otherwise
+
+Issue #175 asks to preserve the page or reading position, with safe bounds and a fallback to the document start. Today `DocumentDetailView` shows every file with `QuickLookPreview` (`QLPreviewController` / `QLPreviewView`), and neither exposes or accepts a current page. Decision:
+- PDFs (the common case for scanned and imported documents) get a small `PDFPreview` wrapper around PDFKit's `PDFView` on iOS and macOS.
+  - It reports the 1-based current page via `.PDFViewPageChanged` into `DocumentDetailView` state.
+  - It accepts an initial page, applied once after the document loads.
+- Every other type keeps QuickLook and reports no page.
+
+The page is an optional `page` key inside payload version 1. Adding an optional key does not need a version bump: older receivers ignore unknown keys, and a missing key means "start". This is how the field is versioned. `ReadingPosition.clamp(page: Int?, pageCount: Int?) -> Int` (FolioKit, pure) maps a missing or non-positive page, or a missing `pageCount`, to 1, and a larger page to `pageCount`. `pageCount` comes from the loaded `PDFDocument`, not from server metadata, so it matches what the receiver can show. A non-integer `page` is dropped during decoding, and the rest of the payload stays valid.
+
+The advertiser takes the current page as input (`AdvertisingState.page`), so the single document activity updates as the user scrolls. SwiftUI calls the `.userActivity` update closure on state change, and the system coalesces Handoff updates. The web fallback opens the document page at its start; the web viewer has no page anchor today.
+
+Alternative considered: keep QuickLook and approximate the position from scroll offset. Rejected because QuickLook gives no stable page mapping and differs between iOS and macOS.
+
 ### 3. Server identity = canonical base URL
 
 `ServerIdentity(url)` canonicalises:
@@ -94,7 +108,7 @@ Alternative considered: keep handlers in `InboxView` and add a lock check. Rejec
 
 ### 6. Advertising: one `.userActivity` per window, chosen by a pure function
 
-`HandoffAdvertiser.payload(for: AdvertisingState) -> HandoffPayload?` (FolioKit) decides what a window advertises. Its input is the session URL, `isLocked`, the selected vault, the destination (inbox, all or saved-view ID), the selected document ID and `showingDiscussion`. The rules:
+`HandoffAdvertiser.payload(for: AdvertisingState) -> HandoffPayload?` (FolioKit) decides what a window advertises. Its input is the session URL, `isLocked`, the selected vault, the destination (inbox, all or saved-view ID), the selected document ID, `showingDiscussion` and the preview's current page, if it reports one. The rules:
 - `nil` when locked or not signed in
 - a `.document` payload, with `pane = .discussion` exactly when `showingDiscussion` is true, when a document is selected
 - otherwise a `.library` or `.savedView` payload

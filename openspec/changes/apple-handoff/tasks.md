@@ -131,6 +131,13 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(apple): workspace routes for Handoff targets`.
 
+- [ ] 6.9 Add `ReadingPosition.clamp(page:pageCount:)` and the optional `page` key in `HandoffPayload`. First write failing tests:
+  - `ReadingPositionTests`: 7 of 12 → 7; 40 of 12 → 12; nil, 0 or −3 → 1; any page with a nil `pageCount` → 1
+  - `HandoffPayloadTests` additions: `page` round-trips; a payload without `page` or with a string/float `page` still decodes, with `page == nil`; a #392 payload without `page` still decodes
+  - `HandoffAdvertiserTests` addition: the reported page appears in the document payload, and a QuickLook (no page) state omits it
+
+  Commit `feat(apple): carry and clamp the reading position`.
+
 ## 7. App wiring
 
 - [ ] 7.1 Declare `NSUserActivityTypes` (`com.cedricziel.folio.document`, `.library`, `.saved-view`) in `project.yml`. Add the failing check first: a step in `apple/scripts/check-build-settings.sh` that runs `plutil -extract NSUserActivityTypes json` on the generated Info.plist and expects all three. Commit `build(apple): declare Handoff activity types`.
@@ -138,6 +145,8 @@ Server and Apple sections are independent and can land in either order; within e
 - [ ] 7.3 Prefill sign-in from `.prefillSignIn`: `OnboardingViewModel.address` takes the URL, and `AppModel.connected(to:)` re-decides. First write a failing `ViewModelTests` case: the prefill sets the address, sign-in to the same server yields the route, and sign-in to another server drops it. Commit `feat(apple): continue Handoff after sign-in`.
 - [ ] 7.4 Render `HandoffPresentation`: the alert with **Open in Browser** / **Cancel**, `SFSafariViewController` on iOS and `NSWorkspace` on macOS. The failing test is `HandoffPresentationTests` from 6.5, extended with a case for the button set per presentation. The view only switches over the value. Commit `feat(apple): browser fallback for foreign continuations`.
 - [ ] 7.5 Wire advertising. `DocumentDetailView` keeps one `.userActivity` (#392's `.documentActivity`, or a new one if Handoff lands first), with `isActive = payload != nil` and `pane` from `showingDiscussion`; the discussion sheet gets no modifier. `InboxView` gets one `.userActivity` for library and saved-view types, with `isActive = session.selection == nil && payload != nil`. Both build the payload with `HandoffAdvertiser.payload(for:)`. The failing test is `HandoffAdvertiserTests` from 6.7, extended with a split-view case: a selection plus a library makes the library inactive. Commit `feat(apple): advertise Handoff for documents, libraries and saved views`.
+
+- [ ] 7.6 Add `PDFPreview` (PDFKit `PDFView` on iOS and macOS) for PDF documents in `DocumentDetailView`, keeping `QuickLookPreview` for other types. It reports the 1-based current page on `.PDFViewPageChanged` and opens once at `ReadingPosition.clamp(page:pageCount:)` of the loaded document. First add `Sources/PDFPreview.swift` to the `FolioAuthTests` sources in `project.yml` (as `AppLock.swift` is), then write a failing test there (macOS, which can host `PDFView`): a 3-page fixture opened with page 2 shows page 2; with page 9 it shows page 3; with nil it shows page 1; a page change publishes the new number. Commit `feat(apple): PDF preview keeps the reading position`.
 
 ## 8. Self-builder docs
 
@@ -170,6 +179,8 @@ Server and Apple sections are independent and can land in either order; within e
   - Handoff into a locked Mac opens only after unlock
   - Handoff to a device on another server offers the browser
   - a Mac without the app opens the web page
+  - a PDF read at page N continues at page N, and a non-PDF opens at the start
+- [ ] 9.5 Record device and platform coverage in the implementation PR, as #175's last acceptance criterion requires. Add a table of the sender → receiver combinations actually tested: iPhone, iPad and Mac, with OS versions, for document, discussion, library, saved view and page. List every combination left unverified, such as iPad → iPad, Universal Links on iPad, or macOS without Apple Silicon. The PR description contains the table before it is marked ready.
 
 ## Workflow follow-up
 

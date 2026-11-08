@@ -50,7 +50,7 @@ The Apple app SHALL declare each activity type it advertises or accepts in its `
 
 ### Requirement: Payload identifies server and target
 
-Each activity's user info SHALL carry `version` (integer `1`), `server` (the sender's server base URL), and `vault`. A document activity adds `document` and an optional `pane` = `discussion`. A library activity adds `list` = `inbox` or `all`. A saved-view activity adds `savedView`. All IDs are lowercase UUID strings.
+Each activity's user info SHALL carry `version` (integer `1`), `server` (the sender's server base URL), and `vault`. A document activity adds `document`, an optional `pane` = `discussion`, and an optional `page` (1-based integer reading position). A library activity adds `list` = `inbox` or `all`. A saved-view activity adds `savedView`. All IDs are lowercase UUID strings.
 
 #### Scenario: Round trip
 
@@ -61,6 +61,29 @@ Each activity's user info SHALL carry `version` (integer `1`), `server` (the sen
 
 - **WHEN** user info lacks a required key, holds an invalid UUID, a URL that is not http(s) with a host, or a `version` other than `1`
 - **THEN** decoding fails, the app does not navigate, and it opens the activity's web page URL if one is present
+
+### Requirement: Reading position follows the document where supported
+When the sender's preview exposes the current page, the document activity SHALL carry it as `page`. The receiver SHALL open its preview at that page clamped to 1...pageCount of the loaded file. It falls back to the document start when `page` is missing, not a positive integer, or unsupported by its preview.
+
+#### Scenario: Continue on the same page
+- **WHEN** a user reading page 7 of a 12-page PDF hands it over
+- **THEN** the receiver shows the document with its preview at page 7
+
+#### Scenario: Page beyond the receiver's document
+- **WHEN** the payload says page 40 and the loaded PDF has 12 pages
+- **THEN** the preview opens at page 12
+
+#### Scenario: Missing or invalid page
+- **WHEN** the payload has no `page`, or `page` is `0`, negative, or not an integer
+- **THEN** the payload still decodes and the preview opens at the first page
+
+#### Scenario: Preview without page support
+- **WHEN** the document is an image or another type shown without a paged preview
+- **THEN** the sender omits `page` and the receiver opens the document at its start
+
+#### Scenario: Page changes while advertising
+- **WHEN** the user scrolls from page 3 to page 4
+- **THEN** the advertised activity's `page` becomes 4
 
 ### Requirement: Handoff reveals no document content
 
