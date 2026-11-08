@@ -54,7 +54,7 @@ struct UploadBatchRunnerTests {
         #expect(await service.tagged.map(\.document) == documents.map(\.id))
     }
 
-    @Test func lostUploadAnswerIsFoundOnTheServerInsteadOfUploadedAgain() async throws {
+    @Test func lostUploadAnswerIsReplayedByItsKeyInsteadOfUploadedAgain() async throws {
         let service = MockFolioService()
         let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
         let files = [file("a.pdf")]
@@ -69,35 +69,62 @@ struct UploadBatchRunnerTests {
         let documents = try await runner.run(files, tagIDs: [first.id], scope: "s")
 
         #expect(await service.uploads.count == 1)
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2)
+        #expect(Set(keys).count == 1, "the retry reuses the first attempt's Idempotency-Key")
         #expect(documents.map(\.id) == [stored.id])
         #expect(await service.tagged.map(\.document) == [stored.id])
     }
 
-    @Test func lostUploadThatNeverReachedTheServerIsSentAgain() async throws {
-        let service = MockFolioService()
+    @Test func aSameNamedDocumentFromEarlierIsNeverAdopted() async throws {
+        let earlier = Document(title: "Scan", originalFilename: "scan.pdf", createdAt: .now)
+        let service = MockFolioService(documents: [earlier])
         let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
         await service.setFailure(.unreachable)
         await #expect(throws: FolioError.unreachable) {
-            _ = try await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+            _ = try await runner.run([file("scan.pdf")], tagIDs: [first.id], scope: "s")
         }
 
         await service.setFailure(nil)
-        _ = try await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+        let documents = try await runner.run([file("scan.pdf")], tagIDs: [first.id], scope: "s")
 
-        #expect(await service.filters.count == 1)
-        #expect(await service.uploads.map(\.filename) == ["a.pdf"])
+        #expect(await service.uploads.map(\.filename) == ["scan.pdf"])
+        #expect(documents.first?.id != earlier.id)
+        #expect(await service.tagged.map(\.document) != [earlier.id])
     }
 
-    @Test func serverRefusalIsNotLookedUpBeforeUploadingAgain() async throws {
+    @Test func aDocumentDeletedBeforeTaggingIsUploadedAgain() async throws {
         let service = MockFolioService()
         let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
-        await service.setFailure(.server(status: 503, message: nil))
+        await service.setFailingTags([first.id])
         _ = try? await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+        let deleted = try #require(runner.progress(files: [file("a.pdf")], tagIDs: [first.id], scope: "s"))
+        await service.markDeleted(try #require(deleted.steps.first?.documentID))
 
-        await service.setFailure(nil)
+        await service.setFailingTags([])
+        let documents = try await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+
+        #expect(await service.uploads.count == 2)
+        #expect(Set(await service.uploadKeys).count == 2, "the new upload gets a new key")
+        let replacement = try #require(documents.first?.id)
+        #expect(replacement != deleted.steps.first?.documentID)
+        #expect(await service.tagged.map(\.document) == [replacement])
+    }
+
+    @Test func aBatchAlreadyRunningElsewhereIsNotStartedTwice() async throws {
+        let service = MockFolioService()
+        let store = InMemoryUploadProgressStore()
+        let runner = UploadBatchRunner(service: service, store: store)
+        let key = UploadBatchRunner.key(files: [file("a.pdf")], tagIDs: [first.id], scope: "s")
+        #expect(store.lock(key))
+
+        await #expect(throws: UploadBatchError.alreadyRunning) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
+        }
+        #expect(await service.uploads.isEmpty)
+
+        store.unlock(key)
         _ = try await runner.run([file("a.pdf")], tagIDs: [first.id], scope: "s")
-
-        #expect(await service.filters.isEmpty)
         #expect(await service.uploads.count == 1)
     }
 
@@ -134,6 +161,34 @@ struct UploadBatchRunnerTests {
         #expect(FileUploadProgressStore(directory: directory).load("batch") == progress)
         #expect(FileUploadProgressStore(directory: directory, maxAge: -1).load("batch") == nil)
         #expect(FileUploadProgressStore(directory: directory).load("batch") == nil)
+    }
+
+    @Test func savingSweepsAbandonedProgress() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "folio-progress-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileUploadProgressStore(directory: directory)
+        let progress = UploadBatchProgress(steps: [UploadStep(remainingTags: [])], updatedAt: .now)
+        store.save(progress, for: "abandoned")
+        let abandoned = directory.appending(path: "upload-progress/abandoned.json")
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date.now.addingTimeInterval(-2 * 24 * 60 * 60)], ofItemAtPath: abandoned.path)
+
+        store.save(progress, for: "current")
+
+        #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+        #expect(store.load("current") == progress)
+    }
+
+    @Test func fileStoreLocksABatchAcrossInstances() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "folio-progress-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(FileUploadProgressStore(directory: directory).lock("batch"))
+        #expect(!FileUploadProgressStore(directory: directory).lock("batch"))
+        FileUploadProgressStore(directory: directory).unlock("batch")
+        #expect(FileUploadProgressStore(directory: directory).lock("batch"))
     }
 }
 
@@ -215,6 +270,8 @@ struct ShortcutUploadRetryTests {
         let tags = "/api/documents/\(documentID)/tags"
         let paths = ShareUploadProtocol.requests(to: host).map { $0.url?.path() ?? "" }
         #expect(Array(paths.prefix(3)) == ["/api/documents/upload", tags, tags])
+        let upload = try #require(ShareUploadProtocol.requests(to: host).first)
+        #expect(upload.value(forHTTPHeaderField: "Idempotency-Key").flatMap(UUID.init(uuidString:)) != nil)
         #expect(!paths.dropFirst(3).contains("/api/documents/upload"))
         #expect(documents.map(\.id.uuidString).map { $0.lowercased() } == [documentID])
     }
