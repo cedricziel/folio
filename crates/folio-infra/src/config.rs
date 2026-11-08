@@ -506,6 +506,14 @@ pub struct AppleConfig {
     pub app_ids: Vec<String>,
 }
 
+impl AppleConfig {
+    /// The validated app IDs, without repeats
+    pub fn parsed(&self) -> Result<Vec<AppleAppId>, String> {
+        AppleAppId::parse_all(self.app_ids.iter().map(String::as_str))
+            .map_err(|e| format!("apple.app_ids (FOLIO_APPLE__APP_IDS): {e}"))
+    }
+}
+
 /// Server directories an import may read, and the size limit for one file
 ///
 /// Config-only: which server paths the app reads is a deployment decision.
@@ -856,9 +864,11 @@ pub const SETTINGS: &[Setting] = &[
 impl Config {
     /// Rejects combinations that are unsafe to run. Called once at startup.
     pub fn validate(&self) -> Result<(), String> {
-        for id in &self.apple.app_ids {
-            id.parse::<AppleAppId>()
-                .map_err(|e| format!("apple.app_ids (FOLIO_APPLE__APP_IDS): {e}"))?;
+        self.apple.parsed()?;
+        if let Some(url) = self.server.public_url.as_deref().filter(|u| !u.is_empty()) {
+            url::Url::parse(url).map_err(|e| {
+                format!("server.public_url (FOLIO_SERVER__PUBLIC_URL) is not a valid URL ({e}): {url:?}")
+            })?;
         }
         if !self.auth.required {
             return Ok(());
@@ -1422,6 +1432,34 @@ vault = "{VAULT}"
         let config = load_toml(example).unwrap();
         assert_eq!(config.apple.app_ids, ["ABCDE12345.com.example.folio"]);
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn apple_config_parses_and_dedupes_its_app_ids() {
+        let config = load(&[(
+            "FOLIO_APPLE__APP_IDS",
+            "ABCDE12345.com.example.folio, ABCDE12345.com.example.folio",
+        )]);
+        let ids = config.apple.parsed().unwrap();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0].as_str(), "ABCDE12345.com.example.folio");
+    }
+
+    #[test]
+    fn unparseable_public_url_fails_startup_even_without_auth() {
+        let err = load(&[
+            ("FOLIO_AUTH__REQUIRED", "false"),
+            ("FOLIO_SERVER__PUBLIC_URL", "https://exa mple.com/folio"),
+        ])
+        .validate()
+        .unwrap_err();
+        assert!(err.contains("server.public_url"), "{err}");
+        assert!(load(&[
+            ("FOLIO_AUTH__REQUIRED", "false"),
+            ("FOLIO_SERVER__PUBLIC_URL", "https://example.com/folio"),
+        ])
+        .validate()
+        .is_ok());
     }
 
     #[test]
