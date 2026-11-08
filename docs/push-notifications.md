@@ -39,3 +39,12 @@ Admins can also set all of this on `/settings` under **Push notifications**, and
 
 - **The card shows an APNs error.** APNs refused the key (for example `InvalidProviderToken`). Check the team ID, key ID, topic and key. Sending pauses for 15 minutes, or until you save the settings again.
 - **Testing against a stub.** `FOLIO_PUSH__APNS__BASE_URL=http://127.0.0.1:9443` sends every push to that address over cleartext HTTP/2 instead of Apple. It is read from the configuration only, and the settings page warns while it is set.
+
+## Enabling push in the Apple app build
+
+The app ships with push turned off (`FOLIO_PUSH = NO` in `apple/Folio/project.yml`). With it off, the build carries no push entitlement, never asks for notification permission and never registers with APNs, so signing works with the existing profiles. To turn it on:
+
+1. In the Apple Developer portal, enable **Push Notifications** on the App ID `com.cedricziel.folio`. `bundle exec fastlane bootstrap` does this through the App Store Connect API.
+2. Regenerate the match profiles so they carry `aps-environment`: `bundle exec fastlane bootstrap force:true` (App Store and development, iOS and macOS).
+3. Set `FOLIO_PUSH: 'YES'` in `apple/Folio/project.yml`. The target then signs with `apple/Folio/Push/FolioPush.entitlements`, which adds `aps-environment` (development for Debug, production for Release) to the usual entitlements.
+4. Create an APNs key under Keys in the portal and configure the server as described above.

@@ -14,6 +14,11 @@ enum PushNotifications {
     private static let askedKey = "push.askedAfterUpload"
     private static let responder = NotificationResponder()
 
+    /// Builds without the push entitlement (`FOLIO_PUSH = NO`) never ask or register.
+    static var isEnabled: Bool {
+        (Bundle.main.object(forInfoDictionaryKey: "FolioPushEnabled") as? String) == "YES"
+    }
+
     /// Called once at launch: categories and the delegate must be set before a notification is opened.
     static func configure() {
         let center = UNUserNotificationCenter.current()
@@ -42,6 +47,7 @@ enum PushNotifications {
 
     /// Signed in: deliver quietly until the person decides, and tell the server about this device.
     static func signedIn(to server: URL) {
+        guard isEnabled else { return }
         Task {
             let center = UNUserNotificationCenter.current()
             if await center.notificationSettings().authorizationStatus == .notDetermined {
@@ -54,6 +60,7 @@ enum PushNotifications {
 
     /// After the first finished upload or scan, ask once for prominent notifications.
     static func afterUpload() {
+        guard isEnabled else { return }
         let defaults = UserDefaults.standard
         guard !defaults.bool(forKey: askedKey) else { return }
         defaults.set(true, forKey: askedKey)
@@ -61,6 +68,7 @@ enum PushNotifications {
     }
 
     static func requestFullAuthorization() async {
+        guard isEnabled else { return }
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings().authorizationStatus
         guard status == .notDetermined || status == .provisional else { return }
@@ -71,11 +79,13 @@ enum PushNotifications {
 
     /// Forget this device on the server, then clear what it already shows.
     static func signingOut() async {
+        guard isEnabled else { return }
         await PushRegistration.shared.signingOut()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
     }
 
     static func registerForRemoteNotifications() {
+        guard isEnabled else { return }
         #if os(iOS)
             UIApplication.shared.registerForRemoteNotifications()
         #else
@@ -160,6 +170,19 @@ struct NotificationSettingsView: View {
     @State private var testStatus: String?
 
     var body: some View {
+        if PushNotifications.isEnabled {
+            settings
+        } else {
+            ContentUnavailableView(
+                "Notifications aren't available",
+                systemImage: "bell.slash",
+                description: Text("This build of Folio doesn't receive push notifications yet.")
+            )
+            .navigationTitle("Notifications")
+        }
+    }
+
+    private var settings: some View {
         Form {
             Section {
                 Toggle("Documents that need review", isOn: binding(\.needsReview))

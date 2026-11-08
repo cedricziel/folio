@@ -79,7 +79,7 @@ def register_bundle_ids
   if app_bundle && !app_bundle.get_capabilities.map(&:capability_type).include?(push)
     begin
       app_bundle.create_capability(push)
-      UI.success("Enabled Push Notifications on #{APP_IDENTIFIER}; run `bootstrap force:true` to refresh the profiles")
+      UI.success("Enabled Push Notifications on #{APP_IDENTIFIER}; run `bootstrap force:true`, then set FOLIO_PUSH to YES")
     rescue StandardError => e
       UI.important("Could not enable Push Notifications on #{APP_IDENTIFIER}: #{e.message}")
     end
