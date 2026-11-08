@@ -29,7 +29,7 @@ A self-hosted server can't push to the App Store build on its own: only the Appl
   - Distinct documents are counted across vaults, after a 30 s quiet window and never more than 5 minutes after the first outcome.
   - Each device gets at most 12 alerts an hour.
   - Each device's batch is claimed with a lease, so replicas never double-send.
-- **Generic payloads.** Alert text comes from fixed templates filled with counts. Payloads never carry titles, names or content, and alerts carry a lock-screen placeholder that names no document.
+- **Generic payloads.** Alert text comes from fixed templates filled with counts. Payloads never carry titles, names or content, and alerts carry a lock-screen placeholder that names no document. Showing titles is a per-device opt-in: a Notification Service Extension fetches the title from the server, taking the shared OAuth refresh lock, and falls back to the generic text.
 - **Widget reloads.** The same sender sends `apns-push-type: widgets` pushes to widget tokens, at most once per device every 15 minutes.
 - **Transport.**
   - A `PushTransport` port with `none` (default) and `apns` adapters. `apns` uses direct HTTP/2 with ES256 token auth.
@@ -58,6 +58,7 @@ A self-hosted server can't push to the App Store build on its own: only the Appl
   - first-completion triggers
   - coalescing and rate limits
   - payload privacy
+  - the title opt-in
   - deep links and actions
   - invalid tokens
   - widget reload pushes
@@ -93,6 +94,6 @@ A self-hosted server can't push to the App Store build on its own: only the Appl
   - The `aps-environment` entitlement.
   - FolioKit `PushRegistration` and `NotificationRouter`.
   - Sign-out and reconnect changes in `AppModel`.
-  - No new extension target.
+  - A new `FolioNotificationService` extension target for the title opt-in.
   - Nothing in `Sharing/`, `FileProvider/`, `Telemetry/` or App Intents.
 - **Ordering.** The #306 fix lands before the server PR merges.

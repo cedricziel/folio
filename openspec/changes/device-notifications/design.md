@@ -43,7 +43,7 @@ What the server has today:
 **Non-Goals:**
 
 - Implementing the relay. It stays a designed port until the owner decides whether to run one (Decision 1).
-- Sending titles in any form. A title opt-in through a Notification Service Extension (NSE) is dropped from this change; see Decision 4.
+- Sending titles through APNs or a relay. The title opt-in is resolved on the device (Decision 4).
 - In-app SSE on Apple.
 - Live Activities, controls and the widgets themselves (other #351 sub-issues).
 - Email or web push.
@@ -103,7 +103,7 @@ The `Processed` payload has no run ID, and `finish_embed_stage` emits it for rep
 
 The planner does no network I/O. A slow APNs call therefore can't make the dispatcher replay events to SSE and workflows.
 
-### Decision 4: Payloads stay generic; no title opt-in
+### Decision 4: Payloads stay generic; titles only fetched on the device
 
 ```json
 {
@@ -124,10 +124,12 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
 
 - **Text.** Server-side templates fill in the counts, localized from the device's `locale`; Phase 2 ships English and German. `vault` is set only for a single vault, `document` only for a single document, and `thread-id` only for a single vault.
 - **Lock screen.** Categories set `hiddenPreviewsBodyPlaceholder`.
-- **Why not a title opt-in through an NSE:**
-  - An NSE can't suppress an alert it shouldn't show without the notification-filtering entitlement. An alert in flight at sign-out would show the previous account's title.
-  - An NSE that refreshes a token outside `SharedConfiguration.oauthRefreshLock` trips refresh reuse detection (`server.rs:446`) and revokes the grant.
-  - Both are avoidable, but neither is worth it for a first version. If a later change adds titles, its NSE must take `oauthRefreshLock` before any refresh, and must hold the filtering entitlement or show titles only for documents it can still fetch.
+- **Title opt-in.** #359 asks for one, because App lock doesn't cover notifications. With `show_titles` on, the server adds `mutable-content: 1`, and the payload still carries no title.
+- **`FolioNotificationService` (NSE).** For a single-document alert it fetches the title with the app's credentials from the shared keychain, within a 5 s budget, and sets it as the subtitle.
+- **Safeguards:**
+  - Any token refresh goes through the existing token provider under `SharedConfiguration.oauthRefreshLock`. A refresh outside it would trip refresh reuse detection (`server.rs:446`) and revoke the grant.
+  - An NSE can't suppress an alert without the notification-filtering entitlement. So the base text is always generic, and the NSE adds a title only after a successful fetch: signed out means no credentials, and another account gets a `403`. An alert from a previous session therefore never shows a title.
+- **Why fetch on the device:** the opt-in has the same privacy whatever the transport, which matters for a future relay.
 
 ### Decision 5: One alert per device per flush, limits and widgets
 
@@ -186,7 +188,8 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
   - `willPresent` suppresses the banner on the matching Inbox.
   - **Mark reviewed** is `.authenticationRequired` and uses `FolioService`.
 - **Sign-out.** `DELETE /api/devices/{id}` before revoking, then `removeAllDeliveredNotifications()`.
-- **Boundaries.** No NSE target in this change. The work stays out of `Sharing/`, `FileProvider/`, `Telemetry/` and App Intents, except for reading `InstallationIdentity`.
+- **Extension.** A `FolioNotificationService` target (iOS and macOS) sharing the keychain group and App Group (Decision 4).
+- **Boundaries.** The work stays out of `Sharing/`, `FileProvider/`, `Telemetry/` and App Intents, except for reading `InstallationIdentity`.
 
 ### Decision 10: JSON API and OpenAPI
 
@@ -231,7 +234,7 @@ The planner does no network I/O. A slow APNs call therefore can't make the dispa
 - **Relay.** Designed, not built, pending the owner (Decision 1).
 - **Badge.** Deferred. It will be an absolute count, reset on open (Decision 5).
 - **Background refresh.** Only for widgets and a future badge, never the alert path (Decision 1).
-- **Titles.** Not in this change (Decision 4).
+- **Titles.** An opt-in, fetched on the device by the NSE under the refresh lock; never in payloads (Decision 4).
 
 [apns-token]: https://developer.apple.com/documentation/usernotifications/establishing-a-token-based-connection-to-apns
 [apns-send]: https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns

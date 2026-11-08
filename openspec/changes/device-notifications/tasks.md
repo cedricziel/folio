@@ -3,7 +3,7 @@
 Phase 2 lands as stacked PRs:
 
 - **Server** (groups 1–7) on `claude/feat-359-device-notifications`, rebased onto the #306 fix before merge
-- **Apple** (groups 8–9) on a branch stacked on it
+- **Apple** (groups 8–10) on a branch stacked on it
 
 Each task is one semantic commit, and each test below is written first and seen to fail.
 
@@ -67,7 +67,7 @@ Each task is one semantic commit, and each test below is written first and seen 
 
 ## 5. Sending
 
-- [ ] 5.1 Add the `PushTransport` port, the `none` adapter, and the alert templates. The templates produce English and German count text, `thread-id` only for a single vault, `vault` and `document` only when single, and the category. Verify with unit tests, including that a serialized payload never contains the document title or vault name.
+- [ ] 5.1 Add the `PushTransport` port, the `none` adapter, and the alert templates. The templates produce English and German count text, `thread-id` only for a single vault, `vault` and `document` only when single, the category, and `mutable-content` only with `show_titles`. Verify with unit tests, including that a serialized payload never contains the document title or vault name.
 - [ ] 5.2 Implement `NotificationSender`. Verify with tests on a controllable clock and a recording transport:
   - 200 outcomes in 3 minutes give at most 2 alerts
   - two vaults give one alert without a `thread-id`
@@ -117,12 +117,16 @@ Each task is one semantic commit, and each test below is written first and seen 
 
   Add `aps-environment` to `project.yml`. Verify with unit tests on fakes, including the order of `DELETE` and revoke on sign-out.
 
-- [ ] 8.3 Add the permission flow (`.provisional` on first sign-in, the full prompt after the first finished upload or scan) and Settings → Notifications (three toggles, scope, test button and an explanation of `push_available: false`). Verify with view-model tests.
+- [ ] 8.3 Add the permission flow (`.provisional` on first sign-in, the full prompt after the first finished upload or scan) and Settings → Notifications (three toggles, scope, the title opt-in with the App lock note, a test button, and an explanation of `push_available: false`). Verify with view-model tests.
 
 ## 9. Apple: handling and actions
 
 - [ ] 9.1 Add `NotificationRouter`: categories `FOLIO_DOCUMENT` (Open, and Mark reviewed with `.authenticationRequired`) and `FOLIO_INBOX`, with `hiddenPreviewsBodyPlaceholder`. It routes through `IntentRouter`, falling back to the Inbox, and `willPresent` suppresses the banner on the matching Inbox. Verify with unit tests that parse sample payloads.
 - [ ] 9.2 Make Mark reviewed call the review endpoint and remove the delivered notification. Verify with a unit test on the mock service, and confirm that Apple CI (the Swift gate) passes.
+
+## 10. Apple: title opt-in extension
+
+- [ ] 10.1 Add the `FolioNotificationService` target, sharing the keychain group and App Group. For a `mutable-content` single-document alert, it fetches the title through `FolioService` within 5 s, with any refresh under `SharedConfiguration.oauthRefreshLock`, and keeps the generic text when signed out, refused or out of time. Verify with unit tests of its content builder against a mock service that succeeds, returns `403`, times out, and needs a refresh, the last one asserting the lock is taken.
 
 ## Workflow follow-up
 

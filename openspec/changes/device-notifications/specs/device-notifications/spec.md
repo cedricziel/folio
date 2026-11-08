@@ -61,6 +61,7 @@ Preferences SHALL contain:
 | `failed`                               | on      |
 | `scope`: `mine` or `editable`          | `mine`  |
 | `vaults`: `all` or a list of vault IDs | `all`   |
+| `show_titles` | off |
 
 `mine` limits notifications to documents the person uploaded. `editable` widens them to every document the person may edit.
 
@@ -238,7 +239,7 @@ An alert SHALL contain only:
 - the document ID when exactly one document is covered
 - a category
 
-It SHALL NOT contain a document title, filename, tag, correspondent, extracted text or vault name, whatever transport is used. Alerts SHALL carry a lock-screen placeholder that names no document.
+It SHALL NOT contain a document title, filename, tag, correspondent, extracted text or vault name, whatever transport is used. When the device has `show_titles` on, the alert SHALL also carry `mutable-content: 1`, so the device can fetch the title itself. Alerts SHALL carry a lock-screen placeholder that names no document.
 
 Notification text SHALL NOT be free-form input to the transport. It SHALL come only from fixed templates filled with counts.
 
@@ -251,6 +252,31 @@ Notification text SHALL NOT be free-form input to the transport. It SHALL come o
 
 - **WHEN** the person's device is set to show previews only when unlocked
 - **THEN** the locked screen shows "Folio" and the placeholder, which names no document
+
+### Requirement: Title opt-in
+
+With `show_titles` on, the device SHALL fetch a single document's title from the server with its own credentials and show it in the alert. It SHALL show the generic text when any of these hold:
+
+- the fetch fails or takes longer than 5 seconds
+- the device is signed out
+- the server refuses access
+
+The fetch SHALL NOT refresh credentials outside the app's shared refresh lock. The settings screen SHALL say that App lock does not cover notifications.
+
+#### Scenario: Title shown
+
+- **WHEN** one document needs review on a device with `show_titles` on
+- **THEN** the APNs payload has no title, and the device shows the title it fetched
+
+#### Scenario: Signed out before delivery
+
+- **WHEN** an alert queued before sign-out arrives after it
+- **THEN** the device has no credentials and shows the generic text
+
+#### Scenario: Token refresh during the fetch
+
+- **WHEN** the extension's access token has expired while the app is refreshing
+- **THEN** the extension waits for the shared refresh lock and uses the refreshed token, and the grant is not revoked for refresh-token reuse
 
 ### Requirement: Deep links and actions
 
