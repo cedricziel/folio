@@ -36,7 +36,7 @@ struct SystemContinuedWork: ContinuedWorkScheduling {
         static func submit(
             title: String, total: Int, onCancel: @escaping @MainActor @Sendable () -> Void
         ) -> ContinuedProcessingWork? {
-            guard let bundleID = Bundle.main.bundleIdentifier else { return nil }
+            guard let bundleID = Bundle.main.bundleIdentifier, permitsContinuedTasks(bundleID) else { return nil }
             let identifier = "\(bundleID).continued.\(UUID().uuidString)"
             let work = ContinuedProcessingWork(title: title, total: total)
             let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
@@ -58,6 +58,12 @@ struct SystemContinuedWork: ContinuedWorkScheduling {
                 return nil
             }
             return work
+        }
+
+        /// Registering an identifier the Info.plist doesn't permit raises; builds without the entry stay foreground-only.
+        private static func permitsContinuedTasks(_ bundleID: String) -> Bool {
+            let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String]
+            return permitted?.contains("\(bundleID).continued.*") == true
         }
 
         func update(completed: Int) {
