@@ -103,7 +103,7 @@ import Testing
 
     @Test func reviewTrackingKeepsAClassifiedDocumentInTheInboxUntilReviewed() async throws {
         let original = Document(
-            title: "Letter", ocrStatus: .done, embedStatus: .done, reviewed: false, canEditDocumentDate: true,
+            title: "Letter", ocrStatus: .done, embedStatus: .done, canEditDocumentDate: true, reviewed: false,
             canReviewDocument: true)
         let service = await makeService(original)
         let list = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1))
