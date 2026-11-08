@@ -35,6 +35,12 @@ public final class DocumentBrowserSession: Identifiable {
         list = DocumentListViewModel(service: service)
         list.scope = destination == .inbox ? .inbox : .all
     }
+
+    /// Keeps the open document when a resizable window crosses the preview width.
+    public func adaptToLayout(showsPreview: Bool) {
+        guard !showsPreview, let selection, path.last != selection else { return }
+        path = [selection]
+    }
 }
 
 /// In-memory navigation for one signed-in workspace; discard it on account changes.

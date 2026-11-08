@@ -58,6 +58,29 @@ pub async fn harness_with(
     configured: Vec<IngestionSourceDef>,
     make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
 ) -> Harness {
+    harness_with_store(
+        configured,
+        make_auth,
+        Arc::new(ObjectStoreDocumentStore::in_memory()),
+    )
+    .await
+}
+
+/// A harness that keeps originals in `store`, without sign-in
+pub async fn harness_storing_in(store: Arc<dyn DocumentStore>) -> Harness {
+    harness_with_store(
+        Vec::new(),
+        |store| AuthState::new(store, None).with_required(false),
+        store,
+    )
+    .await
+}
+
+async fn harness_with_store(
+    configured: Vec<IngestionSourceDef>,
+    make_auth: impl FnOnce(Arc<dyn folio_auth::AuthStore>) -> AuthState,
+    store: Arc<dyn DocumentStore>,
+) -> Harness {
     let directory = tempfile::Builder::new()
         .prefix("folio-test-")
         .tempdir()
@@ -84,7 +107,6 @@ pub async fn harness_with(
         openai_api_key: None,
         anthropic_api_key: None,
     };
-    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
     let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
     let pipeline = PipelineContext::new(repos.settings.clone(), ai);
@@ -98,6 +120,7 @@ pub async fn harness_with(
         repos.saved_views,
         repos.documents,
         repos.entries,
+        repos.upload_receipts,
         repos.tags,
         repos.correspondents,
         repos.document_types,

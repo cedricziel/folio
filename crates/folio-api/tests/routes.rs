@@ -69,6 +69,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         repos.saved_views,
         repos.documents,
         repos.entries,
+        repos.upload_receipts,
         repos.tags,
         repos.correspondents,
         repos.document_types,

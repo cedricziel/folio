@@ -586,12 +586,19 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     }
 
     public func upload(_ file: UploadFile) async throws -> Document {
-        try await call("documents.upload") { try await uploadRequest(file) }
+        try await call("documents.upload") { try await uploadRequest(file, idempotencyKey: nil) }
     }
 
-    private func uploadRequest(_ file: UploadFile) async throws -> Document {
+    public func upload(_ file: UploadFile, idempotencyKey: UUID) async throws -> Document {
+        try await call("documents.upload") { try await uploadRequest(file, idempotencyKey: idempotencyKey) }
+    }
+
+    private func uploadRequest(_ file: UploadFile, idempotencyKey: UUID?) async throws -> Document {
         var request = URLRequest(url: endpoint("api/documents/upload"))
         request.httpMethod = "POST"
+        if let idempotencyKey {
+            request.setValue(idempotencyKey.uuidString.lowercased(), forHTTPHeaderField: "Idempotency-Key")
+        }
         let form = MultipartForm(file: file)
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
 
