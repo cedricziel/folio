@@ -29,6 +29,19 @@ final class LocalItemMetadataStore: @unchecked Sendable {
         entries = (try? JSONDecoder().decode([String: LocalItemMetadata].self, from: Data(contentsOf: file))) ?? [:]
     }
 
+    private static let sharedLock = NSLock()
+    nonisolated(unsafe) private static var sharedStores: [URL: LocalItemMetadataStore] = [:]
+
+    /// One store per file, so extension instances that overlap don't overwrite each other's writes.
+    static func shared(file: URL) -> LocalItemMetadataStore {
+        sharedLock.withLock {
+            if let store = sharedStores[file] { return store }
+            let store = LocalItemMetadataStore(file: file)
+            sharedStores[file] = store
+            return store
+        }
+    }
+
     /// A store in a fresh temporary file, for tests and for when Application Support is unavailable.
     static func scratch() -> LocalItemMetadataStore {
         LocalItemMetadataStore(
@@ -48,10 +61,14 @@ final class LocalItemMetadataStore: @unchecked Sendable {
         lock.withLock { entries[id.rawValue] ?? LocalItemMetadata() }
     }
 
-    /// Copies the `fields` that changed from `item` and saves them before returning the result.
-    func update(with item: NSFileProviderItem, fields: NSFileProviderItemFields) throws -> LocalItemMetadata {
-        try lock.withLock {
-            let key = item.itemIdentifier.rawValue
+    /// Copies the local `fields` from `item` to the entry for `id` (the item's own identifier by default)
+    /// and saves them before returning the result.
+    func update(
+        with item: NSFileProviderItem, fields: NSFileProviderItemFields, for id: NSFileProviderItemIdentifier? = nil
+    ) throws -> LocalItemMetadata {
+        let fields = fields.intersection(LocalItemMetadata.fields)
+        return try lock.withLock {
+            let key = (id ?? item.itemIdentifier).rawValue
             var metadata = entries[key] ?? LocalItemMetadata()
             if fields.contains(.lastUsedDate) { metadata.lastUsedDate = item.lastUsedDate ?? nil }
             if fields.contains(.tagData) { metadata.tagData = item.tagData ?? nil }

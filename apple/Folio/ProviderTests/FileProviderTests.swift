@@ -10,6 +10,14 @@ private final class UploadTemplate: NSObject, NSFileProviderItem {
     var contentType = UTType.pdf
 }
 
+private final class TaggedUploadTemplate: NSObject, NSFileProviderItem {
+    var itemIdentifier = NSFileProviderItemIdentifier("new-tagged-file")
+    var parentItemIdentifier = FolioItemID.folder(.scoped(MockFolioService.defaultVault.id, .inbox)).providerIdentifier
+    var filename = "tagged.pdf"
+    var contentType = UTType.pdf
+    var tagData: Data? = Data("green".utf8)
+}
+
 private final class EditedItem: NSObject, NSFileProviderItem {
     let itemIdentifier: NSFileProviderItemIdentifier
     var parentItemIdentifier: NSFileProviderItemIdentifier
@@ -164,6 +172,32 @@ final class FileProviderTests: XCTestCase {
             looked.fulfill()
         }
         await fulfillment(of: [looked], timeout: 5)
+    }
+
+    func testUploadKeepsTheTemplateTags() async throws {
+        let service = MockFolioService()
+        let store = LocalItemMetadataStore.scratch()
+        let provider = FolioFileProvider(
+            domain: NSFileProviderDomain(identifier: .init("tagged-upload-test"), displayName: "Test"),
+            service: service, localMetadata: store)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".pdf")
+        try Data("%PDF-1.4".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let template = TaggedUploadTemplate()
+        let completed = expectation(description: "Tagged upload completes")
+
+        _ = provider.createItem(
+            basedOn: template, fields: [.contents, .filename, .tagData], contents: file,
+            request: NSFileProviderRequest()
+        ) { item, _, _, error in
+            XCTAssertNil(error)
+            XCTAssertEqual(item?.tagData ?? nil, template.tagData)
+            if let id = item?.itemIdentifier {
+                XCTAssertEqual(store.metadata(for: id).tagData, template.tagData)
+            }
+            completed.fulfill()
+        }
+        await fulfillment(of: [completed], timeout: 5)
     }
 
     func testRenamingIsStillRefused() async {

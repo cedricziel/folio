@@ -20,7 +20,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         service = nil
         temporaryDirectory = nil
         localMetadata =
-            (try? LocalItemMetadataStore.file(domain: domain)).map(LocalItemMetadataStore.init(file:)) ?? .scratch()
+            (try? LocalItemMetadataStore.file(domain: domain)).map(LocalItemMetadataStore.shared(file:)) ?? .scratch()
         super.init()
     }
 
@@ -144,7 +144,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     }
 
     func createItem(
-        basedOn itemTemplate: NSFileProviderItem, fields _: NSFileProviderItemFields, contents url: URL?,
+        basedOn itemTemplate: NSFileProviderItem, fields: NSFileProviderItemFields, contents url: URL?,
         options _: NSFileProviderCreateItemOptions = [], request _: NSFileProviderRequest,
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, (any Error)?) -> Void
     ) -> Progress {
@@ -165,7 +165,9 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
                 var file = try UploadFile(contentsOf: url)
                 file.filename = filename
                 let node = try await catalog.upload(file, to: destination)
-                completionHandler(providerItem(node), [], false, nil)
+                let local = try localMetadata.update(
+                    with: itemTemplate, fields: fields, for: node.id.providerIdentifier)
+                completionHandler(FolioProviderItem(node, local: local), [], false, nil)
             } catch {
                 completionHandler(nil, [], false, error.providerError)
             }
@@ -173,7 +175,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         return progress
     }
 
-    /// Only the device-local fields can change; anything else would need the server.
+    /// Only the device-local fields are kept. Renames, moves and new contents are refused; other system
+    /// metadata that arrives alongside is answered with the server's values, which the system then adopts.
     func modifyItem(
         _ item: NSFileProviderItem, baseVersion _: NSFileProviderItemVersion,
         changedFields: NSFileProviderItemFields, contents: URL?,
@@ -181,7 +184,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, (any Error)?) -> Void
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
-        guard contents == nil, changedFields.isSubset(of: LocalItemMetadata.fields) else {
+        let refused: NSFileProviderItemFields = [.contents, .filename, .parentItemIdentifier]
+        guard contents == nil, changedFields.isDisjoint(with: refused) else {
             completionHandler(nil, [], false, Self.unsupported)
             progress.completedUnitCount = 1
             return progress
@@ -189,11 +193,11 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         Task {
             defer { progress.completedUnitCount = 1 }
             do {
+                let local = try localMetadata.update(with: item, fields: changedFields)
                 let (catalog, _) = try catalog()
                 guard let id = FolioItemID(providerIdentifier: item.itemIdentifier),
                     let node = try await catalog.node(for: id)
                 else { throw NSFileProviderError(.noSuchItem) }
-                let local = try localMetadata.update(with: item, fields: changedFields)
                 completionHandler(FolioProviderItem(node, local: local), [], false, nil)
             } catch {
                 ProviderDiagnostics.failure(operation: "modifyItem", phase: "local-metadata", error: error)
@@ -250,7 +254,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             return progress
         }
         do {
-            try localMetadata.setKeepDownloaded(keep, for: itemIdentifiers)
+            try localMetadata.setKeepDownloaded(keep, for: itemIdentifiers.filter { $0 != .rootContainer })
         } catch {
             ProviderDiagnostics.failure(operation: "performAction", phase: "local-metadata", error: error)
             completionHandler(error.providerError)
