@@ -46,6 +46,8 @@ targets:
         CFBundleDisplayName: Folio
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         UILaunchScreen: {}
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).continued.*
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
