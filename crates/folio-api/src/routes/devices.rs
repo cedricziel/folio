@@ -25,6 +25,9 @@ use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::vault::Uploader;
 
+/// Each selected vault costs an access lookup per registration.
+const MAX_SELECTED_VAULTS: usize = 100;
+
 /// What push notification routes need
 #[derive(Clone)]
 pub struct PushState {
@@ -170,8 +173,16 @@ pub(crate) async fn register_device(
         }
     }
     let user = UserId(auth.user_id.clone());
-    if let VaultSelection::Only(vaults) = &input.preferences.vaults {
-        for vault in vaults {
+    let mut input = input;
+    if let VaultSelection::Only(vaults) = &mut input.preferences.vaults {
+        vaults.sort();
+        vaults.dedup();
+        if vaults.len() > MAX_SELECTED_VAULTS {
+            return Err(unprocessable(format!(
+                "Too many vaults selected; choose at most {MAX_SELECTED_VAULTS} or all"
+            )));
+        }
+        for vault in vaults.iter() {
             if state.access.effective_role(&user, *vault).await?.is_none() {
                 return Err(unprocessable(format!("Vault {vault} is not accessible")));
             }

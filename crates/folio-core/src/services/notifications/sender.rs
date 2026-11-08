@@ -60,6 +60,13 @@ pub enum TestRefusal {
     NoToken,
 }
 
+/// What sending to one device came to
+enum Flushed {
+    Sent(usize),
+    /// APNs refused the provider credentials, so nothing more goes out this round
+    Refused,
+}
+
 pub struct NotificationSender {
     devices: Arc<dyn PushDeviceRepository>,
     documents: Arc<dyn DocumentLookup>,
@@ -98,6 +105,7 @@ impl NotificationSender {
         }
         let limits = self.limits.limits().await;
         let mut sent = 0;
+        let mut refused = false;
         for device in self
             .devices
             .claim_due(
@@ -109,9 +117,20 @@ impl NotificationSender {
             )
             .await?
         {
-            sent += self
+            if refused {
+                self.unclaim(device).await?;
+                continue;
+            }
+            match self
                 .flush_device(device, now, limits.max_alerts_per_hour)
-                .await?;
+                .await?
+            {
+                Flushed::Sent(count) => sent += count,
+                Flushed::Refused => refused = true,
+            }
+        }
+        if refused {
+            return Ok(sent);
         }
         for device in self
             .devices
@@ -123,9 +142,22 @@ impl NotificationSender {
             )
             .await?
         {
-            sent += self.flush_widgets(device, now).await?;
+            if refused {
+                self.unclaim(device).await?;
+                continue;
+            }
+            match self.flush_widgets(device, now).await? {
+                Flushed::Sent(count) => sent += count,
+                Flushed::Refused => refused = true,
+            }
         }
         Ok(sent)
+    }
+
+    /// Give back a claimed device untouched, for the next flush
+    async fn unclaim(&self, id: Uuid) -> Result<()> {
+        let state = self.devices.state(id).await?;
+        self.devices.release(id, &state).await
     }
 
     /// The device if its grant still authorizes the app; otherwise it is deleted
@@ -141,9 +173,9 @@ impl NotificationSender {
         Ok(Some(device))
     }
 
-    async fn flush_device(&self, id: Uuid, now: DateTime<Utc>, cap: u32) -> Result<usize> {
+    async fn flush_device(&self, id: Uuid, now: DateTime<Utc>, cap: u32) -> Result<Flushed> {
         let Some(device) = self.live_device(id).await? else {
-            return Ok(0);
+            return Ok(Flushed::Sent(0));
         };
         let mut state = self.devices.state(id).await?;
         let (summary, stale) = self.summarize(&device).await?;
@@ -153,7 +185,7 @@ impl NotificationSender {
         let Some(token) = device.alert_token.as_ref().filter(|_| !summary.is_empty()) else {
             self.devices.remove_pending(id, &summary.items()).await?;
             self.devices.release(id, &state).await?;
-            return Ok(0);
+            return Ok(Flushed::Sent(0));
         };
 
         let window_open = state
@@ -169,7 +201,7 @@ impl NotificationSender {
                 .window_started_at
                 .map(|start| start + Duration::hours(1));
             self.devices.release(id, &state).await?;
-            return Ok(0);
+            return Ok(Flushed::Sent(0));
         }
 
         let message = PushMessage {
@@ -214,13 +246,14 @@ impl NotificationSender {
             }
             PushOutcome::CredentialError { reason } => {
                 warn!(%reason, "APNs refused the provider credentials");
-                0
+                self.devices.release(id, &state).await?;
+                return Ok(Flushed::Refused);
             }
         };
         if self.devices.get(id).await?.is_some() {
             self.devices.release(id, &state).await?;
         }
-        Ok(sent)
+        Ok(Flushed::Sent(sent))
     }
 
     /// What is still worth telling, and the pending rows that are not
@@ -258,15 +291,15 @@ impl NotificationSender {
         Ok((summary, stale))
     }
 
-    async fn flush_widgets(&self, id: Uuid, now: DateTime<Utc>) -> Result<usize> {
+    async fn flush_widgets(&self, id: Uuid, now: DateTime<Utc>) -> Result<Flushed> {
         let Some(device) = self.live_device(id).await? else {
-            return Ok(0);
+            return Ok(Flushed::Sent(0));
         };
         let mut state = self.devices.state(id).await?;
         let Some(token) = device.widget_token.as_ref() else {
             state.widgets_dirty_at = None;
             self.devices.release(id, &state).await?;
-            return Ok(0);
+            return Ok(Flushed::Sent(0));
         };
         let message = PushMessage {
             apns_id: Uuid::new_v4(),
@@ -298,15 +331,20 @@ impl NotificationSender {
                 0
             }
             // Try again at the next interval.
-            PushOutcome::Retry { .. } | PushOutcome::CredentialError { .. } => {
+            PushOutcome::Retry { .. } => {
                 state.widgets_sent_at = Some(now);
                 0
+            }
+            PushOutcome::CredentialError { reason } => {
+                warn!(%reason, "APNs refused the provider credentials");
+                self.devices.release(id, &state).await?;
+                return Ok(Flushed::Refused);
             }
         };
         if self.devices.get(id).await?.is_some() {
             self.devices.release(id, &state).await?;
         }
-        Ok(sent)
+        Ok(Flushed::Sent(sent))
     }
 
     /// Send a test alert to a person's device right away

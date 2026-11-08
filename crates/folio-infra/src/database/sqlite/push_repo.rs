@@ -121,7 +121,7 @@ impl PushDeviceRepository for SqlitePushRepository {
     async fn upsert(&self, r: DeviceRegistration) -> Result<(PushDevice, bool)> {
         let now = ts(Utc::now());
         let preferences = serde_json::to_string(&r.preferences).map_err(err)?;
-        let mut tx = self.pool.begin().await.map_err(err)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT id FROM push_devices WHERE user_id = ? AND installation_id = ?",
         )
@@ -275,7 +275,7 @@ impl PushDeviceRepository for SqlitePushRepository {
             PushTokenKind::Alert => "alert_token",
             PushTokenKind::Widget => "widget_token",
         };
-        let mut tx = self.pool.begin().await.map_err(err)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         let cleared = sqlx::query(sqlx::AssertSqlSafe(format!(
             "UPDATE push_devices SET {column} = NULL, {column}_registered_at = NULL
              WHERE id = ? AND {column} IS NOT NULL
@@ -306,7 +306,7 @@ impl PushDeviceRepository for SqlitePushRepository {
         outcome: DocumentOutcome,
         items: &[PendingNotification],
     ) -> Result<bool> {
-        let mut tx = self.pool.begin().await.map_err(err)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         let first = sqlx::query(
             "INSERT INTO push_document_outcomes (document_id, outcome, created_at)
              SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM documents WHERE id = ?)
@@ -418,7 +418,7 @@ impl PushDeviceRepository for SqlitePushRepository {
     }
 
     async fn remove_pending(&self, device: Uuid, items: &[(Id, NotificationKind)]) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(err)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         for (document, kind) in items {
             sqlx::query(
                 "DELETE FROM push_pending WHERE device_id = ? AND document_id = ? AND kind = ?",
@@ -493,7 +493,7 @@ impl PushDeviceRepository for SqlitePushRepository {
     }
 
     async fn mark_widgets_dirty(&self, devices: &[Uuid], at: DateTime<Utc>) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(err)?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         for device in devices {
             sqlx::query("UPDATE push_devices SET widgets_dirty_at = ? WHERE id = ?")
                 .bind(ts(at))
