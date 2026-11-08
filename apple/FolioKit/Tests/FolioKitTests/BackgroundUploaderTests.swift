@@ -7,6 +7,7 @@ import Testing
 final class ShareUploadProtocol: URLProtocol, @unchecked Sendable {
     enum Reply: Sendable {
         case status(Int)
+        case json(Int, String)
         case transport(URLError.Code)
     }
 
@@ -43,14 +44,20 @@ final class ShareUploadProtocol: URLProtocol, @unchecked Sendable {
         case let .transport(code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
         case let .status(status):
-            let response = HTTPURLResponse(
-                url: request.url!, statusCode: status, httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data("{}".utf8))
-            client?.urlProtocolDidFinishLoading(self)
+            answer(status, body: "{}")
+        case let .json(status, body):
+            answer(status, body: body)
         }
+    }
+
+    private func answer(_ status: Int, body: String) {
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
     }
 
     override func stopLoading() {}

@@ -177,6 +177,143 @@ struct ShareViewModelTests {
         #expect(await service.tagged.map(\.tag) == [tag.id])
     }
 
+    @Test func tagFailureRetryAttachesTheTagWithoutUploadingAgain() async {
+        let service = MockFolioService()
+        let tag = Tag(name: "Insurance")
+        await service.setTags([tag])
+        await service.setFailingTags([tag.id])
+        let model = ShareViewModel(files: [file()], service: service, background: RecordingUploader())
+        await model.loadTags()
+        model.selectedTagIDs = [tag.id]
+
+        await model.upload()
+        #expect(model.state == .failed("The server answered with status 500."))
+        #expect(model.progress == .init(uploaded: 1, total: 1))
+        #expect(model.hasUnfinishedBatch)
+
+        await service.setFailingTags([])
+        await model.upload()
+
+        #expect(model.state == .done)
+        #expect(!model.hasUnfinishedBatch)
+        #expect(await service.uploads.count == 1)
+        #expect(await service.tagged.map(\.tag) == [tag.id])
+    }
+
+    @Test func secondFileFailureRetryUploadsOnlyTheSecondFile() async {
+        let service = MockFolioService()
+        let tag = Tag(name: "Insurance")
+        await service.setTags([tag])
+        await service.setFailUploadsAfter(1)
+        let model = ShareViewModel(
+            files: [file("a.pdf"), file("b.pdf")], service: service, background: RecordingUploader()
+        )
+        await model.loadTags()
+        model.selectedTagIDs = [tag.id]
+
+        await model.upload()
+        #expect(model.progress == .init(uploaded: 1, total: 2))
+
+        await service.setFailUploadsAfter(nil)
+        await model.upload()
+
+        #expect(model.state == .done)
+        #expect(await service.uploads.map(\.filename) == ["a.pdf", "b.pdf"])
+        #expect(await service.tagged.count == 2)
+    }
+
+    @Test func retryKeepsTheOriginalVaultAndTags() async {
+        let personal = Vault(id: UUID(), name: "Personal", role: .owner)
+        let shared = Vault(id: UUID(), name: "Household", role: .editor)
+        let personalService = MockFolioService()
+        let sharedService = MockFolioService()
+        let tag = Tag(name: "Private")
+        await personalService.setTags([tag])
+        await personalService.setFailUploadsAfter(1)
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: personalService, shared.id: sharedService]
+        )
+        let model = ShareViewModel(
+            files: [file("a.pdf"), file("b.pdf")], service: source, background: RecordingUploader()
+        )
+        await model.loadTags()
+        model.selectedTagIDs = [tag.id]
+        await model.upload()
+
+        model.destination.selectVault(shared.id)
+        model.selectedTagIDs = []
+        await personalService.setFailUploadsAfter(nil)
+        await model.upload()
+
+        #expect(model.state == .done)
+        #expect(await personalService.uploads.map(\.filename) == ["a.pdf", "b.pdf"])
+        #expect(await personalService.tagged.count == 2)
+        #expect(await sharedService.uploads.isEmpty)
+    }
+
+    @Test func reopenedShareSheetResumesTheStoppedBatch() async {
+        let service = MockFolioService()
+        let tag = Tag(name: "Insurance")
+        await service.setTags([tag])
+        await service.setFailingTags([tag.id])
+        let store = InMemoryUploadProgressStore()
+        func sheet() async -> ShareViewModel {
+            let model = ShareViewModel(
+                files: [file()], service: service, background: RecordingUploader(), progressStore: store,
+                progressScope: "https://folio.example.com"
+            )
+            await model.loadTags()
+            model.selectedTagIDs = [tag.id]
+            return model
+        }
+        await sheet().upload()
+
+        await service.setFailingTags([])
+        let reopened = await sheet()
+        await reopened.upload()
+
+        #expect(reopened.state == .done)
+        #expect(await service.uploads.count == 1)
+        #expect(await service.tagged.map(\.tag) == [tag.id])
+    }
+
+    @Test func failedBackgroundHandOffRetriesOnlyTheRemainingFiles() async {
+        let uploader = FailingOnceUploader(failAt: 1)
+        let model = ShareViewModel(
+            files: [file("a.pdf"), file("b.pdf"), file("c.pdf")], service: MockFolioService(), background: uploader
+        )
+
+        await model.upload()
+        #expect(model.progress == .init(uploaded: 1, total: 3))
+
+        await model.upload()
+
+        #expect(model.state == .queued)
+        #expect(uploader.enqueued.map(\.filename) == ["a.pdf", "b.pdf", "c.pdf"])
+    }
+
+    final class FailingOnceUploader: BackgroundUploading, @unchecked Sendable {
+        private(set) var enqueued: [UploadFile] = []
+        private var failAt: Int?
+
+        init(failAt: Int) {
+            self.failAt = failAt
+        }
+
+        func enqueue(_ file: UploadFile) throws {
+            if enqueued.count == failAt {
+                failAt = nil
+                throw FolioError.unreachable
+            }
+            enqueued.append(file)
+        }
+
+        func enqueue(_ file: UploadFile, vaultID _: UUID?) throws {
+            try enqueue(file)
+        }
+    }
+
     @Test func foregroundFailureIsReported() async {
         let service = MockFolioService()
         await service.setFailure(.unreachable)

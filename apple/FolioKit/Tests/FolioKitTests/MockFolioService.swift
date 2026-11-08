@@ -100,6 +100,9 @@ actor MockFolioService: FolioService {
     var typeList: [DocumentType] = []
     var failure: FolioError?
     var failUploadsAfter: Int?
+    /// Creates the document but loses the answer, as when the connection drops after the server stored it.
+    var loseUploadResponses = false
+    var failingTagIDs: Set<Tag.ID> = []
     var failLookups = false
     var uploadDelay: Duration?
     var tagList: [Tag] = []
@@ -228,6 +231,14 @@ actor MockFolioService: FolioService {
 
     func setFailUploadsAfter(_ count: Int?) {
         failUploadsAfter = count
+    }
+
+    func setLoseUploadResponses(_ lose: Bool) {
+        loseUploadResponses = lose
+    }
+
+    func setFailingTags(_ ids: Set<Tag.ID>) {
+        failingTagIDs = ids
     }
 
     func setTags(_ tags: [Tag]) {
@@ -433,7 +444,12 @@ actor MockFolioService: FolioService {
             throw FolioError.unreachable
         }
         uploads.append(file)
-        return Document(title: file.title ?? file.filename, originalFilename: file.filename)
+        let document = Document(title: file.title ?? file.filename, originalFilename: file.filename)
+        if loseUploadResponses {
+            documentList.append(document)
+            throw FolioError.unreachable
+        }
+        return document
     }
 
     func tags() async throws -> [Tag] {
@@ -459,6 +475,9 @@ actor MockFolioService: FolioService {
     func addTag(_ tagID: Tag.ID, to documentID: Document.ID) async throws {
         if let failure {
             throw failure
+        }
+        if failingTagIDs.contains(tagID) {
+            throw FolioError.server(status: 500, message: nil)
         }
         tagged.append(TagAssignment(tag: tagID, document: documentID))
     }
