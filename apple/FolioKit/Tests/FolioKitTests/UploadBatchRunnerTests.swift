@@ -258,9 +258,12 @@ struct UploadBatchRunnerTests {
             .appending(path: "folio-progress-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        #expect(FileUploadProgressStore(directory: directory).lock("batch"))
+        let holder = FileUploadProgressStore(directory: directory)
+        #expect(holder.lock("batch"))
         #expect(!FileUploadProgressStore(directory: directory).lock("batch"))
         FileUploadProgressStore(directory: directory).unlock("batch")
+        #expect(!FileUploadProgressStore(directory: directory).lock("batch"), "only the holder releases the lock")
+        holder.unlock("batch")
         #expect(FileUploadProgressStore(directory: directory).lock("batch"))
     }
 }
