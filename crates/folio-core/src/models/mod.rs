@@ -18,6 +18,7 @@ mod metadata;
 mod metadata_field;
 mod metadata_value;
 mod processing_attempt;
+mod push;
 mod saved_view;
 mod settings;
 mod source;
@@ -67,6 +68,11 @@ pub use metadata_field::{
 };
 pub use metadata_value::{DocumentMetadata, DocumentMetadataValue, MetadataChange};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
+pub use push::{
+    valid_push_token, DevicePlatform, DeviceRegistration, DocumentOutcome, NotificationKind,
+    NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
+    PushEnvironment, PushToken, PushTokenKind, VaultSelection,
+};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
