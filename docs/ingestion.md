@@ -68,7 +68,17 @@ allowed_content_types = ["application/pdf", "image/*"]   # default
 mail_body = "none"          # "eml" also stores the whole message
 after_import = "mark_read"  # "mark_read" (default), "move", or "delete"
 move_to = "Imported"        # required for "move"
+
+[ingest.paperless.home]
+url = "https://paperless.example"
+token_file = "/run/secrets/paperless_token"   # or: token = "..."
+vault = "<vault ID>"        # required
+sync_mode = "mirror"        # "once", "new_only" or "mirror" (default)
+poll_interval_secs = 900    # default, at least 60
+default_currency = "EUR"    # optional
 ```
+
+Paperless sources are covered in [paperless-import.md](paperless-import.md).
 
 Set `enabled = false` on any source to keep its settings but not run it. Changes made in the UI apply within a few seconds; configuration changes need a restart.
 

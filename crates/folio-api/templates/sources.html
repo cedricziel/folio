@@ -11,12 +11,13 @@
             <h1 class="title">{% if deleted %}Deleted sources{% else %}Sources{% endif %}</h1>
             <div class="head-actions">
                 {% if deleted %}<a href="{{ "/settings/sources"|vault_url }}" class="f-btn">Active sources</a>{% else %}<a href="{{ "/settings/sources?deleted=true"|vault_url }}" class="f-btn">Deleted sources</a>{% endif %}
+                {% if can_add_paperless %}<a href="{{ "/settings/sources/new?kind=paperless"|vault_url }}" class="f-btn">Connect Paperless</a>{% endif %}
                 <a href="{{ "/settings/sources/new?kind=email"|vault_url }}" class="f-btn">Add mail account</a>
                 <a href="{{ "/settings/sources/new?kind=folder"|vault_url }}" class="f-btn f-btn-primary">Add folder</a>
             </div>
         </div>
         {% if deleted %}<p class="lede">Deleted sources stop importing and keep their import history. Restoring a previously enabled source resumes automatic imports.</p>{% else %}
-        <p class="lede">Folio imports files from consume folders and attachments from mailboxes automatically. Rules for what to keep live under <a href="{{ "/workflows"|vault_url }}">Workflows</a>.</p>{% endif %}
+        <p class="lede">Folio imports files from consume folders, attachments from mailboxes and documents from a Paperless library automatically. Rules for what to keep live under <a href="{{ "/workflows"|vault_url }}">Workflows</a>.</p>{% endif %}
     </header>
 
     {% match notice %}
@@ -34,7 +35,7 @@
         {% for row in rows %}
         <div class="f-row f-row-plain source-row">
             <div class="row-main">
-                {% if row.read_only || row.deleted %}
+                {% if row.read_only || row.deleted || row.admin_only %}
                 <span class="f-row-title">{{ row.name }}</span>
                 {% else %}
                 <a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}" class="f-row-title">{{ row.name }}</a>
@@ -43,6 +44,7 @@
                     <span class="f-meta">{{ row.kind }}</span>
                     <span class="f-meta">{{ row.summary }}</span>
                     {% if row.read_only %}<span class="f-meta">From server configuration</span>{% endif %}
+                    {% if row.admin_only %}<span class="f-meta">Only an instance admin can change it</span>{% endif %}
                     {% if !row.enabled %}<span class="f-status f-status-pending">Off</span>{% endif %}
                 </div>
                 {% match row.lifecycle_summary %}{% when Some with (history) %}<div class="f-row-sub"><span class="f-meta">{{ history }}</span></div>{% when None %}{% endmatch %}
@@ -62,7 +64,9 @@
                 {% endmatch %}
             </div>
             <div class="form-actions">
-                {% if row.deleted %}
+                {% if row.admin_only %}
+                {% if !row.deleted %}<a href="{{ "/settings/sources"|vault_url }}/{{ row.id }}/outcomes" class="f-btn f-btn-quiet">Outcomes</a>{% endif %}
+                {% else if row.deleted %}
                 <form action="{{ "/settings/sources"|vault_url }}/{{ row.id }}/restore" method="post" data-turbo="false">
                     <button type="submit" class="f-btn f-btn-primary">Restore</button>
                 </form>

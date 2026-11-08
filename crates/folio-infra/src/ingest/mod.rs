@@ -10,7 +10,7 @@ pub use mime::guess_mime;
 
 use std::sync::Arc;
 
-use folio_core::error::Result;
+use folio_core::error::{Error, Result};
 use folio_core::models::{IngestionSourceDef, SourceConfig};
 use folio_core::ports::{IngestLedger, IngestionSource, IngestionSourceFactory};
 
@@ -39,6 +39,11 @@ impl IngestionSourceFactory for SourceFactory {
                 Arc::clone(&self.ledger),
                 def.vault_id,
             )),
+            SourceConfig::Paperless(_) => {
+                return Err(Error::Validation(
+                    "Paperless sync is not available yet".to_string(),
+                ))
+            }
         })
     }
 }

@@ -15,8 +15,8 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 
 ## 2. Run, ledger and sync storage
 
-- [ ] 2.1 Migration for `import_runs` (including `cursor_after` and `confirm_trash`), `import_items`, `import_staging`, `paperless_documents` (including `needs_reapply` and `folio_state`), `paperless_taxonomy` and `paperless_sync_state` (including `library_sample`, `once_done`, `retry_ids` and `parked_ids`). It also adds `paperless` to the `ingest_items` and `source_health` CHECKs (a table rebuild on SQLite) and a partial unique index for one live `paperless` source per vault. Failing test first: on both backends, `source_health` accepts `paperless`, and a second live `paperless` source in a vault is rejected.
-- [ ] 2.2 Add the models and the `ImportRunRepository`, `ImportItemRepository` and `PaperlessLedgerRepository` ports in `crates/folio-core/src/ports/import_runs.rs`, with SQLite and Postgres adapters:
+- [x] 2.1 Migration for `import_runs` (including `cursor_after` and `confirm_trash`), `import_items`, `import_staging`, `paperless_documents` (including `needs_reapply` and `folio_state`), `paperless_taxonomy` and `paperless_sync_state` (including `library_sample`, `once_done`, `retry_ids` and `parked_ids`). It also adds `paperless` to the `ingest_items` and `source_health` CHECKs (a table rebuild on SQLite) and a partial unique index for one live `paperless` source per vault. Failing test first: on both backends, `source_health` accepts `paperless`, and a second live `paperless` source in a vault is rejected.
+- [x] 2.2 Add the models and the `ImportRunRepository`, `ImportItemRepository` and `PaperlessLedgerRepository` ports in `crates/folio-core/src/ports/import_runs.rs`, with SQLite and Postgres adapters:
   - the claim, finish, counts and one-active-run rule
   - the ledger, the taxonomy map and the sync state with the cursor, retry and park sets
 
@@ -36,24 +36,24 @@ Migrations are split by pull request. Each PR adds its own `202611071xxxxx_paper
 - [x] 3.1 Add the `PaperlessReader` port and the streaming export adapter, with the 2.20 and 3.x fixtures. Failing test first: the expected records, and a password hash never appears in any record.
 - [x] 3.2 Add the root guard. Failing test first: `..`, symlinks outside the root, `/imports-x`, and missing paths, all with the same error.
 - [x] 3.3 Add the original-file guard. Failing test first: `../etc/passwd`, `/etc/passwd` and a symlinked original yield `unsafe_path` without being opened.
-- [ ] 3.4 REST adapter, part 1: client with token auth, API version 9, a same-origin redirect policy and fixed error reasons, plus paginated taxonomy and document records. Failing test first, against `wiremock`: the records equal the export fixture's for the same library, and a cross-origin redirect yields `redirected` without sending the token.
-- [ ] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
+- [x] 3.4 REST adapter, part 1: client with token auth, API version 9, a same-origin redirect policy and fixed error reasons, plus paginated taxonomy and document records. Failing test first, against `wiremock`: the records equal the export fixture's for the same library, and a cross-origin redirect yields `redirected` without sending the token.
+- [x] 3.5 REST adapter, part 2: keyset `modified_since`, `CompleteIdSet` listing, the trash listing, metadata and download, backoff, and the token never logged. Failing test first:
   - a page failure or a count mismatch yields an error, not a set
   - a document modified mid-listing isn't skipped
   - a 429 followed by a 200 succeeds
-- [ ] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
+- [x] 3.6 Contract test against real Paperless 2.20.x and 3.4.x in testcontainers, with Redis and seeded data. It is ignored unless `FOLIO_PAPERLESS_IT=1` and runs as its own CI job. Failing test first: the records and checksums read back match the seeded data.
 
 ## 4. Paperless source
 
-- [ ] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
+- [x] 4.1 Add `SourceConfig::Paperless` with validation (http(s) URL, interval of at least 60 s), `REDACTED` token handling (the placeholder is kept only when the URL is unchanged), `token_file` from config only, `[ingest.paperless.<name>]` with a required `vault`, `SETTINGS` entries and docs. Failing test first:
   - the validation errors
   - a URL change with the placeholder fails
   - config without `vault` fails at load
   - the drift test passes
-- [ ] 4.2 Add the `Caller` value and the `CallerResolver` port. Implement them in folio-infra from folio-auth, with `auth.required = false` mapping to an admin. Failing test first: an admin, a non-admin owner, and auth disabled each resolve as expected.
-- [ ] 4.3 Apply the admin-plus-owner guard to every `paperless` source operation, JSON and HTML: create, update, toggle, delete, restore, test and try-connection. Add 409 for a second source, with config winning. Failing tests first: 403 for each operation by a non-admin owner, with no outbound request made (wiremock records none), and 409 cases.
+- [x] 4.2 Add the `Caller` value and the `CallerResolver` port. Implement them in folio-infra from folio-auth, with `auth.required = false` mapping to an admin. Failing test first: an admin, a non-admin owner, and auth disabled each resolve as expected.
+- [x] 4.3 Apply the admin-plus-owner guard to every `paperless` source operation, JSON and HTML: create, update, toggle, delete, restore, test and try-connection. Add 409 for a second source, with config winning. Failing tests first: 403 for each operation by a non-admin owner, with no outbound request made (wiremock records none), and 409 cases.
 - [ ] 4.4 Extend `/test` with the version, the document count, `superuser` and the reason. Update `SourceTestResult` in OpenAPI and regenerate. Failing test first: each reason, and `superuser: false` for a limited token.
-- [ ] 4.5 Add the Paperless variant of the HTML source form (URL, token, sync mode, interval). Failing test first: a route test renders and submits it. Verify it with the screen tour.
+- [x] 4.5 Add the Paperless variant of the HTML source form (URL, token, sync mode, interval). Failing test first: a route test renders and submits it. Verify it with the screen tour.
 - [ ] 4.6 Register the Paperless source with `IngestScheduler`:
   - the first poll is the only first-run trigger, and `once_done` is respected
   - an active run skips the poll without reporting `Conflict`

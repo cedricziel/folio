@@ -1,5 +1,6 @@
 //! Domain models
 
+mod caller;
 mod correspondent;
 mod document;
 mod document_date;
@@ -8,6 +9,7 @@ mod document_page;
 mod document_review;
 mod document_type;
 mod file_identity;
+mod import_run;
 mod imported_document;
 mod ingest;
 mod ingest_identity;
@@ -26,6 +28,7 @@ mod workflow;
 mod workflow_event_conditions;
 mod workflow_trigger;
 
+pub use caller::Caller;
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{
     CreateDocument, Document, DocumentFilter, DocumentStatus, ProcessingStage, ProcessingStatus,
@@ -39,11 +42,18 @@ pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, Documen
 pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
 pub use file_identity::FileIdentity;
+pub use import_run::{
+    CreateImportRun, FolioState, ImportAction, ImportApplied, ImportItem, ImportItemCount,
+    ImportItemOutcome, ImportItemStatus, ImportRun, ImportRunKind, ImportRunStatus, ImportTrigger,
+    LibrarySample, NewImportItem, NewImportRun, PaperlessLedgerEntry, PaperlessSyncState,
+    RunTransition, TaxonomyKind, TaxonomyMapping, IMPORT_CLAIM_TIMEOUT,
+};
 pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
 pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
-    IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PollReport,
-    SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus, REDACTED,
+    IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PaperlessConfig,
+    PaperlessSyncMode, PollReport, SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus,
+    PAPERLESS_MAX_URL_LEN, PAPERLESS_MIN_POLL_SECS, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{

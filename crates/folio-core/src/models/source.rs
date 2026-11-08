@@ -26,6 +26,8 @@ pub enum SourceKind {
     Share,
     /// Carried over from another document system
     Import,
+    /// Synced from a Paperless-ngx library
+    Paperless,
 }
 
 impl SourceKind {
@@ -38,6 +40,7 @@ impl SourceKind {
             Self::Mcp => "mcp",
             Self::Share => "share",
             Self::Import => "import",
+            Self::Paperless => "paperless",
         }
     }
 
@@ -51,6 +54,7 @@ impl SourceKind {
             Self::Mcp,
             Self::Share,
             Self::Import,
+            Self::Paperless,
         ]
         .into_iter()
         .find(|k| k.as_str() == value)
@@ -142,6 +146,7 @@ impl DocumentSource {
                     SourceKind::Mcp => "MCP",
                     SourceKind::Share => "Share link",
                     SourceKind::Import => "Import",
+                    SourceKind::Paperless => "Paperless",
                 };
                 label.to_string()
             }
@@ -410,6 +415,12 @@ mod tests {
             ..Default::default()
         };
         assert!(cond.validate().is_err());
+    }
+
+    #[test]
+    fn paperless_kind_round_trips_through_its_wire_name() {
+        assert_eq!(SourceKind::Paperless.as_str(), "paperless");
+        assert_eq!(SourceKind::parse("paperless"), SourceKind::Paperless);
     }
 
     #[test]

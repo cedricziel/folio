@@ -414,12 +414,12 @@ impl ManifestStream {
     }
 }
 
-fn malformed(kind: MalformedKind, location: SourceLocation) -> PaperlessReadError {
+pub(super) fn malformed(kind: MalformedKind, location: SourceLocation) -> PaperlessReadError {
     PaperlessReadError::Malformed { kind, location }
 }
 
 /// Keeps serde's message out: it can quote source data
-fn json_error(error: serde_json::Error, location: SourceLocation) -> PaperlessReadError {
+pub(super) fn json_error(error: serde_json::Error, location: SourceLocation) -> PaperlessReadError {
     let kind = match error.classify() {
         Category::Io => return io_error(&location.to_string(), error.into()),
         Category::Eof => MalformedKind::UnexpectedEnd,
@@ -678,7 +678,7 @@ struct TagFields {
 }
 
 #[derive(Deserialize)]
-struct CustomFieldFields {
+pub(super) struct CustomFieldFields {
     name: String,
     data_type: PaperlessFieldType,
     extra_data: Option<CustomFieldExtra>,
@@ -699,7 +699,7 @@ enum SelectOption {
 }
 
 impl CustomFieldFields {
-    fn into_record(self, id: i64) -> PaperlessCustomField {
+    pub(super) fn into_record(self, id: i64) -> PaperlessCustomField {
         let extra = self.extra_data.unwrap_or_default();
         PaperlessCustomField {
             id,

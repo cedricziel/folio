@@ -10,6 +10,7 @@
 //! - Import sources and their path checks
 
 pub mod ai;
+pub mod caller;
 pub mod config;
 pub mod database;
 pub mod import;
@@ -21,6 +22,7 @@ pub mod thumbnail;
 pub mod workflow;
 
 pub use ai::{DynamicEmbeddingService, DynamicOcrService, PipelineContext};
+pub use caller::AuthCallerResolver;
 pub use config::Config;
 pub use database::{
     create_pool, run_migrations, Database, DatabaseBackend, DatabaseError, DatabaseHealthCheck,

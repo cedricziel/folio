@@ -62,7 +62,11 @@ fn parse_classification_id(
 }
 
 /// Create the main application router
-pub fn create_router(state: AppState, auth: auth::AuthState) -> Router {
+pub fn create_router(mut state: AppState, auth: auth::AuthState) -> Router {
+    state.callers = std::sync::Arc::new(folio_infra::AuthCallerResolver::new(
+        auth.store.clone(),
+        auth.required,
+    ));
     let health = health::router(state.health_checks.clone());
     let enforcement = axum::middleware::from_fn_with_state(auth.clone(), auth::enforce_auth);
     let forward = axum::middleware::from_fn_with_state(auth.clone(), crate::forward::forward_auth);

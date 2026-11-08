@@ -516,9 +516,21 @@ impl IngestScheduler {
     /// Supervise sources until shutdown is signalled
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         let mut running: HashMap<Id, (String, JoinHandle<()>)> = HashMap::new();
+        let mut warned = HashSet::new();
         loop {
             match self.managed.list_all().await {
                 Ok(managed) => {
+                    let (managed, shadowed) =
+                        super::split_shadowed_paperless(&self.configured, managed);
+                    for def in shadowed {
+                        if warned.insert(def.id) {
+                            warn!(
+                                "Paperless source '{}' is not run: the server configuration defines \
+                                 this vault's Paperless source",
+                                def.name
+                            );
+                        }
+                    }
                     let wanted: Vec<_> = self
                         .configured
                         .iter()
@@ -639,6 +651,7 @@ fn failure_reason(error: &Error) -> &'static str {
         Error::NotFound { .. } => "The source location was not found",
         Error::Storage(_) => "The source could not be reached or read",
         Error::Conflict(_) => "The source is busy",
+        Error::Forbidden(_) => "The source is not allowed to run",
         Error::Repository(_) | Error::AiService(_) => "Folio could not process this source run",
     }
 }

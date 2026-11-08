@@ -15,6 +15,9 @@ use folio_core::error::Error as DomainError;
 pub struct ErrorResponse {
     /// Human-readable error message
     pub error: String,
+    /// Stable machine-readable reason, such as `forbidden`, where one is defined
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
 }
@@ -24,6 +27,7 @@ pub struct ErrorResponse {
 pub struct ApiError {
     status: StatusCode,
     message: String,
+    code: Option<&'static str>,
     details: Option<String>,
 }
 
@@ -32,7 +36,27 @@ impl ApiError {
         Self {
             status,
             message: message.into(),
+            code: None,
             details: None,
+        }
+    }
+
+    /// 403 for a bearer token that lacks `scope`, with the error code `insufficient_scope`
+    pub fn insufficient_scope(scope: &str) -> Self {
+        Self {
+            code: Some("insufficient_scope"),
+            ..Self::new(
+                StatusCode::FORBIDDEN,
+                format!("This token needs the {scope} scope"),
+            )
+        }
+    }
+
+    /// 403 with the error code `forbidden`
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            code: Some("forbidden"),
+            ..Self::new(StatusCode::FORBIDDEN, message)
         }
     }
 
@@ -62,6 +86,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = ErrorResponse {
             error: self.message,
+            code: self.code,
             details: self.details,
         };
 
@@ -85,6 +110,7 @@ impl From<DomainError> for ApiError {
                 format!("{} with {} '{}' already exists", entity_type, field, value),
             ),
             DomainError::Conflict(msg) => ApiError::new(StatusCode::CONFLICT, msg),
+            DomainError::Forbidden(msg) => ApiError::forbidden(msg),
             DomainError::Repository(msg) => {
                 tracing::error!("Repository error: {}", msg);
                 ApiError::internal("Database error")

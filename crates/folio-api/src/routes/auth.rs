@@ -508,7 +508,7 @@ fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response
 }
 
 /// Granted to no current OAuth client, so bearer tokens cannot change vault ownership
-const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
+pub(crate) const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
 
 /// Vault lifecycle and membership routes; choosing one's own default vault is excluded
 fn manages_vault(path: &str) -> bool {

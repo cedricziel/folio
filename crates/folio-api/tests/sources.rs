@@ -268,55 +268,23 @@ async fn managed_sources_can_be_trashed_and_restored_from_the_existing_page() {
     assert!(restored["deleted_at"].is_null());
 }
 
-async fn source_session(h: &Harness, name: &str, role: folio_core::models::VaultRole) -> String {
-    h.auth_store
-        .create_user(folio_auth::User {
-            id: name.into(),
-            username: name.into(),
-            password_hash: "!".into(),
-            created_at: 1,
-            email: None,
-            display_name: None,
-            is_admin: false,
-            is_owner: false,
-            auth_source: "local".into(),
-            external_id: None,
-        })
-        .await
-        .unwrap();
-    let user = folio_core::models::UserId::from(name);
-    h.members
-        .grant(
-            h.vault,
-            &folio_core::models::Principal::User(user.clone()),
-            role,
-            None,
-        )
-        .await
-        .unwrap();
-    h.vault_repository
-        .set_default(&user, h.vault)
-        .await
-        .unwrap();
-    let token = format!("source-session-{name}");
-    h.auth_store
-        .create_session(folio_auth::Session {
-            id_hash: folio_auth::crypto::hash_token(&token),
-            user_id: name.into(),
-            expires_at: i64::MAX / 2,
-            created_at: 1,
-            user_agent: None,
-        })
-        .await
-        .unwrap();
-    format!("folio_session={token}")
-}
-
 #[tokio::test]
 async fn source_trash_and_restore_preserve_owner_authorization_and_server_actors() {
     let h = common::harness_requiring_login().await;
-    let owner = source_session(&h, "source-owner", folio_core::models::VaultRole::Owner).await;
-    let editor = source_session(&h, "source-editor", folio_core::models::VaultRole::Editor).await;
+    let owner = common::vault_session(
+        &h,
+        "source-owner",
+        folio_core::models::VaultRole::Owner,
+        false,
+    )
+    .await;
+    let editor = common::vault_session(
+        &h,
+        "source-editor",
+        folio_core::models::VaultRole::Editor,
+        false,
+    )
+    .await;
     let input: folio_core::models::IngestionSourceInput = serde_json::from_value(json!({
         "name": "Restricted source", "config": {"type": "folder", "path": "/unused/source"}
     }))
@@ -583,6 +551,8 @@ async fn a_masked_password_is_refused_when_the_mail_server_changes() {
         ("host", json!("127.0.0.1")),
         ("port", json!(port)),
         ("username", json!("someone-else")),
+        ("security", json!("plain")),
+        ("accept_invalid_certs", json!(true)),
     ] {
         let mut body = mail_body("********");
         body["config"][field] = value;
@@ -634,4 +604,37 @@ async fn a_masked_password_is_refused_when_the_mail_server_changes() {
         assert!(!page.contains("value=\"********\""), "{page}");
     }
     assert_no_connection(&listener).await;
+}
+
+#[tokio::test]
+async fn a_masked_password_survives_a_safer_connection_and_host_spelling() {
+    let app = test_app(Vec::new()).await;
+    let mut body = mail_body("hunter2");
+    body["config"]["security"] = json!("plain");
+    body["config"]["accept_invalid_certs"] = json!(true);
+    let (status, created) = json_request(&app, "POST", "/api/sources", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let mut body = mail_body("********");
+    body["config"]["host"] = json!("IMAP.Example.test.");
+    body["config"]["security"] = json!("tls");
+    body["config"]["accept_invalid_certs"] = json!(false);
+    let (status, updated) =
+        json_request(&app, "PUT", &format!("/api/sources/{id}"), Some(body)).await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+
+    let stored = app
+        .state
+        .ingestion
+        .managed
+        .find(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let SourceConfig::Email(email) = stored.config else {
+        panic!("email")
+    };
+    assert_eq!(email.password.as_deref(), Some("hunter2"));
+    assert!(!email.accept_invalid_certs);
 }

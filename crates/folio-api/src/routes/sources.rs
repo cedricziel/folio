@@ -13,15 +13,16 @@ use uuid::Uuid;
 
 use folio_core::error::Error as DomainError;
 use folio_core::models::{
-    EmailConfig, Id, IngestionSourceDef, IngestionSourceInput, SourceConfig, SourceOrigin,
-    SourceStatus, REDACTED,
+    EmailConfig, Id, IngestionSourceDef, IngestionSourceInput, MailSecurity, PaperlessConfig,
+    SourceConfig, SourceOrigin, SourceStatus, REDACTED,
 };
 
+use super::auth::VAULT_MANAGEMENT_SCOPE;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, InternalError, NotFound};
 use crate::state::AppState;
-use crate::vault::DefaultVault;
+use crate::vault::{DefaultVault, CURRENT_VAULT};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -158,43 +159,134 @@ pub(crate) fn require_managed(def: &IngestionSourceDef) -> ApiResult<()> {
     Ok(())
 }
 
-/// Replace a masked password by the stored one and refuse server-side password files
+/// Paperless sources need an instance admin who owns the vault; a bearer token
+/// also needs the vault management scope
+pub(crate) async fn require_paperless_admin(state: &AppState) -> ApiResult<()> {
+    let (user, role, token_scopes) = CURRENT_VAULT
+        .try_with(|ctx| (ctx.user.clone(), Some(ctx.role), ctx.token_scopes.clone()))
+        .unwrap_or((None, None, None));
+    if token_scopes.is_some_and(|scopes| !scopes.iter().any(|s| s == VAULT_MANAGEMENT_SCOPE)) {
+        return Err(ApiError::insufficient_scope(VAULT_MANAGEMENT_SCOPE));
+    }
+    let caller = state.callers.resolve(user.as_ref()).await?;
+    folio_core::services::authorize_paperless(&caller, role)?;
+    Ok(())
+}
+
+/// Applies [`require_paperless_admin`] when any of `configs` is a Paperless source
+pub(crate) async fn guard_paperless<'a>(
+    state: &AppState,
+    configs: impl IntoIterator<Item = &'a SourceConfig>,
+) -> ApiResult<()> {
+    if configs.into_iter().any(SourceConfig::is_paperless) {
+        require_paperless_admin(state).await?;
+    }
+    Ok(())
+}
+
+/// Refuses a second live Paperless source in the vault; `except` keeps its own slot
+pub(crate) async fn claim_paperless_slot(
+    state: &AppState,
+    vault: VaultId,
+    config: &SourceConfig,
+    except: Option<Id>,
+) -> Result<(), DomainError> {
+    if !config.is_paperless() {
+        return Ok(());
+    }
+    folio_core::services::ensure_paperless_slot(
+        state.ingestion.managed.as_ref(),
+        &state.ingestion.configured,
+        vault,
+        except,
+    )
+    .await
+}
+
+/// Replace a masked secret by the stored one and refuse server-side secret files
 ///
-/// The stored password is kept only for the same server and username, so an
-/// edit cannot send it to another host. A password file would let a UI user make the server read any file and send
-/// its content to a host of their choosing, so files are configuration-only.
+/// A password or token file would let a UI user make the server read any file
+/// and send its content to a host of their choosing, so files are
+/// configuration-only. A stored secret is only kept while it would go to the
+/// same server (see [`keeps_password`] and [`same_url`]), so it is never sent
+/// to a host the user just typed in.
 pub(crate) fn prepare_input(
     input: &mut IngestionSourceInput,
     existing: Option<&IngestionSourceDef>,
 ) -> Result<(), DomainError> {
-    if let SourceConfig::Email(email) = &mut input.config {
-        if email.password_file.is_some() {
-            return Err(DomainError::Validation(
-                "Password files can only be set in the server configuration".into(),
-            ));
+    let previous = existing.map(|d| &d.config);
+    match &mut input.config {
+        SourceConfig::Email(email) => {
+            if email.password_file.is_some() {
+                return Err(DomainError::Validation(
+                    "Password files can only be set in the server configuration".into(),
+                ));
+            }
+            if email.password.as_deref() == Some(REDACTED) || email.password.is_none() {
+                let stored = match previous {
+                    Some(SourceConfig::Email(old)) if !keeps_password(old, email) => {
+                        return Err(DomainError::Validation(
+                            "Enter the account password again, because the server, username or \
+                             security settings changed"
+                                .to_string(),
+                        ))
+                    }
+                    Some(SourceConfig::Email(old)) => old.password.clone(),
+                    _ => None,
+                };
+                email.password = Some(stored.ok_or_else(|| {
+                    DomainError::Validation("Enter the account password".to_string())
+                })?);
+            }
         }
-        if email.password.as_deref() == Some(REDACTED) || email.password.is_none() {
-            let stored = match existing.map(|d| &d.config) {
-                Some(SourceConfig::Email(old)) if !same_account(old, email) => {
-                    return Err(DomainError::Validation(
-                        "Enter the account password again, because the server or username changed"
-                            .to_string(),
-                    ))
-                }
-                Some(SourceConfig::Email(old)) => old.password.clone(),
-                _ => None,
-            };
-            email.password = Some(stored.ok_or_else(|| {
-                DomainError::Validation("Enter the account password".to_string())
-            })?);
+        SourceConfig::Paperless(paperless) => {
+            if paperless.token_file.is_some() {
+                return Err(DomainError::Validation(
+                    "token_file can only be set in the server configuration".into(),
+                ));
+            }
+            paperless.url = PaperlessConfig::normalize_url(&paperless.url)?;
+            if paperless
+                .token
+                .as_deref()
+                .is_none_or(|t| t.is_empty() || t == REDACTED)
+            {
+                paperless.token = Some(match previous {
+                    Some(SourceConfig::Paperless(old)) if same_url(old, &paperless.url) => old
+                        .token
+                        .clone()
+                        .ok_or_else(|| DomainError::Validation("token is required".to_string()))?,
+                    Some(SourceConfig::Paperless(_)) => {
+                        return Err(DomainError::Validation(
+                            "token: enter the API token again, because the url changed".to_string(),
+                        ))
+                    }
+                    _ => return Err(DomainError::Validation("token is required".to_string())),
+                });
+            }
         }
+        SourceConfig::Folder(_) => {}
     }
     input.validate()
 }
 
 /// Whether a masked password may stand for the stored one
-pub(crate) fn same_account(old: &EmailConfig, new: &EmailConfig) -> bool {
-    old.host == new.host && old.port == new.port && old.username == new.username
+///
+/// Only for the same server and username, and only while the connection does
+/// not get weaker, so an edit cannot send the stored password somewhere else.
+pub(crate) fn keeps_password(old: &EmailConfig, new: &EmailConfig) -> bool {
+    let host = |h: &str| h.trim().trim_end_matches('.').to_ascii_lowercase();
+    let downgraded = (old.security == MailSecurity::Tls && new.security == MailSecurity::Plain)
+        || (!old.accept_invalid_certs && new.accept_invalid_certs);
+    host(&old.host) == host(&new.host)
+        && old.port == new.port
+        && old.username == new.username
+        && !downgraded
+}
+
+/// Whether a stored Paperless source points at `url`, which is already normalized
+pub(crate) fn same_url(stored: &PaperlessConfig, url: &str) -> bool {
+    PaperlessConfig::normalize_url(&stored.url).unwrap_or_else(|_| stored.url.clone()) == url
 }
 
 /// List ingestion sources
@@ -251,6 +343,7 @@ pub(crate) async fn get_source(
 /// Create an ingestion source
 ///
 /// Passwords are stored unencrypted in the database until Folio has a secret key.
+/// Every operation on a Paperless source needs an instance admin who owns the vault.
 #[utoipa::path(
     post,
     path = "/api/sources",
@@ -259,7 +352,7 @@ pub(crate) async fn get_source(
     request_body = IngestionSourceInput,
     responses(
         (status = 201, description = "The created source", body = SourceView),
-        (status = 409, description = "An active source already uses this name"),
+        (status = 409, description = "An active source already uses this name, or the vault already has a Paperless source"),
         BadRequest,
         InternalError,
     )
@@ -269,7 +362,9 @@ pub(crate) async fn create_source(
     State(state): State<AppState>,
     ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<(StatusCode, Json<SourceView>)> {
+    guard_paperless(&state, [&input.config]).await?;
     prepare_input(&mut input, None)?;
+    claim_paperless_slot(&state, vault, &input.config, None).await?;
     let def = state.ingestion.managed.create(vault, input).await?;
     Ok((
         StatusCode::CREATED,
@@ -279,8 +374,8 @@ pub(crate) async fn create_source(
 
 /// Replace an ingestion source
 ///
-/// A password of `********` keeps the stored one while the host, port and
-/// username stay the same.
+/// A password of `********` keeps the stored one while the host, port,
+/// username and connection security stay the same.
 #[utoipa::path(
     put,
     path = "/api/sources/{id}",
@@ -290,7 +385,7 @@ pub(crate) async fn create_source(
     request_body = IngestionSourceInput,
     responses(
         (status = 200, description = "The updated source", body = SourceView),
-        (status = 409, description = "An active source already uses this name"),
+        (status = 409, description = "An active source already uses this name, or the vault already has a Paperless source"),
         BadRequest,
         NotFound,
         InternalError,
@@ -303,8 +398,10 @@ pub(crate) async fn update_source(
     ApiJson(mut input): ApiJson<IngestionSourceInput>,
 ) -> ApiResult<Json<SourceView>> {
     let existing = find(vault, &state, id).await?;
+    guard_paperless(&state, [&existing.config, &input.config]).await?;
     require_managed(&existing)?;
     prepare_input(&mut input, Some(&existing))?;
+    claim_paperless_slot(&state, vault, &input.config, Some(id)).await?;
     let def = state.ingestion.managed.update(vault, id, input).await?;
     Ok(Json(view(DefaultVault(vault), &state, def).await?))
 }
@@ -329,6 +426,7 @@ pub(crate) async fn delete_source(
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<StatusCode> {
     let existing = find_retained(vault, &state, id).await?;
+    guard_paperless(&state, [&existing.config]).await?;
     require_managed(&existing)?;
     state.ingestion.managed.delete(vault, id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -343,7 +441,7 @@ pub(crate) async fn delete_source(
     params(("id" = Uuid, Path, description = "Source ID")),
     responses(
         (status = 200, description = "The restored source", body = SourceView),
-        (status = 409, description = "An active source already uses this name"),
+        (status = 409, description = "An active source already uses this name, or the vault already has a Paperless source"),
         NotFound,
         InternalError,
     )
@@ -353,8 +451,25 @@ pub(crate) async fn restore_source(
     State(state): State<AppState>,
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceView>> {
-    let restored = state.ingestion.managed.restore(vault, id).await?;
+    let restored = restore(&state, vault, id).await?;
     Ok(Json(view(DefaultVault(vault), &state, restored).await?))
+}
+
+/// Restore a retained source, applying the Paperless rules first
+pub(crate) async fn restore(
+    state: &AppState,
+    vault: VaultId,
+    id: Id,
+) -> ApiResult<IngestionSourceDef> {
+    let retained = state
+        .ingestion
+        .managed
+        .find_deleted(vault, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Source not found"))?;
+    guard_paperless(state, [&retained.config]).await?;
+    claim_paperless_slot(state, vault, &retained.config, Some(id)).await?;
+    Ok(state.ingestion.managed.restore(vault, id).await?)
 }
 
 /// Outcome of checking a source
@@ -366,6 +481,12 @@ pub struct SourceTestResult {
 }
 
 pub(crate) async fn run_test(state: &AppState, def: &IngestionSourceDef) -> SourceTestResult {
+    if def.config.is_paperless() {
+        return SourceTestResult {
+            ok: false,
+            message: "unsupported".to_string(),
+        };
+    }
     let outcome = match state.ingestion.factory.build(def) {
         Ok(source) => source.test().await,
         Err(e) => Err(e),
@@ -401,6 +522,7 @@ pub(crate) async fn test_source(
     ApiPath(id): ApiPath<Uuid>,
 ) -> ApiResult<Json<SourceTestResult>> {
     let def = find(vault, &state, id).await?;
+    guard_paperless(&state, [&def.config]).await?;
     Ok(Json(run_test(&state, &def).await))
 }
 
