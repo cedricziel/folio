@@ -112,6 +112,10 @@ actor MockFolioService: FolioService {
     var failingTagIDs: Set<Tag.ID> = []
     /// Documents someone deleted; tagging them answers 404.
     var deletedDocumentIDs: Set<Document.ID> = []
+    /// Tags someone deleted; assigning them answers 404, as the server does.
+    var missingTagIDs: Set<Tag.ID> = []
+    /// Adds uploaded documents to the list, so `document(id:)` finds them.
+    var keepsUploads = false
     private var keyedUploads: [UUID: Document] = [:]
     private(set) var uploadKeys: [UUID] = []
     var failLookups = false
@@ -253,6 +257,14 @@ actor MockFolioService: FolioService {
 
     func setFailingTags(_ ids: Set<Tag.ID>) {
         failingTagIDs = ids
+    }
+
+    func setMissingTags(_ ids: Set<Tag.ID>) {
+        missingTagIDs = ids
+    }
+
+    func setKeepsUploads(_ keeps: Bool) {
+        keepsUploads = keeps
     }
 
     func markDeleted(_ id: Document.ID) {
@@ -485,6 +497,9 @@ actor MockFolioService: FolioService {
         if let idempotencyKey {
             keyedUploads[idempotencyKey] = document
         }
+        if keepsUploads {
+            documentList.append(document)
+        }
         if loseUploadResponses {
             documentList.append(document)
             throw FolioError.unreachable
@@ -516,7 +531,7 @@ actor MockFolioService: FolioService {
         if let failure {
             throw failure
         }
-        if deletedDocumentIDs.contains(documentID) {
+        if deletedDocumentIDs.contains(documentID) || missingTagIDs.contains(tagID) {
             throw FolioError.server(status: 404, message: nil)
         }
         if failingTagIDs.contains(tagID) {

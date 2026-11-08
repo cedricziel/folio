@@ -128,6 +128,25 @@ struct UploadBatchRunnerTests {
         #expect(await service.tagged.map(\.document) == [replacement])
     }
 
+    @Test func aDeletedTagFailsWithoutUploadingAgain() async throws {
+        let service = MockFolioService()
+        await service.setKeepsUploads(true)
+        let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
+        await service.setMissingTags([second.id])
+
+        await #expect(throws: UploadBatchError.tagNoLongerExists) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [first.id, second.id], scope: "s")
+        }
+        await #expect(throws: UploadBatchError.tagNoLongerExists) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [first.id, second.id], scope: "s")
+        }
+
+        #expect(await service.uploads.count == 1, "a missing tag never causes another upload")
+        let progress = try #require(runner.progress(files: [file("a.pdf")], tagIDs: [first.id, second.id], scope: "s"))
+        #expect(progress.uploaded == 1)
+        #expect(progress.remainingTags == 1)
+    }
+
     @Test func aBatchAlreadyRunningElsewhereIsNotStartedTwice() async throws {
         let service = MockFolioService()
         let store = InMemoryUploadProgressStore()
