@@ -46,7 +46,7 @@ pub use ingest::{
     EmailConfig, FolderAfterImport, FolderConfig, IngestItem, IngestOutcome, IngestionSourceDef,
     IngestionSourceInput, LedgerEntry, MailAfterImport, MailBody, MailSecurity, PaperlessConfig,
     PaperlessSyncMode, PollReport, SourceConfig, SourceLifecycle, SourceOrigin, SourceStatus,
-    PAPERLESS_MIN_POLL_SECS, REDACTED,
+    PAPERLESS_MAX_URL_LEN, PAPERLESS_MIN_POLL_SECS, REDACTED,
 };
 pub use ingest_identity::IngestItemKey;
 pub use ingest_outcome::{

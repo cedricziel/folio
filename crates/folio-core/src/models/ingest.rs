@@ -223,6 +223,9 @@ pub struct PaperlessConfig {
     pub default_currency: Option<String>,
 }
 
+/// The longest Paperless base URL Folio stores
+pub const PAPERLESS_MAX_URL_LEN: usize = 2048;
+
 /// The shortest poll interval a Paperless source accepts
 pub const PAPERLESS_MIN_POLL_SECS: u64 = 60;
 
@@ -251,13 +254,27 @@ impl PaperlessConfig {
             .ok_or_else(|| Error::Validation("No Paperless token configured".to_string()))
     }
 
+    /// The canonical form of a Paperless base URL, as it is stored and compared
+    pub fn normalize_url(raw: &str) -> Result<String> {
+        let invalid = || {
+            Error::Validation(format!(
+                "url must be an http or https URL without credentials, at most {PAPERLESS_MAX_URL_LEN} bytes"
+            ))
+        };
+        let raw = raw.trim();
+        if raw.len() > PAPERLESS_MAX_URL_LEN || raw.chars().any(char::is_control) {
+            return Err(invalid());
+        }
+        url::Url::parse(raw)
+            .ok()
+            .filter(super::metadata::is_http_url_without_credentials)
+            .map(String::from)
+            .ok_or_else(invalid)
+    }
+
     fn validate(&self) -> Result<()> {
         let invalid = |msg: &str| Err(Error::Validation(msg.to_string()));
-        if !url::Url::parse(self.url.trim())
-            .is_ok_and(|url| super::metadata::is_http_url_without_credentials(&url))
-        {
-            return invalid("url must be an http or https URL without credentials");
-        }
+        Self::normalize_url(&self.url)?;
         if self.poll_interval_secs < PAPERLESS_MIN_POLL_SECS {
             return invalid("poll_interval_secs must be at least 60");
         }
@@ -623,6 +640,31 @@ mod tests {
         ] {
             let message = validation_message(&paperless(serde_json::json!({ "url": url })));
             assert!(message.contains("url"), "{url}: {message}");
+        }
+    }
+
+    #[test]
+    fn paperless_urls_are_normalized() {
+        assert_eq!(
+            PaperlessConfig::normalize_url(" HTTPS://Paperless.Example ").unwrap(),
+            "https://paperless.example/"
+        );
+        assert_eq!(
+            PaperlessConfig::normalize_url("http://p.lan:8000/sub/../api").unwrap(),
+            "http://p.lan:8000/api"
+        );
+    }
+
+    #[test]
+    fn paperless_urls_with_control_characters_or_over_two_kilobytes_are_rejected() {
+        for url in [
+            "https://paperless.example/\u{0}".to_string(),
+            "https://paper\tless.example".to_string(),
+            "https://paperless.example/a\nb".to_string(),
+            format!("https://paperless.example/{}", "a".repeat(2048)),
+        ] {
+            let message = validation_message(&paperless(serde_json::json!({ "url": url })));
+            assert!(message.contains("url"), "{url:?}: {message}");
         }
     }
 
