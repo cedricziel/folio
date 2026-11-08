@@ -20,7 +20,7 @@ use folio_core::models::{
 
 use super::sources::{
     all_sources, claim_paperless_slot, find, find_retained, guard_paperless, prepare_input,
-    require_managed, require_paperless_admin, run_test, SourceListQuery,
+    require_managed, require_paperless_admin, run_test, same_url, SourceListQuery,
 };
 use super::view::{Nav, Sidebar};
 use crate::error::{ApiError, ApiResult};
@@ -539,26 +539,46 @@ async fn save(
     stored.map(drop).map_err(|e| e.to_string())
 }
 
+/// A re-rendered form never echoes a typed token: it shows the mask where
+/// saving would keep the stored token, and an empty field otherwise
+fn hide_token(values: &mut FormValues, existing: Option<&IngestionSourceDef>) {
+    if values.kind != "paperless" {
+        return;
+    }
+    let keeps_stored = match existing.map(|def| &def.config) {
+        Some(SourceConfig::Paperless(old)) => {
+            old.token.is_some()
+                && PaperlessConfig::normalize_url(&values.url).is_ok_and(|url| same_url(old, &url))
+        }
+        _ => false,
+    };
+    values.token = if keeps_stored {
+        REDACTED.into()
+    } else {
+        String::new()
+    };
+}
+
 async fn create(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
-    Form(values): Form<FormValues>,
+    Form(mut values): Form<FormValues>,
 ) -> ApiResult<Response> {
     if values.kind == "paperless" {
         require_paperless_admin(&state).await?;
     }
-    if values.test.is_some() {
-        let notice = try_connection(&state, values.clone(), None).await;
-        return Ok(form(vault, &state, None, values, notice)
-            .await?
-            .into_response());
-    }
-    match save(&state, vault, values.clone(), None).await {
-        Ok(()) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(form(vault, &state, None, values, danger(message))
-            .await?
-            .into_response()),
-    }
+    let notice = if values.test.is_some() {
+        try_connection(&state, values.clone(), None).await
+    } else {
+        match save(&state, vault, values.clone(), None).await {
+            Ok(()) => return Ok(Redirect::to("/settings/sources").into_response()),
+            Err(message) => danger(message),
+        }
+    };
+    hide_token(&mut values, None);
+    Ok(form(vault, &state, None, values, notice)
+        .await?
+        .into_response())
 }
 
 async fn update(
@@ -572,26 +592,18 @@ async fn update(
         require_paperless_admin(&state).await?;
     }
     require_managed(&existing)?;
-    if values.test.is_some() {
-        let notice = try_connection(&state, values.clone(), Some(&existing)).await;
-        return Ok(form(vault, &state, Some(id.to_string()), values, notice)
-            .await?
-            .into_response());
-    }
-    let saved = save(&state, vault, values.clone(), Some(&existing)).await;
-    if let SourceConfig::Paperless(old) = &existing.config {
-        if old.url != values.url.trim() && values.token == REDACTED {
-            values.token.clear();
+    let notice = if values.test.is_some() {
+        try_connection(&state, values.clone(), Some(&existing)).await
+    } else {
+        match save(&state, vault, values.clone(), Some(&existing)).await {
+            Ok(()) => return Ok(Redirect::to("/settings/sources").into_response()),
+            Err(message) => danger(message),
         }
-    }
-    match saved {
-        Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
-        Err(message) => Ok(
-            form(vault, &state, Some(id.to_string()), values, danger(message))
-                .await?
-                .into_response(),
-        ),
-    }
+    };
+    hide_token(&mut values, Some(&existing));
+    Ok(form(vault, &state, Some(id.to_string()), values, notice)
+        .await?
+        .into_response())
 }
 
 async fn toggle(

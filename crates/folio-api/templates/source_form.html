@@ -47,7 +47,7 @@
             <label for="url">Paperless URL</label>
             <input class="input mono" type="url" id="url" name="url" value="{{ values.url }}" placeholder="https://paperless.example" inputmode="url" autocomplete="off" required>
             <label for="token">API token</label>
-            <input class="input" type="password" id="token" name="token" value="{{ values.token }}" autocomplete="off"{% if values.token.is_empty() %} required{% endif %}>
+            <input class="input" type="password" id="token" name="token" value="{{ values.token }}" autocomplete="new-password"{% if values.token.is_empty() %} required{% endif %}>
             <p class="f-meta">Create the token in Paperless under your profile. Folio only imports the documents this token can see. The token is stored unencrypted in the database; to keep it out, define the source in the server configuration with a token file. Changing the URL needs the token again.</p>
         </fieldset>
 

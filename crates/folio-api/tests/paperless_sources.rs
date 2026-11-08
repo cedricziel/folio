@@ -139,7 +139,7 @@ async fn a_new_url_with_the_placeholder_asks_for_the_token_and_changes_nothing()
         );
     }
     let stored = stored_config(&app, &id).await;
-    assert_eq!(stored.url, "https://paperless.example");
+    assert_eq!(stored.url, "https://paperless.example/");
     assert_eq!(stored.token.as_deref(), Some(TOKEN));
 
     let (status, _) = send(
@@ -152,7 +152,7 @@ async fn a_new_url_with_the_placeholder_asks_for_the_token_and_changes_nothing()
     .await;
     assert_eq!(status, StatusCode::OK);
     let stored = stored_config(&app, &id).await;
-    assert_eq!(stored.url, "https://elsewhere.example");
+    assert_eq!(stored.url, "https://elsewhere.example/");
     assert_eq!(stored.token.as_deref(), Some("new-token"));
 }
 
@@ -212,8 +212,9 @@ async fn invalid_settings_are_rejected_naming_the_field() {
     assert!(error["error"].as_str().unwrap().contains("token_file"));
 }
 
-/// A TCP listener standing in for Paperless that only counts connections
-async fn paperless_listener() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+/// A TCP listener at the source URL that counts connections, so a guard that
+/// lets a request through to the Paperless client fails the test
+async fn paperless_tripwire() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -252,9 +253,8 @@ async fn seed_paperless(
 #[tokio::test]
 async fn a_vault_owner_who_is_not_an_admin_is_forbidden_every_paperless_operation() {
     let h = common::harness_requiring_login().await;
-    let (url, hits) = paperless_listener().await;
+    let (url, hits) = paperless_tripwire().await;
     let cookie = vault_owner_session(&h, "owner-not-admin", false).await;
-    let live = seed_paperless(&h, "Live", &url).await;
     let retained = seed_paperless(&h, "Retained", &url).await;
     h.state
         .ingestion
@@ -262,6 +262,7 @@ async fn a_vault_owner_who_is_not_an_admin_is_forbidden_every_paperless_operatio
         .delete(h.vault, retained.id)
         .await
         .unwrap();
+    let live = seed_paperless(&h, "Live", &url).await;
     let (live_id, retained_id) = (live.id, retained.id);
 
     let body = paperless_body(&url, "another-token");
@@ -313,7 +314,11 @@ async fn a_vault_owner_who_is_not_an_admin_is_forbidden_every_paperless_operatio
         assert_eq!(status, StatusCode::FORBIDDEN, "{uri}");
     }
 
-    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing reached the Paperless URL"
+    );
     let active = h.state.ingestion.managed.list(h.vault).await.unwrap();
     assert_eq!(active, vec![live.clone()]);
     let deleted = h
@@ -340,7 +345,7 @@ async fn a_vault_owner_who_is_not_an_admin_is_forbidden_every_paperless_operatio
 #[tokio::test]
 async fn an_admin_who_owns_the_vault_manages_paperless_sources() {
     let h = common::harness_requiring_login().await;
-    let (url, hits) = paperless_listener().await;
+    let (url, hits) = paperless_tripwire().await;
     let cookie = vault_owner_session(&h, "admin-owner", true).await;
 
     let (status, created) = send(
@@ -397,7 +402,11 @@ async fn an_admin_who_owns_the_vault_manages_paperless_sources() {
     .await;
     assert_eq!(status, StatusCode::OK, "{restored}");
     assert_eq!(restored["enabled"], false);
-    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing reached the Paperless URL"
+    );
 }
 
 #[tokio::test]
@@ -587,7 +596,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
     let SourceConfig::Paperless(saved) = &def.config else {
         panic!("paperless")
     };
-    assert_eq!(saved.url, "https://paperless.example");
+    assert_eq!(saved.url, "https://paperless.example/");
     assert_eq!(saved.token.as_deref(), Some(TOKEN));
     assert_eq!(
         saved.sync_mode,
@@ -637,7 +646,7 @@ async fn the_paperless_form_renders_saves_and_never_shows_the_token() {
     let (status, refused) = page(&app, "POST", &edit_uri, None, Some(&moved)).await;
     assert_eq!(status, StatusCode::OK);
     assert!(refused.contains("enter the API token again"), "{refused}");
-    assert!(refused.contains(r#"name="token" value="" autocomplete="off" required"#));
+    assert!(refused.contains(r#"name="token" value="" autocomplete="new-password" required"#));
 
     let second = "kind=paperless&name=Second&enabled=on&url=https%3A%2F%2Fsecond.example\
 &token=t&sync_mode=mirror&poll_interval_secs=900";
@@ -672,4 +681,354 @@ async fn non_admin_owners_see_the_paperless_source_without_its_controls() {
     assert!(!list.contains(&format!("/{}/test", def.id)));
     assert!(!list.contains(&format!("/{}/toggle", def.id)));
     assert!(!list.contains("new?kind=paperless"));
+}
+
+fn paperless_form(url: &str, token: &str) -> String {
+    format!(
+        "kind=paperless&name=Paperless&enabled=on&url={}&token={token}&sync_mode=mirror\
+&poll_interval_secs=900&default_currency=EUR",
+        url.replace(':', "%3A").replace('/', "%2F")
+    )
+}
+
+#[tokio::test]
+async fn re_rendered_forms_never_echo_the_token() {
+    let app = common::harness().await;
+    let typed = "typed-secret-token";
+
+    let (status, tested) = page(
+        &app,
+        "POST",
+        "/settings/sources",
+        None,
+        Some(&format!(
+            "{}&test=1",
+            paperless_form("https://p.example", typed)
+        )),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!tested.contains(typed), "try-connection echoed the token");
+    assert!(tested.contains(r#"name="token" value="" autocomplete="new-password""#));
+
+    let invalid = paperless_form("https://p.example", typed).replace("EUR", "euro");
+    let (_, refused) = page(&app, "POST", "/settings/sources", None, Some(&invalid)).await;
+    assert!(refused.contains("default_currency"), "{refused}");
+    assert!(!refused.contains(typed), "the error page echoed the token");
+
+    let (status, _) = page(
+        &app,
+        "POST",
+        "/settings/sources",
+        None,
+        Some(&paperless_form("https://p.example", TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SEE_OTHER);
+    let (_, conflict) = page(
+        &app,
+        "POST",
+        "/settings/sources",
+        None,
+        Some(&paperless_form("https://other.example", typed)),
+    )
+    .await;
+    assert!(conflict.contains("already has a Paperless source"));
+    assert!(!conflict.contains(typed), "the 409 page echoed the token");
+
+    let id = app.state.ingestion.managed.list(app.vault).await.unwrap()[0].id;
+    let edit = format!("/settings/sources/{id}");
+    let (_, same_url) = page(
+        &app,
+        "POST",
+        &edit,
+        None,
+        Some(&format!(
+            "{}&test=1",
+            paperless_form("https://P.example", typed)
+        )),
+    )
+    .await;
+    assert!(!same_url.contains(typed) && !same_url.contains(TOKEN));
+    assert!(same_url.contains(r#"name="token" value="********""#));
+    let (_, new_url) = page(
+        &app,
+        "POST",
+        &edit,
+        None,
+        Some(&format!(
+            "{}&test=1",
+            paperless_form("https://new.example", typed)
+        )),
+    )
+    .await;
+    assert!(!new_url.contains(typed) && !new_url.contains(TOKEN));
+    assert!(new_url.contains(r#"name="token" value="""#));
+}
+
+#[tokio::test]
+async fn urls_are_stored_normalized_and_compared_that_way() {
+    let app = common::harness().await;
+    let (status, created) = send(
+        &app,
+        "POST",
+        "/api/sources",
+        None,
+        Some(paperless_body("  HTTPS://Paperless.Example ", TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["config"]["url"], "https://paperless.example/");
+    let id = created["id"].as_str().unwrap();
+
+    let (status, _) = send(
+        &app,
+        "PUT",
+        &format!("/api/sources/{id}"),
+        None,
+        Some(paperless_body("https://paperless.example", "********")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the same URL keeps the token");
+
+    let long = format!("https://p.example/{}", "a".repeat(2048));
+    for url in [long.as_str(), "https://p.example/\u{7}"] {
+        let (status, error) = send(
+            &app,
+            "PUT",
+            &format!("/api/sources/{id}"),
+            None,
+            Some(paperless_body(url, "new-token")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert!(error["error"].as_str().unwrap().contains("url"));
+    }
+}
+
+#[tokio::test]
+async fn restoring_a_source_that_is_not_in_the_trash_is_not_found() {
+    let app = common::harness().await;
+    let (_, created) = send(
+        &app,
+        "POST",
+        "/api/sources",
+        None,
+        Some(paperless_body("https://p.example", TOKEN)),
+    )
+    .await;
+    for id in [
+        created["id"].as_str().unwrap().to_string(),
+        uuid::Uuid::new_v4().to_string(),
+    ] {
+        let (status, _) = send(
+            &app,
+            "POST",
+            &format!("/api/sources/{id}/restore"),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{id}");
+    }
+}
+
+#[tokio::test]
+async fn a_non_admin_cannot_switch_a_source_into_or_out_of_paperless() {
+    let h = common::harness_requiring_login().await;
+    let cookie = vault_owner_session(&h, "switch-kind", false).await;
+    let mail = json!({
+        "name": "Mail",
+        "config": {"type": "email", "host": "imap.example.test", "username": "me", "password": "pw"}
+    });
+    let (status, created) = send(&h, "POST", "/api/sources", Some(&cookie), Some(mail)).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let mail_id = created["id"].as_str().unwrap();
+    let (status, error) = send(
+        &h,
+        "PUT",
+        &format!("/api/sources/{mail_id}"),
+        Some(&cookie),
+        Some(paperless_body("https://p.example", TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["code"], "forbidden");
+
+    let library = seed_paperless(&h, "Library", "https://p.example").await;
+    let back_to_mail = json!({
+        "name": "Library",
+        "config": {"type": "email", "host": "imap.example.test", "username": "me", "password": "pw"}
+    });
+    let (status, error) = send(
+        &h,
+        "PUT",
+        &format!("/api/sources/{}", library.id),
+        Some(&cookie),
+        Some(back_to_mail),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(error["code"], "forbidden");
+    let stored = h
+        .state
+        .ingestion
+        .managed
+        .find(h.vault, library.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, library);
+}
+
+#[tokio::test]
+async fn an_admin_needs_to_own_the_vault_selected_by_header_or_prefix() {
+    let h = common::harness_requiring_login().await;
+    let cookie = common::vault_session(
+        &h,
+        "admin-editor",
+        folio_core::models::VaultRole::Owner,
+        true,
+    )
+    .await;
+    let other = h.vault_repository.create("Shared", None).await.unwrap().id;
+    h.members
+        .grant(
+            other,
+            &folio_core::models::Principal::User("admin-editor".into()),
+            folio_core::models::VaultRole::Editor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let request = |vault: String| {
+        Request::post("/api/sources")
+            .header("cookie", &cookie)
+            .header("x-folio-vault", vault)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                paperless_body("https://p.example", TOKEN).to_string(),
+            ))
+            .unwrap()
+    };
+    let denied = h
+        .app
+        .clone()
+        .oneshot(request(other.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let (status, _) = page(
+        &h,
+        "POST",
+        &format!("/vaults/{other}/settings/sources"),
+        Some(&cookie),
+        Some(&paperless_form("https://p.example", TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(h
+        .state
+        .ingestion
+        .managed
+        .list(other)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let allowed = h
+        .app
+        .clone()
+        .oneshot(request(h.vault.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn with_auth_disabled_a_signed_in_member_counts_as_an_admin() {
+    let h = common::harness().await;
+    let cookie = vault_owner_session(&h, "local-user", false).await;
+    let (status, created) = send(
+        &h,
+        "POST",
+        "/api/sources",
+        Some(&cookie),
+        Some(paperless_body("https://p.example", TOKEN)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+}
+
+#[tokio::test]
+async fn bearer_tokens_need_the_vault_management_scope_for_paperless() {
+    let h = common::harness_requiring_login().await;
+    vault_owner_session(&h, "token-admin", true).await;
+    h.auth_store
+        .insert_client(folio_auth::OAuthClient {
+            client_id: "paperless-client".into(),
+            client_name: "Paperless test client".into(),
+            redirect_uris: vec!["http://localhost/callback".into()],
+            created_at: 1,
+        })
+        .await
+        .unwrap();
+    for (token, scopes) in [
+        ("write-only", vec!["documents:write"]),
+        ("manager", vec!["documents:write", "vaults:manage"]),
+    ] {
+        h.auth_store
+            .insert_access_token(folio_auth::AccessToken {
+                token_hash: folio_auth::crypto::hash_token(token),
+                client_id: "paperless-client".into(),
+                user_id: "token-admin".into(),
+                scopes: scopes.into_iter().map(String::from).collect(),
+                audience: "http://localhost/api".into(),
+                expires_at: i64::MAX,
+                grant_id: format!("grant-{token}"),
+            })
+            .await
+            .unwrap();
+    }
+    let post = |token: &str, body: Value| {
+        Request::post("/api/sources")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let folder = json!({"name": "Scans", "config": {"type": "folder", "path": "/unused/scans"}});
+
+    let refused = h
+        .app
+        .clone()
+        .oneshot(post(
+            "write-only",
+            paperless_body("https://p.example", TOKEN),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let body: Value = serde_json::from_str(&common::text(refused).await).unwrap();
+    assert_eq!(body["code"], "insufficient_scope");
+    let folder_ok = h
+        .app
+        .clone()
+        .oneshot(post("write-only", folder))
+        .await
+        .unwrap();
+    assert_eq!(
+        folder_ok.status(),
+        StatusCode::CREATED,
+        "other kinds keep their scope"
+    );
+
+    let created = h
+        .app
+        .clone()
+        .oneshot(post("manager", paperless_body("https://p.example", TOKEN)))
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
 }

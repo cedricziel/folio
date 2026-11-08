@@ -13,10 +13,11 @@ use uuid::Uuid;
 
 use folio_core::error::Error as DomainError;
 use folio_core::models::{
-    Id, IngestionSourceDef, IngestionSourceInput, SourceConfig, SourceOrigin, SourceStatus,
-    REDACTED,
+    Id, IngestionSourceDef, IngestionSourceInput, PaperlessConfig, SourceConfig, SourceOrigin,
+    SourceStatus, REDACTED,
 };
 
+use super::auth::VAULT_MANAGEMENT_SCOPE;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath};
 use crate::openapi::{BadRequest, InternalError, NotFound};
@@ -158,11 +159,15 @@ pub(crate) fn require_managed(def: &IngestionSourceDef) -> ApiResult<()> {
     Ok(())
 }
 
-/// Paperless sources need an instance admin who owns the vault
+/// Paperless sources need an instance admin who owns the vault; a bearer token
+/// also needs the vault management scope
 pub(crate) async fn require_paperless_admin(state: &AppState) -> ApiResult<()> {
-    let (user, role) = CURRENT_VAULT
-        .try_with(|ctx| (ctx.user.clone(), Some(ctx.role)))
-        .unwrap_or((None, None));
+    let (user, role, token_scopes) = CURRENT_VAULT
+        .try_with(|ctx| (ctx.user.clone(), Some(ctx.role), ctx.token_scopes.clone()))
+        .unwrap_or((None, None, None));
+    if token_scopes.is_some_and(|scopes| !scopes.iter().any(|s| s == VAULT_MANAGEMENT_SCOPE)) {
+        return Err(ApiError::insufficient_scope(VAULT_MANAGEMENT_SCOPE));
+    }
     let caller = state.callers.resolve(user.as_ref()).await?;
     folio_core::services::authorize_paperless(&caller, role)?;
     Ok(())
@@ -232,13 +237,14 @@ pub(crate) fn prepare_input(
                     "token_file can only be set in the server configuration".into(),
                 ));
             }
+            paperless.url = PaperlessConfig::normalize_url(&paperless.url)?;
             if paperless
                 .token
                 .as_deref()
                 .is_none_or(|t| t.is_empty() || t == REDACTED)
             {
                 paperless.token = Some(match previous {
-                    Some(SourceConfig::Paperless(old)) if old.url == paperless.url => old
+                    Some(SourceConfig::Paperless(old)) if same_url(old, &paperless.url) => old
                         .token
                         .clone()
                         .ok_or_else(|| DomainError::Validation("token is required".to_string()))?,
@@ -254,6 +260,11 @@ pub(crate) fn prepare_input(
         SourceConfig::Folder(_) => {}
     }
     input.validate()
+}
+
+/// Whether a stored Paperless source points at `url`, which is already normalized
+pub(crate) fn same_url(stored: &PaperlessConfig, url: &str) -> bool {
+    PaperlessConfig::normalize_url(&stored.url).unwrap_or_else(|_| stored.url.clone()) == url
 }
 
 /// List ingestion sources
@@ -427,10 +438,14 @@ pub(crate) async fn restore(
     vault: VaultId,
     id: Id,
 ) -> ApiResult<IngestionSourceDef> {
-    if let Some(retained) = state.ingestion.managed.find_deleted(vault, id).await? {
-        guard_paperless(state, [&retained.config]).await?;
-        claim_paperless_slot(state, vault, &retained.config, Some(id)).await?;
-    }
+    let retained = state
+        .ingestion
+        .managed
+        .find_deleted(vault, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Source not found"))?;
+    guard_paperless(state, [&retained.config]).await?;
+    claim_paperless_slot(state, vault, &retained.config, Some(id)).await?;
     Ok(state.ingestion.managed.restore(vault, id).await?)
 }
 

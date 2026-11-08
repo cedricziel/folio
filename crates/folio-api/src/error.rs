@@ -41,6 +41,17 @@ impl ApiError {
         }
     }
 
+    /// 403 for a bearer token that lacks `scope`, with the error code `insufficient_scope`
+    pub fn insufficient_scope(scope: &str) -> Self {
+        Self {
+            code: Some("insufficient_scope"),
+            ..Self::new(
+                StatusCode::FORBIDDEN,
+                format!("This token needs the {scope} scope"),
+            )
+        }
+    }
+
     /// 403 with the error code `forbidden`
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self {
