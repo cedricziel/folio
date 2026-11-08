@@ -58,7 +58,7 @@ private func scopeDefaults() -> UserDefaults {
     UserDefaults(suiteName: "SpotlightIndexTests-\(UUID().uuidString)")!
 }
 
-private func until(_ condition: () async -> Bool) async throws {
+private func until(_ condition: @Sendable () async -> Bool) async throws {
     for _ in 0..<500 {
         if await condition() { return }
         try await Task.sleep(for: .milliseconds(5))
