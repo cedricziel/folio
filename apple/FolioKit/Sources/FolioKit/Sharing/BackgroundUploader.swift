@@ -62,7 +62,7 @@ public extension BackgroundUploading {
 /// Each upload is recorded in a `ShareUploadStore` before it starts. Its body stays on disk until the server
 /// accepts it, so rejected, unauthorized and interrupted shares remain visible and can be retried. Every attempt
 /// carries the record's id as `Idempotency-Key`, so a retry after a lost answer returns the first document.
-public final class BackgroundUploader: NSObject, BackgroundUploading, URLSessionTaskDelegate, @unchecked Sendable {
+public final class BackgroundUploader: NSObject, BackgroundUploading, URLSessionDataDelegate, @unchecked Sendable {
     public static let identifierPrefix = "com.cedricziel.folio.share."
 
     public static func makeIdentifier() -> String {
@@ -77,6 +77,9 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     private var session: URLSession!
     private var changeHandler: (@Sendable (ShareUploadRecord) -> Void)?
     private var eventsFinishedHandler: (@Sendable () -> Void)?
+    /// The start of each running task's answer, enough to read the error code of a refusal.
+    private var answers: [Int: Data] = [:]
+    private static let answerLimit = 4096
 
     /// - Parameters:
     ///   - serverURL: Where new shares go; nil for an uploader that only collects the outcome of earlier ones.
@@ -146,7 +149,16 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
 
     public func retry(_ id: UUID) async throws {
         guard store.claim(id) else { throw ShareRetryError.inProgress }
-        defer { store.unclaim(id) }
+        // A token refresh can outlast the claim's timeout; renew it so no other process starts the same share.
+        let renewal = Task { [store] in
+            while (try? await Task.sleep(for: .seconds(ShareUploadStore.claimTimeout / 3))) != nil {
+                _ = store.renewClaim(id)
+            }
+        }
+        defer {
+            renewal.cancel()
+            store.unclaim(id)
+        }
         guard var record = store.record(id), record.canRetry,
             FileManager.default.fileExists(atPath: store.bodyFile(for: id).path)
         else { throw ShareRetryError.unavailable }
@@ -158,6 +170,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
             token = try await tokens.refresh(rejecting: token)
             guard token != nil else { throw FolioError.signInRequired }
         }
+        guard store.renewClaim(id) else { throw ShareRetryError.inProgress }
         record.status = .pending
         record.attempts += 1
         record.updatedAt = .now
@@ -208,15 +221,24 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        let answer = lock.withLock { answers.removeValue(forKey: task.taskIdentifier) }
         guard let description = task.taskDescription else { return }
         guard let shareTask = ShareTask(description) else {
             // Tasks enqueued by earlier versions carry the path of their body instead of a record.
             try? FileManager.default.removeItem(atPath: description)
             return
         }
-        let failure = ShareUploadFailure.classify(response: task.response, error: error)
+        let failure = ShareUploadFailure.classify(response: task.response, error: error, body: answer)
         if let record = store.complete(shareTask.id, attempt: shareTask.attempt, failure: failure) {
             onChange?(record)
+        }
+    }
+
+    public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.withLock {
+            let received = answers[dataTask.taskIdentifier, default: Data()]
+            guard received.count < Self.answerLimit else { return }
+            answers[dataTask.taskIdentifier] = received + data.prefix(Self.answerLimit - received.count)
         }
     }
 
