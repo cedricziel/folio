@@ -347,7 +347,13 @@ struct RootView: View {
         #if os(iOS)
             browserPage = BrowserPage(url: url)
         #else
-            NSWorkspace.shared.open(url)
+            // Open the default browser by name: a self-build with associated domains would otherwise
+            // receive its own link back.
+            let workspace = NSWorkspace.shared
+            guard let browser = workspace.urlForApplication(toOpen: URL(string: "https://example.com")!) else {
+                return
+            }
+            workspace.open([url], withApplicationAt: browser, configuration: NSWorkspace.OpenConfiguration())
         #endif
     }
 
