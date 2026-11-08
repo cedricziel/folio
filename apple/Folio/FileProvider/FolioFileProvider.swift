@@ -48,9 +48,12 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         if let service {
             return (FolioCatalog(service: service, cache: cache), service)
         }
-        guard let server = SharedConfiguration.serverURL(),
-            let service = SharedConfiguration.makeService(downloadDirectory: downloadDirectory)
-        else { throw NSFileProviderError(.notAuthenticated) }
+        guard let server = SharedConfiguration.serverURL() else {
+            ProcessCatalogCache.clear()
+            throw NSFileProviderError(.notAuthenticated)
+        }
+        // One read of the server keeps the service and the cache it fills on the same server.
+        let service = SharedConfiguration.makeService(for: server, downloadDirectory: downloadDirectory)
         return (FolioCatalog(service: service, cache: ProcessCatalogCache.cache(for: server)), service)
     }
 
@@ -461,6 +464,10 @@ private enum ProcessCatalogCache {
             current = (server, cache)
             return cache
         }
+    }
+
+    static func clear() {
+        lock.withLock { current = nil }
     }
 }
 

@@ -22,6 +22,8 @@ public final class FolioTelemetry: @unchecked Sendable {
     private var configuredURL: URL?
     private var configuredProvider: (any BearerTokenProvider)?
     private var lastConfiguration = Date.distantPast
+    private var lastFlush = ContinuousClock.Instant.now - .seconds(60)
+    private var flushPending = false
     private var instrumentation: URLSessionInstrumentation?
     private let installationIdentity: InstallationIdentity
     private let session: URLSession
@@ -129,7 +131,18 @@ public final class FolioTelemetry: @unchecked Sendable {
             if let retired { Task.detached { retired.retire() } }
             if accepted { next.event("app.session.start") } else { next.shutdown() }
         } catch {
-            // Optional observability must never block sign-in or document access.
+            // Optional observability must never block sign-in or document access. A server that refuses the
+            // settings request stops collection; a transport failure keeps the current runtime until it recovers.
+            if let refused = error as? URLError,
+                [.badServerResponse, .userAuthenticationRequired].contains(refused.code)
+            {
+                let stale = lock.withLock { () -> TelemetryRuntime? in
+                    guard generation == ticket else { return nil }
+                    defer { runtime = nil }
+                    return runtime
+                }
+                if let stale { Task.detached { stale.shutdown() } }
+            }
         }
     }
 
@@ -186,9 +199,37 @@ public final class FolioTelemetry: @unchecked Sendable {
         }
     }
 
-    /// Flushes pending signals on a worker task, without delaying the caller.
+    /// Flushes pending signals on a worker task, without delaying the caller. Calls made while a flush is
+    /// pending share it, and flushes start at most once per second, so a burst of operations sends one export.
     public func flush() {
-        if let runtime = current { Task.detached { runtime.flush() } }
+        let plan = lock.withLock { () -> (TelemetryRuntime, Duration)? in
+            guard let runtime, !flushPending else { return nil }
+            flushPending = true
+            let elapsed = ContinuousClock.now - lastFlush
+            return (runtime, elapsed >= .seconds(1) ? .zero : .seconds(1) - elapsed)
+        }
+        guard let plan else { return }
+        let (runtime, wait) = plan
+        Task.detached { [self] in
+            if wait > .zero { try? await Task.sleep(for: wait) }
+            lock.withLock {
+                flushPending = false
+                lastFlush = .now
+            }
+            runtime.flush()
+        }
+    }
+
+    /// Flushes and waits at most `timeout`, for a process the system is about to suspend.
+    public func flush(timeout: Duration) async {
+        guard let runtime = current else { return }
+        let export = Task.detached { runtime.flush() }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await export.value }
+            group.addTask { try? await Task.sleep(for: timeout) }
+            await group.next()
+            group.cancelAll()
+        }
     }
 
     var current: TelemetryRuntime? { lock.withLock { runtime } }

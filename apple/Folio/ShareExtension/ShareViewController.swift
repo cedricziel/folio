@@ -54,10 +54,12 @@ struct ShareRoot: View {
         }
     }
 
-    /// Sends recorded telemetry before the system ends the extension.
+    /// Sends recorded telemetry, waiting briefly, before the system suspends the extension.
     private func finish() {
-        FolioTelemetry.shared.flush()
-        context?.completeRequest(returningItems: nil)
+        Task {
+            await FolioTelemetry.shared.flush(timeout: .milliseconds(1500))
+            context?.completeRequest(returningItems: nil)
+        }
     }
 
     private func buildModel(_ files: [UploadFile]) async -> ShareViewModel? {

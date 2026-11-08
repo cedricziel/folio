@@ -379,7 +379,8 @@ private final class TelemetryCapture: @unchecked Sendable {
         #expect(second !== first)
 
         var exported: [String] = []
-        for _ in 0..<50 where exported.isEmpty {
+        // Under the 5-second batch delay, so only the retiring flush can deliver it in time.
+        for _ in 0..<20 where exported.isEmpty {
             try await Task.sleep(for: .milliseconds(100))
             exported = try capture.requests.filter { $0.0.url?.lastPathComponent == "traces" }.flatMap {
                 try Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest(serializedBytes: $0.1)
@@ -387,6 +388,36 @@ private final class TelemetryCapture: @unchecked Sendable {
             }
         }
         #expect(exported.contains("documents.list"))
+    }
+
+    @Test func refusedRefreshStopsTheRuntime() async throws {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        let status = TelemetryCapture()
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                let refused = status.requests.isEmpty == false
+                return (
+                    refused ? 403 : 200,
+                    Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8)
+                )
+            }
+            return (200, Data("{}".utf8))
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+        )
+        defer { telemetry.stop() }
+        telemetry.refreshInterval = 0
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(telemetry.current != nil)
+
+        status.append(URLRequest(url: baseURL), Data())
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+
+        #expect(telemetry.current == nil)
     }
 }
 
