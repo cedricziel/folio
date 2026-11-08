@@ -58,6 +58,8 @@ targets:
           NSAllowsLocalNetworking: true
         ITSAppUsesNonExemptEncryption: false
         LSApplicationCategoryType: public.app-category.productivity
+        NSUserActivityTypes:
+          - com.cedricziel.folio.document
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio

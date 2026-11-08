@@ -41,6 +41,7 @@ struct InboxView: View {
         @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
     @FocusState private var searchFocused: Bool
+    @Environment(DocumentActivityTracker.self) private var activity: DocumentActivityTracker?
     private let router = IntentRouter.shared
 
     init(
@@ -126,6 +127,10 @@ struct InboxView: View {
             guard let request else { return }
             router.clear()
             handle(request)
+        }
+        .onChange(of: ObjectIdentifier(session.list), initial: true) {
+            let activity = activity
+            session.list.onRemove = { activity?.documentRemoved($0) }
         }
         .onContinueUserActivity(CSSearchableItemActionType) { activity in
             let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
@@ -458,6 +463,7 @@ struct InboxView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("document-\(row.id)")
+                    .draggableDocument(row.document, vaultID: vaultID)
                     .contextMenu {
                         if canEdit {
                             Button("Move to Trash", systemImage: "trash", role: .destructive) {
@@ -498,6 +504,7 @@ struct InboxView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("document-\(row.id)")
+        .draggableDocument(row.document, vaultID: vaultID)
     }
 
     @ViewBuilder

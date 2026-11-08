@@ -57,6 +57,10 @@ public final class DocumentDetailViewModel {
     public let discussion: DocumentDiscussionViewModel
     public private(set) var document: Document
     public private(set) var preview = Preview.loading
+    /// The downloaded original once the preview is ready.
+    public var previewFile: URL? {
+        if case let .ready(url) = preview { url } else { nil }
+    }
     public private(set) var metadata: [MetadataField] = []
     public private(set) var metadataFailure: String?
     public private(set) var history: [MetadataField] = []

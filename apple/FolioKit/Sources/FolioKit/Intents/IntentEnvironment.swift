@@ -14,6 +14,21 @@ public enum IntentEnvironment {
         factory.withLock { $0 = make }
     }
 
+    private static let spotlightIndex = OSAllocatedUnfairLock<SpotlightIndex>(initialState: .shared)
+
+    /// Where intents report documents that are gone, so Spotlight stops offering them.
+    public static var spotlight: SpotlightIndex { spotlightIndex.withLock { $0 } }
+
+    /// Swaps the Spotlight index, for tests.
+    public static func use(spotlight: SpotlightIndex) {
+        spotlightIndex.withLock { $0 = spotlight }
+    }
+
+    /// The server intents talk to.
+    public static func serverURL() -> URL? {
+        SharedConfiguration.serverURL()
+    }
+
     public typealias IntentRecorder = @Sendable (TelemetryIntent) -> Void
 
     private static let recorder = OSAllocatedUnfairLock<IntentRecorder>(
