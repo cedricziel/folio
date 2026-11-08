@@ -14,10 +14,12 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     private let service: (any FolioService)?
     private let temporaryDirectory: (() throws -> URL)?
     private let localMetadata: LocalItemMetadataStore
+    private let cache: FolioCatalogCache?
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
         service = nil
+        cache = nil
         temporaryDirectory = nil
         localMetadata =
             (try? LocalItemMetadataStore.file(domain: domain)).map(LocalItemMetadataStore.shared(file:)) ?? .scratch()
@@ -26,10 +28,11 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
 
     init(
         domain: NSFileProviderDomain, service: any FolioService, temporaryDirectory: (() throws -> URL)? = nil,
-        localMetadata: LocalItemMetadataStore = .scratch()
+        localMetadata: LocalItemMetadataStore = .scratch(), cache: FolioCatalogCache? = nil
     ) {
         self.domain = domain
         self.service = service
+        self.cache = cache
         self.temporaryDirectory = temporaryDirectory
         self.localMetadata = localMetadata
         super.init()
@@ -42,10 +45,16 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     func invalidate() {}
 
     private func catalog(downloadDirectory: URL? = nil) throws -> (FolioCatalog, any FolioService) {
-        guard let service = service ?? SharedConfiguration.makeService(downloadDirectory: downloadDirectory) else {
+        if let service {
+            return (FolioCatalog(service: service, cache: cache), service)
+        }
+        guard let server = SharedConfiguration.serverURL() else {
+            ProcessCatalogCache.clear()
             throw NSFileProviderError(.notAuthenticated)
         }
-        return (FolioCatalog(service: service), service)
+        // One read of the server keeps the service and the cache it fills on the same server.
+        let service = SharedConfiguration.makeService(for: server, downloadDirectory: downloadDirectory)
+        return (FolioCatalog(service: service, cache: ProcessCatalogCache.cache(for: server)), service)
     }
 
     func item(
@@ -54,7 +63,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             do {
                 let (catalog, _) = try catalog()
                 guard let id = FolioItemID(providerIdentifier: identifier),
@@ -76,7 +88,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     ) -> Progress {
         let progress = Progress(totalUnitCount: 1)
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             var phase = "staging"
             do {
                 let directory: URL
@@ -113,6 +128,7 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         let batch = ThumbnailBatch(
             progress: progress, perThumbnail: perThumbnailCompletionHandler, completion: completionHandler)
         let task = Task {
+            defer { FolioTelemetry.shared.flush() }
             var source: (any FolioService)?
             for identifier in itemIdentifiers {
                 do {
@@ -159,7 +175,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         }
         let filename = itemTemplate.filename
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             do {
                 let (catalog, _) = try catalog()
                 var file = try UploadFile(contentsOf: url)
@@ -198,7 +217,10 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             return progress
         }
         Task {
-            defer { progress.completedUnitCount = 1 }
+            defer {
+                progress.completedUnitCount = 1
+                FolioTelemetry.shared.flush()
+            }
             do {
                 let local = try localMetadata.update(with: item, fields: changedFields)
                 let (catalog, _) = try catalog()
@@ -298,6 +320,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
 
     func enumerateItems(for observer: NSFileProviderEnumerationObserver, startingAt _: NSFileProviderPage) {
         Task {
+            defer { FolioTelemetry.shared.flush() }
             do {
                 let snapshot = try await state.initialSnapshot()
                 observer.didEnumerate(snapshot.nodes.map(providerItem))
@@ -310,6 +333,7 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
 
     func enumerateChanges(for observer: NSFileProviderChangeObserver, from anchor: NSFileProviderSyncAnchor) {
         Task {
+            defer { FolioTelemetry.shared.flush() }
             do {
                 let (snapshot, updated, deleted) = try await state.changes(from: anchor)
                 observer.didUpdate(updated.map(providerItem))
@@ -425,6 +449,25 @@ extension FolioItemID {
         } else {
             self.init(rawValue: providerIdentifier.rawValue)
         }
+    }
+}
+
+/// One catalog cache per server for the whole extension process, shared by every provider instance.
+private enum ProcessCatalogCache {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var current: (server: URL, cache: FolioCatalogCache)?
+
+    static func cache(for server: URL) -> FolioCatalogCache {
+        lock.withLock {
+            if let current, current.server == server { return current.cache }
+            let cache = FolioCatalogCache()
+            current = (server, cache)
+            return cache
+        }
+    }
+
+    static func clear() {
+        lock.withLock { current = nil }
     }
 }
 

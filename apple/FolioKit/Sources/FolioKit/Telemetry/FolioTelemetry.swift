@@ -22,6 +22,8 @@ public final class FolioTelemetry: @unchecked Sendable {
     private var configuredURL: URL?
     private var configuredProvider: (any BearerTokenProvider)?
     private var lastConfiguration = Date.distantPast
+    private var lastFlush = ContinuousClock.Instant.now - .seconds(60)
+    private var flushPending = false
     private var instrumentation: URLSessionInstrumentation?
     private let installationIdentity: InstallationIdentity
     private let session: URLSession
@@ -48,13 +50,22 @@ public final class FolioTelemetry: @unchecked Sendable {
         await configure(baseURL: baseURL, tokenProvider: tokenProvider, ticket: ticket)
     }
 
+    /// How long accepted settings are reused before they are fetched again.
+    var refreshInterval: TimeInterval = 300
+
+    /// A refresh for the same server keeps the current runtime recording until its replacement is accepted.
     private func reserve(baseURL: URL, tokenProvider: any BearerTokenProvider) -> UUID? {
         lock.withLock {
-            guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= 300 else { return nil }
-            runtime?.transport.disable()
-            let previous = runtime
-            runtime = nil
-            if let previous { Task.detached { previous.shutdown() } }
+            guard configuredURL != baseURL || Date().timeIntervalSince(lastConfiguration) >= refreshInterval else {
+                return nil
+            }
+            if configuredURL != baseURL {
+                // Signals recorded for another server must not be sent once its credentials are gone.
+                runtime?.transport.disable()
+                let previous = runtime
+                runtime = nil
+                if let previous { Task.detached { previous.shutdown() } }
+            }
             configuredURL = baseURL
             configuredProvider = tokenProvider
             lastConfiguration = Date()
@@ -72,6 +83,12 @@ public final class FolioTelemetry: @unchecked Sendable {
             let (data, _) = try await transport.data(for: request)
             let config = try JSONDecoder().decode(TelemetryConfiguration.self, from: data)
             guard config.enabled, config.serviceNamespace == "folio", config.endpoint == "/api/telemetry" else {
+                let disabled = lock.withLock { () -> TelemetryRuntime? in
+                    guard generation == ticket else { return nil }
+                    defer { runtime = nil }
+                    return runtime
+                }
+                if let disabled { Task.detached { disabled.shutdown() } }
                 return
             }
             guard let installation = installationIdentity.resolve() else {
@@ -82,8 +99,10 @@ public final class FolioTelemetry: @unchecked Sendable {
             }
             let resource = Self.resource(installationID: installation)
             let next = TelemetryRuntime(baseURL: baseURL, transport: transport, resource: resource)
+            var retired: TelemetryRuntime?
             let accepted = lock.withLock {
                 guard generation == ticket else { return false }
+                retired = runtime
                 runtime = next
                 if instrumentation == nil {
                     instrumentation = URLSessionInstrumentation(
@@ -109,9 +128,25 @@ public final class FolioTelemetry: @unchecked Sendable {
                 }
                 return true
             }
+            if let retired { Task.detached { retired.retire() } }
             if accepted { next.event("app.session.start") } else { next.shutdown() }
         } catch {
-            // Optional observability must never block sign-in or document access.
+            // Optional observability must never block sign-in or document access. A server that refuses the
+            // settings request (401, 403, no token) stops collection. Any other failure, such as a 5xx while the
+            // server restarts or no network, keeps the current runtime and lets the next call retry.
+            let refused =
+                (error as? TelemetryHTTPStatus).map { [401, 403].contains($0.code) } ?? false
+                || (error as? URLError)?.code == .userAuthenticationRequired
+            let stale = lock.withLock { () -> TelemetryRuntime? in
+                guard generation == ticket else { return nil }
+                guard refused else {
+                    lastConfiguration = .distantPast
+                    return nil
+                }
+                defer { runtime = nil }
+                return runtime
+            }
+            if let stale { Task.detached { stale.shutdown() } }
         }
     }
 
@@ -168,9 +203,43 @@ public final class FolioTelemetry: @unchecked Sendable {
         }
     }
 
-    /// Flushes pending signals on a worker task, without delaying the caller.
+    /// Flushes pending signals on a worker task, without delaying the caller. Calls made while a flush is
+    /// pending share it, and flushes start at most once per second, so a burst of operations sends one export.
     public func flush() {
-        if let runtime = current { Task.detached { runtime.flush() } }
+        guard
+            let plan = lock.withLock({ () -> (TelemetryRuntime, Duration)? in
+                guard let active = self.runtime, !flushPending else { return nil }
+                flushPending = true
+                let elapsed = ContinuousClock.now - lastFlush
+                return (active, elapsed >= .seconds(1) ? .zero : .seconds(1) - elapsed)
+            })
+        else { return }
+        let (target, delay) = plan
+        Task.detached { [self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            lock.withLock {
+                flushPending = false
+                lastFlush = .now
+            }
+            target.flush()
+        }
+    }
+
+    /// Flushes and waits at most `timeout`, for a process the system is about to suspend.
+    public func flush(timeout: Duration) async {
+        guard let runtime = current else { return }
+        // Whichever finishes first resumes the caller; a slow export keeps running on its own.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let once = ResumeOnce(continuation)
+            Task.detached {
+                runtime.flush()
+                once.resume()
+            }
+            Task.detached {
+                try? await Task.sleep(for: timeout)
+                once.resume()
+            }
+        }
     }
 
     var current: TelemetryRuntime? { lock.withLock { runtime } }
@@ -180,7 +249,16 @@ public final class FolioTelemetry: @unchecked Sendable {
         return TelemetryRequestPolicy.allows(request.url, origin: runtime.baseURL)
     }
 
-    static func resource(installationID: UUID, version: String? = nil) -> Resource {
+    /// Which Folio process records: the app, or the extension named by its bundle identifier suffix.
+    static func component(bundleIdentifier: String?) -> String {
+        let suffix = bundleIdentifier?.split(separator: ".").last.map(String.init) ?? ""
+        return ["share", "fileprovider"].contains(suffix) ? suffix : "app"
+    }
+
+    static func resource(
+        installationID: UUID, version: String? = nil,
+        component: String = FolioTelemetry.component(bundleIdentifier: Bundle.main.bundleIdentifier)
+    ) -> Resource {
         var system = utsname()
         uname(&system)
         var model = withUnsafeBytes(of: &system.machine) { bytes in
@@ -213,7 +291,7 @@ public final class FolioTelemetry: @unchecked Sendable {
                 "service.version": .string(
                     version ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
                         ?? "unknown"),
-                "service.instance.id": .string(processID),
+                "service.instance.id": .string(processID), "folio.app.component": .string(component),
                 "folio.installation.id": .string(installationID.uuidString.lowercased()),
                 "os.type": .string("darwin"), "os.name": .string(os),
                 "os.version": .string(ProcessInfo.processInfo.operatingSystemVersionString),
@@ -329,6 +407,29 @@ final class TelemetryRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
     }
 }
 
+/// A telemetry request the server answered with a non-2xx status.
+struct TelemetryHTTPStatus: Error, Equatable {
+    let code: Int
+}
+
+/// Resumes a continuation once, from whichever caller gets there first.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume() {
+        let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume()
+    }
+}
+
 final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
     let baseURL: URL
     private let provider: any BearerTokenProvider
@@ -365,7 +466,7 @@ final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
             (data, response) = try await session.data(for: signed(fresh))
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+            throw TelemetryHTTPStatus(code: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         return (data, http)
     }
@@ -455,6 +556,12 @@ final class TelemetryRuntime: @unchecked Sendable {
         traces.forceFlush(timeout: 5)
         logProcessor.forceFlush(timeout: 5)
         _ = metrics.forceFlush()
+    }
+
+    /// Sends what is still queued, then stops; for a runtime replaced while its server stays the same.
+    func retire() {
+        flush()
+        shutdown()
     }
 
     func shutdown() {

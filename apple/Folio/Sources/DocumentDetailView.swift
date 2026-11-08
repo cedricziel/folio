@@ -11,25 +11,30 @@ struct DocumentDetailView: View {
     @State private var model: DocumentDetailViewModel
     @State private var showingDiscussion = false
     @State private var editingDate = false
+    @State private var classifying = false
     /// The PDF preview's current page, handed over with the document.
     @State private var page: Int?
     /// The page a continued document asked for, applied once when the PDF loads.
     @State private var initialPage: Int?
     let snapshot: Snapshot
     let vaultID: UUID
+    /// Hands saved edits back to the list so its rows and inbox follow them.
+    let onDocumentChange: @MainActor (Document) -> Void
     /// How Handoff asked to show this document, if it did.
     let continuation: DocumentContinuation?
     let onContinued: () -> Void
 
     init(
-        snapshot: Snapshot, service: any FolioService, vaultID: UUID, continuation: DocumentContinuation? = nil,
-        onContinued: @escaping () -> Void = {}
+        snapshot: Snapshot, service: any FolioService, vaultID: UUID,
+        onDocumentChange: @escaping @MainActor (Document) -> Void = { _ in },
+        continuation: DocumentContinuation? = nil, onContinued: @escaping () -> Void = {}
     ) {
         _model = State(
             initialValue: DocumentDetailViewModel(
                 document: snapshot.document, lookups: snapshot.lookups, service: service))
         self.snapshot = snapshot
         self.vaultID = vaultID
+        self.onDocumentChange = onDocumentChange
         self.continuation = continuation
         self.onContinued = onContinued
     }
@@ -52,12 +57,14 @@ struct DocumentDetailView: View {
                 try await model.saveDocumentDate(date)
             }
         }
+        .sheet(isPresented: $classifying) { DocumentClassificationView(model: model) }
+        .onChange(of: model.document) { _, document in onDocumentChange(document) }
         .onChange(of: snapshot) { _, snapshot in
             model.update(document: snapshot.document, lookups: snapshot.lookups)
         }
         .task { await model.loadPreview() }
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
-        .task(id: snapshot.document.updatedAt) { await model.refreshMetadata() }
+        .task(id: snapshot.document.updatedAt) { await model.refreshMetadata(after: snapshot.document.updatedAt) }
         .task(id: model.summary) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
         .documentActivity(model.summary, vaultID: vaultID, showingDiscussion: showingDiscussion, page: page)
         .onChange(of: continuation, initial: true) { _, continuation in
@@ -122,6 +129,15 @@ struct DocumentDetailView: View {
                 }
                 DocumentProcessingView(document: model.document)
                 Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
+                if model.canClassify {
+                    Button("Classify", systemImage: "tag") { classifying = true }
+                    if let failure = model.classificationFailure, !classifying {
+                        Text(failure).foregroundStyle(Color.danger)
+                        if model.canRetryClassification {
+                            Button("Retry save") { Task { await model.retryClassification() } }
+                        }
+                    }
+                }
                 if let failure = model.metadataFailure {
                     Text(failure).foregroundStyle(Color.danger)
                     Button("Retry details") { Task { await model.refreshMetadata() } }

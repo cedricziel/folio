@@ -109,6 +109,7 @@ jobs:
             -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
             -only-testing:NavigationTests/NavigationTests/testWideWindowKeepsDocumentListBesidePreview \
             -only-testing:NavigationTests/NavigationTests/testRefreshingTheListUpdatesTheSelectedDocumentDetails \
+            -only-testing:NavigationTests/NavigationTests/testFilingBesideTheListKeepsTheDocumentOpen \
             -parallel-testing-enabled NO -test-timeouts-enabled YES \
             -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
             CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES

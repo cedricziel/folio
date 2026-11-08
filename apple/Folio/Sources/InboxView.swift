@@ -136,7 +136,7 @@ struct InboxView: View {
             if let document = list.document(for: id) {
                 DocumentDetailView(
                     snapshot: .init(document: document, lookups: list.lookups), service: service,
-                    vaultID: vaultID,
+                    vaultID: vaultID, onDocumentChange: { list.apply($0) },
                     continuation: session.continuation?.documentID == id ? session.continuation : nil,
                     onContinued: { session.continuation = nil }
                 )
