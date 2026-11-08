@@ -15,10 +15,11 @@ struct ShareView: View {
                 TextField("Title", text: $model.title)
                     .textFieldStyle(.roundedBorder)
                     .font(FolioTheme.Typography.body)
+                    .disabled(model.hasUnfinishedBatch)
             }
 
             VaultDestinationPicker(destination: model.destination)
-                .disabled(model.state == .uploading)
+                .disabled(model.state == .uploading || model.hasUnfinishedBatch)
 
             if !model.tags.isEmpty {
                 VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
@@ -42,31 +43,42 @@ struct ShareView: View {
                             )
                             .toggleStyle(.button)
                             .font(FolioTheme.Typography.bodySm)
+                            .disabled(model.hasUnfinishedBatch)
                         }
                     }
                 }
+            }
+
+            if !model.retained.isEmpty {
+                RetainedSharesView(model: model)
             }
 
             if case let .failed(message) = model.state {
                 Label(message, systemImage: "exclamationmark.triangle")
                     .font(FolioTheme.Typography.bodySm)
                     .foregroundStyle(Color.danger)
+                if let progress = model.progress {
+                    Text("\(progress.uploaded) of \(progress.total) sent. Retry finishes only the remaining steps.")
+                        .font(FolioTheme.Typography.bodySm)
+                        .foregroundStyle(Color.inkMuted)
+                }
             }
 
             HStack {
                 Button("Cancel", role: .cancel, action: onFinish)
                 Spacer()
-                Button(model.state == .uploading ? "Uploading…" : "Upload") {
+                Button(uploadTitle) {
                     FolioTelemetry.shared.action(.shareSubmit)
                     Task {
                         await model.upload()
-                        if model.state == .done {
+                        if model.state == .done || model.state == .queued {
                             onFinish()
                         }
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.state == .uploading || !model.destination.canUpload)
+                .disabled(
+                    model.state == .uploading || (!model.hasUnfinishedBatch && !model.destination.canUpload))
             }
         }
         .padding(FolioTheme.Spacing.space4)
@@ -76,8 +88,65 @@ struct ShareView: View {
         .task(id: model.destination.selectedVaultID) { await model.loadTags() }
     }
 
+    private var uploadTitle: String {
+        if model.state == .uploading { return "Uploading…" }
+        return model.hasUnfinishedBatch ? "Retry" : "Upload"
+    }
+
     private var summary: String {
         model.files.count == 1 ? "File this document" : "File \(model.files.count) documents"
+    }
+}
+
+/// Earlier background shares the server has not accepted yet, each with its outcome and a retry.
+private struct RetainedSharesView: View {
+    let model: ShareViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
+            Text("EARLIER SHARES")
+                .font(FolioTheme.Typography.label)
+                .foregroundStyle(Color.inkMuted)
+            ForEach(model.retained) { record in
+                VStack(alignment: .leading, spacing: FolioTheme.Spacing.space1) {
+                    Text(record.displayName)
+                        .font(FolioTheme.Typography.bodySm)
+                        .foregroundStyle(Color.ink)
+                    Text(status(of: record))
+                        .font(FolioTheme.Typography.bodySm)
+                        .foregroundStyle(isFailure(record) ? Color.danger : Color.inkMuted)
+                    HStack {
+                        if record.canRetry {
+                            Button("Retry") { Task { await model.retry(record.id) } }
+                                .disabled(model.retrying.contains(record.id))
+                        }
+                        Button(record.status == .uploaded ? "Dismiss" : "Discard", role: .destructive) {
+                            model.discard(record.id)
+                        }
+                    }
+                    .font(FolioTheme.Typography.bodySm)
+                }
+                .accessibilityElement(children: .contain)
+            }
+            if let error = model.retryError {
+                Text(error)
+                    .font(FolioTheme.Typography.bodySm)
+                    .foregroundStyle(Color.danger)
+            }
+        }
+    }
+
+    private func status(of record: ShareUploadRecord) -> String {
+        switch record.status {
+        case .pending: "Uploading in the background…"
+        case .uploaded: "Uploaded"
+        case let .failed(failure): failure.message
+        }
+    }
+
+    private func isFailure(_ record: ShareUploadRecord) -> Bool {
+        if case .failed = record.status { return true }
+        return false
     }
 }
 
