@@ -32,7 +32,10 @@ pub use document_repo::{
     SqliteCorrespondentRepository, SqliteDocumentRepository, SqliteDocumentTypeRepository,
     SqliteTagRepository,
 };
-pub use import_runs::{record_import_applied, upsert_paperless_document, SqliteImportRepository};
+pub use import_runs::{
+    put_paperless_sync_state, record_import_applied, transition_import_run,
+    upsert_paperless_document, SqliteImportRepository,
+};
 pub use ingest_outcomes::SqliteIngestOutcomeRepository;
 pub use ingest_repo::{SqliteIngestLedger, SqliteSourceRepository};
 pub(crate) use outbox::capture_document;

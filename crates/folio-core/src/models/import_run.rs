@@ -14,15 +14,13 @@ pub const IMPORT_CLAIM_TIMEOUT: chrono::TimeDelta = chrono::TimeDelta::minutes(1
 macro_rules! text_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
         pub enum $name {
             $($variant),+
         }
 
         impl $name {
-            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
-
             pub fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $text),+
@@ -175,6 +173,18 @@ pub enum CreateImportRun {
     Conflict { active_run: Id },
 }
 
+/// What a conditional status change did
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunTransition {
+    Applied,
+    /// The run wasn't in one of the expected statuses
+    Skipped,
+    /// Becoming active would give the vault a second active run
+    Conflict {
+        active_run: Id,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportItem {
     pub run_id: Id,
@@ -300,14 +310,18 @@ mod tests {
 
     #[test]
     fn statuses_round_trip_through_text() {
-        for status in ImportItemStatus::ALL {
-            assert_eq!(
-                status.as_str().parse::<ImportItemStatus>().unwrap(),
-                *status
-            );
+        for status in [
+            ImportItemStatus::Pending,
+            ImportItemStatus::InProgress,
+            ImportItemStatus::WouldRestore,
+        ] {
+            assert_eq!(status.as_str().parse::<ImportItemStatus>(), Ok(status));
         }
-        for status in ImportRunStatus::ALL {
-            assert_eq!(status.as_str().parse::<ImportRunStatus>().unwrap(), *status);
+        for status in [
+            ImportRunStatus::Queued,
+            ImportRunStatus::CompletedWithErrors,
+        ] {
+            assert_eq!(status.as_str().parse::<ImportRunStatus>(), Ok(status));
         }
         assert!("nope".parse::<ImportAction>().is_err());
     }

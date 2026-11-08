@@ -32,7 +32,10 @@ pub use document_repo::{
     PostgresCorrespondentRepository, PostgresDocumentRepository, PostgresDocumentTypeRepository,
     PostgresTagRepository,
 };
-pub use import_runs::{record_import_applied, upsert_paperless_document, PostgresImportRepository};
+pub use import_runs::{
+    put_paperless_sync_state, record_import_applied, transition_import_run,
+    upsert_paperless_document, PostgresImportRepository,
+};
 pub use ingest_outcomes::PostgresIngestOutcomeRepository;
 pub use ingest_repo::{PostgresIngestLedger, PostgresSourceRepository};
 pub(crate) use outbox::capture_document;

@@ -1,13 +1,14 @@
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use folio_core::error::Error;
 use folio_core::models::{
     CreateImportRun, FolioState, ImportAction, ImportApplied, ImportItemOutcome, ImportItemStatus,
     ImportRun, ImportRunKind, ImportRunStatus, ImportTrigger, LibrarySample, NewImportItem,
-    NewImportRun, PaperlessLedgerEntry, PaperlessSyncState, TaxonomyKind, TaxonomyMapping, VaultId,
+    NewImportRun, PaperlessLedgerEntry, PaperlessSyncState, RunTransition, TaxonomyKind,
+    TaxonomyMapping, VaultId,
 };
 use folio_infra::database::Repositories;
 use folio_infra::Database;
@@ -45,7 +46,7 @@ fn item(paperless_id: i64, action: ImportAction) -> NewImportItem {
 }
 
 async fn created(r: &Repositories, run: NewImportRun) -> ImportRun {
-    match r.import_runs.create(run).await.unwrap() {
+    match r.import_runs.create(run, Utc::now()).await.unwrap() {
         CreateImportRun::Created(run) => *run,
         other => panic!("expected a new run, got {other:?}"),
     }
@@ -65,7 +66,10 @@ async fn runs_contract(r: &Repositories, vault: VaultId, other_vault: VaultId) {
     );
 
     assert_eq!(
-        r.import_runs.create(new_run(vault)).await.unwrap(),
+        r.import_runs
+            .create(new_run(vault), Utc::now())
+            .await
+            .unwrap(),
         CreateImportRun::Conflict {
             active_run: first.id
         },
@@ -75,28 +79,32 @@ async fn runs_contract(r: &Repositories, vault: VaultId, other_vault: VaultId) {
     assert_ne!(elsewhere.id, first.id);
 
     let now = at("2026-11-07T10:00:00Z");
-    assert!(!r
-        .import_runs
-        .transition(
-            first.id,
-            &[ImportRunStatus::Running],
-            ImportRunStatus::Completed,
-            None,
-            now
-        )
-        .await
-        .unwrap());
-    assert!(r
-        .import_runs
-        .transition(
-            first.id,
-            &[ImportRunStatus::Queued],
-            ImportRunStatus::Running,
-            None,
-            now
-        )
-        .await
-        .unwrap());
+    assert_eq!(
+        r.import_runs
+            .transition(
+                first.id,
+                &[ImportRunStatus::Running],
+                ImportRunStatus::Completed,
+                None,
+                now
+            )
+            .await
+            .unwrap(),
+        RunTransition::Skipped
+    );
+    assert_eq!(
+        r.import_runs
+            .transition(
+                first.id,
+                &[ImportRunStatus::Queued],
+                ImportRunStatus::Running,
+                None,
+                now
+            )
+            .await
+            .unwrap(),
+        RunTransition::Applied
+    );
     r.import_runs
         .set_plan_complete(first.id, true)
         .await
@@ -118,14 +126,14 @@ async fn runs_contract(r: &Repositories, vault: VaultId, other_vault: VaultId) {
             .increment_driver_restarts(first.id)
             .await
             .unwrap(),
-        1
+        Some(1)
     );
     assert_eq!(
         r.import_runs
             .increment_driver_restarts(first.id)
             .await
             .unwrap(),
-        2
+        Some(2)
     );
     assert!(r.import_runs.request_cancel(first.id).await.unwrap());
     let running = r.import_runs.get(vault, first.id).await.unwrap().unwrap();
@@ -140,18 +148,28 @@ async fn runs_contract(r: &Repositories, vault: VaultId, other_vault: VaultId) {
     assert_eq!(running.driver_restarts, 2);
 
     let later = now + TimeDelta::minutes(5);
-    assert!(r
-        .import_runs
-        .transition(
-            first.id,
-            &[ImportRunStatus::Running],
-            ImportRunStatus::Failed,
-            Some("library_mismatch".into()),
-            later
-        )
-        .await
-        .unwrap());
+    assert_eq!(
+        r.import_runs
+            .transition(
+                first.id,
+                &[ImportRunStatus::Running],
+                ImportRunStatus::Failed,
+                Some("library_mismatch".into()),
+                later
+            )
+            .await
+            .unwrap(),
+        RunTransition::Applied
+    );
     assert!(!r.import_runs.request_cancel(first.id).await.unwrap());
+    assert_eq!(
+        r.import_runs
+            .increment_driver_restarts(first.id)
+            .await
+            .unwrap(),
+        None,
+        "only an active run's driver restarts"
+    );
     let failed = r.import_runs.get(vault, first.id).await.unwrap().unwrap();
     assert_eq!(failed.finished_at, Some(later));
     assert_eq!(failed.error.as_deref(), Some("library_mismatch"));
@@ -166,6 +184,32 @@ async fn runs_contract(r: &Repositories, vault: VaultId, other_vault: VaultId) {
         .map(|run| run.id)
         .collect();
     assert_eq!(listed, vec![second.id, first.id], "newest first");
+
+    assert_eq!(
+        r.import_runs
+            .transition(
+                first.id,
+                &[ImportRunStatus::Failed],
+                ImportRunStatus::Queued,
+                None,
+                later
+            )
+            .await
+            .unwrap(),
+        RunTransition::Conflict {
+            active_run: second.id
+        },
+        "a retry can't re-enter queued while another run is active"
+    );
+    assert_eq!(
+        r.import_runs
+            .get(vault, first.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ImportRunStatus::Failed
+    );
 }
 
 async fn items_contract(r: &Repositories, vault: VaultId) {
@@ -330,17 +374,19 @@ async fn items_contract(r: &Repositories, vault: VaultId) {
         .list_items(run.id, None, None, 100)
         .await
         .unwrap();
-    let mut expected: HashMap<(ImportAction, ImportItemStatus), u64> = HashMap::new();
+    let mut expected: BTreeMap<(&str, &str), u64> = BTreeMap::new();
     for item in &all {
-        *expected.entry((item.action, item.status)).or_default() += 1;
+        *expected
+            .entry((item.action.as_str(), item.status.as_str()))
+            .or_default() += 1;
     }
-    let counts: HashMap<_, _> = r
+    let counts: BTreeMap<_, _> = r
         .import_items
         .counts(run.id)
         .await
         .unwrap()
         .into_iter()
-        .map(|count| ((count.action, count.status), count.count))
+        .map(|count| ((count.action.as_str(), count.status.as_str()), count.count))
         .collect();
     assert_eq!(counts, expected, "counts equal the items grouped by status");
     assert_eq!(all[0].warnings, vec!["dropped field".to_string()]);
@@ -459,7 +505,17 @@ async fn ledger_contract(r: &Repositories, vault: VaultId) {
 
     assert_eq!(r.paperless_ledger.sync_state(vault).await.unwrap(), None);
     let mut state = PaperlessSyncState::new(vault, at("2026-11-07T10:00:00Z"));
-    r.paperless_ledger.put_sync_state(&state).await.unwrap();
+    r.paperless_ledger
+        .put_sync_state(&state, None)
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            r.paperless_ledger.put_sync_state(&state, None).await,
+            Err(Error::Conflict(_))
+        ),
+        "a second first write loses"
+    );
     assert_eq!(
         r.paperless_ledger.sync_state(vault).await.unwrap(),
         Some(state.clone())
@@ -481,8 +537,24 @@ async fn ledger_contract(r: &Repositories, vault: VaultId) {
     state.once_done = true;
     state.last_poll_at = Some(at("2026-11-07T10:00:00Z"));
     state.last_full_reconcile_at = Some(at("2026-11-06T10:00:00Z"));
+    let read_at = state.updated_at;
     state.updated_at = at("2026-11-07T10:01:00Z");
-    r.paperless_ledger.put_sync_state(&state).await.unwrap();
+    r.paperless_ledger
+        .put_sync_state(&state, Some(read_at))
+        .await
+        .unwrap();
+    let mut stale = state.clone();
+    stale.cursor_modified = None;
+    stale.updated_at = at("2026-11-07T10:02:00Z");
+    assert!(
+        matches!(
+            r.paperless_ledger
+                .put_sync_state(&stale, Some(read_at))
+                .await,
+            Err(Error::Conflict(_))
+        ),
+        "a writer that read an older state loses"
+    );
     assert_eq!(
         r.paperless_ledger.sync_state(vault).await.unwrap(),
         Some(state)
@@ -513,6 +585,65 @@ fn ledger_entry(vault: VaultId, paperless_id: i64) -> PaperlessLedgerEntry {
         folio_state: FolioState::Live,
         last_synced_at: at("2026-11-07T10:00:00Z"),
         last_run_id: None,
+    }
+}
+
+/// The driver's final transition and the cursor copy commit or roll back
+/// together
+async fn finish_in_transaction(db: &Database, run: &ImportRun, commit: bool) {
+    let now = at("2026-11-07T11:00:00Z");
+    let mut state = PaperlessSyncState::new(run.vault_id, now);
+    state.cursor_modified = Some(at("2026-11-07T09:00:00Z"));
+    let from = [ImportRunStatus::Running];
+    match db {
+        Database::Sqlite(pool) => {
+            use folio_infra::database::sqlite::{put_paperless_sync_state, transition_import_run};
+            let mut tx = pool.begin().await.unwrap();
+            assert_eq!(
+                transition_import_run(
+                    &mut tx,
+                    run.id,
+                    &from,
+                    ImportRunStatus::Completed,
+                    None,
+                    now
+                )
+                .await
+                .unwrap(),
+                RunTransition::Applied
+            );
+            put_paperless_sync_state(&mut tx, &state, None)
+                .await
+                .unwrap();
+            if commit {
+                tx.commit().await.unwrap();
+            }
+        }
+        Database::Postgres(pool) => {
+            use folio_infra::database::postgres::{
+                put_paperless_sync_state, transition_import_run,
+            };
+            let mut tx = pool.begin().await.unwrap();
+            assert_eq!(
+                transition_import_run(
+                    &mut tx,
+                    run.id,
+                    &from,
+                    ImportRunStatus::Completed,
+                    None,
+                    now
+                )
+                .await
+                .unwrap(),
+                RunTransition::Applied
+            );
+            put_paperless_sync_state(&mut tx, &state, None)
+                .await
+                .unwrap();
+            if commit {
+                tx.commit().await.unwrap();
+            }
+        }
     }
 }
 
@@ -591,6 +722,55 @@ async fn transaction_contract(db: Database) {
         .await
         .unwrap()
         .is_some());
+    let finishing = created(&r, new_run(common::legacy_vault(&db).await)).await;
+    let start = at("2026-11-07T10:30:00Z");
+    r.import_runs
+        .transition(
+            finishing.id,
+            &[ImportRunStatus::Queued],
+            ImportRunStatus::Running,
+            None,
+            start,
+        )
+        .await
+        .unwrap();
+    finish_in_transaction(&db, &finishing, false).await;
+    assert_eq!(
+        r.import_runs
+            .get(finishing.vault_id, finishing.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ImportRunStatus::Running
+    );
+    assert_eq!(
+        r.paperless_ledger
+            .sync_state(finishing.vault_id)
+            .await
+            .unwrap(),
+        None
+    );
+    finish_in_transaction(&db, &finishing, true).await;
+    assert_eq!(
+        r.import_runs
+            .get(finishing.vault_id, finishing.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ImportRunStatus::Completed
+    );
+    assert_eq!(
+        r.paperless_ledger
+            .sync_state(finishing.vault_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .cursor_modified,
+        Some(at("2026-11-07T09:00:00Z"))
+    );
+
     let items = r
         .import_items
         .list_items(run.id, None, None, 10)

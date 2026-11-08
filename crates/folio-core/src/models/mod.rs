@@ -44,7 +44,7 @@ pub use import_run::{
     CreateImportRun, FolioState, ImportAction, ImportApplied, ImportItem, ImportItemCount,
     ImportItemOutcome, ImportItemStatus, ImportRun, ImportRunKind, ImportRunStatus, ImportTrigger,
     LibrarySample, NewImportItem, NewImportRun, PaperlessLedgerEntry, PaperlessSyncState,
-    TaxonomyKind, TaxonomyMapping, IMPORT_CLAIM_TIMEOUT,
+    RunTransition, TaxonomyKind, TaxonomyMapping, IMPORT_CLAIM_TIMEOUT,
 };
 pub use imported_document::{ExternalRef, ImportSource, ImportedDocument, ImportedNote};
 pub use ingest::{

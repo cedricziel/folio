@@ -7,22 +7,25 @@ use crate::error::Result;
 use crate::models::{
     CreateImportRun, Id, ImportItem, ImportItemCount, ImportItemOutcome, ImportItemStatus,
     ImportRun, ImportRunStatus, NewImportItem, NewImportRun, PaperlessLedgerEntry,
-    PaperlessSyncState, TaxonomyKind, TaxonomyMapping, VaultId,
+    PaperlessSyncState, RunTransition, TaxonomyKind, TaxonomyMapping, VaultId,
 };
 
 #[async_trait]
 pub trait ImportRunRepository: Send + Sync {
     /// Create a queued run, unless the vault already has a queued or running one
-    async fn create(&self, run: NewImportRun) -> Result<CreateImportRun>;
+    async fn create(&self, run: NewImportRun, now: DateTime<Utc>) -> Result<CreateImportRun>;
 
     async fn get(&self, vault: VaultId, id: Id) -> Result<Option<ImportRun>>;
 
     /// Runs of a vault, newest first
     async fn list(&self, vault: VaultId, limit: u32) -> Result<Vec<ImportRun>>;
 
-    /// Move the run to `to` only when its status is one of `from`; returns
-    /// whether it moved. Entering `running` sets `started_at`, entering a
-    /// final status sets `finished_at`, and `error` replaces the stored error.
+    /// Move the run to `to` only when its status is one of `from`. Entering
+    /// `running` sets `started_at`, entering a final status sets
+    /// `finished_at`, and `error` replaces the stored error. Re-entering an
+    /// active status while another run in the vault is active is a
+    /// [`RunTransition::Conflict`]. To change the sync state in the same
+    /// transaction, use the backend's `transition_import_run`.
     async fn transition(
         &self,
         id: Id,
@@ -30,7 +33,7 @@ pub trait ImportRunRepository: Send + Sync {
         to: ImportRunStatus,
         error: Option<String>,
         now: DateTime<Utc>,
-    ) -> Result<bool>;
+    ) -> Result<RunTransition>;
 
     async fn set_plan_complete(&self, id: Id, complete: bool) -> Result<()>;
 
@@ -38,8 +41,9 @@ pub trait ImportRunRepository: Send + Sync {
     /// flagged
     async fn request_cancel(&self, id: Id) -> Result<bool>;
 
-    /// Returns the new restart count
-    async fn increment_driver_restarts(&self, id: Id) -> Result<u32>;
+    /// Returns the new restart count, or `None` when the run isn't queued or
+    /// running
+    async fn increment_driver_restarts(&self, id: Id) -> Result<Option<u32>>;
 
     async fn set_cursor_after(&self, id: Id, cursor: Option<DateTime<Utc>>) -> Result<()>;
 
@@ -80,7 +84,8 @@ pub trait ImportItemRepository: Send + Sync {
     ) -> Result<bool>;
 
     /// Return failed items to `pending` with no attempts and no claim;
-    /// returns how many were reset
+    /// returns how many were reset. Callers must first make sure the run
+    /// isn't queued or running, or a driver may skip the reset items.
     async fn reset_failed_items(&self, run: Id, now: DateTime<Utc>) -> Result<u64>;
 
     async fn counts(&self, run: Id) -> Result<Vec<ImportItemCount>>;
@@ -134,6 +139,14 @@ pub trait PaperlessLedgerRepository: Send + Sync {
 
     async fn sync_state(&self, vault: VaultId) -> Result<Option<PaperlessSyncState>>;
 
-    /// Replace the vault's sync state
-    async fn put_sync_state(&self, state: &PaperlessSyncState) -> Result<()>;
+    /// Replace the vault's sync state, but only if it is unchanged since it
+    /// was read: `read_at` is the `updated_at` the caller read, or `None` when
+    /// there was no state yet. Anything else is a `Conflict`; read again and
+    /// retry. To write it in the caller's transaction, use the backend's
+    /// `put_paperless_sync_state`.
+    async fn put_sync_state(
+        &self,
+        state: &PaperlessSyncState,
+        read_at: Option<DateTime<Utc>>,
+    ) -> Result<()>;
 }

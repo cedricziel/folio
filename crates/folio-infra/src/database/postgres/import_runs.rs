@@ -6,11 +6,11 @@ use folio_core::error::{Error, Result};
 use folio_core::models::{
     CreateImportRun, Id, ImportApplied, ImportItem, ImportItemCount, ImportItemOutcome,
     ImportItemStatus, ImportRun, ImportRunStatus, NewImportItem, NewImportRun,
-    PaperlessLedgerEntry, PaperlessSyncState, TaxonomyKind, TaxonomyMapping, UserId, VaultId,
-    IMPORT_CLAIM_TIMEOUT,
+    PaperlessLedgerEntry, PaperlessSyncState, RunTransition, TaxonomyKind, TaxonomyMapping, UserId,
+    VaultId, IMPORT_CLAIM_TIMEOUT,
 };
 use folio_core::ports::{ImportItemRepository, ImportRunRepository, PaperlessLedgerRepository};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool};
 
 /// Runs, items, the sync ledger and the sync state in PostgreSQL
 pub struct PostgresImportRepository {
@@ -330,9 +330,115 @@ async fn finish_import_item(
     Ok(result.rows_affected() == 1)
 }
 
+/// Move a run between statuses inside the caller's transaction, so the
+/// driver can copy the cursor into the sync state in the same transaction;
+/// see [`ImportRunRepository::transition`]
+pub async fn transition_import_run(
+    conn: &mut PgConnection,
+    id: Id,
+    from: &[ImportRunStatus],
+    to: ImportRunStatus,
+    error: Option<String>,
+    now: DateTime<Utc>,
+) -> Result<RunTransition> {
+    // A savepoint keeps the caller's transaction usable after the one-active
+    // index rejects the update.
+    let mut savepoint = conn.begin().await.map_err(storage_error)?;
+    let updated = sqlx::query(
+        "UPDATE import_runs SET status = $1, \
+             started_at = CASE WHEN $1 = 'running' THEN $2 ELSE started_at END, \
+             finished_at = $3, error = $4 \
+         WHERE id = $5 AND status = ANY($6)",
+    )
+    .bind(to.as_str())
+    .bind(now)
+    .bind((!to.is_active()).then_some(now))
+    .bind(error)
+    .bind(id)
+    .bind(
+        from.iter()
+            .map(|status| status.as_str())
+            .collect::<Vec<_>>(),
+    )
+    .execute(&mut *savepoint)
+    .await;
+    match updated {
+        Ok(result) => {
+            savepoint.commit().await.map_err(storage_error)?;
+            Ok(if result.rows_affected() == 1 {
+                RunTransition::Applied
+            } else {
+                RunTransition::Skipped
+            })
+        }
+        Err(error)
+            if error
+                .as_database_error()
+                .is_some_and(|e| e.is_unique_violation()) =>
+        {
+            savepoint.rollback().await.map_err(storage_error)?;
+            let active: Option<Id> = sqlx::query_scalar(
+                "SELECT other.id FROM import_runs run \
+                 JOIN import_runs other ON other.vault_id = run.vault_id AND other.id <> run.id \
+                 WHERE run.id = $1 AND other.status IN ('queued', 'running')",
+            )
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(storage_error)?;
+            match active {
+                Some(active_run) => Ok(RunTransition::Conflict {
+                    active_run: active_run,
+                }),
+                None => Err(Error::Conflict(
+                    "the vault's active import run changed meanwhile; try again".into(),
+                )),
+            }
+        }
+        Err(error) => Err(storage_error(error)),
+    }
+}
+
+/// Write the vault's sync state inside the caller's transaction; see
+/// [`PaperlessLedgerRepository::put_sync_state`]
+pub async fn put_paperless_sync_state(
+    conn: &mut PgConnection,
+    state: &PaperlessSyncState,
+    read_at: Option<DateTime<Utc>>,
+) -> Result<()> {
+    let sql = if read_at.is_some() {
+        "UPDATE paperless_sync_state SET source_id = $2, library_sample = $3::jsonb, cursor_modified = $4, last_poll_at = $5, last_full_reconcile_at = $6, once_done = $7, retry_ids = $8::jsonb, parked_ids = $9::jsonb, updated_at = $10 \
+         WHERE vault_id = $1 AND updated_at = $11"
+    } else {
+        "INSERT INTO paperless_sync_state (vault_id, source_id, library_sample, cursor_modified, last_poll_at, last_full_reconcile_at, once_done, retry_ids, parked_ids, updated_at) \
+         VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10) ON CONFLICT (vault_id) DO NOTHING"
+    };
+    let mut query = sqlx::query(sql)
+        .bind(state.vault_id.0)
+        .bind(state.source_id)
+        .bind(state.library_sample.as_ref().map(to_json).transpose()?)
+        .bind(state.cursor_modified)
+        .bind(state.last_poll_at)
+        .bind(state.last_full_reconcile_at)
+        .bind(state.once_done)
+        .bind(to_json(&state.retry_ids)?)
+        .bind(to_json(&state.parked_ids)?)
+        .bind(state.updated_at);
+    if let Some(read_at) = read_at {
+        query = query.bind(read_at);
+    }
+    let result = query.execute(conn).await.map_err(storage_error)?;
+    if result.rows_affected() == 0 {
+        return Err(Error::Conflict(
+            "the sync state changed since it was read".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl ImportRunRepository for PostgresImportRepository {
-    async fn create(&self, run: NewImportRun) -> Result<CreateImportRun> {
+    async fn create(&self, run: NewImportRun, now: DateTime<Utc>) -> Result<CreateImportRun> {
         // The active run can finish between a rejected insert and the lookup;
         // one more insert covers that.
         for _ in 0..2 {
@@ -349,7 +455,7 @@ impl ImportRunRepository for PostgresImportRepository {
             .bind(run.dry_run)
             .bind(to_json(&run.params)?)
             .bind(run.created_by.as_ref().map(UserId::as_str))
-            .bind(Utc::now())
+            .bind(now)
             .fetch_one(&self.pool)
             .await;
             match inserted {
@@ -412,25 +518,9 @@ impl ImportRunRepository for PostgresImportRepository {
         to: ImportRunStatus,
         error: Option<String>,
         now: DateTime<Utc>,
-    ) -> Result<bool> {
-        let from: Vec<&str> = from.iter().map(|status| status.as_str()).collect();
-        let finished = (!to.is_active()).then_some(now);
-        let result = sqlx::query(
-            "UPDATE import_runs SET status = $1, \
-                 started_at = CASE WHEN $1 = 'running' THEN $2 ELSE started_at END, \
-                 finished_at = $3, error = $4 \
-             WHERE id = $5 AND status = ANY($6)",
-        )
-        .bind(to.as_str())
-        .bind(now)
-        .bind(finished)
-        .bind(error)
-        .bind(id)
-        .bind(from)
-        .execute(&self.pool)
-        .await
-        .map_err(storage_error)?;
-        Ok(result.rows_affected() == 1)
+    ) -> Result<RunTransition> {
+        let mut conn = self.pool.acquire().await.map_err(storage_error)?;
+        transition_import_run(&mut conn, id, from, to, error, now).await
     }
 
     async fn set_plan_complete(&self, id: Id, complete: bool) -> Result<()> {
@@ -454,15 +544,18 @@ impl ImportRunRepository for PostgresImportRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    async fn increment_driver_restarts(&self, id: Id) -> Result<u32> {
+    async fn increment_driver_restarts(&self, id: Id) -> Result<Option<u32>> {
         let restarts: Option<i32> = sqlx::query_scalar(
-            "UPDATE import_runs SET driver_restarts = driver_restarts + 1 WHERE id = $1 RETURNING driver_restarts",
+            "UPDATE import_runs SET driver_restarts = driver_restarts + 1 \
+             WHERE id = $1 AND status IN ('queued', 'running') RETURNING driver_restarts",
         )
         .bind(id)
         .fetch_optional(&self.pool)
         .await
         .map_err(storage_error)?;
-        unsigned(restarts.ok_or_else(|| missing_run(id))?)
+        restarts
+            .map(|restarts| u32::try_from(restarts).map_err(storage_error))
+            .transpose()
     }
 
     async fn set_cursor_after(&self, id: Id, cursor: Option<DateTime<Utc>>) -> Result<()> {
@@ -762,25 +855,12 @@ impl PaperlessLedgerRepository for PostgresImportRepository {
         .transpose()
     }
 
-    async fn put_sync_state(&self, state: &PaperlessSyncState) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO paperless_sync_state (vault_id, source_id, library_sample, cursor_modified, last_poll_at, last_full_reconcile_at, once_done, retry_ids, parked_ids, updated_at) \
-             VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10) \
-             ON CONFLICT (vault_id) DO UPDATE SET source_id = excluded.source_id, library_sample = excluded.library_sample, cursor_modified = excluded.cursor_modified, last_poll_at = excluded.last_poll_at, last_full_reconcile_at = excluded.last_full_reconcile_at, once_done = excluded.once_done, retry_ids = excluded.retry_ids, parked_ids = excluded.parked_ids, updated_at = excluded.updated_at",
-        )
-        .bind(state.vault_id.0)
-        .bind(state.source_id)
-        .bind(state.library_sample.as_ref().map(to_json).transpose()?)
-        .bind(state.cursor_modified)
-        .bind(state.last_poll_at)
-        .bind(state.last_full_reconcile_at)
-        .bind(state.once_done)
-        .bind(to_json(&state.retry_ids)?)
-        .bind(to_json(&state.parked_ids)?)
-        .bind(state.updated_at)
-        .execute(&self.pool)
-        .await
-        .map_err(storage_error)?;
-        Ok(())
+    async fn put_sync_state(
+        &self,
+        state: &PaperlessSyncState,
+        read_at: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        let mut conn = self.pool.acquire().await.map_err(storage_error)?;
+        put_paperless_sync_state(&mut conn, state, read_at).await
     }
 }
