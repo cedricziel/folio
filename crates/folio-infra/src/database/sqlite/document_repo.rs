@@ -1340,7 +1340,9 @@ impl DocumentRepository for SqliteDocumentRepository {
             .bind(id.to_string()).bind(vault.to_string()).fetch_optional(&mut *tx).await.map_err(map_sqlx_error)?
             .ok_or_else(|| not_found("Document", id))?;
         if !pending && existing_path.as_deref() == Some(file_path) {
-            return Ok(());
+            sqlx::query("UPDATE documents SET file_size = ? WHERE id = ? AND vault_id = ? AND file_size IS NULL")
+                .bind(file_size as i64).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+            return self.commit(tx).await;
         }
         sqlx::query("UPDATE documents SET file_path = ?, file_size = ?, upload_pending = FALSE, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ?")
             .bind(file_path).bind(file_size as i64).bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
@@ -1360,11 +1362,12 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn list_missing_file_size(&self, after: Option<Id>, limit: u32) -> Result<Vec<Document>> {
+        // The backfill never reads the OCR text, so it is not loaded
         let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT {DOC_COLS} FROM documents WHERE file_path IS NOT NULL AND file_size IS NULL AND purge_requested_at IS NULL AND (? IS NULL OR id > ?) ORDER BY id LIMIT ?"
+            "SELECT {} FROM documents WHERE file_path IS NOT NULL AND file_size IS NULL AND purge_requested_at IS NULL AND id > ? ORDER BY id LIMIT ?",
+            DOC_COLS.replace(" content,", " NULL AS content,")
         )))
-        .bind(after.map(|id| id.to_string()))
-        .bind(after.map(|id| id.to_string()))
+        .bind(after.map(|id| id.to_string()).unwrap_or_default())
         .bind(i64::from(limit))
         .fetch_all(&self.pool)
         .await

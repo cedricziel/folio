@@ -2578,13 +2578,23 @@ async fn file_size_contract(db: &Database) {
         .map(|d| d.id)
         .collect();
     assert!(missing.contains(&doc.id));
-    assert!(r
+    let before = Id::from_u128(doc.id.as_u128() - 1);
+    let after_cursor: Vec<_> = r
+        .documents
+        .list_missing_file_size(Some(before), 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    assert!(after_cursor.contains(&doc.id));
+    assert!(!r
         .documents
         .list_missing_file_size(Some(doc.id), 1000)
         .await
         .unwrap()
         .iter()
-        .all(|d| d.id > doc.id));
+        .any(|d| d.id <= doc.id));
 
     r.documents
         .set_file_size(vault, doc.id, "sized/original", 99)

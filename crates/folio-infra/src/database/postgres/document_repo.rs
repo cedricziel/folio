@@ -1261,7 +1261,9 @@ impl DocumentRepository for PostgresDocumentRepository {
             .bind(id).bind(vault.0).fetch_optional(&mut *tx).await.map_err(repo_err)?
             .ok_or_else(|| not_found("Document", id))?;
         if !pending && existing_path.as_deref() == Some(file_path) {
-            return Ok(());
+            sqlx::query("UPDATE documents SET file_size = $1 WHERE id = $2 AND vault_id = $3 AND file_size IS NULL")
+                .bind(file_size as i64).bind(id).bind(vault.0).execute(&mut *tx).await.map_err(repo_err)?;
+            return self.commit(tx).await;
         }
         sqlx::query("UPDATE documents SET file_path = $1, file_size = $6, upload_pending = FALSE, updated_at = $2, updated_by = $5 WHERE id = $3 AND vault_id = $4")
             .bind(file_path).bind(Utc::now()).bind(id).bind(vault.0).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(file_size as i64)
@@ -1282,10 +1284,14 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn list_missing_file_size(&self, after: Option<Id>, limit: u32) -> Result<Vec<Document>> {
-        let rows: Vec<DocumentRow> = sqlx::query_as(select_documents!(
-            "WHERE file_path IS NOT NULL AND file_size IS NULL AND purge_requested_at IS NULL AND ($1::uuid IS NULL OR id > $1) ORDER BY id LIMIT $2"
+        // The backfill never reads the OCR text, so it is not loaded
+        let rows: Vec<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(
+            select_documents!(
+                "WHERE file_path IS NOT NULL AND file_size IS NULL AND purge_requested_at IS NULL AND id > $1 ORDER BY id LIMIT $2"
+            )
+            .replace(" content,", " NULL AS content,"),
         ))
-        .bind(after)
+        .bind(after.unwrap_or(Uuid::nil()))
         .bind(i64::from(limit))
         .fetch_all(&self.pool)
         .await

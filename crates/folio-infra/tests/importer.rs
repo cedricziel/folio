@@ -142,14 +142,50 @@ async fn backfill_records_sizes_from_storage_and_skips_missing_objects() {
         r.documents.set_file_path(vault, id, path).await.unwrap();
     }
 
-    let recorded = folio_core::services::backfill_file_sizes(r.documents.as_ref(), store.as_ref())
-        .await
-        .unwrap();
+    let recorded =
+        folio_core::services::backfill_file_sizes(r.documents.as_ref(), store.as_ref(), 1)
+            .await
+            .unwrap();
 
     assert_eq!(recorded, 1);
     for (id, size) in [(stored.id, Some(12)), (lost.id, None)] {
         let document = r.documents.find_by_id(vault, id).await.unwrap().unwrap();
         assert_eq!(document.file_size, size);
+    }
+}
+
+#[tokio::test]
+async fn backfill_pages_past_every_batch_and_skips_documents_being_purged() {
+    let (_db, r, vault) = fixture().await;
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let mut ids = Vec::new();
+    for n in 0..5 {
+        let document = r
+            .documents
+            .create_for_upload(vault, Default::default())
+            .await
+            .unwrap();
+        let path = format!("doc-{n}/original");
+        store.put(&path, vec![0; n + 1].into()).await.unwrap();
+        r.documents
+            .set_file_path(vault, document.id, &path)
+            .await
+            .unwrap();
+        ids.push((document.id, n as u64 + 1));
+    }
+    let (purging, _) = ids.pop().unwrap();
+    r.documents.delete(vault, purging).await.unwrap();
+    r.documents.request_purge(vault, purging).await.unwrap();
+
+    let recorded =
+        folio_core::services::backfill_file_sizes(r.documents.as_ref(), store.as_ref(), 2)
+            .await
+            .unwrap();
+
+    assert_eq!(recorded, 4);
+    for (id, size) in ids {
+        let document = r.documents.find_by_id(vault, id).await.unwrap().unwrap();
+        assert_eq!(document.file_size, Some(size));
     }
 }
 

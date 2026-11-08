@@ -219,7 +219,7 @@ async fn main() -> Result<()> {
 
     let (sized_documents, sized_store) = (document_repo.clone(), store.clone());
     tokio::spawn(async move {
-        match backfill_file_sizes(sized_documents.as_ref(), sized_store.as_ref()).await {
+        match backfill_file_sizes(sized_documents.as_ref(), sized_store.as_ref(), 200).await {
             Ok(0) => {}
             Ok(recorded) => info!("Recorded the file size of {recorded} documents"),
             Err(e) => tracing::warn!("File size backfill stopped: {e}"),
