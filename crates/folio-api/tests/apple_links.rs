@@ -338,3 +338,54 @@ async fn clearing_the_field_falls_back_to_config() {
     );
     assert!(settings_page(&app).await.contains("from config.toml"));
 }
+
+#[tokio::test]
+async fn invalid_stored_row_is_shown_as_an_error_and_config_still_serves() {
+    let h = harness().await;
+    h.state
+        .settings_repo
+        .set("apple.app_ids", "not-an-app-id")
+        .await
+        .unwrap();
+    let app = app_with(&h, &["ABCDE12345.com.example.folio"], false);
+    assert_eq!(
+        served_app_ids(&app).await.unwrap(),
+        ["ABCDE12345.com.example.folio"]
+    );
+    let page = settings_page(&app).await;
+    assert!(page.contains("f-notice-danger"), "{page}");
+    assert!(page.contains("not-an-app-id"), "{page}");
+    assert!(page.contains("from config.toml"), "{page}");
+}
+
+#[tokio::test]
+async fn cross_origin_post_with_an_admin_session_is_rejected() {
+    let h = harness_requiring_login().await;
+    let admin = vault_session(&h, "admin", folio_core::models::VaultRole::Owner, true).await;
+    let app = app_with(&h, &[], true);
+    let mut request = post_form(
+        "/settings/apple",
+        Some(&admin),
+        "app_ids=ABCDE12345.com.example.folio",
+    );
+    request
+        .headers_mut()
+        .insert("sec-fetch-site", "cross-site".parse().unwrap());
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(stored(&h).await, None);
+}
+
+#[tokio::test]
+async fn association_sets_no_cookie_for_a_signed_in_visitor() {
+    let h = harness_requiring_login().await;
+    let admin = vault_session(&h, "admin", folio_core::models::VaultRole::Owner, true).await;
+    let app = app_with(&h, &["ABCDE12345.com.example.folio"], true);
+    let request = axum::http::Request::get(AASA)
+        .header(header::COOKIE, &admin)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().get(header::SET_COOKIE).is_none());
+}

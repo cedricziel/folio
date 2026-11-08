@@ -99,6 +99,7 @@ struct AppleLinks {
     effective: Vec<String>,
     source: &'static str,
     association_url: String,
+    /// A rejected submission or an invalid stored row
     error: Option<String>,
 }
 
@@ -148,26 +149,33 @@ async fn render_settings(
         .map(|s| s.value.trim().eq_ignore_ascii_case("true"))
         .unwrap_or(state.mcp_default);
 
-    let (effective, source) = apple::effective_app_ids(state).await?;
+    let stored = settings
+        .iter()
+        .find(|s| s.key == apple::SETTING_KEY)
+        .map(|s| s.value.as_str());
+    let (effective, source) = apple::resolve(stored, &state.apple_app_ids_default);
+    let fallback = if effective.is_empty() {
+        "not configured"
+    } else {
+        "from config.toml"
+    };
+    let (source, stored_error) = match source {
+        AppIdSource::Settings => ("from settings", None),
+        AppIdSource::Config => ("from config.toml", None),
+        AppIdSource::Unconfigured => ("not configured", None),
+        AppIdSource::Invalid(error) => (
+            fallback,
+            Some(format!("The saved app IDs are ignored: {error}")),
+        ),
+    };
     let (draft, error) = match apple_draft {
         Some(AppleDraft { text, error }) => (text, Some(error)),
-        None => (
-            settings
-                .iter()
-                .find(|s| s.key == apple::SETTING_KEY)
-                .map(|s| s.value.clone())
-                .unwrap_or_default(),
-            None,
-        ),
+        None => (stored.unwrap_or_default().to_string(), stored_error),
     };
     let apple = AppleLinks {
         draft,
         effective: effective.iter().map(ToString::to_string).collect(),
-        source: match source {
-            AppIdSource::Settings => "from settings",
-            AppIdSource::Config => "from config.toml",
-            AppIdSource::Unconfigured => "not configured",
-        },
+        source,
         association_url: format!(
             "{}/.well-known/apple-app-site-association",
             apple::origin(&state.public_url)

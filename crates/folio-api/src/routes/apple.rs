@@ -27,37 +27,43 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Where the effective app IDs come from
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AppIdSource {
     Settings,
     Config,
     Unconfigured,
+    /// The stored row does not parse; the startup value applies instead
+    Invalid(String),
 }
 
-/// A non-empty settings row wins; otherwise the startup value applies
-pub(crate) async fn effective_app_ids(
-    state: &AppState,
-) -> ApiResult<(Vec<AppleAppId>, AppIdSource)> {
-    let stored = state.settings_repo.get(SETTING_KEY).await?;
-    let from_settings = match stored.as_ref().map(|s| AppleAppId::parse_list(&s.value)) {
-        Some(Ok(ids)) => ids,
-        Some(Err(error)) => {
-            tracing::warn!(%error, "ignoring invalid {SETTING_KEY} setting");
-            Vec::new()
+/// A non-empty, valid settings row wins; otherwise the startup value applies
+pub(crate) fn resolve(
+    stored: Option<&str>,
+    default: &[AppleAppId],
+) -> (Vec<AppleAppId>, AppIdSource) {
+    let fallback = || {
+        if default.is_empty() {
+            (Vec::new(), AppIdSource::Unconfigured)
+        } else {
+            (default.to_vec(), AppIdSource::Config)
         }
-        None => Vec::new(),
     };
-    Ok(if !from_settings.is_empty() {
-        (from_settings, AppIdSource::Settings)
-    } else if !state.apple_app_ids_default.is_empty() {
-        (state.apple_app_ids_default.clone(), AppIdSource::Config)
-    } else {
-        (Vec::new(), AppIdSource::Unconfigured)
-    })
+    match stored.map(AppleAppId::parse_list) {
+        Some(Ok(ids)) if !ids.is_empty() => (ids, AppIdSource::Settings),
+        Some(Err(error)) => (default.to_vec(), AppIdSource::Invalid(error.to_string())),
+        _ => fallback(),
+    }
 }
 
 async fn app_site_association(State(state): State<AppState>) -> ApiResult<Response> {
-    let (app_ids, _) = effective_app_ids(&state).await?;
+    let stored = state.settings_repo.get(SETTING_KEY).await?;
+    let (app_ids, source) = resolve(
+        stored.as_ref().map(|s| s.value.as_str()),
+        &state.apple_app_ids_default,
+    );
+    if let AppIdSource::Invalid(error) = &source {
+        tracing::warn!(%error, "ignoring invalid {SETTING_KEY} setting");
+    }
     if app_ids.is_empty() {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
@@ -98,4 +104,34 @@ fn association(app_ids: &[AppleAppId], prefix: &str) -> Value {
             }]
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(list: &str) -> Vec<AppleAppId> {
+        AppleAppId::parse_list(list).unwrap()
+    }
+
+    #[test]
+    fn resolve_prefers_a_valid_stored_row_and_falls_back_otherwise() {
+        let config = ids("ABCDE12345.config");
+        assert_eq!(
+            resolve(Some("FGHIJ67890.stored"), &config),
+            (ids("FGHIJ67890.stored"), AppIdSource::Settings)
+        );
+        assert_eq!(
+            resolve(Some(" "), &config),
+            (config.clone(), AppIdSource::Config)
+        );
+        assert_eq!(
+            resolve(None, &config),
+            (config.clone(), AppIdSource::Config)
+        );
+        assert_eq!(resolve(None, &[]), (Vec::new(), AppIdSource::Unconfigured));
+        let (served, source) = resolve(Some("nope"), &config);
+        assert_eq!(served, config);
+        assert!(matches!(source, AppIdSource::Invalid(e) if e.contains("nope")));
+    }
 }

@@ -5,9 +5,11 @@
     <p>Effective app IDs ({{ apple.source }}): {% if apple.effective.is_empty() %}none, so no association is served.{% else %}{% for id in apple.effective %}<code>{{ id }}</code>{% if !loop.last %}, {% endif %}{% endfor %}{% endif %}<br>
     Check it at <code>{{ apple.association_url }}</code>.</p>
 
-    {% if let Some(error) = apple.error %}
+    {% match apple.error %}
+    {% when Some with (error) %}
     <div class="f-notice f-notice-danger" role="alert"><p>{{ error }}</p></div>
-    {% endif %}
+    {% when None %}
+    {% endmatch %}
 
     <form action="/settings/apple" method="post">
         <div class="field">
