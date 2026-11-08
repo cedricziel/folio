@@ -3,7 +3,7 @@ import Security
 
 /// What the app and every extension agree on: where the server is and how to authenticate.
 public enum SharedConfiguration {
-    public static let appGroup = UserDefaultsServerConfigStore.appGroup
+    public static var appGroup: String { UserDefaultsServerConfigStore.appGroup }
 
     /// Info.plist key holding `$(AppIdentifierPrefix)com.cedricziel.folio`, which is only known at build time.
     public static var keychainAccessGroup: String? {

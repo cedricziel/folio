@@ -3,8 +3,8 @@ import Foundation
 
 public enum OAuthConfiguration {
     public static let clientName = "Folio"
-    public static let callbackScheme = "com.cedricziel.folio"
-    public static let redirectURI = "com.cedricziel.folio:/oauth/callback"
+    public static var callbackScheme: String { AppConfiguration.callbackScheme }
+    public static var redirectURI: String { AppConfiguration.redirectURI(scheme: callbackScheme) }
     public static let scopes = "documents:read documents:write"
 }
 
