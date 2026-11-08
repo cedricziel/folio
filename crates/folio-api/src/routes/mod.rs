@@ -118,9 +118,9 @@ pub fn create_router(mut state: AppState, auth: auth::AuthState) -> Router {
 
     let html_errors = axum::middleware::from_fn_with_state(state.clone(), error_pages::html_errors);
 
-    let router = crate::telemetry::instrument(routes)
+    // HTML error pages are rendered inside the request span, so they carry its Server-Timing too.
+    let router = crate::telemetry::instrument(routes.layer(html_errors))
         // Middleware
-        .layer(html_errors)
         .layer(default_vault)
         .layer(enforcement)
         .layer(forward)

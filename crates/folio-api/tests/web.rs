@@ -524,3 +524,38 @@ async fn read_again_queues_forced_processing() {
         folio_infra::JobType::ProcessDocument { force: true, .. }
     )));
 }
+
+#[tokio::test]
+async fn pages_declare_their_telemetry_screen() {
+    let h = harness().await;
+    let document = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Screen".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let detail = format!("/documents/{}", document.id);
+    for (uri, screen) in [
+        ("/", "inbox"),
+        ("/?view=all", "documents"),
+        (detail.as_str(), "document.detail"),
+        ("/trash", "trash"),
+        ("/manage", "taxonomy"),
+        ("/settings", "settings"),
+        ("/workflows", "workflows"),
+        ("/settings/integrations", "integrations"),
+        ("/settings/sources", "sources"),
+        ("/no-such-page", "error"),
+    ] {
+        let response = h.app.clone().oneshot(get_html(uri)).await.unwrap();
+        let body = text(response).await;
+        let tag = format!(r#"<meta name="folio-screen" content="{screen}">"#);
+        assert!(body.contains(&tag), "{uri} should declare {screen}");
+    }
+}
