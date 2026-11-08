@@ -130,3 +130,64 @@ async fn the_web_upload_honours_the_key_too() {
     }
     assert_eq!(documents(&h).await, 1);
 }
+
+#[tokio::test]
+async fn a_key_whose_document_was_deleted_is_gone() {
+    let h = harness().await;
+    let key = Uuid::new_v4().to_string();
+    let first = h
+        .app
+        .clone()
+        .oneshot(upload("/api/documents/upload", Some(&key), "pixels"))
+        .await
+        .unwrap();
+    let id: Uuid = id(first).await.parse().unwrap();
+    h.state.document_repo.delete(h.vault, id).await.unwrap();
+
+    let replay = h
+        .app
+        .clone()
+        .oneshot(upload("/api/documents/upload", Some(&key), "pixels"))
+        .await
+        .unwrap();
+
+    assert_eq!(replay.status(), StatusCode::GONE);
+}
+
+#[tokio::test]
+async fn a_web_replay_does_not_add_the_row_again() {
+    let h = harness().await;
+    let key = Uuid::new_v4().to_string();
+    let first = h
+        .app
+        .clone()
+        .oneshot(upload("/documents/upload", Some(&key), "pixels"))
+        .await
+        .unwrap();
+    assert!(text(first).await.contains("turbo-stream"));
+
+    let replay = h
+        .app
+        .clone()
+        .oneshot(upload("/documents/upload", Some(&key), "pixels"))
+        .await
+        .unwrap();
+
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert!(!text(replay).await.contains("turbo-stream"));
+}
+
+#[tokio::test]
+async fn a_second_file_part_is_rejected() {
+    let h = harness().await;
+    let mut request = multipart(&[
+        ("file", Some("a.png"), "one"),
+        ("file", Some("b.png"), "two"),
+    ]);
+    *request.uri_mut() = "/api/documents/upload".parse().unwrap();
+
+    let response = h.app.clone().oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(documents(&h).await, 0);
+}
