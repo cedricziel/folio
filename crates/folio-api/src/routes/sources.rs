@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use folio_core::error::Error as DomainError;
 use folio_core::models::{
-    Id, IngestionSourceDef, IngestionSourceInput, SourceConfig, SourceOrigin, SourceStatus,
-    REDACTED,
+    EmailConfig, Id, IngestionSourceDef, IngestionSourceInput, SourceConfig, SourceOrigin,
+    SourceStatus, REDACTED,
 };
 
 use crate::error::{ApiError, ApiResult};
@@ -160,7 +160,8 @@ pub(crate) fn require_managed(def: &IngestionSourceDef) -> ApiResult<()> {
 
 /// Replace a masked password by the stored one and refuse server-side password files
 ///
-/// A password file would let a UI user make the server read any file and send
+/// The stored password is kept only for the same server and username, so an
+/// edit cannot send it to another host. A password file would let a UI user make the server read any file and send
 /// its content to a host of their choosing, so files are configuration-only.
 pub(crate) fn prepare_input(
     input: &mut IngestionSourceInput,
@@ -174,6 +175,12 @@ pub(crate) fn prepare_input(
         }
         if email.password.as_deref() == Some(REDACTED) || email.password.is_none() {
             let stored = match existing.map(|d| &d.config) {
+                Some(SourceConfig::Email(old)) if !same_account(old, email) => {
+                    return Err(DomainError::Validation(
+                        "Enter the account password again, because the server or username changed"
+                            .to_string(),
+                    ))
+                }
                 Some(SourceConfig::Email(old)) => old.password.clone(),
                 _ => None,
             };
@@ -183,6 +190,11 @@ pub(crate) fn prepare_input(
         }
     }
     input.validate()
+}
+
+/// Whether a masked password may stand for the stored one
+pub(crate) fn same_account(old: &EmailConfig, new: &EmailConfig) -> bool {
+    old.host == new.host && old.port == new.port && old.username == new.username
 }
 
 /// List ingestion sources
@@ -267,7 +279,8 @@ pub(crate) async fn create_source(
 
 /// Replace an ingestion source
 ///
-/// A password of `********` keeps the stored one.
+/// A password of `********` keeps the stored one while the host, port and
+/// username stay the same.
 #[utoipa::path(
     put,
     path = "/api/sources/{id}",

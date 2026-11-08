@@ -564,3 +564,74 @@ async fn source_outcomes_page_retains_history_without_linking_missing_documents(
     assert!(html.contains(&format!("/outcomes?before={latest}&limit=1")));
     assert!(html.contains("/outcomes?limit=1\""));
 }
+
+async fn assert_no_connection(listener: &tokio::net::TcpListener) {
+    let accepted =
+        tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept()).await;
+    assert!(accepted.is_err(), "Folio connected to the new server");
+}
+
+#[tokio::test]
+async fn a_masked_password_is_refused_when_the_mail_server_changes() {
+    let app = test_app(Vec::new()).await;
+    let (_, created) = json_request(&app, "POST", "/api/sources", Some(mail_body("hunter2"))).await;
+    let id = created["id"].as_str().unwrap().to_string();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    for (field, value) in [
+        ("host", json!("127.0.0.1")),
+        ("port", json!(port)),
+        ("username", json!("someone-else")),
+    ] {
+        let mut body = mail_body("********");
+        body["config"][field] = value;
+        let (status, error) =
+            json_request(&app, "PUT", &format!("/api/sources/{id}"), Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{field}");
+        assert!(error.to_string().contains("password again"), "{error}");
+    }
+
+    let stored = app
+        .state
+        .ingestion
+        .managed
+        .find(app.vault, id.parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let SourceConfig::Email(email) = stored.config else {
+        panic!("email")
+    };
+    assert_eq!(email.host, "imap.example.test");
+    assert_eq!(email.password.as_deref(), Some("hunter2"));
+
+    let form = format!(
+        "kind=email&name=Work+mail&enabled=on&host=127.0.0.1&port={port}&security=plain\
+&username=me&password=********&mailboxes=INBOX&poll_interval_secs=300&criteria=UNSEEN\
+&allowed_content_types=application%2Fpdf&mail_body=none&mail_after_import=mark_read"
+    );
+    for extra in ["&test=1", ""] {
+        let response = app
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/settings/sources/{id}"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("{form}{extra}")))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(page.contains("password again"), "{page}");
+        assert!(!page.contains("value=\"********\""), "{page}");
+    }
+    assert_no_connection(&listener).await;
+}

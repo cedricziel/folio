@@ -464,16 +464,30 @@ async fn create(
     }
 }
 
+/// Clear a masked password the stored one cannot stand for, so the form asks for it
+fn drop_stale_mask(values: &mut FormValues, existing: &IngestionSourceDef) {
+    if let SourceConfig::Email(old) = &existing.config {
+        if values.password == REDACTED
+            && (old.host != values.host.trim()
+                || old.port.to_string() != values.port.trim()
+                || old.username != values.username.trim())
+        {
+            values.password.clear();
+        }
+    }
+}
+
 async fn update(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-    Form(values): Form<FormValues>,
+    Form(mut values): Form<FormValues>,
 ) -> ApiResult<Response> {
     let existing = find(vault, &state, id).await?;
     require_managed(&existing)?;
     if values.test.is_some() {
         let notice = try_connection(&state, values.clone(), Some(&existing)).await;
+        drop_stale_mask(&mut values, &existing);
         return Ok(form(vault, &state, Some(id.to_string()), values, notice)
             .await?
             .into_response());
@@ -490,6 +504,7 @@ async fn update(
         },
         Err(message) => Err(message),
     };
+    drop_stale_mask(&mut values, &existing);
     match saved {
         Ok(_) => Ok(Redirect::to("/settings/sources").into_response()),
         Err(message) => Ok(
