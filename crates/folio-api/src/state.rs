@@ -12,7 +12,7 @@ use folio_core::ports::{
     SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
     UploadReceiptRepository, WorkflowRepository,
 };
-use folio_core::services::{Importer, SearchServiceFacade, VaultService};
+use folio_core::services::{IdempotentUploads, Importer, SearchServiceFacade, VaultService};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
 
 use folio_core::EventBroadcaster;
@@ -36,8 +36,8 @@ pub struct AppState {
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     pub document_repo: Arc<dyn DocumentRepository>,
     pub entry_repo: Arc<dyn DocumentEntryRepository>,
-    /// Makes uploads sent with an `Idempotency-Key` safe to retry
-    pub upload_receipts: Arc<dyn UploadReceiptRepository>,
+    /// Uploads sent with an `Idempotency-Key`, safe to retry
+    pub keyed_uploads: Arc<IdempotentUploads>,
     pub tag_repo: Arc<dyn TagRepository>,
     pub correspondent_repo: Arc<dyn CorrespondentRepository>,
     pub document_type_repo: Arc<dyn DocumentTypeRepository>,
@@ -127,11 +127,16 @@ impl AppState {
             store.clone(),
             Arc::new(job_queue.clone()),
         ));
+        let keyed_uploads = Arc::new(IdempotentUploads::new(
+            upload_receipts,
+            importer.clone(),
+            document_repo.clone(),
+        ));
         Self {
             saved_views,
             document_repo,
             entry_repo,
-            upload_receipts,
+            keyed_uploads,
             tag_repo,
             correspondent_repo,
             document_type_repo,

@@ -373,7 +373,8 @@ pub struct UploadDocumentRequest {
     responses(
         (status = 200, description = "The created document, or the one an earlier request with the same Idempotency-Key created", body = Document),
         BadRequest,
-        (status = 409, description = "The Idempotency-Key belongs to a different upload, is still in progress, or its document was deleted", body = crate::error::ErrorResponse),
+        (status = 409, description = "The Idempotency-Key was already used for a different file, or its first request is still storing the document; retry shortly", body = crate::error::ErrorResponse),
+        (status = 410, description = "The document an earlier request with this Idempotency-Key created has been deleted", body = crate::error::ErrorResponse),
         PayloadTooLarge,
         InternalError,
     )
@@ -387,7 +388,7 @@ pub(crate) async fn upload_document(
 ) -> ApiResult<Json<Document>> {
     let key = super::pages::idempotency_key(&headers)?;
     let document = store_upload(&state, vault, uploader, multipart, SourceKind::Api, key).await?;
-    Ok(Json(document))
+    Ok(Json(document.into_document()))
 }
 
 /// Search request body (for POST)
