@@ -7,8 +7,10 @@ use folio_core::ports::{
     digest_original, PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessVersion,
     SourceFailure,
 };
-use folio_infra::import::{resolve_import_dir, PaperlessFsReader, PaperlessHttpReader};
-use futures::TryStreamExt;
+use folio_infra::import::{
+    resolve_import_dir, InvalidPaperlessSource, PaperlessFsReader, PaperlessHttpReader,
+};
+use futures::{StreamExt, TryStreamExt};
 use serde::Deserialize;
 use serde_json::json;
 use wiremock::matchers::{header, method, path, path_regex, query_param};
@@ -207,7 +209,8 @@ async fn failures_map_to_fixed_reasons() {
         (401, SourceFailure::Unauthorized),
         (403, SourceFailure::Unauthorized),
         (406, SourceFailure::UnsupportedVersion),
-        (404, SourceFailure::UpstreamError),
+        // Not a Paperless at this URL
+        (404, SourceFailure::Unreachable),
         (500, SourceFailure::UpstreamError),
     ] {
         let server = MockServer::start().await;
@@ -239,8 +242,16 @@ async fn only_http_urls_are_accepted() {
         "not a url",
         "https://user:pw@host",
     ] {
-        assert!(PaperlessHttpReader::new(url, TOKEN).is_err(), "{url}");
+        assert_eq!(
+            PaperlessHttpReader::new(url, TOKEN).err(),
+            Some(InvalidPaperlessSource::Url),
+            "{url}"
+        );
     }
+    assert_eq!(
+        PaperlessHttpReader::new("https://paperless.test", "bad\ntoken").err(),
+        Some(InvalidPaperlessSource::Token)
+    );
 }
 
 #[tokio::test]
@@ -288,16 +299,18 @@ fn id_page(count: u64, ids: &[i64], next: bool, all: Option<&[i64]>) -> Response
     ResponseTemplate::new(200).set_body_json(body)
 }
 
-async fn id_listing(pages: Vec<ResponseTemplate>) -> Result<Vec<i64>, PaperlessReadError> {
+async fn id_listing(page: ResponseTemplate) -> Result<Vec<i64>, PaperlessReadError> {
     let server = MockServer::start().await;
-    for (n, page) in (1..).zip(pages) {
-        Mock::given(path("/api/documents/"))
-            .and(query_param("page", n.to_string()))
-            .and(query_param("page_size", "1000"))
-            .respond_with(page)
-            .mount(&server)
-            .await;
-    }
+    Mock::given(path("/api/documents/"))
+        .and(QueryIs::new(
+            [("page", "1"), ("page_size", "1")]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+        ))
+        .respond_with(page)
+        .mount(&server)
+        .await;
     let reader = rest_reader(&server).with_retry_delays(Vec::new());
     let ids = reader.list_document_ids().await?;
     Ok(ids.ids().iter().copied().collect())
@@ -306,37 +319,17 @@ async fn id_listing(pages: Vec<ResponseTemplate>) -> Result<Vec<i64>, PaperlessR
 #[tokio::test]
 async fn an_id_listing_is_complete_or_an_error() {
     // API version 9 lists every ID on the first page
-    let listed = id_listing(vec![id_page(3, &[1, 2], true, Some(&[1, 2, 7]))]).await;
+    let listed = id_listing(id_page(3, &[1], true, Some(&[1, 2, 7]))).await;
     assert_eq!(listed.unwrap(), [1, 2, 7]);
-    let short = id_listing(vec![id_page(3, &[1, 2], true, Some(&[1, 2]))]).await;
+
+    let short = id_listing(id_page(3, &[1], true, Some(&[1, 2]))).await;
     assert_eq!(source_failure(short), SourceFailure::UpstreamError);
-    let repeated = id_listing(vec![id_page(3, &[1, 2], true, Some(&[1, 2, 2]))]).await;
+    let repeated = id_listing(id_page(3, &[1], true, Some(&[1, 2, 2]))).await;
     assert_eq!(source_failure(repeated), SourceFailure::UpstreamError);
-
-    // Without that list, every page is read
-    let paged = id_listing(vec![
-        id_page(3, &[1, 2], true, None),
-        id_page(3, &[7], false, None),
-    ])
-    .await;
-    assert_eq!(paged.unwrap(), [1, 2, 7]);
-
-    let failed_page = id_listing(vec![
-        id_page(3, &[1, 2], true, None),
-        ResponseTemplate::new(500),
-    ])
-    .await;
-    assert_eq!(source_failure(failed_page), SourceFailure::UpstreamError);
-
-    let short = id_listing(vec![id_page(3, &[1, 2], false, None)]).await;
-    assert_eq!(source_failure(short), SourceFailure::UpstreamError);
-
-    let repeated = id_listing(vec![
-        id_page(2, &[1], true, None),
-        id_page(2, &[1], false, None),
-    ])
-    .await;
-    assert_eq!(source_failure(repeated), SourceFailure::UpstreamError);
+    let unlisted = id_listing(id_page(3, &[1], true, None)).await;
+    assert_eq!(source_failure(unlisted), SourceFailure::UpstreamError);
+    let failed = id_listing(ResponseTemplate::new(500)).await;
+    assert_eq!(source_failure(failed), SourceFailure::UpstreamError);
 }
 
 fn modified(minute: u32) -> String {
@@ -425,65 +418,189 @@ fn document_ids(records: &[PaperlessRecord]) -> Vec<i64> {
         .collect()
 }
 
+fn documents(records: &[PaperlessRecord]) -> Vec<(i64, String)> {
+    records
+        .iter()
+        .filter_map(|r| match r {
+            PaperlessRecord::Document(d) => Some((d.id, d.modified.to_rfc3339())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn at(minute: u32) -> String {
+    modified(minute)
+        .parse::<DateTime<Utc>>()
+        .unwrap()
+        .to_rfc3339()
+}
+
 #[tokio::test]
-async fn a_document_modified_mid_listing_is_not_skipped() {
+async fn a_document_modified_mid_listing_is_read_again() {
     let server = document_server().await;
-    let page = |n: &str| ("page", n.to_owned());
+    let first = ("page", "1".to_owned());
     let floor = |minute| ("modified__gte", modified(minute));
-    // Document 1 is modified (to minute 5) after the first page is read, so
-    // page 2 by number would start at document 4 and skip 3
+    // Document 1 is modified (to minute 5) after the first page is read;
+    // page 2 by number would then start at document 4 and skip 3
     listing_page(
         &server,
-        &[page("1")],
+        &[first.clone()],
         doc_page(&[doc_json(1, 1), doc_json(2, 2)], true),
     )
     .await;
     listing_page(
         &server,
-        &[page("2")],
-        doc_page(&[doc_json(4, 4), doc_json(1, 5)], false),
-    )
-    .await;
-    listing_page(
-        &server,
-        &[page("1"), floor(2)],
+        &[first.clone(), floor(2)],
         doc_page(&[doc_json(2, 2), doc_json(3, 3)], true),
     )
     .await;
     listing_page(
         &server,
-        &[page("1"), floor(3)],
+        &[first.clone(), floor(3)],
         doc_page(&[doc_json(3, 3), doc_json(4, 4)], true),
     )
     .await;
     listing_page(
         &server,
-        &[page("1"), floor(4)],
+        &[first, floor(4)],
         doc_page(&[doc_json(4, 4), doc_json(1, 5)], false),
     )
     .await;
 
     let records = rest_records(&rest_reader(&server)).await;
-    assert_eq!(document_ids(&records), [1, 2, 3, 4]);
+    // The later record of document 1 replaces the earlier one
+    assert_eq!(
+        documents(&records),
+        [(1, at(1)), (2, at(2)), (3, at(3)), (4, at(4)), (1, at(5))]
+    );
 }
 
 #[tokio::test]
-async fn a_page_sharing_one_modified_time_turns_the_page() {
+async fn a_run_sharing_one_modified_time_is_read_by_id() {
     let server = document_server().await;
-    let page = |n: &str| ("page", n.to_owned());
-    let floor = ("modified__gte", modified(1));
-    let first = doc_page(&[doc_json(1, 1), doc_json(2, 1)], true);
-    listing_page(&server, &[page("1")], first.clone()).await;
-    listing_page(&server, &[page("1"), floor.clone()], first).await;
+    let first = ("page", "1".to_owned());
+    // Bulk edits stamp many documents with one `modified`; this run fills
+    // more than a page
+    let run = doc_page(&[doc_json(1, 1), doc_json(2, 1)], true);
+    listing_page(&server, &[first.clone()], run.clone()).await;
     listing_page(
         &server,
-        &[page("2"), floor],
-        doc_page(&[doc_json(3, 1)], false),
+        &[first.clone(), ("modified__gte", modified(1))],
+        run,
     )
     .await;
+    let exact: BTreeMap<String, String> = [
+        ("page", "1"),
+        ("page_size", "1"),
+        ("modified__gte", &modified(1)),
+        ("modified__lte", &modified(1)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    Mock::given(path("/api/documents/"))
+        .and(QueryIs::new(exact))
+        .respond_with(id_page(4, &[1], true, Some(&[1, 2, 3, 4])))
+        .mount(&server)
+        .await;
+    // Document 3 changes (to minute 2) while the run is read
+    let by_id: BTreeMap<String, String> = [
+        ("page", "1"),
+        ("page_size", "100"),
+        ("ordering", "id"),
+        ("id__in", "3,4"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    Mock::given(path("/api/documents/"))
+        .and(QueryIs::new(by_id))
+        .respond_with(doc_page(&[doc_json(3, 2), doc_json(4, 1)], false))
+        .mount(&server)
+        .await;
+    let after: BTreeMap<String, String> = [
+        ("page", "1"),
+        ("page_size", "100"),
+        ("ordering", "modified,id"),
+        ("modified__gt", &modified(1)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    Mock::given(path("/api/documents/"))
+        .and(QueryIs::new(after))
+        .respond_with(doc_page(&[doc_json(3, 2)], false))
+        .mount(&server)
+        .await;
 
     let records = rest_records(&rest_reader(&server)).await;
-    assert_eq!(document_ids(&records), [1, 2, 3]);
+    assert_eq!(
+        documents(&records),
+        [(1, at(1)), (2, at(1)), (3, at(2)), (4, at(1))]
+    );
+}
+
+#[tokio::test]
+async fn a_document_without_file_details_fails_alone() {
+    let server = document_server().await;
+    Mock::given(path("/api/documents/2/metadata/"))
+        .respond_with(ResponseTemplate::new(404))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    listing_page(
+        &server,
+        &[("page", "1".to_owned())],
+        doc_page(&[doc_json(1, 1), doc_json(2, 2)], false),
+    )
+    .await;
+    let records = rest_records(&rest_reader(&server)).await;
+    assert_eq!(document_ids(&records), [1]);
+    assert!(records.iter().any(|r| matches!(
+        r,
+        PaperlessRecord::InvalidDocument(d) if d.id == 2
+    )));
+}
+
+#[tokio::test]
+async fn a_missing_original_is_missing() {
+    let server = serve("v2_20").await;
+    let reader = rest_reader(&server);
+    let mut doc = rest_records(&reader)
+        .await
+        .into_iter()
+        .find_map(|r| match r {
+            PaperlessRecord::Document(d) => Some(d),
+            _ => None,
+        })
+        .unwrap();
+    doc.original_handle = "404".into();
+    assert!(matches!(
+        reader.open_original(&doc).await.err(),
+        Some(PaperlessReadError::Missing { .. })
+    ));
+}
+
+#[tokio::test]
+async fn an_oversized_response_is_refused() {
+    let server = document_server().await;
+    let mut body = vec![b' '; 64 * 1024 * 1024];
+    body.extend_from_slice(br#"{"count": 0, "next": null, "results": []}"#);
+    Mock::given(path("/api/correspondents/"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "application/json"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let results: Vec<_> = rest_reader(&server).scan().await.unwrap().collect().await;
+    assert!(
+        matches!(
+            results.as_slice(),
+            [Err(PaperlessReadError::Source(
+                SourceFailure::UpstreamError
+            ))]
+        ),
+        "{results:?}"
+    );
 }
 
 #[tokio::test]
@@ -567,4 +684,59 @@ async fn retries_run_out_with_an_upstream_error() {
     assert_eq!(failure, SourceFailure::UpstreamError);
     // The first try and four retries
     assert_eq!(server.received_requests().await.unwrap().len(), 5);
+}
+
+fn trashed_json(id: i64, root: Option<i64>, checksum: Option<&str>) -> serde_json::Value {
+    let mut doc = doc_json(id, 1);
+    doc["deleted_at"] = json!("2025-06-01T09:00:00+01:00");
+    doc["root_document"] = json!(root);
+    if let Some(checksum) = checksum {
+        doc["versions"] = json!([{
+            "id": id,
+            "added": "2024-05-01T09:00:00+01:00",
+            "version_label": null,
+            "checksum": checksum,
+            "is_root": true,
+        }]);
+    }
+    doc
+}
+
+#[tokio::test]
+async fn only_trashed_roots_with_a_listed_checksum_are_yielded() {
+    let server = document_server().await;
+    listing_page(&server, &[("page", "1".to_owned())], empty_page()).await;
+    let sha = "a".repeat(64);
+    Mock::given(path("/api/trash/"))
+        .respond_with(doc_page(
+            &[
+                // A Paperless 3 root, a version trashed on its own, and a
+                // Paperless 2 document without a listed checksum
+                trashed_json(7, None, Some(&sha)),
+                trashed_json(8, Some(7), Some(&sha)),
+                trashed_json(9, None, None),
+            ],
+            false,
+        ))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let records = rest_records(&rest_reader(&server)).await;
+    let trashed: Vec<_> = records
+        .iter()
+        .filter_map(|r| match r {
+            PaperlessRecord::Document(d) => Some((d.id, d.trashed, d.checksum.value.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(trashed, [(7, true, sha)]);
+    // Nothing was downloaded to learn a checksum
+    let downloads = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path().ends_with("/download/"))
+        .count();
+    assert_eq!(downloads, 0);
 }

@@ -546,40 +546,10 @@
     }
   },
   {
-    "path": "/api/documents/",
-    "query": {
-      "page": "1",
-      "page_size": "1000",
-      "ordering": "id"
-    },
-    "status": 200,
-    "body": {
-      "count": 3,
-      "next": null,
-      "previous": null,
-      "all": [
-        1,
-        2,
-        4
-      ],
-      "results": [
-        {
-          "id": 1
-        },
-        {
-          "id": 2
-        },
-        {
-          "id": 4
-        }
-      ]
-    }
-  },
-  {
     "path": "/api/trash/",
     "query": {
       "page": "1",
-      "page_size": "100"
+      "page_size": "100000"
     },
     "status": 200,
     "body": {

@@ -19,6 +19,11 @@ const USER_AGENT: &str = concat!("folio/", env!("CARGO_PKG_VERSION"), " paperles
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_REDIRECTS: usize = 5;
+/// Whole-request limit for API calls; downloads stream and only time out
+/// when they stall
+const JSON_TIMEOUT: Duration = Duration::from_secs(120);
+/// The largest JSON body read, far above a page of 100 documents
+const MAX_JSON_BYTES: usize = 64 * 1024 * 1024;
 
 /// Waits before each retry of a 429 or 5xx response; once they run out the
 /// request fails with [`SourceFailure::UpstreamError`]
@@ -29,10 +34,14 @@ const RETRY_DELAYS: [Duration; 4] = [
     Duration::from_secs(8),
 ];
 
-/// The base URL is not an http(s) URL
-#[derive(Debug, thiserror::Error)]
-#[error("the Paperless URL must be an http or https URL")]
-pub struct InvalidPaperlessUrl;
+/// The URL or token can't be used to reach Paperless
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidPaperlessSource {
+    #[error("the Paperless URL must be an http or https URL")]
+    Url,
+    #[error("the Paperless token contains characters an HTTP header can't carry")]
+    Token,
+}
 
 /// One Paperless instance, reached with one token
 #[derive(Clone)]
@@ -59,13 +68,13 @@ pub(super) fn upstream() -> PaperlessReadError {
 }
 
 impl Api {
-    pub(super) fn new(base_url: &str, token: &str) -> Result<Self, InvalidPaperlessUrl> {
-        let mut base = Url::parse(base_url).map_err(|_| InvalidPaperlessUrl)?;
+    pub(super) fn new(base_url: &str, token: &str) -> Result<Self, InvalidPaperlessSource> {
+        let mut base = Url::parse(base_url).map_err(|_| InvalidPaperlessSource::Url)?;
         if !matches!(base.scheme(), "http" | "https") || base.cannot_be_a_base() {
-            return Err(InvalidPaperlessUrl);
+            return Err(InvalidPaperlessSource::Url);
         }
         if !base.username().is_empty() || base.password().is_some() {
-            return Err(InvalidPaperlessUrl);
+            return Err(InvalidPaperlessSource::Url);
         }
         base.set_query(None);
         base.set_fragment(None);
@@ -74,8 +83,8 @@ impl Api {
             base.set_path(&path);
         }
 
-        let mut auth =
-            HeaderValue::from_str(&format!("Token {token}")).map_err(|_| InvalidPaperlessUrl)?;
+        let mut auth = HeaderValue::from_str(&format!("Token {token}"))
+            .map_err(|_| InvalidPaperlessSource::Token)?;
         auth.set_sensitive(true);
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, auth);
@@ -111,22 +120,22 @@ impl Api {
     }
 
     /// GETs `path` (relative to the base URL), retrying 429 and 5xx; `None`
-    /// on 404, since a document can vanish between listing and reading it
-    pub(super) async fn get_opt(
+    /// on 404. Without a timeout, the response may be streamed for as long
+    /// as it keeps arriving.
+    async fn send(
         &self,
         path: &str,
         query: &[(&str, &str)],
+        timeout: Option<Duration>,
     ) -> Result<Option<Response>, PaperlessReadError> {
         let url = self.base.join(path).map_err(|_| upstream())?;
         let mut delays = self.retry_delays.iter();
         loop {
-            let response = self
-                .http
-                .get(url.clone())
-                .query(query)
-                .send()
-                .await
-                .map_err(transport_failure)?;
+            let mut request = self.http.get(url.clone()).query(query);
+            if let Some(timeout) = timeout {
+                request = request.timeout(timeout);
+            }
+            let response = request.send().await.map_err(transport_failure)?;
             let status = response.status();
             if status.is_success() {
                 return Ok(Some(response));
@@ -155,26 +164,37 @@ impl Api {
         }
     }
 
+    /// A file, streamed; `None` when Paperless has no such document
+    pub(super) async fn download(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Option<Response>, PaperlessReadError> {
+        self.send(path, query, None).await
+    }
+
+    /// An endpoint that exists on every Paperless; a 404 means the URL
+    /// doesn't point at one
     pub(super) async fn get(
         &self,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<Response, PaperlessReadError> {
-        self.get_opt(path, query).await?.ok_or_else(upstream)
+        self.send(path, query, Some(JSON_TIMEOUT))
+            .await?
+            .ok_or(PaperlessReadError::Source(SourceFailure::Unreachable))
     }
 
+    /// One document's details; `None` when Paperless has no such document
     pub(super) async fn get_json_opt<T: DeserializeOwned>(
         &self,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<Option<T>, PaperlessReadError> {
-        let Some(response) = self.get_opt(path, query).await? else {
-            return Ok(None);
-        };
-        let body = response.bytes().await.map_err(transport_failure)?;
-        serde_json::from_slice(&body)
-            .map(Some)
-            .map_err(|e| json_error(e, SourceLocation::file(path)))
+        match self.send(path, query, Some(JSON_TIMEOUT)).await? {
+            Some(response) => parse(response, path).await.map(Some),
+            None => Ok(None),
+        }
     }
 
     pub(super) async fn get_json<T: DeserializeOwned>(
@@ -182,8 +202,23 @@ impl Api {
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<T, PaperlessReadError> {
-        self.get_json_opt(path, query).await?.ok_or_else(upstream)
+        parse(self.get(path, query).await?, path).await
     }
+}
+
+/// Reads the body in chunks up to [`MAX_JSON_BYTES`]
+async fn parse<T: DeserializeOwned>(
+    mut response: Response,
+    path: &str,
+) -> Result<T, PaperlessReadError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(transport_failure)? {
+        if body.len() + chunk.len() > MAX_JSON_BYTES {
+            return Err(upstream());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|e| json_error(e, SourceLocation::file(path)))
 }
 
 /// reqwest errors quote the URL and upstream text, so only the kind survives

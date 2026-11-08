@@ -3,7 +3,8 @@
 //! Requests go out one at a time. Documents are listed in `(modified, id)`
 //! order and each page starts from the last pair seen, so a document
 //! modified during the listing moves behind the cursor instead of shifting
-//! another one out of view.
+//! another one out of view. Such a document is read again there, and its
+//! newer records follow the older ones in the stream.
 //!
 //! Every file request names its document as `?version=`: Paperless 3 would
 //! otherwise serve a root's newest file version, and Paperless 2 ignores it.
@@ -11,33 +12,33 @@
 mod client;
 mod wire;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::io;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use folio_core::ports::{
-    digest_original, ChecksumAlgorithm, CompleteIdSet, InvalidDocumentReason, MalformedKind,
-    OriginalFile, PaperlessDocument, PaperlessFieldType, PaperlessInvalidDocument, PaperlessNamed,
-    PaperlessReadError, PaperlessReader, PaperlessRecord, PaperlessSourceInfo, PaperlessTag,
-    PaperlessVersion, RecordStream, SourceFailure, SourceLocation,
+    CompleteIdSet, InvalidDocumentReason, MalformedKind, OriginalFile, PaperlessDocument,
+    PaperlessFieldType, PaperlessInvalidDocument, PaperlessNamed, PaperlessReadError,
+    PaperlessReader, PaperlessRecord, PaperlessSourceInfo, PaperlessTag, PaperlessVersion,
+    RecordStream, SourceLocation,
 };
 use futures::TryStreamExt;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::io::AsyncRead;
 use tokio::sync::mpsc;
 use tokio_util::io::StreamReader;
 
 use super::paperless_fs::malformed;
-pub use client::InvalidPaperlessUrl;
+pub use client::InvalidPaperlessSource;
 use client::{upstream, Api};
-use wire::{Content, CustomField, Document, Id, IdPage, Key, Metadata, Page};
+use wire::{Content, CustomField, Document, IdPage, Key, Metadata, Page};
 
 const PAGE_SIZE: &str = "100";
-const ID_PAGE_SIZE: &str = "1000";
+/// Paperless's own maximum; trash is read in one page so its order can't
+/// shift between pages
+const WHOLE_LISTING: &str = "100000";
 const DOCUMENT_FIELDS: &str = "id,correspondent,document_type,title,content,tags,created,\
 modified,added,deleted_at,archive_serial_number,original_file_name,mime_type,notes,\
 custom_fields,root_document,versions";
@@ -52,7 +53,7 @@ pub struct PaperlessHttpReader {
 
 impl PaperlessHttpReader {
     /// `base_url` is where Paperless is served, with any path prefix
-    pub fn new(base_url: &str, token: &str) -> Result<Self, InvalidPaperlessUrl> {
+    pub fn new(base_url: &str, token: &str) -> Result<Self, InvalidPaperlessSource> {
         Ok(Self {
             api: Api::new(base_url, token)?,
         })
@@ -109,35 +110,10 @@ impl PaperlessReader for PaperlessHttpReader {
         Ok(self.listing(Some(cursor)))
     }
 
-    /// API version 9 lists every matching ID on the first page; without that
-    /// list the pages are read one by one. Either way the IDs must be unique
-    /// and as many as the count Paperless reports.
+    /// API version 9 lists every matching ID on the first page, from one
+    /// query; the IDs must be unique and as many as Paperless counts
     async fn list_document_ids(&self) -> Result<CompleteIdSet, PaperlessReadError> {
-        let path = "api/documents/";
-        let query = [("ordering", "id"), ("fields", "id")];
-        let first: IdPage = self
-            .api
-            .get_json(
-                path,
-                &[
-                    ("page", "1"),
-                    ("page_size", ID_PAGE_SIZE),
-                    query[0],
-                    query[1],
-                ],
-            )
-            .await?;
-        let (count, listed) = match first.all {
-            Some(all) => (first.count, all),
-            None => {
-                let (count, ids) = all_pages::<Id>(&self.api, path, ID_PAGE_SIZE, &query).await?;
-                (count, ids.into_iter().map(|Id { id }| id).collect())
-            }
-        };
-        let ids: BTreeSet<i64> = listed.iter().copied().collect();
-        if ids.len() != listed.len() || ids.len() as u64 != count {
-            return Err(upstream());
-        }
+        let ids = all_ids(&self.api, &[]).await?;
         Ok(CompleteIdSet::from_complete_listing(ids))
     }
 
@@ -152,19 +128,37 @@ impl PaperlessReader for PaperlessHttpReader {
                 .map_err(|_| PaperlessReadError::UnsafePath {
                     what: "original handle".to_owned(),
                 })?;
-        let response = download(&self.api, id).await?.ok_or_else(upstream)?;
+        let path = format!("api/documents/{id}/download/");
+        let version = id.to_string();
+        let response = self
+            .api
+            .download(&path, &[("original", "true"), ("version", &version)])
+            .await?
+            .ok_or_else(|| PaperlessReadError::Missing {
+                what: format!("the original of Paperless document {id}"),
+            })?;
+        let size = response.content_length();
+        let body = response
+            .bytes_stream()
+            .map_err(|_| std::io::Error::other("the Paperless download was interrupted"));
         Ok(OriginalFile {
-            size: response.content_length(),
-            reader: Box::new(body_reader(response)),
+            size,
+            reader: Box::new(StreamReader::new(body)),
         })
     }
 }
 
-async fn download(api: &Api, id: i64) -> Result<Option<reqwest::Response>, PaperlessReadError> {
-    let path = format!("api/documents/{id}/download/");
-    let version = id.to_string();
-    api.get_opt(&path, &[("original", "true"), ("version", &version)])
-        .await
+/// The IDs of the live root documents matching `filter`
+async fn all_ids(api: &Api, filter: &[(&str, &str)]) -> Result<BTreeSet<i64>, PaperlessReadError> {
+    let mut query = vec![("page", "1"), ("page_size", "1"), ("fields", "id")];
+    query.extend_from_slice(filter);
+    let page: IdPage = api.get_json("api/documents/", &query).await?;
+    let all = page.all.ok_or_else(upstream)?;
+    let ids: BTreeSet<i64> = all.iter().copied().collect();
+    if ids.len() != all.len() || ids.len() as u64 != page.count {
+        return Err(upstream());
+    }
+    Ok(ids)
 }
 
 async fn metadata(api: &Api, id: i64) -> Result<Option<Metadata>, PaperlessReadError> {
@@ -181,14 +175,6 @@ async fn content(api: &Api, root: i64, version: i64) -> Result<Option<String>, P
         .get_json_opt(&path, &[("version", &version), ("fields", "content")])
         .await?;
     Ok(content.map(|c| c.content))
-}
-
-fn body_reader(response: reqwest::Response) -> impl AsyncRead + Send + Unpin {
-    StreamReader::new(
-        response
-            .bytes_stream()
-            .map_err(|_| io::Error::other("the Paperless download was interrupted")),
-    )
 }
 
 struct Sink(mpsc::Sender<Result<PaperlessRecord, PaperlessReadError>>);
@@ -216,110 +202,194 @@ async fn list_records(
     since: Option<DateTime<Utc>>,
     sink: &Sink,
 ) -> Result<(), PaperlessReadError> {
-    let by_id = [("ordering", "id")];
-    let taxonomy = |path| all_pages::<PaperlessNamed>(api, path, PAGE_SIZE, &by_id);
-    let (_, correspondents) = taxonomy("api/correspondents/").await?;
+    let taxonomy = |path| all_pages::<PaperlessNamed>(api, path);
     sink.send_all(
-        correspondents
+        taxonomy("api/correspondents/")
+            .await?
             .into_iter()
             .map(PaperlessRecord::Correspondent),
     )
     .await?;
-    let (_, types) = taxonomy("api/document_types/").await?;
-    sink.send_all(types.into_iter().map(PaperlessRecord::DocumentType))
-        .await?;
-    let (_, tags) = all_pages::<PaperlessTag>(api, "api/tags/", PAGE_SIZE, &by_id).await?;
-    sink.send_all(tags.into_iter().map(PaperlessRecord::Tag))
-        .await?;
+    sink.send_all(
+        taxonomy("api/document_types/")
+            .await?
+            .into_iter()
+            .map(PaperlessRecord::DocumentType),
+    )
+    .await?;
+    sink.send_all(
+        all_pages::<PaperlessTag>(api, "api/tags/")
+            .await?
+            .into_iter()
+            .map(PaperlessRecord::Tag),
+    )
+    .await?;
     let mut field_types = HashMap::new();
-    let (_, fields) =
-        all_pages::<CustomField>(api, "api/custom_fields/", PAGE_SIZE, &by_id).await?;
-    for field in fields {
+    for field in all_pages::<CustomField>(api, "api/custom_fields/").await? {
         let field = field.fields.into_record(field.id);
         field_types.insert(field.id, field.data_type);
         sink.send(PaperlessRecord::CustomField(field)).await?;
     }
-    list_documents(api, since, &field_types, sink).await?;
+    let mut documents = Documents {
+        api,
+        field_types: &field_types,
+        sink,
+        emitted: HashMap::new(),
+    };
+    documents.list(since).await?;
     list_trash(api, since, &field_types, sink).await
 }
 
-/// Every page of a listing, and the count of the first page; taxonomy and
-/// trash are small enough to read whole before any record goes out
+/// Every page of a taxonomy listing, which is small enough to read whole
+/// before any record goes out
 async fn all_pages<T: DeserializeOwned>(
     api: &Api,
     path: &str,
-    page_size: &str,
-    query: &[(&str, &str)],
-) -> Result<(u64, Vec<T>), PaperlessReadError> {
-    let mut count = None;
+) -> Result<Vec<T>, PaperlessReadError> {
     let mut out = Vec::new();
     for page in 1u64.. {
         let page = page.to_string();
-        let mut paged = vec![("page", page.as_str()), ("page_size", page_size)];
-        paged.extend_from_slice(query);
-        let response: Page<T> = api.get_json(path, &paged).await?;
-        count.get_or_insert(response.count);
+        let query = [
+            ("page", page.as_str()),
+            ("page_size", PAGE_SIZE),
+            ("ordering", "id"),
+        ];
+        let response: Page<T> = api.get_json(path, &query).await?;
         let empty = response.results.is_empty();
         out.extend(response.results);
         if response.next.is_none() || empty {
             break;
         }
     }
-    Ok((count.unwrap_or_default(), out))
+    Ok(out)
 }
 
-/// Keyset paging over `(modified, id)`. Paperless only filters on
-/// `modified`, so each request asks for `modified >= m` of the last pair
-/// seen and skips the pairs already passed; when a whole page shares one
-/// `modified`, the next request turns the page instead.
-async fn list_documents(
-    api: &Api,
-    since: Option<DateTime<Utc>>,
-    field_types: &HashMap<i64, PaperlessFieldType>,
-    sink: &Sink,
-) -> Result<(), PaperlessReadError> {
-    let path = "api/documents/";
-    let mut floor = since;
-    let mut page = 1u64;
-    let mut last: Option<(DateTime<Utc>, i64)> = None;
-    let mut seen = HashSet::new();
-    loop {
-        let floor_param = floor.map(|m| m.to_rfc3339_opts(SecondsFormat::Micros, true));
-        let page_param = page.to_string();
-        let mut query = vec![
-            ("page", page_param.as_str()),
-            ("page_size", PAGE_SIZE),
-            ("ordering", "modified,id"),
-            ("fields", DOCUMENT_FIELDS),
-        ];
-        if let Some(floor) = floor_param.as_deref() {
-            query.push(("modified__gte", floor));
+/// Where the next page of documents starts
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Floor {
+    /// `modified >= m`; the pairs already passed are skipped
+    From(DateTime<Utc>),
+    /// `modified > m`, after a run of documents sharing `m` was read whole
+    After(DateTime<Utc>),
+}
+
+impl Floor {
+    fn at(self) -> DateTime<Utc> {
+        match self {
+            Floor::From(m) | Floor::After(m) => m,
         }
-        let response: Page<Value> = api.get_json(path, &query).await?;
-        let empty = response.results.is_empty();
-        for raw in response.results {
-            let key = key(&raw, path)?;
-            if let Some(modified) = key.modified() {
-                if last.is_some_and(|last| (modified, key.id) <= last) {
-                    continue;
+    }
+}
+
+fn timestamp(m: DateTime<Utc>) -> String {
+    m.to_rfc3339_opts(SecondsFormat::Micros, true)
+}
+
+struct Documents<'a> {
+    api: &'a Api,
+    field_types: &'a HashMap<i64, PaperlessFieldType>,
+    sink: &'a Sink,
+    /// The `modified` of each document's last records, so a document comes
+    /// out again only when it changed
+    emitted: HashMap<i64, Option<DateTime<Utc>>>,
+}
+
+impl Documents<'_> {
+    /// Keyset paging over `(modified, id)`. Paperless only filters on
+    /// `modified`, so each request asks for `modified >= m` of the last pair
+    /// seen and skips the pairs already passed. A full page that never gets
+    /// past `m` is a run of documents sharing it, which page numbers would
+    /// shift under; the run is read whole by ID instead.
+    async fn list(&mut self, since: Option<DateTime<Utc>>) -> Result<(), PaperlessReadError> {
+        let path = "api/documents/";
+        let mut floor = since.map(Floor::From);
+        let mut last: Option<(DateTime<Utc>, i64)> = None;
+        loop {
+            let bound = floor.map(|f| timestamp(f.at()));
+            let mut query = vec![
+                ("page", "1"),
+                ("page_size", PAGE_SIZE),
+                ("ordering", "modified,id"),
+                ("fields", DOCUMENT_FIELDS),
+            ];
+            match (floor, bound.as_deref()) {
+                (Some(Floor::From(_)), Some(m)) => query.push(("modified__gte", m)),
+                (Some(Floor::After(_)), Some(m)) => query.push(("modified__gt", m)),
+                _ => {}
+            }
+            let response: Page<Value> = self.api.get_json(path, &query).await?;
+            let more = response.next.is_some() && !response.results.is_empty();
+            for raw in response.results {
+                let key = key(&raw, path)?;
+                if let Some(modified) = key.modified() {
+                    if last.is_some_and(|last| (modified, key.id) <= last) {
+                        continue;
+                    }
+                    last = Some((modified, key.id));
                 }
-                last = Some((modified, key.id));
+                self.emit(key, raw).await?;
             }
-            if seen.insert(key.id) {
-                sink.send_all(document_records(api, key.id, raw, field_types).await?)
-                    .await?;
+            if !more {
+                return Ok(());
+            }
+            let Some((modified, id)) = last else {
+                // Nothing on a full page has a readable `modified`
+                return Err(upstream());
+            };
+            if floor.map(Floor::at) == Some(modified) {
+                self.tie_run(modified, id).await?;
+                floor = Some(Floor::After(modified));
+            } else {
+                floor = Some(Floor::From(modified));
             }
         }
-        if response.next.is_none() || empty {
-            return Ok(());
-        }
-        match last {
-            Some((modified, _)) if floor != Some(modified) => {
-                floor = Some(modified);
-                page = 1;
+    }
+
+    /// Every document whose `modified` is exactly `m` and whose ID is above
+    /// `after`, fetched by ID in chunks of one page
+    async fn tie_run(&mut self, m: DateTime<Utc>, after: i64) -> Result<(), PaperlessReadError> {
+        let bound = timestamp(m);
+        let ids = all_ids(
+            self.api,
+            &[("modified__gte", &bound), ("modified__lte", &bound)],
+        )
+        .await?;
+        let ids: Vec<i64> = ids.into_iter().filter(|id| *id > after).collect();
+        let path = "api/documents/";
+        for chunk in ids.chunks(100) {
+            let chunk = chunk
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let query = [
+                ("page", "1"),
+                ("page_size", PAGE_SIZE),
+                ("ordering", "id"),
+                ("fields", DOCUMENT_FIELDS),
+                ("id__in", chunk.as_str()),
+            ];
+            let response: Page<Value> = self.api.get_json(path, &query).await?;
+            for raw in response.results {
+                let key = key(&raw, path)?;
+                self.emit(key, raw).await?;
             }
-            _ => page += 1,
         }
+        Ok(())
+    }
+
+    /// Sends a document's records unless the same or a newer state of it
+    /// already went out
+    async fn emit(&mut self, key: Key, raw: Value) -> Result<(), PaperlessReadError> {
+        let modified = key.modified();
+        if let Some(previous) = self.emitted.get(&key.id) {
+            if modified <= *previous {
+                return Ok(());
+            }
+        }
+        self.emitted.insert(key.id, modified);
+        let records = document_records(self.api, key.id, raw, self.field_types).await?;
+        self.sink.send_all(records).await
     }
 }
 
@@ -329,7 +399,8 @@ fn key(raw: &Value, path: &str) -> Result<Key, PaperlessReadError> {
         .map_err(|_| malformed(MalformedKind::InvalidRecord, SourceLocation::file(path)))
 }
 
-/// A document's records; none when it vanished while being read
+/// A document's records. A document whose file details are gone fails
+/// alone, as [`PaperlessRecord::InvalidDocument`].
 async fn document_records(
     api: &Api,
     id: i64,
@@ -340,12 +411,12 @@ async fn document_records(
         return Ok(vec![invalid(id)]);
     };
     let Some(file) = metadata(api, id).await? else {
-        return Ok(Vec::new());
+        return Ok(vec![invalid(id)]);
     };
     if document.has_versions() {
         // A root's listed content is its newest version's
         let Some(own) = content(api, id, id).await? else {
-            return Ok(Vec::new());
+            return Ok(vec![invalid(id)]);
         };
         document.content = own;
     }
@@ -358,18 +429,19 @@ async fn document_records(
     let added = records.versions.iter().rev().filter(|v| !v.is_root);
     let mut versions = Vec::new();
     for (index, version) in (1..).zip(added) {
-        let (Some(file), Some(text)) = (
+        let record = match (
             metadata(api, version.id).await?,
             content(api, id, version.id).await?,
-        ) else {
-            continue;
+        ) {
+            (Some(file), Some(text)) => {
+                wire::version_record(&records.document, version, index, text, file)
+            }
+            _ => None,
         };
-        versions.push(
-            match wire::version_record(&records.document, version, index, text, file) {
-                Some(record) => PaperlessRecord::Document(Box::new(record)),
-                None => invalid(version.id),
-            },
-        );
+        versions.push(match record {
+            Some(record) => PaperlessRecord::Document(Box::new(record)),
+            None => invalid(version.id),
+        });
     }
     let mut out = vec![PaperlessRecord::Document(Box::new(records.document))];
     out.extend(versions);
@@ -377,7 +449,11 @@ async fn document_records(
     Ok(out)
 }
 
-/// Trashed documents, which `/api/documents/` leaves out
+/// Trashed documents, which `/api/documents/` leaves out. Paperless won't
+/// serve `/metadata/` for them, so only Paperless 3, which lists their
+/// checksum, yields them; Paperless 2 exports leave them out too. A file
+/// version trashed on its own isn't yielded: the API doesn't say which
+/// version it was.
 async fn list_trash(
     api: &Api,
     since: Option<DateTime<Utc>>,
@@ -385,49 +461,34 @@ async fn list_trash(
     sink: &Sink,
 ) -> Result<(), PaperlessReadError> {
     let path = "api/trash/";
-    let (_, trashed) = all_pages::<Value>(api, path, PAGE_SIZE, &[]).await?;
-    for raw in trashed {
+    let response: Page<Value> = api
+        .get_json(path, &[("page", "1"), ("page_size", WHOLE_LISTING)])
+        .await?;
+    if response.next.is_some() {
+        return Err(upstream());
+    }
+    for raw in response.results {
         let id = key(&raw, path)?.id;
         let Ok(document) = Document::deserialize(raw) else {
             sink.send(invalid(id)).await?;
             continue;
         };
-        if since.is_some_and(|since| document.modified < since) {
+        if document.root_document.is_some() || since.is_some_and(|since| document.modified < since)
+        {
             continue;
         }
-        sink.send_all(trashed_records(api, document, field_types).await?)
-            .await?;
+        let Some(checksum) = document.listed_checksum().map(str::to_owned) else {
+            continue;
+        };
+        let records = match document.into_records(&checksum, None, field_types) {
+            Some(records) => std::iter::once(PaperlessRecord::Document(Box::new(records.document)))
+                .chain(records.rest)
+                .collect(),
+            None => vec![invalid(id)],
+        };
+        sink.send_all(records).await?;
     }
     Ok(())
-}
-
-/// Paperless won't serve `/metadata/` for a trashed document. Paperless 3
-/// lists its checksum; on Paperless 2 the original is hashed for it.
-async fn trashed_records(
-    api: &Api,
-    document: Document,
-    field_types: &HashMap<i64, PaperlessFieldType>,
-) -> Result<Vec<PaperlessRecord>, PaperlessReadError> {
-    let id = document.id;
-    let (checksum, size) = match document.listed_checksum() {
-        Some(listed) => (listed.to_owned(), None),
-        None => {
-            let Some(response) = download(api, id).await? else {
-                return Ok(Vec::new());
-            };
-            // Paperless 2 checksums are MD5
-            let digests = digest_original(body_reader(response), ChecksumAlgorithm::Md5)
-                .await
-                .map_err(|_| PaperlessReadError::Source(SourceFailure::Unreachable))?;
-            (digests.md5.unwrap_or_default(), Some(digests.size))
-        }
-    };
-    Ok(match document.into_records(&checksum, size, field_types) {
-        Some(records) => std::iter::once(PaperlessRecord::Document(Box::new(records.document)))
-            .chain(records.rest)
-            .collect(),
-        None => vec![invalid(id)],
-    })
 }
 
 fn invalid(id: i64) -> PaperlessRecord {

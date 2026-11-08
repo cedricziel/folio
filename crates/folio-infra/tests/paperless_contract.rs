@@ -25,6 +25,8 @@ const PASSWORD: &str = "contract-test-password";
 const INVOICE: &[u8] = b"ACME Corp\nInvoice 42\nTotal EUR 123.45\n";
 const LETTER: &[u8] = b"City Utilities\nWater bill for February\n";
 const FLYER: &[u8] = b"Pizza flyer\n";
+const SIGNED: &[u8] = b"City Utilities\nWater bill for February, signed\n";
+const REDIS: &str = "7.4.12-alpine";
 
 fn enabled() -> bool {
     std::env::var("FOLIO_PAPERLESS_IT").is_ok_and(|v| v == "1")
@@ -52,7 +54,7 @@ async fn start(tag: &str) -> Instance {
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let network = format!("folio-paperless-{suffix}");
     let redis_name = format!("folio-paperless-redis-{suffix}");
-    let redis = GenericImage::new("redis", "7-alpine")
+    let redis = GenericImage::new("redis", REDIS)
         .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"))
         .with_network(&network)
         .with_container_name(&redis_name)
@@ -170,6 +172,34 @@ impl Seeder {
                     .multipart(form),
             )
             .await;
+        self.consumed(task, name).await
+    }
+
+    /// Uploads a new file version of `root` (Paperless 3) and waits for it
+    async fn add_version(&self, root: i64, name: &str, bytes: &[u8], label: &str) -> i64 {
+        let form = Form::new()
+            .part(
+                "document",
+                Part::bytes(bytes.to_vec())
+                    .file_name(name.to_owned())
+                    .mime_str("text/plain")
+                    .unwrap(),
+            )
+            .text("version_label", label.to_owned());
+        let task = self
+            .send(
+                self.request(
+                    reqwest::Method::POST,
+                    &format!("/api/documents/{root}/update_version/"),
+                )
+                .multipart(form),
+            )
+            .await;
+        self.consumed(task, name).await
+    }
+
+    /// The document a consumption task created
+    async fn consumed(&self, task: Value, name: &str) -> i64 {
         let task = task.as_str().unwrap().to_owned();
         let deadline = Instant::now() + Duration::from_secs(180);
         loop {
@@ -212,9 +242,11 @@ struct Seeded {
     invoice: i64,
     letter: i64,
     flyer: i64,
+    /// A file version of `letter`, on Paperless 3
+    signed: Option<i64>,
 }
 
-async fn seed(instance: &Instance) -> Seeded {
+async fn seed(instance: &Instance, versions: bool) -> Seeded {
     let s = Seeder {
         http: reqwest::Client::new(),
         url: instance.url.clone(),
@@ -321,6 +353,13 @@ async fn seed(instance: &Instance) -> Seeded {
     .await;
     s.send(s.request(reqwest::Method::DELETE, &format!("/api/documents/{flyer}/")))
         .await;
+    let signed = match versions {
+        true => Some(
+            s.add_version(letter, "letter-signed.txt", SIGNED, "signed")
+                .await,
+        ),
+        false => None,
+    };
 
     Seeded {
         inbox,
@@ -337,6 +376,7 @@ async fn seed(instance: &Instance) -> Seeded {
         invoice,
         letter,
         flyer,
+        signed,
     }
 }
 
@@ -350,7 +390,9 @@ async fn contract(version: &str, algorithm: ChecksumAlgorithm) {
         .with_test_writer()
         .try_init();
     let instance = start(version).await;
-    let seeded = seed(&instance).await;
+    // Paperless 3 keeps file versions and lists trashed documents' checksums
+    let v3 = algorithm == ChecksumAlgorithm::Sha256;
+    let seeded = seed(&instance, v3).await;
     let token = instance.token().await.unwrap();
     let reader = PaperlessHttpReader::new(&instance.url, &token).unwrap();
 
@@ -468,20 +510,38 @@ async fn contract(version: &str, algorithm: ChecksumAlgorithm) {
         Some(PaperlessFieldValue::DocumentLink(vec![seeded.letter]))
     );
 
-    let flyer = &documents[&seeded.flyer];
-    assert!(flyer.trashed);
+    // Paperless 2 serves no checksum for a trashed document; its exports
+    // leave trashed documents out too
+    let mut files = vec![(seeded.invoice, INVOICE), (seeded.letter, LETTER)];
+    if v3 {
+        assert!(documents[&seeded.flyer].trashed);
+        assert_eq!(documents[&seeded.flyer].size, None);
+        files.push((seeded.flyer, FLYER));
+    } else {
+        assert!(!documents.contains_key(&seeded.flyer));
+    }
 
-    for (id, bytes) in [
-        (seeded.invoice, INVOICE),
-        (seeded.letter, LETTER),
-        (seeded.flyer, FLYER),
-    ] {
+    if let Some(signed) = seeded.signed {
+        // The root keeps its own file and content; the version comes apart
+        let letter = &documents[&seeded.letter];
+        assert!(letter.content.contains("February"), "{}", letter.content);
+        assert!(!letter.content.contains("signed"), "{}", letter.content);
+        let version = &documents[&signed];
+        let info = version.version_of.as_ref().unwrap();
+        assert_eq!(info.root_document, seeded.letter);
+        assert_eq!(info.index, Some(1));
+        assert_eq!(info.label.as_deref(), Some("signed"));
+        assert!(version.content.contains("signed"), "{}", version.content);
+        assert_eq!(version.title, letter.title);
+        files.push((signed, SIGNED));
+    }
+
+    for (id, bytes) in files {
         let document: &PaperlessDocument = &documents[&id];
         assert_eq!(document.checksum.algorithm, algorithm, "doc {id}");
         let expected = digest_original(bytes, algorithm).await.unwrap();
         assert!(expected.matches(&document.checksum), "doc {id}");
-        // Paperless 3 lists a trashed document's checksum, so it isn't downloaded for its size
-        if !(document.trashed && algorithm == ChecksumAlgorithm::Sha256) {
+        if !document.trashed {
             assert_eq!(document.size, Some(bytes.len() as u64), "doc {id}");
         }
 

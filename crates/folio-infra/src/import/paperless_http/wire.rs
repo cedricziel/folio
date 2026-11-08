@@ -16,7 +16,6 @@ use crate::import::paperless_fs::CustomFieldFields;
 /// `StandardPagination`, without the `all` list of every ID
 #[derive(Deserialize)]
 pub(super) struct Page<T> {
-    pub count: u64,
     pub next: Option<String>,
     pub results: Vec<T>,
 }
@@ -33,11 +32,6 @@ pub(super) struct CustomField {
     pub id: i64,
     #[serde(flatten)]
     pub fields: CustomFieldFields,
-}
-
-#[derive(Deserialize)]
-pub(super) struct Id {
-    pub id: i64,
 }
 
 /// What a listing needs from a document before reading the rest of it
@@ -75,6 +69,9 @@ pub(super) struct Document {
     notes: Vec<Note>,
     #[serde(default)]
     custom_fields: Vec<FieldInstance>,
+    /// Paperless 3 only; set on a file version
+    #[serde(default)]
+    pub root_document: Option<i64>,
     /// Paperless 3 only; the root and every file version, newest first
     #[serde(default)]
     pub versions: Vec<Version>,

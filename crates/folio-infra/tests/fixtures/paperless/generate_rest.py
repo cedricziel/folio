@@ -28,7 +28,6 @@ HERE = Path(__file__).resolve().parent
 TZ = timezone(timedelta(hours=1))
 BASE = "http://paperless.test"
 PAGE_SIZE = 100
-ID_PAGE_SIZE = 1000
 DOC_FIELDS = (
     "id,correspondent,document_type,title,content,tags,created,modified,added,"
     "deleted_at,archive_serial_number,original_file_name,mime_type,notes,"
@@ -221,7 +220,8 @@ def build(name, *, version, v3):
         return body
 
     recording = [
-        # `/api/` redirects to the HTML schema viewer, so the version comes from here
+        # `/api/` redirects to the HTML schema viewer, so the version comes
+        # from here; `all` lists every live root document for the ID listing
         entry("/api/documents/", {"page": "1", "page_size": "1"}, {**page([{"id": roots[0]["pk"]}]), "count": len(roots), "next": f"{BASE}/api/documents/?fields=id&page=2&page_size=1", "all": [r["pk"] for r in roots]}, headers={"X-Version": version, "X-Api-Version": "10" if v3 else "9"}),
         entry("/api/correspondents/", {"page": "1", "page_size": str(PAGE_SIZE), "ordering": "id"}, page([
             {**matching(r["pk"], r["fields"], count_docs(lambda d: d["correspondent"] == r["pk"])), "last_correspondence": None}
@@ -248,10 +248,8 @@ def build(name, *, version, v3):
         entry("/api/documents/", {"page": "1", "page_size": str(PAGE_SIZE), "ordering": "modified,id"}, page([
             only(document_json(r, effective_content=True), DOC_FIELDS) for r in roots
         ])),
-        entry("/api/documents/", {"page": "1", "page_size": str(ID_PAGE_SIZE), "ordering": "id"}, page([
-            {"id": r["pk"]} for r in roots
-        ])),
-        entry("/api/trash/", {"page": "1", "page_size": str(PAGE_SIZE)}, page([
+        # Read in one page, Paperless's maximum, so its order can't shift
+        entry("/api/trash/", {"page": "1", "page_size": "100000"}, page([
             document_json(r, effective_content=False) for r in trashed
         ])),
     ]
