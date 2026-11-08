@@ -25,6 +25,8 @@ public struct ShortcutError: Error, Equatable, CustomLocalizedStringResourceConv
             self.init("There are no documents in Folio yet.")
         case ShortcutFailure.documentNotFound:
             self.init("That document is no longer in Folio.")
+        case ShortcutFailure.noRecognizedText:
+            self.init("Folio has no text for that document. It may still be reading it, or found no text.")
         case let ShortcutFailure.unreadableFile(name):
             self.init("Couldn't read \(name).")
         case FolioError.unreachable:

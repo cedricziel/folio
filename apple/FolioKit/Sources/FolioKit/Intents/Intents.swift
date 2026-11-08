@@ -166,15 +166,26 @@ public struct GetLatestDocumentIntent: AppIntent {
     }
 }
 
-public struct OpenDocumentIntent: OpenIntent {
+public struct OpenDocumentIntent: OpenIntent, PredictableIntent {
     public static let title: LocalizedStringResource = "Open a document"
     public static let description = IntentDescription(
         "Opens a document in Folio.", categoryName: "Documents"
     )
     public static let openAppWhenRun = true
 
-    @Parameter(title: "Document")
+    @Parameter(title: "Document", requestValueDialog: "Which document?")
     public var target: DocumentEntity
+
+    // Spotlight offers an intent only when its summary shows every required parameter.
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Open \(\.$target)")
+    }
+
+    public static var predictionConfiguration: some IntentPredictionConfiguration {
+        IntentPrediction(parameters: (\Self.$target)) { target in
+            DisplayRepresentation(title: "Open \(target.title)")
+        }
+    }
 
     public init() {}
 
@@ -185,7 +196,7 @@ public struct OpenDocumentIntent: OpenIntent {
     @MainActor
     public func perform() async throws -> some IntentResult {
         IntentEnvironment.ran(.openDocument)
-        IntentRouter.shared.route(.document(target.id))
+        IntentRouter.shared.route(.document(target.documentID, vaultID: target.id.vaultID))
         return .result()
     }
 }
@@ -215,7 +226,9 @@ public struct AddTagIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
         IntentEnvironment.ran(.addTag)
-        try await IntentEnvironment.run { try await $0.addTag(tag.id, to: document.id) }
+        try await IntentEnvironment.run {
+            try await $0.scoped(to: document.id.vaultID).addTag(tag.id, to: document.documentID)
+        }
         return .result(dialog: "Tagged \(document.title) with \(tag.name).")
     }
 }
@@ -245,7 +258,9 @@ public struct RemoveTagIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
         IntentEnvironment.ran(.removeTag)
-        try await IntentEnvironment.run { try await $0.removeTag(tag.id, from: document.id) }
+        try await IntentEnvironment.run {
+            try await $0.scoped(to: document.id.vaultID).removeTag(tag.id, from: document.documentID)
+        }
         return .result(dialog: "Removed \(tag.name) from \(document.title).")
     }
 }
