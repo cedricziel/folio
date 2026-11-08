@@ -14,13 +14,13 @@ struct DocumentClassificationView: View {
                     Section {
                         Picker("From", selection: correspondent) {
                             Text("Not set").tag(UUID?.none)
-                            ForEach(choices(options.correspondents.map { ($0.id, $0.name) }, keeping: "From")) {
+                            ForEach(choices(options.correspondents.map { ($0.id, $0.name) }, keeping: .correspondent)) {
                                 Text($0.name).tag(UUID?.some($0.id))
                             }
                         }
                         Picker("Type", selection: documentType) {
                             Text("Not set").tag(UUID?.none)
-                            ForEach(choices(options.documentTypes.map { ($0.id, $0.name) }, keeping: "Type")) {
+                            ForEach(choices(options.documentTypes.map { ($0.id, $0.name) }, keeping: .documentType)) {
                                 Text($0.name).tag(UUID?.some($0.id))
                             }
                         }
@@ -55,6 +55,11 @@ struct DocumentClassificationView: View {
             }
         }
         .task { await model.loadClassificationOptions() }
+        .interactiveDismissDisabled(model.savingClassification)
+        .onChange(of: model.savingClassification) { _, saving in
+            let message = saving ? "Saving" : model.classificationFailure ?? model.metadataFailure ?? "Saved"
+            AccessibilityNotification.Announcement(message).post()
+        }
         #if os(macOS)
             .frame(minWidth: 420, minHeight: 420)
         #endif
@@ -93,13 +98,29 @@ struct DocumentClassificationView: View {
         let name: String
     }
 
+    private enum Field {
+        case correspondent, documentType
+
+        var currentID: KeyPath<Document, UUID?> {
+            switch self {
+            case .correspondent: \.correspondentID
+            case .documentType: \.documentTypeID
+            }
+        }
+
+        var metadataLabel: String {
+            switch self {
+            case .correspondent: "From"
+            case .documentType: "Type"
+            }
+        }
+    }
+
     /// Keeps the current value selectable when it is no longer active, such as a trashed correspondent.
-    /// `field` is the metadata label whose value names it.
-    private func choices(_ active: [(UUID, String)], keeping field: String) -> [Choice] {
+    private func choices(_ active: [(UUID, String)], keeping field: Field) -> [Choice] {
         var choices = active.map { Choice(id: $0.0, name: $0.1) }
-        let currentID = field == "From" ? model.document.correspondentID : model.document.documentTypeID
-        if let currentID, !choices.contains(where: { $0.id == currentID }) {
-            let name = model.metadata.first { $0.label == field }?.value ?? "Unknown"
+        if let currentID = model.document[keyPath: field.currentID], !choices.contains(where: { $0.id == currentID }) {
+            let name = model.metadata.first { $0.label == field.metadataLabel }?.value ?? "Unknown"
             choices.insert(Choice(id: currentID, name: name), at: 0)
         }
         return choices

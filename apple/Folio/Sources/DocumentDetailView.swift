@@ -54,7 +54,7 @@ struct DocumentDetailView: View {
         }
         .task { await model.loadPreview() }
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
-        .task(id: snapshot.document.updatedAt) { await model.refreshMetadata() }
+        .task(id: snapshot.document.updatedAt) { await model.refreshMetadata(after: snapshot.document.updatedAt) }
         .task(id: model.summary) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
     }
 
@@ -106,6 +106,12 @@ struct DocumentDetailView: View {
                 Button("Notes and comments", systemImage: "text.bubble") { showingDiscussion = true }
                 if model.canClassify {
                     Button("Classify", systemImage: "tag") { classifying = true }
+                    if let failure = model.classificationFailure, !classifying {
+                        Text(failure).foregroundStyle(Color.danger)
+                        if model.canRetryClassification {
+                            Button("Retry save") { Task { await model.retryClassification() } }
+                        }
+                    }
                 }
                 if let failure = model.metadataFailure {
                     Text(failure).foregroundStyle(Color.danger)

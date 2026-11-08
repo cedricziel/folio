@@ -100,7 +100,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["first.pdf"].exists)
     }
 
-    func testFilingFromTheInboxRecoversFromAFailedSaveAndLeavesTheInbox() throws {
+    func testClassifyingRecoversFromAFailedSaveAndReviewingFilesTheDocument() throws {
         XCUIDevice.shared.orientation = .portrait
         let app = launchClassification()
         try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
@@ -111,6 +111,7 @@ import XCTest
         classifyWithRetry(app)
         XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
         XCTAssertEqual(app.staticTexts["metadata-Type"].label, "Invoice")
+        markReviewed(app)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         let kept = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Second fixture")).firstMatch
         XCTAssertTrue(kept.waitForExistence(timeout: 5), app.debugDescription)
@@ -126,7 +127,10 @@ import XCTest
         row.tap()
         XCTAssertTrue(app.staticTexts["letter.pdf"].waitForExistence(timeout: 5), app.debugDescription)
         classifyWithRetry(app)
-        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "A filed document leaves the inbox.")
+        XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
+        XCTAssertTrue(row.exists, "Classifying alone does not file a document.")
+        markReviewed(app)
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "A reviewed document leaves the inbox.")
         XCTAssertEqual(app.staticTexts["metadata-From"].label, "City utilities")
         XCTAssertTrue(app.staticTexts["letter.pdf"].exists, "The filed document stays open beside the list.")
     }
@@ -149,9 +153,9 @@ import XCTest
         let city = app.buttons["City utilities"]
         XCTAssertTrue(city.waitForExistence(timeout: 5), app.debugDescription)
         city.tap()
-        let retry = app.buttons["Retry save"]
+        let retry = app.buttons["Retry save"].firstMatch
         XCTAssertTrue(retry.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(app.staticTexts["Couldn't reach the server."].exists, app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Couldn't reach the server."].firstMatch.exists, app.debugDescription)
         capture(app, name: "Failed classification save with Retry")
         retry.tap()
         XCTAssertTrue(retry.waitForNonExistence(timeout: 5), app.debugDescription)
@@ -173,6 +177,13 @@ import XCTest
         XCTAssertTrue(done.wait(for: \.isEnabled, toEqual: true, timeout: 5), app.debugDescription)
         done.tap()
         XCTAssertTrue(app.staticTexts["metadata-From"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    private func markReviewed(_ app: XCUIApplication) {
+        let review = app.buttons["Mark reviewed"]
+        XCTAssertTrue(review.waitForExistence(timeout: 5), app.debugDescription)
+        review.tap()
+        XCTAssertTrue(app.buttons["Mark unreviewed"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
     private func picker(_ label: String, in app: XCUIApplication) -> XCUIElement {

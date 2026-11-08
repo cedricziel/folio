@@ -29,6 +29,12 @@ actor MockFolioService: FolioService {
         guard detailGate == nil else { return }
         await withCheckedContinuation { detailStarted = $0 }
     }
+    /// Lets later reads through while an earlier suspended read keeps waiting.
+    func stopSuspendingDocumentReads() { suspendDetailRequests = false }
+    func setFailDocumentReads(_ error: FolioError?) { failDocumentReads = error }
+    private(set) var documentReads = 0
+    private var failDocumentReads: FolioError?
+
     func releaseDocumentReads() {
         suspendDetailRequests = false
         detailGate?.resume()
@@ -306,7 +312,9 @@ actor MockFolioService: FolioService {
     }
 
     func document(id: Document.ID) async throws -> Document {
+        documentReads += 1
         if let failure { throw failure }
+        if let failDocumentReads { throw failDocumentReads }
         guard let document = documentList.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: nil)
         }

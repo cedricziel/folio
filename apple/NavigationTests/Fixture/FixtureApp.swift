@@ -44,12 +44,13 @@ extension FixtureApp {
             return MockFolioService(
                 documents: documents, loseFirstEntryResponse: arguments.contains("--discussion-save-failure"))
         }
-        // Processed and unclassified, so the inbox holds it until it is filed.
+        // Processed but not reviewed, so the inbox holds it until it is marked reviewed.
         let letter = Document(
             title: "Unfiled letter", originalFilename: "letter.pdf", ocrStatus: .done, embedStatus: .done,
-            canEditDocumentDate: true)
+            canEditDocumentDate: true, reviewed: false, canReviewDocument: true)
         let kept = Document(
-            title: "Second fixture", originalFilename: "second.pdf", ocrStatus: .done, embedStatus: .done)
+            title: "Second fixture", originalFilename: "second.pdf", ocrStatus: .done, embedStatus: .done,
+            reviewed: false)
         return MockFolioService(
             documents: [letter, kept], correspondents: [Correspondent(name: "City utilities")],
             types: [DocumentType(name: "Invoice")], tags: [FolioKit.Tag(name: "Taxes")],

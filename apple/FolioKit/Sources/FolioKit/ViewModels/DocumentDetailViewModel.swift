@@ -74,6 +74,8 @@ public final class DocumentDetailViewModel {
     private var loading = false
     private var metadataWrites = 0
     private var failedChange: ClassificationChange?
+    /// `updatedAt` of the last full document fetched from the server.
+    private var fetchedVersion: Date?
 
     public init(document: Document, lookups: DocumentLookups = DocumentLookups(), service: any FolioService) {
         discussion = DocumentDiscussionViewModel(documentID: document.id, service: service)
@@ -175,6 +177,10 @@ public final class DocumentDetailViewModel {
     }
 
     public func loadClassificationOptions() async {
+        if !savingClassification {
+            failedChange = nil
+            classificationFailure = nil
+        }
         do {
             async let correspondents = service.correspondents()
             async let documentTypes = service.documentTypes()
@@ -199,7 +205,8 @@ public final class DocumentDetailViewModel {
 
     /// Saves one change through the server's own routes, then shows the document as the server now has it.
     ///
-    /// A failure leaves the document as it was and keeps the change for `retryClassification()`.
+    /// A rejected write leaves the document as it was and keeps the change for `retryClassification()`.
+    /// When only the follow-up fetch fails, the change is saved and `metadataFailure` offers a refresh instead.
     public func classify(_ change: ClassificationChange) async {
         guard canClassify, !savingClassification else { return }
         savingClassification = true
@@ -212,19 +219,33 @@ public final class DocumentDetailViewModel {
             case let .addTag(id): try await service.addTag(id, to: document.id)
             case let .removeTag(id): try await service.removeTag(id, from: document.id)
             }
-            metadataWrites += 1
-            let updated = try await service.document(id: document.id)
-            failedChange = nil
-            applyMetadata(updated)
         } catch {
             failedChange = change
             classificationFailure = error.localizedDescription
+            return
+        }
+        failedChange = nil
+        do {
+            let updated = try await service.document(id: document.id)
+            // Fetches started before the write would show the document without it.
+            metadataWrites += 1
+            applyMetadata(updated)
+            metadataFailure = nil
+        } catch {
+            metadataFailure = error.localizedDescription
         }
     }
 
     public func retryClassification() async {
         guard let change = failedChange else { return }
         await classify(change)
+    }
+
+    /// Fetches the full document unless the list row is no newer than the last one fetched,
+    /// as when the row came from this model's own save.
+    public func refreshMetadata(after rowUpdate: Date) async {
+        if let fetchedVersion, fetchedVersion >= rowUpdate { return }
+        await refreshMetadata()
     }
 
     /// Fetches the full document; a superseded or cancelled fetch changes nothing.
@@ -244,6 +265,7 @@ public final class DocumentDetailViewModel {
 
     private func applyMetadata(_ updated: Document) {
         guard updated.updatedAt >= document.updatedAt else { return }
+        fetchedVersion = updated.updatedAt
         document = updated
         rebuildFields()
     }
