@@ -67,6 +67,14 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - OpenAPI: fetch the served spec and check that `/api/documents` is listed; compare against the shape asserted in `e2e/tests/documents.spec.ts`.
 - Auth: `up.sh` runs with `auth.required=false` unless `FOLIO_VERIFY_AUTH_REQUIRED=true` is set. `FOLIO_VERIFY_AUTH_REQUIRED=true $S/with-instance.sh bash -c "$S/auth.sh \$FOLIO_VERIFY_ENV"` exercises the setup token, login, `/api` 401, the public PWA assets, the same-origin check and the registration rate limit (the setup link is read from `server.log`). By hand: open the setup link from the log to create the owner with a throwaway password, then log in. Extend `smoke.sh` with the session cookie or token and `e2e/` with a login fixture. Passkeys, OIDC and forward-auth need a local fake provider or headers set by curl; never a real IdP.
 - MCP at `/mcp`: `claude mcp add --transport http folio-verify "$BASE_URL/mcp"` (remove it afterwards) or a JSON-RPC probe: `curl -sS -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "$BASE_URL/mcp"`.
+- Apple app links (`/.well-known/apple-app-site-association`): run the check with and without app IDs. `FOLIO_VERIFY_APPLE_APP_IDS` is passed to the instance as `FOLIO_APPLE__APP_IDS`.
+
+  ```bash
+  FOLIO_VERIFY_APPLE_APP_IDS=ABCDE12345.com.example.folio $S/with-instance.sh bash -c "$S/apple-links.sh \$FOLIO_VERIFY_ENV"
+  $S/with-instance.sh bash -c "$S/apple-links.sh \$FOLIO_VERIFY_ENV"
+  ```
+
+  The first expects 200 JSON with `Cache-Control: public, max-age=3600`, no cookie, the configured app IDs and the three `?`-masked components; the second expects 404. Both check that the root `/apple-app-site-association` is not served and that `/settings` shows the "Apple app links" section with the association URL and the CDN note. Include the settings screen in the screenshot and axe tour.
 - Webhook action identity: run `cargo test -p folio-infra --test workflows webhook_actions_have_independent` for a local deduplicating receiver with two actions and a retry. In an isolated app, send two webhook actions to one local receiver with different routing headers; verify distinct `X-Folio-Delivery` IDs, one shared `X-Folio-Run`, and stable IDs when an action retries.
 - Webhooks and workflows: start a local receiver (`python3 -m http.server`, or `nc -l`) on a free port, point the webhook at `http://127.0.0.1:<port>`, run the trigger (upload), and check the receiver log.
 - Postgres or S3 adapters: start them with testcontainers or a local container, pass the URL through `up.sh` env, and run `smoke.sh` unchanged; the API contract is the same.

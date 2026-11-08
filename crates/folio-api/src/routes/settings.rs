@@ -13,13 +13,16 @@ use axum::{
 use serde::Deserialize;
 use tracing::{error, info};
 
-use folio_core::models::{AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings};
+use folio_core::models::{
+    AiSettings, AppleAppId, EmbeddingSettings, OcrSettings, PipelineSettings,
+};
 use folio_infra::JobType;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
 use crate::vault::DefaultVault;
 
+use super::apple::{self, AppIdSource};
 use super::auth::AuthState;
 use super::view::{Nav, Sidebar};
 
@@ -31,6 +34,7 @@ pub fn router(auth: AuthState) -> Router<AppState> {
         .route("/settings/processing/test", post(test_processing_settings))
         .route("/settings/processing/reembed", post(reembed_all))
         .route("/settings/mcp", post(save_mcp_settings))
+        .route("/settings/apple", post(save_apple_settings))
         .route("/settings/push", post(save_push_settings))
         .route("/settings/push/test", post(test_push_settings))
         .route_layer(middleware::from_fn_with_state(auth, require_admin))
@@ -87,9 +91,21 @@ struct SettingsTemplate {
     embedding_providers: Vec<ProviderOption>,
     notice: String,
     mcp_enabled: bool,
+    apple: AppleLinks,
     push_status: Option<folio_infra::push::PushStatus>,
     push_devices: u64,
     push_notice: String,
+}
+
+/// The "Apple app links" section
+struct AppleLinks {
+    /// Textarea contents: the stored row, or what the admin just submitted
+    draft: String,
+    effective: Vec<String>,
+    source: &'static str,
+    association_url: String,
+    /// A rejected submission or an invalid stored row
+    error: Option<String>,
 }
 
 /// Database key behind the MCP toggle; `folio-mcp` reads the same row
@@ -108,15 +124,13 @@ async fn settings_page(
     State(state): State<AppState>,
     Query(query): Query<SettingsQuery>,
 ) -> ApiResult<Html<String>> {
-    let settings = state.settings_repo.list().await?;
-    let mut processing = (*state.pipeline.settings().await).clone();
-    processing.ai = AiSettings::default();
-    let mcp_enabled = settings
-        .iter()
-        .find(|s| s.key == MCP_ENABLED)
-        .map(|s| s.value.trim().eq_ignore_ascii_case("true"))
-        .unwrap_or(state.mcp_default);
-
+    let notice = match (query.reembedded, query.saved) {
+        (Some(n), _) => format!("Queued {n} documents for re-embedding."),
+        (None, Some(section)) if section == "mcp" => "MCP setting saved.".to_string(),
+        (None, Some(section)) if section == "apple" => "Apple app links saved.".to_string(),
+        (None, Some(_)) => "Processing settings saved.".to_string(),
+        _ => String::new(),
+    };
     let push_notice = match query.push.as_deref() {
         Some("saved") => "Push settings saved.",
         Some("bad_key") => "Not saved: the key is not a PKCS#8 P-256 key (.p8).",
@@ -129,6 +143,67 @@ async fn settings_page(
         _ => "",
     }
     .to_string();
+    render_settings(&state, vault, notice, push_notice, None)
+        .await
+        .map(Html)
+}
+
+/// A rejected Apple app links submission: what was typed and why it failed
+struct AppleDraft {
+    text: String,
+    error: String,
+}
+
+async fn render_settings(
+    state: &AppState,
+    vault: folio_core::models::VaultId,
+    notice: String,
+    push_notice: String,
+    apple_draft: Option<AppleDraft>,
+) -> ApiResult<String> {
+    let settings = state.settings_repo.list().await?;
+    let mut processing = (*state.pipeline.settings().await).clone();
+    processing.ai = AiSettings::default();
+    let mcp_enabled = settings
+        .iter()
+        .find(|s| s.key == MCP_ENABLED)
+        .map(|s| s.value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(state.mcp_default);
+
+    let stored = settings
+        .iter()
+        .find(|s| s.key == apple::SETTING_KEY)
+        .map(|s| s.value.as_str());
+    let (effective, source) = apple::resolve(stored, &state.apple_app_ids_default);
+    let fallback = if effective.is_empty() {
+        "not configured"
+    } else {
+        "from config.toml"
+    };
+    let (source, stored_error) = match source {
+        AppIdSource::Settings => ("from settings", None),
+        AppIdSource::Config => ("from config.toml", None),
+        AppIdSource::Unconfigured => ("not configured", None),
+        AppIdSource::Invalid(error) => (
+            fallback,
+            Some(format!("The saved app IDs are ignored: {error}")),
+        ),
+    };
+    let (draft, error) = match apple_draft {
+        Some(AppleDraft { text, error }) => (text, Some(error)),
+        None => (stored.unwrap_or_default().to_string(), stored_error),
+    };
+    let apple = AppleLinks {
+        draft,
+        effective: effective.iter().map(ToString::to_string).collect(),
+        source,
+        association_url: format!(
+            "{}/.well-known/apple-app-site-association",
+            apple::origin(&state.public_url)
+        ),
+        error,
+    };
+
     let (push_status, push_devices) = match &state.push {
         Some(push) => (
             Some(push.settings.status().await),
@@ -136,16 +211,9 @@ async fn settings_page(
         ),
         None => (None, 0),
     };
-    let notice = match (query.reembedded, query.saved) {
-        (Some(n), _) => format!("Queued {n} documents for re-embedding."),
-        (None, Some(section)) if section == "mcp" => "MCP setting saved.".to_string(),
-        (None, Some(section)) if section == "push" => String::new(),
-        (None, Some(_)) => "Processing settings saved.".to_string(),
-        _ => String::new(),
-    };
 
     let template = SettingsTemplate {
-        sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
+        sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
         credentials: CredentialPresence::from(&AiSettings::from_settings(&settings)),
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),
@@ -156,14 +224,15 @@ async fn settings_page(
         processing,
         notice,
         mcp_enabled,
+        apple,
         push_status,
         push_devices,
         push_notice,
     };
 
-    Ok(Html(template.render().unwrap_or_else(|e| {
-        format!("Error rendering settings page: {}", e)
-    })))
+    Ok(template
+        .render()
+        .unwrap_or_else(|e| format!("Error rendering settings page: {}", e)))
 }
 
 /// AI credentials form data
@@ -408,6 +477,46 @@ async fn save_mcp_settings(
         if enabled { "enabled" } else { "disabled" }
     );
     Ok(Redirect::to("/settings?saved=mcp").into_response())
+}
+
+/// Apple app links form data
+#[derive(Debug, Deserialize)]
+pub struct AppleForm {
+    app_ids: String,
+}
+
+/// Save the app IDs one per line; an empty value falls back to the startup configuration
+async fn save_apple_settings(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    Form(form): Form<AppleForm>,
+) -> ApiResult<Response> {
+    let ids = match AppleAppId::parse_list(&form.app_ids) {
+        Ok(ids) => ids,
+        Err(error) => {
+            let page = render_settings(
+                &state,
+                vault,
+                String::new(),
+                String::new(),
+                Some(AppleDraft {
+                    text: form.app_ids,
+                    error: error.to_string(),
+                }),
+            )
+            .await?;
+            return Ok((StatusCode::UNPROCESSABLE_ENTITY, Html(page)).into_response());
+        }
+    };
+    let value = ids
+        .iter()
+        .map(AppleAppId::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.settings_repo.set(apple::SETTING_KEY, &value).await?;
+
+    info!(count = ids.len(), "Apple app links saved");
+    Ok(Redirect::to("/settings?saved=apple").into_response())
 }
 
 /// Push section form data

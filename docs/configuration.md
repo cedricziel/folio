@@ -14,7 +14,7 @@ From lowest to highest:
 
 The database overrides the other layers only for the keys it manages:
 `ai.openai_api_key`, `ai.anthropic_api_key`, `ocr.*`, `embeddings.*`,
-and the `processing.*` toggles. Everything else is fixed at
+the `processing.*` toggles and `apple.app_ids`. Everything else is fixed at
 startup by the first three layers.
 
 New databases use startup pipeline values until settings are saved. Upgrades
@@ -102,6 +102,7 @@ preserve existing database rows, including values seeded by earlier releases.
 | `push.max_alerts_per_hour` | `FOLIO_PUSH__MAX_ALERTS_PER_HOUR` | `12` | Alerts per device per rolling hour; later outcomes fold into the next alert allowed. |
 | `import.allowed_roots` | `FOLIO_IMPORT__ALLOWED_ROOTS` | empty | Comma-separated server directories an import may read from; through the env variable, a directory can't contain a comma. Empty turns imports off. Config only, not on `/settings`. See [paperless-import.md](paperless-import.md). |
 | `import.max_file_bytes` | `FOLIO_IMPORT__MAX_FILE_BYTES` | `536870912` (512 MB) | Largest original file an import accepts; bigger files fail with `file_too_large`. |
+| `apple.app_ids` | `FOLIO_APPLE__APP_IDS` | empty | Comma-separated Apple app IDs (`TEAMID.bundle.id`) served in `/.well-known/apple-app-site-association`. Startup fails on an invalid entry. |
 
 Ingestion sources have names of your choosing, so they are not listed above:
 `FOLIO_INGEST__FOLDERS__<NAME>__<KEY>`, `FOLIO_INGEST__EMAIL__<NAME>__<KEY>` and
@@ -115,6 +116,35 @@ default `mirror`), `poll_interval_secs` (default `900`, at least `60`),
 `default_currency` and `enabled`. Folio refuses to start when a section has no
 `vault`, has invalid settings, or shares its vault with another section. See
 [paperless-import.md](paperless-import.md#in-configtoml).
+
+## Apple app links
+
+If you build and sign your own Folio app for iPhone, iPad or Mac, Folio can
+publish an Apple app site association at
+`/.well-known/apple-app-site-association` so that document, vault and
+saved-view links on this server open in your app (Universal Links). The
+official App Store app cannot use this. The association is not served (404)
+until at least one app ID is configured.
+
+An app ID is your 10-character Team ID, a dot and the bundle identifier:
+
+```toml
+[apple]
+app_ids = ["ABCDE12345.com.example.folio"]
+```
+
+or, as a comma-separated list,
+`FOLIO_APPLE__APP_IDS=ABCDE12345.com.example.folio,ABCDE12345.com.example.folio.beta`.
+The environment variable overrides `config.toml`, and Folio refuses to start
+when an entry is not a valid app ID.
+
+Owners and admins can also edit the list under **Apple app links** on
+`/settings`, one app ID per line. A non-empty value there replaces the startup
+value on the next request, without a restart. An empty value falls back to
+`config.toml` or the environment, so an app ID set there cannot be turned off
+from `/settings`: remove it from the startup configuration and restart. The
+section shows which source is in effect. For the proxy and device side, see
+[deployment.md](deployment.md#apple-universal-links).
 
 Other variables read directly: `FOLIO_CONFIG` (config file path) and `RUST_LOG`
 (log filter).
