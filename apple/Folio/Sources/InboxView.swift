@@ -253,7 +253,6 @@ struct InboxView: View {
                         .listRowBackground(Color.paper)
                     }
                 }
-                .documentEntityIdentifiers(vaultID: vaultID)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: list.rowChangeRevision)
