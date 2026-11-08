@@ -132,7 +132,7 @@ final class NotificationResponder: NSObject, UNUserNotificationCenterDelegate, S
 }
 
 #if os(iOS)
-    final class FolioAppDelegate: NSObject, UIApplicationDelegate {
+    extension FolioAppDelegate {
         func application(
             _: UIApplication, didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?
         ) -> Bool {

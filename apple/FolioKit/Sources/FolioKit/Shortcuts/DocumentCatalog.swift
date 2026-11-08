@@ -68,10 +68,21 @@ public enum ShortcutFailure: Error, Equatable, Sendable {
 public struct DocumentCatalog: Sendable {
     private let service: any FolioService
     private let calendar: Calendar
+    private let uploads: UploadBatchRunner
+    private let uploadScope: String
 
-    public init(service: any FolioService, calendar: Calendar = .current) {
+    /// - Parameters:
+    ///   - progress: Where unfinished uploads are remembered, so running the Shortcut again resumes them.
+    ///   - uploadScope: Separates remembered uploads by server.
+    public init(
+        service: any FolioService, calendar: Calendar = .current,
+        progress: any UploadProgressStoring = FileUploadProgressStore.shared,
+        uploadScope: String = SharedConfiguration.serverURL()?.absoluteString ?? ""
+    ) {
         self.service = service
         self.calendar = calendar
+        uploads = UploadBatchRunner(service: service, store: progress)
+        self.uploadScope = uploadScope
     }
 
     public func search(_ query: String, limit: Int = 25) async throws -> [DocumentSummary] {
@@ -147,22 +158,17 @@ public struct DocumentCatalog: Sendable {
     }
 
     /// Uploads each file, then tags every new document. A single file may carry a title.
+    ///
+    /// When a run stops part-way, running it again with the same files and tags finishes only the remaining
+    /// uploads and tags instead of creating the earlier documents again.
     public func upload(
         _ files: [UploadFile], title: String? = nil, tagIDs: [Tag.ID] = []
     ) async throws -> [DocumentSummary] {
-        var uploaded: [Document] = []
-        for var file in files {
-            if files.count == 1, let title = title?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !title.isEmpty
-            {
-                file.title = title
-            }
-            let document = try await service.upload(file)
-            for tagID in tagIDs {
-                try await service.addTag(tagID, to: document.id)
-            }
-            uploaded.append(document)
+        var titled = files
+        if files.count == 1, let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            titled[0].title = title
         }
+        let uploaded = try await uploads.run(titled, tagIDs: tagIDs, scope: uploadScope)
         return try await summaries(uploaded)
     }
 

@@ -10,9 +10,9 @@ use folio_core::ports::{
     DocumentRepository, DocumentStore, DocumentTypeRepository, EmbeddingService, HealthCheck,
     IngestLedger, IngestOutcomeReader, IngestionSourceFactory, OcrService, OutboxStore,
     SearchResult, SearchService, SettingsRepository, SourceRepository, TagRepository,
-    WorkflowRepository,
+    UploadReceiptRepository, WorkflowRepository,
 };
-use folio_core::services::{Importer, SearchServiceFacade, VaultService};
+use folio_core::services::{IdempotentUploads, Importer, SearchServiceFacade, VaultService};
 use folio_infra::{JobQueue, PipelineContext, SourceFactory, ThumbnailService, WebhookClient};
 
 use folio_core::EventBroadcaster;
@@ -36,6 +36,10 @@ pub struct AppState {
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     pub document_repo: Arc<dyn DocumentRepository>,
     pub entry_repo: Arc<dyn DocumentEntryRepository>,
+    /// Uploads sent with an `Idempotency-Key`, safe to retry
+    pub keyed_uploads: Arc<IdempotentUploads>,
+    /// Upload tasks that outlive their request; shutdown waits for them
+    pub upload_tasks: tokio_util::task::TaskTracker,
     pub tag_repo: Arc<dyn TagRepository>,
     pub correspondent_repo: Arc<dyn CorrespondentRepository>,
     pub document_type_repo: Arc<dyn DocumentTypeRepository>,
@@ -103,6 +107,7 @@ impl AppState {
         saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
         document_repo: Arc<dyn DocumentRepository>,
         entry_repo: Arc<dyn DocumentEntryRepository>,
+        upload_receipts: Arc<dyn UploadReceiptRepository>,
         tag_repo: Arc<dyn TagRepository>,
         correspondent_repo: Arc<dyn CorrespondentRepository>,
         document_type_repo: Arc<dyn DocumentTypeRepository>,
@@ -128,10 +133,17 @@ impl AppState {
             store.clone(),
             Arc::new(job_queue.clone()),
         ));
+        let keyed_uploads = Arc::new(IdempotentUploads::new(
+            upload_receipts,
+            importer.clone(),
+            document_repo.clone(),
+        ));
         Self {
             saved_views,
             document_repo,
             entry_repo,
+            keyed_uploads,
+            upload_tasks: tokio_util::task::TaskTracker::new(),
             tag_repo,
             correspondent_repo,
             document_type_repo,

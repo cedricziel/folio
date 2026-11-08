@@ -19,6 +19,7 @@ mod outbox;
 mod push_repo;
 mod search;
 mod settings_repo;
+mod upload_receipts;
 mod vault_repo;
 mod workflow_repo;
 
@@ -47,6 +48,7 @@ pub use outbox::{
 pub use push_repo::PostgresPushRepository;
 pub use search::PostgresSearchService;
 pub use settings_repo::PostgresSettingsRepository;
+pub use upload_receipts::PostgresUploadReceiptRepository;
 pub use vault_repo::PostgresVaultRepository;
 pub use workflow_repo::PostgresWorkflowRepository;
 

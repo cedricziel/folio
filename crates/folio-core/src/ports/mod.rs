@@ -16,6 +16,7 @@ mod push;
 mod repository;
 mod saved_view;
 mod storage;
+mod upload_receipts;
 mod workflow;
 
 pub use access::AccessPolicy;
@@ -52,4 +53,8 @@ pub use repository::{
 pub use saved_view::{SavedViewAccess, SavedViewRepository};
 pub use storage::{keys, purge_document, DocumentStore, LocalCopy, StoredObject};
 pub use storage::{ProcessingQueue, ProcessingStatus};
+pub use upload_receipts::{
+    upload_fingerprint, ExpiredReservation, UploadClaim, UploadReceiptKey, UploadReceiptRepository,
+    UPLOAD_CLAIM_HEARTBEAT, UPLOAD_CLAIM_TIMEOUT, UPLOAD_RECEIPT_RETENTION,
+};
 pub use workflow::{FileMetadata, WorkflowRepository};

@@ -74,7 +74,7 @@ public struct OAuthSignIn: Sendable {
         }
         let credentials = OAuthCredentials(
             serverURL: server, clientID: clientID, tokenEndpoint: metadata.tokenEndpoint,
-            revocationEndpoint: metadata.revocationEndpoint, tokens: tokens
+            revocationEndpoint: metadata.revocationEndpoint, tokens: tokens, signInID: UUID()
         )
         if let refreshLock {
             try await refreshLock.withLock { try store.save(credentials) }

@@ -19,6 +19,7 @@ futures = { workspace = true }
 # Web framework
 axum = { workspace = true }
 tower = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 tower-http = { workspace = true }
 tower-livereload = { workspace = true }
 
@@ -54,6 +55,7 @@ base64 = { workspace = true }
 async-trait = { workspace = true }
 
 [dev-dependencies]
+bytes = { workspace = true }
 totp-rs = { version = "6", features = ["otpauth"] }
 webauthn-authenticator-rs = { version = "0.6", features = ["softpasskey"] }
 jsonwebtoken = { version = "11", features = ["rust_crypto"] }

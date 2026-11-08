@@ -37,9 +37,13 @@ public struct FolioCatalog: Sendable {
         return try await cache.vaults(maxAge: maxAge) { try await service.vaults() }
     }
 
+    /// The vault list behind a listing is as fresh as the listing asked for, so an enumeration of a vault that was
+    /// just revoked finds it gone instead of failing with 403.
     private func listing(of folder: FolioItemID.Folder, maxAge: Duration) async throws -> [FolioNode] {
-        guard let cache else { return try await fetchChildren(of: folder) }
-        return try await cache.children(of: folder, maxAge: maxAge) { try await fetchChildren(of: folder) }
+        guard let cache else { return try await fetchChildren(of: folder, vaultAge: maxAge) }
+        return try await cache.children(of: folder, maxAge: maxAge) {
+            try await fetchChildren(of: folder, vaultAge: maxAge)
+        }
     }
 
     /// Finds `id` in `folder`'s listing, refetching a reused listing once if the item is not in it.
@@ -84,9 +88,11 @@ public struct FolioCatalog: Sendable {
         }
     }
 
-    private func context(for folder: FolioItemID.Folder) async throws -> Context? {
+    private func context(
+        for folder: FolioItemID.Folder, vaultAge: Duration = FolioCatalog.lookupAge
+    ) async throws -> Context? {
         guard let id = folder.vaultID else { return nil }
-        let catalog = try await vaultCatalog(maxAge: Self.lookupAge)
+        let catalog = try await vaultCatalog(maxAge: vaultAge)
         guard let vault = catalog.vaults.first(where: { $0.id == id }) else { return nil }
         return Context(service: service.scoped(to: id), vault: vault)
     }
@@ -96,12 +102,12 @@ public struct FolioCatalog: Sendable {
         try await listing(of: folder, maxAge: .zero)
     }
 
-    private func fetchChildren(of folder: FolioItemID.Folder) async throws -> [FolioNode] {
+    private func fetchChildren(of folder: FolioItemID.Folder, vaultAge: Duration) async throws -> [FolioNode] {
         if folder == .root {
             let catalog = try await vaultCatalog(maxAge: .zero)
             return vaultNodes(catalog.vaults)
         }
-        guard let context = try await context(for: folder) else { return [] }
+        guard let context = try await context(for: folder, vaultAge: vaultAge) else { return [] }
         let content: FolioItemID.Folder
         if case .vault = folder {
             content = .root
