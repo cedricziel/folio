@@ -143,6 +143,9 @@ final class AppModel {
         Task {
             defer { isWorking = false }
             do {
+                // Sent while the token still works; best effort, sign-out never waits more than briefly.
+                FolioTelemetry.shared.action(.signOut)
+                await FolioTelemetry.shared.endSession(.signOut)
                 try await SharedConfiguration.tokenProvider().signOut()
                 FolioTelemetry.shared.stop()
                 session = .signedOut

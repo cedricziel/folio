@@ -129,6 +129,8 @@ struct InboxView: View {
                 handle(.document(link.documentID, vaultID: link.vaultID))
             }
         }
+        .telemetryScreen(
+            list.showsSavedView ? TelemetryScreen.savedView : list.scope == .inbox ? TelemetryScreen.inbox : .documents)
     }
 
     private func documentDestination(_ id: Document.ID) -> some View {
@@ -176,7 +178,11 @@ struct InboxView: View {
     private var scanAction: (() -> Void)? {
         guard canAcceptImport else { return nil }
         #if os(iOS)
-            return DocumentScanner.isSupported ? { showScanner = true } : nil
+            guard DocumentScanner.isSupported else { return nil }
+            return {
+                FolioTelemetry.shared.action(.scanStart)
+                showScanner = true
+            }
         #else
             return nil
         #endif
@@ -198,6 +204,7 @@ struct InboxView: View {
         case .inbox:
             onNavigate(.inbox)
         case let .document(id, vaultID):
+            FolioTelemetry.shared.action(.documentOpen)
             onOpenDocument(id, vaultID)
         }
     }
@@ -239,6 +246,7 @@ struct InboxView: View {
                             } else {
                                 Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
                                     pageTask?.cancel()
+                                    FolioTelemetry.shared.action(.browseLoadMore)
                                     pageTask = Task { await list.loadNextPage() }
                                 }
                                 .buttonStyle(.borderless)
@@ -257,7 +265,10 @@ struct InboxView: View {
         .navigationTitle(session.savedViewName ?? (list.scope == .inbox ? "Inbox" : "All documents"))
         .searchable(text: $list.searchText, prompt: "Search documents")
         .searchFocused($searchFocused)
-        .refreshable { await list.load() }
+        .refreshable {
+            FolioTelemetry.shared.action(.browseRefresh)
+            await list.load()
+        }
         .overlay { placeholder }
         .overlay {
             if isDropTargeted && canAcceptImport {
@@ -446,6 +457,7 @@ struct InboxView: View {
             if list.canLoadMore {
                 Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
                     pageTask?.cancel()
+                    FolioTelemetry.shared.action(.browseLoadMore)
                     pageTask = Task { await list.loadNextPage() }
                 }
                 .disabled(list.isLoadingMore)
@@ -589,6 +601,7 @@ struct InboxView: View {
     #if os(iOS)
         private var scanButton: some View {
             Button {
+                FolioTelemetry.shared.action(.scanStart)
                 showScanner = true
             } label: {
                 Label("Scan", systemImage: "doc.viewfinder").frame(maxWidth: .infinity)

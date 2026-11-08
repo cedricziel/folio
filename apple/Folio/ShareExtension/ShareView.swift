@@ -57,6 +57,7 @@ struct ShareView: View {
                 Button("Cancel", role: .cancel, action: onFinish)
                 Spacer()
                 Button(model.state == .uploading ? "Uploading…" : "Upload") {
+                    FolioTelemetry.shared.action(.shareSubmit)
                     Task {
                         await model.upload()
                         if model.state == .done {

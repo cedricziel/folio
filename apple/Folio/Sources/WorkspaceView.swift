@@ -29,6 +29,9 @@ struct WorkspaceView: View {
                     get: { Optional(workspace.destination) },
                     set: {
                         if let destination = $0 {
+                            if destination != workspace.destination {
+                                FolioTelemetry.shared.action(.browseScopeChange)
+                            }
                             workspace.destination = destination
                         }
                     }
@@ -59,6 +62,7 @@ struct WorkspaceView: View {
                     Section("Saved views") {
                         ForEach(workspace.savedViews) { view in
                             Button {
+                                FolioTelemetry.shared.action(.savedViewOpen)
                                 Task { await workspace.openSavedView(view.id) }
                             } label: {
                                 Label(view.name, systemImage: view.visibility == .private ? "bookmark" : "person.2")
@@ -165,6 +169,7 @@ struct WorkspaceView: View {
             ), presenting: pendingViewDelete
         ) { view in
             Button("Delete saved view", role: .destructive) {
+                FolioTelemetry.shared.action(.savedViewDelete)
                 Task { await workspace.deleteSavedView(view.id) }
             }
         } message: { _ in
@@ -205,6 +210,7 @@ struct WorkspaceView: View {
                     get: { workspace.selectedVaultID },
                     set: {
                         if let id = $0 {
+                            FolioTelemetry.shared.action(.vaultSwitch)
                             workspace.selectVault(id)
                         }
                     }
