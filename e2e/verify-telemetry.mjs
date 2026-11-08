@@ -12,14 +12,20 @@ const binary =
   process.env.FOLIO_BIN ?? path.join(repo, "target/debug/folio-app");
 const directory = await mkdtemp(path.join(tmpdir(), "folio-telemetry-"));
 const captures = [];
+// The server's own protobuf export, kept raw: only its trace IDs are checked.
+const serverExports = [];
 const receiver = createServer(async (request, response) => {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  captures.push({
-    signal: request.url.split("/").pop(),
-    headers: request.headers,
-    body: JSON.parse(Buffer.concat(chunks).toString()),
-  });
+  const body = Buffer.concat(chunks);
+  if (request.headers["content-type"] === "application/x-protobuf")
+    serverExports.push({ signal: request.url.split("/").pop(), body });
+  else
+    captures.push({
+      signal: request.url.split("/").pop(),
+      headers: request.headers,
+      body: JSON.parse(body.toString()),
+    });
   response.writeHead(200, { "content-type": "application/json" });
   response.end("{}");
 });
@@ -60,6 +66,9 @@ try {
       FOLIO_AUTH__REQUIRED: "true",
       FOLIO_TELEMETRY__CLIENTS_ENABLED: "true",
       FOLIO_TELEMETRY__OTLP_HTTP_ENDPOINT: `http://127.0.0.1:${collectorPort}`,
+      OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${collectorPort}`,
+      OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+      OTEL_SERVICE_NAME: "folio-server",
       OTEL_EXPORTER_OTLP_HEADERS: "x-api-key=local-server-key",
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -205,6 +214,21 @@ try {
     /^[0-9a-f]{16}$/,
     "the page load joined the server request named in Server-Timing",
   );
+  await expect
+    .poll(
+      () =>
+        serverExports.some(
+          (capture) =>
+            capture.signal === "traces" &&
+            capture.body.includes(Buffer.from(pageLoad.traceId, "hex")) &&
+            capture.body.includes(Buffer.from(pageLoad.parentSpanId, "hex")),
+        ),
+      {
+        message: "the server exported the request span the page load names",
+        timeout: 20_000,
+      },
+    )
+    .toBe(true);
   assert.deepEqual(errors, []);
   console.log(
     "Authenticated browser → Folio → local OTLP receiver verified: traces, metrics, logs, traceparent, session and screen events, Server-Timing page-load link, private resources, server-only credentials.",
