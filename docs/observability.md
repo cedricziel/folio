@@ -5,15 +5,15 @@ you set an OTLP endpoint; without one Folio only writes logs to stderr. Server
 export uses the standard `OTEL_*` variables. Client export has an additional
 explicit opt-in described below.
 
-| Variable | Effect |
-| --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector or backend base URL. Setting it turns export on. Per-signal `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `..._METRICS_ENDPOINT` and `..._LOGS_ENDPOINT` also work. |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default) or `grpc`. |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Comma-separated `key=value` headers, for example `authorization=Bearer <token>`. |
-| `OTEL_SERVICE_NAME` | Defaults to `folio`. |
-| `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes, for example `deployment.environment.name=prod`. |
-| `OTEL_SDK_DISABLED` | `true` turns export off even when an endpoint is set. |
-| `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` | `none` turns one signal off. |
+| Variable                                                              | Effect                                                                                                                                                                |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                         | Collector or backend base URL. Setting it turns export on. Per-signal `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `..._METRICS_ENDPOINT` and `..._LOGS_ENDPOINT` also work. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                         | `http/protobuf` (default) or `grpc`.                                                                                                                                  |
+| `OTEL_EXPORTER_OTLP_HEADERS`                                          | Comma-separated `key=value` headers, for example `authorization=Bearer <token>`.                                                                                      |
+| `OTEL_SERVICE_NAME`                                                   | Defaults to `folio`.                                                                                                                                                  |
+| `OTEL_RESOURCE_ATTRIBUTES`                                            | Extra resource attributes, for example `deployment.environment.name=prod`.                                                                                            |
+| `OTEL_SDK_DISABLED`                                                   | `true` turns export off even when an endpoint is set.                                                                                                                 |
+| `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` | `none` turns one signal off.                                                                                                                                          |
 
 `RUST_LOG` still controls verbosity and defaults to `info`. Keep API keys in a
 secret store or `.env`, never in the repository. Folio loads `.env` for the
@@ -50,16 +50,16 @@ On shutdown (SIGTERM or Ctrl+C) Folio flushes pending data before exiting.
 
 **Metrics**
 
-| Name | Type | Attributes |
-| --- | --- | --- |
-| `http.server.request.duration` | histogram (s) | `http.request.method`, `http.route`, `http.response.status_code` |
-| `http.server.active_requests` | up-down counter | `http.request.method` |
-| `folio.jobs.processed` | counter | `job.type`, `outcome` |
-| `folio.jobs.failed` | counter | `job.type` |
-| `folio.jobs.duration` | histogram (s) | `job.type` |
-| `folio.documents` | up-down counter | none |
-| `folio.ai.request.duration` | histogram (s) | `operation` (`ocr`, `embedding`), `provider`, `outcome` |
-| `folio.storage.operation.duration` | histogram (s) | `operation`, `backend` (`local`, `s3`) |
+| Name                               | Type            | Attributes                                                       |
+| ---------------------------------- | --------------- | ---------------------------------------------------------------- |
+| `http.server.request.duration`     | histogram (s)   | `http.request.method`, `http.route`, `http.response.status_code` |
+| `http.server.active_requests`      | up-down counter | `http.request.method`                                            |
+| `folio.jobs.processed`             | counter         | `job.type`, `outcome`                                            |
+| `folio.jobs.failed`                | counter         | `job.type`                                                       |
+| `folio.jobs.duration`              | histogram (s)   | `job.type`                                                       |
+| `folio.documents`                  | up-down counter | none                                                             |
+| `folio.ai.request.duration`        | histogram (s)   | `operation` (`ocr`, `embedding`), `provider`, `outcome`          |
+| `folio.storage.operation.duration` | histogram (s)   | `operation`, `backend` (`local`, `s3`)                           |
 
 `folio.documents` starts at the stored count when Folio boots and follows
 uploads and deletes after that.
@@ -111,7 +111,9 @@ Payload reads and upstream requests have five-second deadlines. Telemetry
 requests do not create server request spans or metrics, avoiding export loops.
 
 All components use `service.namespace=folio`. Browser resources use
-`service.name=folio-web`; Apple clients use `folio-app`. Set the deployed server
+`service.name=folio-web`; Apple clients use `folio-app`, with
+`folio.app.component` naming the process: `app`, `share` or `fileprovider`
+(Shortcuts actions run in the app's process). Set the deployed server
 name with `OTEL_SERVICE_NAME=folio-server`. Each runtime gets a distinct
 `service.instance.id`. Client `folio.installation.id` values persist in local
 browser storage or the Apple Keychain. Apple clients share the Keychain UUID
