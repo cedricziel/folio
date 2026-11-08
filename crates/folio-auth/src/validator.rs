@@ -98,6 +98,7 @@ impl TokenValidator {
                 client_id: String::new(),
                 scopes: record.scopes,
                 audience: record.audience,
+                grant_id: String::new(),
             });
         }
         let record = self
@@ -120,6 +121,7 @@ impl TokenValidator {
             client_id: record.client_id,
             scopes: record.scopes,
             audience: record.audience,
+            grant_id: record.grant_id,
         })
     }
 
