@@ -184,6 +184,21 @@ async fn relay_preserves_otlp_body_and_uses_only_server_credentials() {
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    let logs = br#"{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"eventName":"folio.action","attributes":[{"key":"session.id","value":{"stringValue":"0b7c2a52-4f0e-4c1e-9a43-2f6a0d1c9e11"}},{"key":"app.screen.name","value":{"stringValue":"inbox"}},{"key":"folio.action.name","value":{"stringValue":"document.delete"}}]}]}]}]}"#;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/telemetry/v1/logs")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, "Bearer client-token")
+                .body(Body::from(logs.as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
     let config = app
         .oneshot(
             Request::builder()
@@ -200,7 +215,12 @@ async fn relay_preserves_otlp_body_and_uses_only_server_credentials() {
     assert!(!String::from_utf8_lossy(&config).contains("upstream-only"));
     assert!(!String::from_utf8_lossy(&config).contains(&receiver.url));
     let requests = receiver.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].path, "/v1/logs");
+    assert_eq!(
+        requests[1].body, logs,
+        "client attributes reach the collector unchanged"
+    );
     assert_eq!(requests[0].path, "/v1/traces");
     assert_eq!(requests[0].body, [10, 0]);
     assert_eq!(

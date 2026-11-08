@@ -4,7 +4,8 @@
   "description": "Front-end dependencies copied or bundled into static/ and embedded in the binary. Rust builds do not need Node.",
   "type": "module",
   "scripts": {
-    "vendor": "node vendor.mjs"
+    "vendor": "node vendor.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",

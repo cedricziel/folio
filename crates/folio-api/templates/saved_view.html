@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block screen %}{% if is_saved %}saved_view{% else %}saved_view.editor{% endif %}{% endblock %}
 {% block title %}{% if is_saved %}{{ name }}{% else %}New saved view{% endif %} - Folio{% endblock %}
 {% block content %}
 <section class="page">
@@ -8,7 +9,7 @@
   {% if can_edit %}
   <details {% if !is_saved %}open{% endif %}>
     <summary>{% if is_saved %}Edit saved view{% else %}View details{% endif %}</summary>
-    <form action="{{ "/saved-views"|vault_url }}{% if is_saved %}/{{ id }}{% endif %}" method="post" data-turbo="false" class="saved-view-form">
+    <form data-folio-action="saved_view.save" action="{{ "/saved-views"|vault_url }}{% if is_saved %}/{{ id }}{% endif %}" method="post" data-turbo="false" class="saved-view-form">
       {% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}
       <label>Name<input class="input" name="name" required maxlength="100" value="{{ name }}"></label>
       <label>Search<input class="input" type="search" name="q" value="{{ search }}"></label>
@@ -29,7 +30,7 @@
     </form>
   </details>
   {% if is_saved %}
-  <form action="{{ "/saved-views"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false" data-controller="confirm" data-confirm-message-value="Delete this saved view? Your documents will remain in the library." data-action="submit->confirm#confirm">
+  <form data-folio-action="saved_view.delete" action="{{ "/saved-views"|vault_url }}/{{ id }}/delete" method="post" data-turbo="false" data-controller="confirm" data-confirm-message-value="Delete this saved view? Your documents will remain in the library." data-action="submit->confirm#confirm">
     {% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}
     <button class="f-btn f-btn-quiet f-btn-danger" type="submit">Delete saved view</button>
   </form>

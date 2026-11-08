@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tracing::{debug, error};
+use tracing::{debug, error, Instrument};
 use uuid::Uuid;
 
 use folio_core::models::{
@@ -630,30 +630,34 @@ pub(crate) async fn store_upload(
     // so the client's retry finds the document instead of storing it again.
     let state = state.clone();
     let (actor, lineage) = (current_actor(), current_lineage());
-    let stored = tokio::spawn(with_actor(
-        actor,
-        with_lineage(lineage, async move {
-            match idempotency_key {
-                Some(key) => {
-                    let key = UploadReceiptKey {
-                        vault,
-                        actor_scope: uploaded_by
-                            .as_ref()
-                            .map(|user| format!("user:{}", user.as_str()))
-                            .unwrap_or_else(|| "system".into()),
-                        key,
-                    };
-                    state.keyed_uploads.upload(key, upload).await
+    let stored = tokio::spawn(
+        with_actor(
+            actor,
+            with_lineage(lineage, async move {
+                match idempotency_key {
+                    Some(key) => {
+                        let key = UploadReceiptKey {
+                            vault,
+                            actor_scope: uploaded_by
+                                .as_ref()
+                                .map(|user| format!("user:{}", user.as_str()))
+                                .unwrap_or_else(|| "system".into()),
+                            key,
+                        };
+                        state.keyed_uploads.upload(key, upload).await
+                    }
+                    // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
+                    None => state
+                        .importer
+                        .import(vault, upload)
+                        .await
+                        .map(UploadOutcome::Created),
                 }
-                // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
-                None => state
-                    .importer
-                    .import(vault, upload)
-                    .await
-                    .map(UploadOutcome::Created),
-            }
-        }),
-    ))
+            }),
+        )
+        // Processing jobs inherit the request's trace from the current span.
+        .instrument(tracing::Span::current()),
+    )
     .await
     .map_err(|e| {
         error!("Upload task failed: {}", e);

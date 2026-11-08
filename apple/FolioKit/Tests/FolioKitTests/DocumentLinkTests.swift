@@ -9,7 +9,8 @@ struct DocumentLinkTests {
 
     @Test func spotlightDonationCarriesTheDocumentVault() {
         let summary = DocumentSummary(id: documentID, title: "Household letter", date: Date(timeIntervalSince1970: 0))
-        let item = SpotlightDonor.searchableItem(summary, vaultID: vaultID)
+        let item = SpotlightItem(summary, vaultID: vaultID, server: URL(string: "https://folio.example")!)
+            .searchableItem
 
         #expect(
             item.uniqueIdentifier
