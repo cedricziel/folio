@@ -227,7 +227,7 @@ processes apart.
   configured are sent once it is; actions from that window are dropped.
   Sign-out sends `session.end` best-effort before the token is removed.
 - **Browse context.** `documents.browse` spans and their completion logs carry
-  `folio.browse.scope` (`inbox`, `all`, `saved_view`), `folio.browse.filters`
+  `folio.browse.scope` (`inbox`, `all`, `saved_view` or `intent`), `folio.browse.filters`
   (kinds only, never values), `folio.browse.sort` and `folio.browse.page`.
 - **Limits.** The same screen within a second is reported once, and each
   process sends at most 60 screen and action events per minute; the excess is

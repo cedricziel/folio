@@ -27,6 +27,5 @@ struct DocumentProcessingView: View {
                 .accessibilityElement(children: .combine)
             }
         }
-        .telemetryScreen(.documentProcessing)
     }
 }

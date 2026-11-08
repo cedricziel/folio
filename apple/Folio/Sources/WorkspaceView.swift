@@ -27,14 +27,7 @@ struct WorkspaceView: View {
             List(
                 selection: Binding(
                     get: { Optional(workspace.destination) },
-                    set: {
-                        if let destination = $0 {
-                            if destination != workspace.destination {
-                                FolioTelemetry.shared.action(.browseScopeChange)
-                            }
-                            workspace.destination = destination
-                        }
-                    }
+                    set: { if let destination = $0 { navigate(to: destination) } }
                 )
             ) {
                 if workspace.isReady {
@@ -98,7 +91,7 @@ struct WorkspaceView: View {
                     canEdit: workspace.canEdit, canUpload: workspace.canUpload,
                     makeUploadDestination: workspace.uploadDestination,
                     onSignOut: onSignOut,
-                    onNavigate: { workspace.destination = $0 },
+                    onNavigate: { navigate(to: $0) },
                     onOpenDocument: { workspace.open($0, vaultID: $1) }
                 )
                 .environment(\.thumbnailCache, workspace.thumbnails)
@@ -200,6 +193,15 @@ struct WorkspaceView: View {
                 Label("Classifications", systemImage: "tag")
             }
         }
+    }
+
+    /// Moves to `destination` at the person's request; a scope change is recorded only when it differs.
+    /// Choosing the current destination still assigns it, which closes an open saved view.
+    private func navigate(to destination: WorkspaceDestination) {
+        if destination != workspace.destination {
+            FolioTelemetry.shared.action(.browseScopeChange)
+        }
+        workspace.destination = destination
     }
 
     @ViewBuilder private var vaultPicker: some View {
