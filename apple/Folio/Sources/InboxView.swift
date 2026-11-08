@@ -397,13 +397,24 @@ struct InboxView: View {
         }
     }
 
+    /// Opens a document the person picked from the list or grid.
+    private func open(_ id: Document.ID) {
+        FolioTelemetry.shared.action(.documentOpen)
+        session.selection = id
+        session.path = [id]
+    }
+
     private var documentSelection: Binding<Document.ID?>? {
         #if os(macOS)
             Binding(
                 get: { session.selection },
                 set: { id in
-                    session.selection = id
-                    session.path = id.map { [$0] } ?? []
+                    if let id, id != session.selection {
+                        open(id)
+                    } else {
+                        session.selection = id
+                        session.path = id.map { [$0] } ?? []
+                    }
                 }
             )
         #else
@@ -421,8 +432,7 @@ struct InboxView: View {
             ) {
                 ForEach(list.rows) { row in
                     Button {
-                        session.selection = row.id
-                        session.path = [row.id]
+                        open(row.id)
                     } label: {
                         VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
                             DocumentThumbnailView(document: row.document)
@@ -468,8 +478,7 @@ struct InboxView: View {
 
     private func documentLink(_ row: DocumentRow, showsPreview: Bool) -> some View {
         Button {
-            session.selection = row.id
-            session.path = [row.id]
+            open(row.id)
         } label: {
             HStack {
                 DocumentRowView(row: row)
@@ -578,7 +587,7 @@ struct InboxView: View {
             #if os(iOS)
                 Menu("Add", systemImage: "plus") {
                     if DocumentScanner.isSupported {
-                        Button("Scan document", systemImage: "doc.viewfinder") { showScanner = true }
+                        Button("Scan document", systemImage: "doc.viewfinder") { scanAction?() }
                     }
                     Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                     Button("Photos", systemImage: "photo") { showPhotosPicker = true }
