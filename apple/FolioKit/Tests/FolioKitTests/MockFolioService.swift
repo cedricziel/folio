@@ -118,6 +118,8 @@ actor MockFolioService: FolioService {
     private var trashedDocuments: [Document.ID: Document] = [:]
     private(set) var pings = 0
     private(set) var downloads = 0
+    /// When set, downloads write a real file into a fresh `folio-` folder here, as the live service does.
+    private var downloadRoot: URL?
     private var documentGate: CheckedContinuation<[Document], Never>?
     private var documentStarted: CheckedContinuation<Void, Never>?
     private var suspendDocumentRequests = false
@@ -425,7 +427,17 @@ actor MockFolioService: FolioService {
         if let failure {
             throw failure
         }
-        return URL(filePath: "/tmp/\(document.originalFilename ?? "file")")
+        let name = document.originalFilename ?? "file"
+        guard let downloadRoot else { return URL(filePath: "/tmp/\(name)") }
+        let folder = downloadRoot.appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: name)
+        try Data(document.title.utf8).write(to: file)
+        return file
+    }
+
+    func writeDownloads(into root: URL) {
+        downloadRoot = root
     }
 
     func upload(_ file: UploadFile) async throws -> Document {
