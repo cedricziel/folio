@@ -59,7 +59,9 @@ struct FolioApp: App {
 
 @MainActor @Observable
 final class AppModel {
-    private(set) var session: SessionRestoration = .restoring
+    private(set) var session: SessionRestoration = .restoring {
+        didSet { SpotlightIndex.shared.sessionChanged(to: session) }
+    }
     private(set) var isWorking = false
     var operationError: String?
     private var restorationTask: Task<Void, Never>?
@@ -108,6 +110,7 @@ final class AppModel {
     func connected(to url: URL) {
         restorationTask?.cancel()
         restorationGeneration += 1
+        SpotlightIndex.shared.signedIn(to: url)
         session = .signedIn(url)
         FileProviderDomain.register()
     }

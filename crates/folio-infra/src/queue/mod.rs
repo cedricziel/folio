@@ -5,12 +5,14 @@ mod processing_scope;
 mod recovery;
 mod sqlite;
 pub mod stages;
+mod trace_context;
 mod worker;
 
 pub(crate) use postgres::insert_job as insert_job_postgres;
 use postgres::PostgresJobQueue;
 pub(crate) use sqlite::insert_job as insert_job_sqlite;
 use sqlite::SqliteJobQueue;
+pub use trace_context::JobTraceContext;
 pub use worker::{Worker, WorkerConfig};
 
 use chrono::{DateTime, Utc};
@@ -198,6 +200,8 @@ pub struct Job {
     pub completed_at: Option<DateTime<Utc>>,
     pub claim_id: Option<Uuid>,
     pub lease_expires_at: Option<i64>,
+    /// Trace context the job was queued under; None for untraced and older jobs
+    pub trace: Option<JobTraceContext>,
 }
 
 /// Retry budget of a job unless the caller sets one
@@ -232,7 +236,14 @@ impl JobQueue {
 
     /// Enqueue a new job
     pub async fn enqueue(&self, job_type: JobType) -> Result<Uuid> {
-        dispatch!(self, enqueue(job_type))
+        let trace = JobTraceContext::current();
+        dispatch!(self, enqueue(job_type, trace))
+    }
+
+    /// Enqueue a job without linking it to the current trace, for bulk enqueues
+    /// that would otherwise put every job into one trace
+    pub async fn enqueue_untraced(&self, job_type: JobType) -> Result<Uuid> {
+        dispatch!(self, enqueue(job_type, None))
     }
 
     /// Enqueue a job to run at a specific time
@@ -241,7 +252,8 @@ impl JobQueue {
         job_type: JobType,
         scheduled_at: DateTime<Utc>,
     ) -> Result<Uuid> {
-        dispatch!(self, enqueue_delayed(job_type, scheduled_at))
+        let trace = JobTraceContext::current();
+        dispatch!(self, enqueue_delayed(job_type, scheduled_at, trace))
     }
 
     /// Enqueue a job with its own retry budget
@@ -251,9 +263,10 @@ impl JobQueue {
         scheduled_at: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<Uuid> {
+        let trace = JobTraceContext::current();
         dispatch!(
             self,
-            enqueue_with_max_attempts(job_type, scheduled_at, max_attempts)
+            enqueue_with_max_attempts(job_type, scheduled_at, max_attempts, trace)
         )
     }
 

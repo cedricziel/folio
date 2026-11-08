@@ -872,6 +872,7 @@ impl DocumentRepository for SqliteDocumentRepository {
                 },
                 now,
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
+                None,
             )
             .await?;
         }
@@ -1189,6 +1190,7 @@ impl DocumentRepository for SqliteDocumentRepository {
                 crate::queue::JobType::process_document(id),
                 Utc::now(),
                 crate::queue::DEFAULT_MAX_ATTEMPTS,
+                crate::queue::JobTraceContext::current().as_ref(),
             )
             .await?;
         }
@@ -1242,6 +1244,7 @@ impl DocumentRepository for SqliteDocumentRepository {
             },
             now,
             crate::queue::DEFAULT_MAX_ATTEMPTS,
+            crate::queue::JobTraceContext::current().as_ref(),
         )
         .await?;
         insert_event_with_envelope(&mut tx, &event, self.origin, Some(&context), &envelope).await?;
