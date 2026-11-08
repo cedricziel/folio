@@ -70,6 +70,8 @@ public enum TelemetryIntent: String, CaseIterable, Sendable {
     case addTag = "add_tag"
     case removeTag = "remove_tag"
     case getDocumentFile = "get_document_file"
+    case tagDocuments = "tag_documents"
+    case untagDocuments = "untag_documents"
 }
 
 /// Which list a browse request serves, exported as `folio.browse.scope`. Never sent to the browse API.
