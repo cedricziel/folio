@@ -87,6 +87,8 @@ public final class DocumentListViewModel {
     private var documents: [Document] = []
     private var lookupsLoaded = false
     private var latestFetch = 0
+    /// Told about every confirmed deletion, including a redone one, so the scene can drop the document's activity.
+    @ObservationIgnored public var onRemove: (@MainActor (Document.ID) -> Void)?
 
     public init(
         service: any FolioService, searchDebounce: Duration = .milliseconds(300), spotlight: SpotlightIndex = .shared
@@ -186,6 +188,7 @@ public final class DocumentListViewModel {
         do {
             try await service.deleteDocument(id: document.id)
             spotlight.remove(documentID: document.id)
+            onRemove?(document.id)
             let wasVisible = rows.contains { $0.id == document.id }
             documents.removeAll { $0.id == document.id }
             if resolvedDocument?.id == document.id {

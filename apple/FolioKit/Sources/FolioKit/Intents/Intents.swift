@@ -179,7 +179,7 @@ public struct OpenDocumentIntent: OpenIntent {
 
     @MainActor
     public func perform() async throws -> some IntentResult {
-        IntentRouter.shared.route(.document(target.id))
+        IntentRouter.shared.route(.document(target.documentID, vaultID: target.id.vaultID))
         return .result()
     }
 }
@@ -208,7 +208,9 @@ public struct AddTagIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await IntentEnvironment.run { try await $0.addTag(tag.id, to: document.id) }
+        try await IntentEnvironment.run {
+            try await $0.scoped(to: document.id.vaultID).addTag(tag.id, to: document.documentID)
+        }
         return .result(dialog: "Tagged \(document.title) with \(tag.name).")
     }
 }
@@ -237,7 +239,9 @@ public struct RemoveTagIntent: AppIntent {
     }
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
-        try await IntentEnvironment.run { try await $0.removeTag(tag.id, from: document.id) }
+        try await IntentEnvironment.run {
+            try await $0.scoped(to: document.id.vaultID).removeTag(tag.id, from: document.documentID)
+        }
         return .result(dialog: "Removed \(tag.name) from \(document.title).")
     }
 }

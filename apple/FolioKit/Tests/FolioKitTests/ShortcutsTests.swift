@@ -103,7 +103,9 @@ struct DocumentCatalogTests {
     @Test func documentsForIdsKeepsOnlyKnownOnes() async throws {
         let kept = document("Kept")
         let (catalog, _) = await makeCatalog([kept, document("Other")])
-        let found = try await catalog.documents(ids: [kept.id, UUID()])
+        let found = try await catalog.documents(ids: [
+            DocumentEntityID(documentID: kept.id), DocumentEntityID(documentID: UUID()),
+        ])
         #expect(found.map(\.id) == [kept.id])
     }
 
@@ -229,7 +231,9 @@ struct DocumentCatalogTests {
     @Test func entityQueriesUseTheService() async throws {
         let target = document("Gas bill", correspondent: stadtwerke, type: invoice)
         _ = await install([target])
-        #expect(try await DocumentEntityQuery().entities(for: [target.id]).map(\.title) == ["Gas bill"])
+        #expect(
+            try await DocumentEntityQuery().entities(for: [DocumentEntityID(documentID: target.id)]).map(\.title)
+                == ["Gas bill"])
         #expect(try await DocumentEntityQuery().entities(matching: "gas").count == 1)
         #expect(try await TagEntityQuery().entities(matching: "util").map(\.name) == ["Utilities"])
         #expect(try await CorrespondentEntityQuery().suggestedEntities().map(\.name) == ["Stadtwerke Köln"])

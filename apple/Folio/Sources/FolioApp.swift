@@ -21,9 +21,6 @@ struct FolioApp: App {
                 // Continuations go to an existing window, the frontmost one, instead of opening another.
                 .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
                 .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
-                .onChange(of: model.session, initial: true) { _, session in
-                    DocumentActivityTracker.shared.sessionChanged(to: session)
-                }
                 .tint(.archive)
                 .onReceive(
                     NotificationCenter.default.publisher(for: Notification.Name("FolioSessionChanged")).receive(
@@ -67,8 +64,13 @@ struct FolioApp: App {
 @MainActor @Observable
 final class AppModel {
     private(set) var session: SessionRestoration = .restoring {
-        didSet { SpotlightIndex.shared.sessionChanged(to: session) }
+        didSet {
+            SpotlightIndex.shared.sessionChanged(to: session)
+            TransferFileCache.shared.sessionChanged(to: session)
+        }
     }
+    /// Counts sign-ins through the browser, which may be another account even on the same server.
+    private(set) var interactiveSignIns = 0
     private(set) var isWorking = false
     var operationError: String?
     /// Handoff, universal-link and Spotlight continuations waiting for a window that can route them.
@@ -114,7 +116,9 @@ final class AppModel {
         restorationTask?.cancel()
         restorationGeneration += 1
         SpotlightIndex.shared.signedIn(to: url)
+        TransferFileCache.shared.signedIn(to: url)
         continuations.signedIn(to: url)
+        interactiveSignIns += 1
         session = .signedIn(url)
         FileProviderDomain.register()
     }
@@ -168,11 +172,11 @@ struct RootView: View {
     let lock: AppLock
     /// Identifies this window to the continuation inbox.
     @State private var sceneID = UUID()
+    /// This window's open document, as the system sees it and as Handoff offers it.
+    @State private var activity = DocumentActivityTracker(isEligibleForHandoff: true)
     @State private var handoffAlert: HandoffAlert?
     #if os(iOS)
         @State private var browserPage: BrowserPage?
-    #endif
-    #if os(iOS)
         @State private var showLockSettings = false
     #endif
 
@@ -180,6 +184,11 @@ struct RootView: View {
 
     var body: some View {
         content
+            .environment(activity)
+            .onChange(of: model.session, initial: true) { _, session in activity.sessionChanged(to: session) }
+            .onChange(of: model.interactiveSignIns) {
+                if case let .signedIn(url) = model.session { activity.signedIn(to: url) }
+            }
             .environment(\.handoffContext, HandoffContext(session: model.session, isLocked: lock.isLocked))
             .onContinueUserActivity(HandoffActivityType.document, perform: receiveHandoff)
             .onContinueUserActivity(HandoffActivityType.library, perform: receiveHandoff)

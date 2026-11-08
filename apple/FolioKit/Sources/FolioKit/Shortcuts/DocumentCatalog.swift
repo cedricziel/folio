@@ -12,13 +12,15 @@ public struct DocumentSummary: Identifiable, Hashable, Sendable {
     public var mimeType: String?
     public var pageCount: Int?
     public var originalFilename: String?
-    /// Whether the server has read the document's text, so it can be shared as plain text.
+    /// Whether the document's text is known to be non-empty, so it can be shared as plain text.
     public var hasRecognizedText: Bool
+    /// The vault holding the document; nil is the server's default vault.
+    public var vaultID: UUID?
 
     public init(
         id: Document.ID, title: String, correspondent: String? = nil, documentType: String? = nil,
         tags: [String] = [], date: Date, mimeType: String? = nil, pageCount: Int? = nil,
-        originalFilename: String? = nil, hasRecognizedText: Bool = false
+        originalFilename: String? = nil, hasRecognizedText: Bool = false, vaultID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -30,18 +32,32 @@ public struct DocumentSummary: Identifiable, Hashable, Sendable {
         self.pageCount = pageCount
         self.originalFilename = originalFilename
         self.hasRecognizedText = hasRecognizedText
+        self.vaultID = vaultID
     }
 
-    public init(_ document: Document, correspondent: String?, documentType: String?) {
+    public init(_ document: Document, correspondent: String?, documentType: String?, vaultID: UUID? = nil) {
         self.init(
             id: document.id, title: document.title, correspondent: correspondent,
             documentType: documentType, tags: document.tags.map(\.name), date: document.createdAt,
             mimeType: document.mimeType, pageCount: document.pageCount,
             originalFilename: document.originalFilename,
-            hasRecognizedText: document.ocrStatus == .done
-                || !(document.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            hasRecognizedText: !(document.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            vaultID: vaultID
         )
     }
+
+    /// The fields Spotlight shows, so processing progress alone doesn't re-index a document.
+    public var indexedFields: [String] {
+        [title, correspondent ?? "", documentType ?? "", FolioFormat.isoDay(date)] + tags
+    }
+}
+
+/// The outcome of looking documents up by id. Documents that are gone or no longer readable are missing;
+/// those the server could not answer for right now are unresolved.
+public struct DocumentResolution: Sendable {
+    public var found: [DocumentSummary]
+    public var missing: [DocumentEntityID]
+    public var unresolved: [DocumentEntityID]
 }
 
 /// What "Find documents" narrows by. Every field is optional and they combine with AND.
@@ -85,12 +101,19 @@ public struct DocumentTransferFile: Sendable {
 public struct DocumentCatalog: Sendable {
     private let service: any FolioService
     private let calendar: Calendar
-    private let locator: DocumentLocator
+    /// The vault `service` is scoped to; nil is the server's default vault.
+    private let vaultID: UUID?
 
-    public init(service: any FolioService, calendar: Calendar = .current, locator: DocumentLocator = .shared) {
+    public init(service: any FolioService, calendar: Calendar = .current, vaultID: UUID? = nil) {
         self.service = service
         self.calendar = calendar
-        self.locator = locator
+        self.vaultID = vaultID
+    }
+
+    /// The same catalog in another vault; nil keeps this one.
+    public func scoped(to vaultID: UUID?) -> DocumentCatalog {
+        guard let vaultID, vaultID != self.vaultID else { return self }
+        return DocumentCatalog(service: service.scoped(to: vaultID), calendar: calendar, vaultID: vaultID)
     }
 
     public func search(_ query: String, limit: Int = 25) async throws -> [DocumentSummary] {
@@ -109,18 +132,70 @@ public struct DocumentCatalog: Sendable {
         return first
     }
 
-    /// Looks each document up by id, in the vault the app opened it from, and skips those that are gone.
-    public func documents(ids: [Document.ID]) async throws -> [DocumentSummary] {
-        var documents: [Document] = []
-        var seen = Set<Document.ID>()
-        for id in ids where seen.insert(id).inserted {
-            do {
-                documents.append(try await document(id))
-            } catch ShortcutFailure.documentNotFound {
-                continue
+    public func documents(ids: [DocumentEntityID]) async throws -> [DocumentSummary] {
+        try await resolve(ids: ids).found
+    }
+
+    /// Looks each document up by id in its own vault, a few at a time, in the order asked.
+    /// Throws only when the server answered for none of them.
+    public func resolve(ids: [DocumentEntityID], concurrency: Int = 4) async throws -> DocumentResolution {
+        var unique: [DocumentEntityID] = []
+        var seen = Set<DocumentEntityID>()
+        for id in ids where seen.insert(id).inserted { unique.append(id) }
+
+        var outcomes = [Result<Document?, any Error>?](repeating: nil, count: unique.count)
+        await withTaskGroup(of: (Int, Result<Document?, any Error>).self) { group in
+            var next = 0
+            func start() {
+                guard next < unique.count else { return }
+                let position = next
+                let catalog = scoped(to: unique[position].vaultID)
+                let documentID = unique[position].documentID
+                group.addTask {
+                    do {
+                        return (position, .success(try await catalog.document(documentID)))
+                    } catch ShortcutFailure.documentNotFound {
+                        return (position, .success(nil))
+                    } catch {
+                        return (position, .failure(error))
+                    }
+                }
+                next += 1
+            }
+            for _ in 0..<max(1, concurrency) { start() }
+            for await (position, outcome) in group {
+                outcomes[position] = outcome
+                start()
             }
         }
-        return try await summaries(documents)
+
+        var resolution = DocumentResolution(found: [], missing: [], unresolved: [])
+        var firstError: (any Error)?
+        var foundByVault: [UUID?: [Document]] = [:]
+        var vaultOrder: [UUID?] = []
+        for (id, outcome) in zip(unique, outcomes) {
+            switch outcome {
+            case let .success(document?):
+                if foundByVault[id.vaultID] == nil { vaultOrder.append(id.vaultID) }
+                foundByVault[id.vaultID, default: []].append(document)
+            case .success(nil):
+                resolution.missing.append(id)
+            case let .failure(error):
+                firstError = firstError ?? error
+                resolution.unresolved.append(id)
+            case nil:
+                resolution.unresolved.append(id)
+            }
+        }
+        if let firstError, foundByVault.isEmpty, resolution.missing.isEmpty { throw firstError }
+        var summariesByID: [DocumentEntityID: DocumentSummary] = [:]
+        for vault in vaultOrder {
+            for summary in try await scoped(to: vault).summaries(foundByVault[vault] ?? []) {
+                summariesByID[DocumentEntityID(documentID: summary.id, vaultID: vault)] = summary
+            }
+        }
+        resolution.found = unique.compactMap { summariesByID[$0] }
+        return resolution
     }
 
     public func find(_ criteria: DocumentCriteria) async throws -> [DocumentSummary] {
@@ -166,15 +241,25 @@ public struct DocumentCatalog: Sendable {
         try await service.removeTag(tagID, from: documentID)
     }
 
-    /// Downloads the original file through the authenticated download path.
-    public func file(for id: Document.ID) async throws -> (url: URL, document: Document) {
-        let document = try await document(id)
-        return try await (service(for: id).downloadFile(for: document), document)
+    /// Downloads the original file through the authenticated download path, in the document's vault.
+    public func file(for id: DocumentEntityID) async throws -> (url: URL, document: Document) {
+        let catalog = scoped(to: id.vaultID)
+        let document = try await catalog.document(id.documentID)
+        return try await (catalog.service.downloadFile(for: document), document)
     }
 
-    /// The original file, named as it was uploaded, with the type its content declares.
-    public func transferFile(for id: Document.ID) async throws -> DocumentTransferFile {
-        let (url, document) = try await file(for: id)
+    /// The original file, named as it was uploaded, with the type its content declares. A copy already on
+    /// this device, such as the open preview, is reused; a new download is kept in `cache`, which removes it.
+    public func transferFile(
+        for id: DocumentEntityID, cache: TransferFileCache = .shared
+    ) async throws -> DocumentTransferFile {
+        if let cached = cache.file(for: id) {
+            return DocumentTransferFile(
+                url: cached,
+                contentType: DocumentTransfer.contentType(mimeType: nil, filename: cached.lastPathComponent))
+        }
+        let (download, document) = try await file(for: id)
+        let url = try cache.store(download, for: id)
         return DocumentTransferFile(
             url: url,
             contentType: DocumentTransfer.contentType(mimeType: document.mimeType, filename: document.originalFilename)
@@ -182,21 +267,19 @@ public struct DocumentCatalog: Sendable {
     }
 
     /// The text the server read from the document.
-    public func recognizedText(for id: Document.ID) async throws -> String {
-        let text = try await document(id).content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    public func recognizedText(for id: DocumentEntityID) async throws -> String {
+        let document = try await scoped(to: id.vaultID).document(id.documentID)
+        let text = document.content?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !text.isEmpty else { throw ShortcutFailure.noRecognizedText }
         return text
     }
 
-    private func service(for id: Document.ID) -> any FolioService {
-        locator.vault(for: id).map(service.scoped(to:)) ?? service
-    }
-
+    /// A readable, untrashed document; anything the server won't show this account counts as not found.
     private func document(_ id: Document.ID) async throws -> Document {
         let document: Document
         do {
-            document = try await service(for: id).document(id: id)
-        } catch FolioError.server(status: 404, _) {
+            document = try await service.document(id: id)
+        } catch FolioError.server(status: 404, _), FolioError.server(status: 403, _) {
             throw ShortcutFailure.documentNotFound
         }
         guard document.id == id, document.deletedAt == nil else { throw ShortcutFailure.documentNotFound }
@@ -233,7 +316,7 @@ public struct DocumentCatalog: Sendable {
         return documents.map { document in
             DocumentSummary(
                 document, correspondent: document.correspondentID.flatMap { peopleByID[$0] },
-                documentType: document.documentTypeID.flatMap { typesByID[$0] })
+                documentType: document.documentTypeID.flatMap { typesByID[$0] }, vaultID: vaultID)
         }
     }
 
