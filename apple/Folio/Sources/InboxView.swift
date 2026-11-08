@@ -208,6 +208,12 @@ struct InboxView: View {
                 documentGrid
             } else {
                 List(selection: documentSelection) {
+                    if list.phase == .loading && !list.rows.isEmpty {
+                        ProgressView("Loading documents…")
+                            .frame(maxWidth: .infinity)
+                            .listRowBackground(Color.paper)
+                            .listRowSeparator(.hidden)
+                    }
                     ForEach(list.rows) { row in
                         documentLink(row, showsPreview: showsPreview)
                             .transition(.opacity)
@@ -222,9 +228,7 @@ struct InboxView: View {
                                 }
                             }
                     }
-                    if list.phase == .loading && !list.rows.isEmpty {
-                        ProgressView("Loading documents…")
-                    } else if list.canLoadMore {
+                    if list.phase != .loading && list.canLoadMore {
                         VStack(spacing: 8) {
                             if let message = list.pageError {
                                 Text(message).foregroundStyle(Color.danger)
