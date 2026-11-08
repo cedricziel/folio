@@ -80,7 +80,8 @@ jobs:
       - run: brew install xcodegen
       - run: bundle exec fastlane test
       - name: Test navigation on iPhone and iPad (26.6) or iPhone Duo (27.1)
-        timeout-minutes: 25
+        # The 27.1 leg runs the whole suite twice (iPhone, then iPhone Duo).
+        timeout-minutes: 40
         run: |
           verify_dir=$(mktemp -d)
           verify_device=""
