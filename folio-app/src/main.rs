@@ -429,6 +429,11 @@ async fn main() -> Result<()> {
             auth.validator("/mcp").with_required(config.auth.required),
             folio_auth::require_bearer,
         ));
+    let upload_tasks = state.upload_tasks.clone();
+    tokio::spawn(sweep_upload_receipts(
+        state.keyed_uploads.clone(),
+        shutdown_tx.subscribe(),
+    ));
     let app = create_router(state, auth.clone()).merge(mcp);
 
     // Start server
@@ -452,6 +457,16 @@ async fn main() -> Result<()> {
     }
 
     maintenance.abort();
+    // Keyed uploads still running finish and record their receipt, so a retry after the restart replays them.
+    upload_tasks.close();
+    if tokio::time::timeout(std::time::Duration::from_secs(30), upload_tasks.wait())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "Stopping with uploads still running; their keys can be retried once they go stale"
+        );
+    }
     stop_worker(shutdown_tx, worker_handle).await;
 
     info!("Folio shutdown complete");
@@ -459,6 +474,24 @@ async fn main() -> Result<()> {
     // Flush pending spans, metrics and logs; the exporters block while sending.
     let _ = tokio::task::spawn_blocking(move || telemetry.shutdown()).await;
     Ok(())
+}
+
+/// Hourly, forget expired upload receipts and remove the unfinished documents they reserved
+async fn sweep_upload_receipts(
+    uploads: Arc<folio_core::services::IdempotentUploads>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+    loop {
+        tokio::select! {
+            _ = interval.tick() => match uploads.sweep(chrono::Utc::now()).await {
+                Ok(0) => {}
+                Ok(expired) => info!("Removed {expired} upload reservations that never completed"),
+                Err(e) => tracing::warn!("Upload receipt sweep failed: {e}"),
+            },
+            _ = shutdown.changed() => return,
+        }
+    }
 }
 
 /// Signal the background worker to stop and wait for it, with a timeout

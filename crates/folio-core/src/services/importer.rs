@@ -83,23 +83,29 @@ impl Importer {
 
 #[async_trait]
 impl DocumentImporter for Importer {
-    async fn import_as(&self, vault: VaultId, id: Id, upload: NewUpload) -> Result<Document> {
-        let document = self
-            .documents
+    async fn begin_as(&self, vault: VaultId, id: Id, upload: &NewUpload) -> Result<Document> {
+        self.documents
             .create_for_upload_as(
                 vault,
                 id,
                 CreateDocument {
-                    uploaded_by: upload.uploaded_by,
-                    title: upload.title.unwrap_or_else(|| upload.filename.clone()),
-                    original_filename: Some(upload.filename),
-                    mime_type: upload.mime_type,
-                    source: upload.source,
-                    tag_ids: upload.tag_ids,
+                    uploaded_by: upload.uploaded_by.clone(),
+                    title: upload
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| upload.filename.clone()),
+                    original_filename: Some(upload.filename.clone()),
+                    mime_type: upload.mime_type.clone(),
+                    source: upload.source.clone(),
+                    tag_ids: upload.tag_ids.clone(),
                     ..Default::default()
                 },
             )
-            .await?;
+            .await
+    }
+
+    async fn import_as(&self, vault: VaultId, id: Id, upload: NewUpload) -> Result<Document> {
+        let document = self.begin_as(vault, id, &upload).await?;
         if document.file_path.is_some() {
             return Ok(document);
         }

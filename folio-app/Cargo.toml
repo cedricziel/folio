@@ -18,6 +18,7 @@ folio-mcp = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
+chrono = { workspace = true }
 
 # Web framework
 axum = { workspace = true }
