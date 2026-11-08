@@ -68,6 +68,16 @@ struct HandoffAdvertiserTests {
         #expect(HandoffAdvertiser.payload(for: state(document: document))?.userInfo["page"] == nil)
     }
 
+    @Test func aSplitViewAdvertisesOnlyTheSelectedDocument() {
+        let selected = state(list: .library(.all), document: document)
+        #expect(HandoffAdvertiser.listPayload(for: selected) == nil)
+        #expect(HandoffAdvertiser.payload(for: selected)?.target == .document(document))
+
+        let cleared = state(list: .library(.all))
+        #expect(HandoffAdvertiser.listPayload(for: cleared)?.target == .library(.all))
+        #expect(HandoffAdvertiser.listPayload(for: state(isLocked: true)) == nil)
+    }
+
     @Test func searchTextIsNotAnInput() {
         let labels = Mirror(reflecting: state()).children.compactMap(\.label)
         #expect(labels == ["session", "isLocked", "vaultID", "list", "documentID", "showingDiscussion", "page"])

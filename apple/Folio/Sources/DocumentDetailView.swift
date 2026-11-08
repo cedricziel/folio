@@ -13,13 +13,21 @@ struct DocumentDetailView: View {
     @State private var editingDate = false
     let snapshot: Snapshot
     let vaultID: UUID
+    /// How Handoff asked to show this document, if it did.
+    let continuation: DocumentContinuation?
+    let onContinued: () -> Void
 
-    init(snapshot: Snapshot, service: any FolioService, vaultID: UUID) {
+    init(
+        snapshot: Snapshot, service: any FolioService, vaultID: UUID, continuation: DocumentContinuation? = nil,
+        onContinued: @escaping () -> Void = {}
+    ) {
         _model = State(
             initialValue: DocumentDetailViewModel(
                 document: snapshot.document, lookups: snapshot.lookups, service: service))
         self.snapshot = snapshot
         self.vaultID = vaultID
+        self.continuation = continuation
+        self.onContinued = onContinued
     }
 
     var body: some View {
@@ -47,7 +55,12 @@ struct DocumentDetailView: View {
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
         .task(id: snapshot.document.updatedAt) { await model.refreshMetadata() }
         .task(id: model.summary) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
-        .documentActivity(model.summary, vaultID: vaultID)
+        .documentActivity(model.summary, vaultID: vaultID, showingDiscussion: showingDiscussion)
+        .onChange(of: continuation, initial: true) { _, continuation in
+            guard let continuation else { return }
+            if continuation.pane == .discussion { showingDiscussion = true }
+            onContinued()
+        }
     }
 
     @ViewBuilder

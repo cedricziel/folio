@@ -15,6 +15,8 @@ struct InboxView: View {
     @Bindable var session: DocumentBrowserSession
     let onNavigate: (WorkspaceDestination) -> Void
     let onOpenDocument: (Document.ID, UUID?) -> Void
+    /// The library or saved view on screen, offered for Handoff when no document is selected.
+    let advertisedList: AdvertisedList
 
     private var list: DocumentListViewModel {
         session.list
@@ -49,7 +51,8 @@ struct InboxView: View {
         makeUploadDestination: @escaping () -> VaultDestinationViewModel,
         onSignOut: @escaping () -> Void,
         onNavigate: @escaping (WorkspaceDestination) -> Void,
-        onOpenDocument: @escaping (Document.ID, UUID?) -> Void
+        onOpenDocument: @escaping (Document.ID, UUID?) -> Void,
+        advertisedList: AdvertisedList = .library(.inbox)
     ) {
         self.serverURL = serverURL
         self.service = service
@@ -61,6 +64,7 @@ struct InboxView: View {
         self.onSignOut = onSignOut
         self.onNavigate = onNavigate
         self.onOpenDocument = onOpenDocument
+        self.advertisedList = advertisedList
         let list = session.list
         _trashHistory = State(initialValue: DocumentTrashHistory(list: list))
         _uploads = State(
@@ -102,6 +106,9 @@ struct InboxView: View {
                     documentDestination(id)
                 }
             }
+            .listActivity(
+                vaultID: vaultID, list: advertisedList,
+                selection: showsPreview ? session.selection : session.path.last)
         }
         .onChange(of: session.path) { _, path in
             if let id = path.last {
@@ -129,7 +136,9 @@ struct InboxView: View {
             if let document = list.document(for: id) {
                 DocumentDetailView(
                     snapshot: .init(document: document, lookups: list.lookups), service: service,
-                    vaultID: vaultID
+                    vaultID: vaultID,
+                    continuation: session.continuation?.documentID == id ? session.continuation : nil,
+                    onContinued: { session.continuation = nil }
                 )
                 .id(id)
             } else if let message = list.documentError(for: id) {

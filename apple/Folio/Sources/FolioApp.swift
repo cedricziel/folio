@@ -180,6 +180,7 @@ struct RootView: View {
 
     var body: some View {
         content
+            .environment(\.handoffContext, HandoffContext(session: model.session, isLocked: lock.isLocked))
             .onContinueUserActivity(HandoffActivityType.document, perform: receiveHandoff)
             .onContinueUserActivity(HandoffActivityType.library, perform: receiveHandoff)
             .onContinueUserActivity(HandoffActivityType.savedView, perform: receiveHandoff)

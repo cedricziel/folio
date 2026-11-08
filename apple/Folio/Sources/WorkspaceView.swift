@@ -102,7 +102,9 @@ struct WorkspaceView: View {
                     makeUploadDestination: workspace.uploadDestination,
                     onSignOut: onSignOut,
                     onNavigate: { workspace.destination = $0 },
-                    onOpenDocument: { workspace.open($0, vaultID: $1) }
+                    onOpenDocument: { workspace.open($0, vaultID: $1) },
+                    advertisedList: workspace.selectedSavedViewID.map(AdvertisedList.savedView)
+                        ?? .library(workspace.destination == .all ? .all : .inbox)
                 )
                 .environment(\.thumbnailCache, workspace.thumbnails)
 

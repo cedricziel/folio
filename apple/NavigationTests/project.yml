@@ -29,6 +29,7 @@ targets:
       - "../Folio/Sources/QuickLookPreview.swift"
       - "../Folio/Sources/Commands.swift"
       - "../Folio/Sources/AppLock.swift"
+      - "../Folio/Sources/DocumentActivity.swift"
       - "../Folio/Sources/ScanReviewView.swift"
       - "../Folio/Sources/DocumentScanner.swift"
       - "../Folio/Sources/UploadReviewView.swift"

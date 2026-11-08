@@ -49,4 +49,11 @@ public enum HandoffAdvertiser {
         }
         return HandoffPayload(server: server, vaultID: vaultID, target: target)
     }
+
+    /// The list's own activity, which stands back while a document is selected: in a split view the
+    /// selected document's detail advertises instead.
+    public static func listPayload(for state: AdvertisingState) -> HandoffPayload? {
+        guard state.documentID == nil else { return nil }
+        return payload(for: state)
+    }
 }
