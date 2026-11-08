@@ -91,8 +91,9 @@ final class PDFPreviewTests: XCTestCase {
         var reported: [Int] = []
         let changed = expectation(description: "page 3 reported")
         let reader = position {
+            // PDFKit can report the same page more than once; fulfilling twice would crash the run.
+            if $0 == 3 && !reported.contains(3) { changed.fulfill() }
             reported.append($0)
-            if $0 == 3 { changed.fulfill() }
         }
         let document = try threePages()
         reader.load(document, initialPage: 1)
