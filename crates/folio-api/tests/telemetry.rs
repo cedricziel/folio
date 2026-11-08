@@ -192,6 +192,26 @@ async fn document_list_spans_record_browse_scope_and_filter_kinds_only() {
         Some("all")
     );
 
+    // The index page ignores a tag filter that isn't an ID, so it isn't counted either.
+    let (malformed, _) = server_span(&harness.app, &exporter, "/?tag_id=not-a-tag").await;
+    assert_eq!(
+        attribute(malformed.attributes.iter(), "folio.browse.scope").as_deref(),
+        Some("inbox")
+    );
+    assert_eq!(filters(&malformed), Some(vec![]));
+
+    let (palette, _) = server_span(
+        &harness.app,
+        &exporter,
+        "/api/documents/search?q=private+words",
+    )
+    .await;
+    assert_eq!(
+        attribute(palette.attributes.iter(), "folio.browse.scope").as_deref(),
+        Some("search")
+    );
+    assert_eq!(filters(&palette), Some(vec!["text".into()]));
+
     let (search, _) =
         server_span(&harness.app, &exporter, "/documents/search?q=private+words").await;
     assert_eq!(
@@ -200,7 +220,7 @@ async fn document_list_spans_record_browse_scope_and_filter_kinds_only() {
     );
     assert_eq!(filters(&search), Some(vec!["text".into()]));
 
-    for span in [&inbox, &all, &tagged, &search] {
+    for span in [&inbox, &all, &tagged, &malformed, &palette, &search] {
         for kv in span.attributes.iter() {
             let text = kv.value.to_string();
             assert!(!text.contains(&tag.to_string()), "{kv:?}");
@@ -228,4 +248,43 @@ async fn html_responses_name_their_server_trace_for_the_browser() {
 
     let (_, json) = server_span(&harness.app, &exporter, "/api/tags").await;
     assert!(json.get("server-timing").is_none());
+
+    exporter.reset();
+    let missing = harness
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/no-such-page")
+                .header("accept", "text/html")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+    let timing = missing
+        .headers()
+        .get("server-timing")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    drop(missing);
+    let span = exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .find(|span| span.span_kind == SpanKind::Server)
+        .expect("a server span for the error page");
+    assert_eq!(
+        timing.as_deref(),
+        Some(
+            format!(
+                "traceparent;desc=\"00-{}-{}-01\"",
+                span.span_context.trace_id(),
+                span.span_context.span_id()
+            )
+            .as_str()
+        ),
+        "HTML error pages name their trace too"
+    );
 }

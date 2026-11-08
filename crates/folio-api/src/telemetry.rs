@@ -138,13 +138,15 @@ fn browse_context(route: &str, query: Option<&str>) -> Option<(&'static str, Vec
     };
     match route {
         "/" => {
+            // Taxonomy filters count only when they are IDs, as the index page ignores anything else.
+            let id = |value: &str| uuid::Uuid::parse_str(value).is_ok();
             let mut filters: Vec<&'static str> = pairs()
-                .filter_map(|(key, _)| match key.as_ref() {
+                .filter_map(|(key, value)| match key.as_ref() {
                     "reviewed" => Some("reviewed"),
                     "document_date_from" | "document_date_to" => Some("document_date"),
-                    "correspondent_id" => Some("correspondent"),
-                    "document_type_id" => Some("document_type"),
-                    "tag_id" => Some("tag"),
+                    "correspondent_id" if id(&value) => Some("correspondent"),
+                    "document_type_id" if id(&value) => Some("document_type"),
+                    "tag_id" if id(&value) => Some("tag"),
                     _ => None,
                 })
                 .collect();
@@ -158,7 +160,7 @@ fn browse_context(route: &str, query: Option<&str>) -> Option<(&'static str, Vec
             Some((if all { "all" } else { "inbox" }, filters))
         }
         "/documents" => Some(("all", Vec::new())),
-        "/documents/search" => {
+        "/documents/search" | "/api/documents/search" => {
             let text = pairs().any(|(key, _)| key == "q");
             Some(("search", if text { vec!["text"] } else { Vec::new() }))
         }
