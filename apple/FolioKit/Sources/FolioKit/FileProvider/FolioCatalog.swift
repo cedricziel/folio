@@ -10,6 +10,8 @@ public struct FolioNode: Equatable, Sendable {
     public let contentType: String?
     public let document: Document?
     public var canUpload = false
+    /// For folders, which have no content of their own, also their modification date.
+    public var created: Date?
 }
 
 /// Maps the server's data onto the virtual folder tree shown in Files and Finder.
@@ -28,25 +30,27 @@ public struct FolioCatalog: Sendable {
             return folder == .root ? .vault(vault.id) : .scoped(vault.id, folder)
         }
 
+        /// Folders without a date of their own, like Inbox or Tags, take the vault's.
         func folderNode(
-            _ folder: FolioItemID.Folder, _ name: String, parent: FolioItemID.Folder = .root
+            _ folder: FolioItemID.Folder, _ name: String, parent: FolioItemID.Folder = .root, created: Date? = nil
         ) -> FolioNode {
-            FolioNode(
+            let created = created ?? vault.createdAt
+            return FolioNode(
                 id: .folder(self.folder(folder)), parent: .folder(self.folder(parent)),
-                name: name, isFolder: true, modified: .distantPast,
+                name: name, isFolder: true, modified: created ?? .distantPast,
                 contentType: nil, document: nil,
-                canUpload: folder.acceptsUploads && vault.role.canUpload
+                canUpload: folder.acceptsUploads && vault.role.canUpload, created: created
             )
         }
 
         func folderNodes(
-            _ entries: [(id: UUID, name: String)], parent: FolioItemID.Folder,
+            _ entries: [(id: UUID, name: String, created: Date?)], parent: FolioItemID.Folder,
             folder: (UUID) -> FolioItemID.Folder
         ) -> [FolioNode] {
             var taken = Set<String>()
             return entries.sorted { $0.id.uuidString < $1.id.uuidString }.map { entry in
                 let name = FolioCatalog.uniqueName(FolioCatalog.sanitized(entry.name), id: entry.id, taken: &taken)
-                return folderNode(folder(entry.id), name, parent: parent)
+                return folderNode(folder(entry.id), name, parent: parent, created: entry.created)
             }
         }
     }
@@ -136,7 +140,8 @@ public struct FolioCatalog: Sendable {
             }
             return FolioNode(
                 id: .folder(.vault(vault.id)), parent: .folder(.root), name: unique,
-                isFolder: true, modified: .distantPast, contentType: nil, document: nil
+                isFolder: true, modified: vault.createdAt ?? .distantPast, contentType: nil, document: nil,
+                created: vault.createdAt
             )
         }
     }
@@ -156,14 +161,15 @@ public struct FolioCatalog: Sendable {
             return try documentNodes(await context.service.documents(matching: ""), in: context.folder(.all))
         case .tags:
             return try await context.folderNodes(
-                context.service.tags().map { ($0.id, $0.name) }, parent: .tags, folder: { .tag($0) })
+                context.service.tags().map { ($0.id, $0.name, $0.createdAt) }, parent: .tags, folder: { .tag($0) })
         case .correspondents:
             return try await context.folderNodes(
-                context.service.correspondents().map { ($0.id, $0.name) }, parent: .correspondents,
+                context.service.correspondents().map { ($0.id, $0.name, $0.createdAt) }, parent: .correspondents,
                 folder: { .correspondent($0) })
         case .types:
             return try await context.folderNodes(
-                context.service.documentTypes().map { ($0.id, $0.name) }, parent: .types, folder: { .type($0) })
+                context.service.documentTypes().map { ($0.id, $0.name, $0.createdAt) }, parent: .types,
+                folder: { .type($0) })
         case let .correspondent(id):
             let documents = try await context.service.documents(filter: DocumentFilter(correspondentID: id))
             return documentNodes(documents, in: context.folder(folder))
@@ -188,9 +194,12 @@ public struct FolioCatalog: Sendable {
         nodes += documentNodes(documents, in: context.folder(.all))
         nodes += documentNodes(documents.filter { $0.status != .filed }, in: context.folder(.inbox))
         nodes += context.folderNodes(
-            correspondents.map { ($0.id, $0.name) }, parent: .correspondents, folder: { .correspondent($0) })
-        nodes += context.folderNodes(documentTypes.map { ($0.id, $0.name) }, parent: .types, folder: { .type($0) })
-        nodes += context.folderNodes(allTags.map { ($0.id, $0.name) }, parent: .tags, folder: { .tag($0) })
+            correspondents.map { ($0.id, $0.name, $0.createdAt) }, parent: .correspondents,
+            folder: { .correspondent($0) })
+        nodes += context.folderNodes(
+            documentTypes.map { ($0.id, $0.name, $0.createdAt) }, parent: .types, folder: { .type($0) })
+        nodes += context.folderNodes(
+            allTags.map { ($0.id, $0.name, $0.createdAt) }, parent: .tags, folder: { .tag($0) })
         for person in correspondents {
             nodes += documentNodes(
                 documents.filter { $0.correspondentID == person.id }, in: context.folder(.correspondent(person.id)))
@@ -213,7 +222,8 @@ public struct FolioCatalog: Sendable {
                 Self.sanitized(document.originalFilename ?? document.title), id: document.id, taken: &taken)
             return FolioNode(
                 id: .document(document.id, in: folder), parent: .folder(folder), name: name, isFolder: false,
-                modified: document.updatedAt, contentType: document.mimeType, document: document
+                modified: document.updatedAt, contentType: document.mimeType, document: document,
+                created: document.createdAt
             )
         }
     }

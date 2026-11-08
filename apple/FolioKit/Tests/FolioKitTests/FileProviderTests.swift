@@ -111,6 +111,27 @@ struct VaultProviderCatalogTests {
                 == "Home-Archive (\(first.id.uuidString.lowercased()))")
     }
 
+    @Test func foldersCarryTheDatesOfWhatTheyStandFor() async throws {
+        let vaultCreated = Date(timeIntervalSince1970: 1_700_000_000)
+        let personCreated = Date(timeIntervalSince1970: 1_710_000_000)
+        let vault = Vault(id: UUID(), name: "Personal", role: .owner, createdAt: vaultCreated)
+        let person = Correspondent(name: "ACME", createdAt: personCreated)
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [vault], defaultVaultID: vault.id),
+            vaultServices: [vault.id: MockFolioService(correspondents: [person])]
+        )
+        let catalog = FolioCatalog(service: source)
+
+        let root = try #require(try await catalog.children(of: .root).first)
+        let sections = try await catalog.children(of: .vault(vault.id))
+        let people = try await catalog.children(of: .scoped(vault.id, .correspondents))
+
+        #expect(root.created == vaultCreated)
+        #expect(!sections.isEmpty && sections.allSatisfy { $0.created == vaultCreated && $0.modified == vaultCreated })
+        #expect(people.map(\.created) == [personCreated])
+        #expect(try await catalog.allNodes().allSatisfy { $0.created != nil })
+    }
+
     @Test func viewerInboxIsReadOnlyAndCannotUpload() async throws {
         let target = MockFolioService()
         let source = MockFolioService(

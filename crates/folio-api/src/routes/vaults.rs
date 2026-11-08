@@ -187,6 +187,7 @@ pub(crate) async fn list_vaults(
             id: v.id,
             name: v.name,
             role,
+            created_at: v.created_at,
         })
         .collect();
     let deleted_vaults = if query.include_deleted {

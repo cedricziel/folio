@@ -125,34 +125,42 @@ public struct Tag: Identifiable, Hashable, Sendable {
     public var name: String
     public var color: String?
     public var deletedAt: Date?
+    public var createdAt: Date?
 
     public var displayName: String { deletedAt == nil ? name : "\(name) (deleted)" }
 
-    public init(id: UUID = UUID(), name: String, color: String? = nil, deletedAt: Date? = nil) {
+    public init(
+        id: UUID = UUID(), name: String, color: String? = nil, deletedAt: Date? = nil, createdAt: Date? = nil
+    ) {
         self.id = id
         self.name = name
         self.color = color
         self.deletedAt = deletedAt
+        self.createdAt = createdAt
     }
 }
 
 public struct Correspondent: Identifiable, Hashable, Sendable {
     public let id: UUID
     public var name: String
+    public var createdAt: Date?
 
-    public init(id: UUID = UUID(), name: String) {
+    public init(id: UUID = UUID(), name: String, createdAt: Date? = nil) {
         self.id = id
         self.name = name
+        self.createdAt = createdAt
     }
 }
 
 public struct DocumentType: Identifiable, Hashable, Sendable {
     public let id: UUID
     public var name: String
+    public var createdAt: Date?
 
-    public init(id: UUID = UUID(), name: String) {
+    public init(id: UUID = UUID(), name: String, createdAt: Date? = nil) {
         self.id = id
         self.name = name
+        self.createdAt = createdAt
     }
 }
 

@@ -417,6 +417,21 @@ private let documentJSON = """
         #expect(catalog.vaults == [Vault(id: id, name: "Household", role: .contributor)])
     }
 
+    @Test func discoversVaultCreationDates() async throws {
+        let id = UUID()
+        StubURLProtocol.handler = { _, _ in
+            .init(
+                body: Data(
+                    """
+                    {"vaults":[{"id":"\(id)","name":"Household","role":"owner","created_at":"2025-03-14T10:15:30.250000000Z"}],"default_vault_id":"\(id)"}
+                    """.utf8
+                )
+            )
+        }
+        let catalog = try await makeService().vaults()
+        #expect(catalog.vaults.first?.createdAt == Date(timeIntervalSince1970: 1_741_947_330.25))
+    }
+
     @Test func missingVaultDiscoveryIsAnError() async throws {
         StubURLProtocol.handler = { _, _ in .init(status: 404) }
         await #expect(throws: FolioError.server(status: 404, message: nil)) {
