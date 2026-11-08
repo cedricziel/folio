@@ -29,6 +29,7 @@ pub struct ApiError {
     message: String,
     code: Option<&'static str>,
     details: Option<String>,
+    retry_after_secs: Option<u64>,
 }
 
 impl ApiError {
@@ -38,7 +39,14 @@ impl ApiError {
             message: message.into(),
             code: None,
             details: None,
+            retry_after_secs: None,
         }
+    }
+
+    /// Tells the client when to try again, as a `Retry-After` header
+    pub fn with_retry_after(mut self, seconds: u64) -> Self {
+        self.retry_after_secs = Some(seconds);
+        self
     }
 
     /// 403 for a bearer token that lacks `scope`, with the error code `insufficient_scope`
@@ -90,7 +98,14 @@ impl IntoResponse for ApiError {
             details: self.details,
         };
 
-        (self.status, Json(body)).into_response()
+        let mut response = (self.status, Json(body)).into_response();
+        if let Some(seconds) = self.retry_after_secs {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(seconds),
+            );
+        }
+        response
     }
 }
 

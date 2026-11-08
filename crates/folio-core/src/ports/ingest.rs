@@ -76,6 +76,12 @@ pub trait IngestionSourceFactory: Send + Sync {
 #[async_trait]
 pub trait DocumentImporter: Send + Sync {
     async fn import(&self, vault: VaultId, upload: NewUpload) -> Result<Document>;
+    /// Create the record of an upload under an id reserved in advance, without storing its original. A repeat
+    /// returns the record already created under that id.
+    async fn begin_as(&self, vault: VaultId, id: Id, upload: &NewUpload) -> Result<Document>;
+    /// Import under an id reserved in advance. Repeating it resumes an interrupted import of the same document
+    /// instead of creating a second one, and returns a document that is already complete unchanged.
+    async fn import_as(&self, vault: VaultId, id: Id, upload: NewUpload) -> Result<Document>;
     /// Resume an import using the document identity durably reserved by `claim`.
     async fn import_reserved(
         &self,
