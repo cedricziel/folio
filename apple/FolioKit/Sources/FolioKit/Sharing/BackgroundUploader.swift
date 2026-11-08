@@ -80,6 +80,9 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     /// The start of each running task's answer, enough to read the error code of a refusal.
     private var answers: [Int: Data] = [:]
     private static let answerLimit = 4096
+    /// Answers kept at once. A task whose completion never arrives can't grow this past the limit; one beyond it
+    /// is classified by its status alone.
+    static let answeredTaskLimit = 64
 
     /// - Parameters:
     ///   - serverURL: Where new shares go; nil for an uploader that only collects the outcome of earlier ones.
@@ -236,11 +239,20 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
 
     public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         lock.withLock {
-            let received = answers[dataTask.taskIdentifier, default: Data()]
-            guard received.count < Self.answerLimit else { return }
-            answers[dataTask.taskIdentifier] = received + data.prefix(Self.answerLimit - received.count)
+            let received = answers[dataTask.taskIdentifier]
+            guard received != nil || answers.count < Self.answeredTaskLimit else { return }
+            let start = received ?? Data()
+            guard start.count < Self.answerLimit else { return }
+            answers[dataTask.taskIdentifier] = start + data.prefix(Self.answerLimit - start.count)
         }
     }
+
+    public func urlSession(_: URLSession, didBecomeInvalidWithError _: (any Error)?) {
+        lock.withLock { answers.removeAll() }
+    }
+
+    /// How many task answers are held right now.
+    var heldAnswers: Int { lock.withLock { answers.count } }
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession _: URLSession) {
         onEventsFinished?()
