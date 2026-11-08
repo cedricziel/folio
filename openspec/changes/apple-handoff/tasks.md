@@ -24,7 +24,7 @@ Server and Apple sections are independent and can land in either order; within e
 ## 2. Apple app site association route
 
 - [x] 2.1 Create `crates/folio-api/tests/apple_links.rs` with a failing test: `GET /.well-known/apple-app-site-association` returns 404 when no app IDs are configured, also with auth enabled and no session (no `/login` redirect). Then add `routes/apple.rs`, merged at the root, plus `AppState.apple_app_ids_default`. Commit `feat(api): serve apple-app-site-association when configured`.
-- [ ] 2.2 Write a failing test for an `apple.app_ids` set in startup config:
+- [x] 2.2 Write a failing test for an `apple.app_ids` set in startup config:
   - the route returns 200 with `Content-Type: application/json`, `Cache-Control: public, max-age=3600` and no `Set-Cookie`
   - the body equals the design §8 snapshot: three components with `????????-????-????-????-????????????` masks, no `*` and no `exclude`
   - with `server.public_url = https://example.com/folio`, every pattern starts with `/folio/vaults/`
