@@ -559,3 +559,105 @@ async fn pages_declare_their_telemetry_screen() {
         assert!(body.contains(&tag), "{uri} should declare {screen}");
     }
 }
+
+/// Pages Handoff and Universal Links hand over; their paths must not change
+mod handoff_urls {
+    use super::*;
+    use common::{harness_requiring_login, vault_session};
+    use folio_core::models::{
+        CreateDocument, SavedViewInput, SavedViewQuery, VaultRole, ViewPresentation, ViewVisibility,
+    };
+    use folio_core::ports::SavedViewAccess;
+
+    fn get_as(uri: &str, cookie: &str) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::get(uri)
+            .header(header::COOKIE, cookie)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn document_page_is_served_until_the_document_is_trashed() {
+        let h = harness().await;
+        let document = h
+            .state
+            .document_repo
+            .create(
+                h.vault,
+                CreateDocument {
+                    title: "Handed over".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let uri = format!("/vaults/{}/documents/{}", h.vault, document.id);
+
+        let response = h.app.clone().oneshot(get(&uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(text(response).await.contains("Handed over"));
+
+        h.state
+            .document_repo
+            .delete(h.vault, document.id)
+            .await
+            .unwrap();
+        let response = h.app.clone().oneshot(get(&uri)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn vault_library_pages_are_served() {
+        let h = harness().await;
+        for uri in [
+            format!("/vaults/{}/", h.vault),
+            format!("/vaults/{}/?view=all", h.vault),
+        ] {
+            let response = h.app.clone().oneshot(get(&uri)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_view_page_is_served_to_its_owner_only_when_private() {
+        let h = harness_requiring_login().await;
+        let alice = vault_session(&h, "alice", VaultRole::Owner, false).await;
+        let bob = vault_session(&h, "bob", VaultRole::Editor, false).await;
+        let view = h
+            .state
+            .saved_views
+            .create(
+                h.vault,
+                &SavedViewAccess {
+                    user: "alice".into(),
+                    role: VaultRole::Owner,
+                },
+                SavedViewInput {
+                    name: "Alice's receipts".into(),
+                    visibility: ViewVisibility::Private,
+                    presentation: ViewPresentation::List,
+                    query: SavedViewQuery::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let uri = format!("/vaults/{}/saved-views/{}", h.vault, view.id);
+
+        let response = h.app.clone().oneshot(get_as(&uri, &alice)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = h.app.clone().oneshot(get_as(&uri, &bob)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn signed_out_visit_redirects_to_login_with_the_page_as_next() {
+        let h = harness_requiring_login().await;
+        let _owner = vault_session(&h, "owner", VaultRole::Owner, true).await;
+        let id = uuid::Uuid::new_v4();
+        let uri = format!("/vaults/{}/documents/{id}", h.vault);
+        let response = h.app.clone().oneshot(get(&uri)).await.unwrap();
+        assert!(response.status().is_redirection(), "{}", response.status());
+        let expected = format!("/login?next=%2Fvaults%2F{}%2Fdocuments%2F{id}", h.vault);
+        assert_eq!(response.headers()[header::LOCATION], expected.as_str());
+    }
+}

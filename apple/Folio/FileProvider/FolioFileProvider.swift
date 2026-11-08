@@ -15,6 +15,8 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
     private let temporaryDirectory: (() throws -> URL)?
     private let localMetadata: LocalItemMetadataStore
     private let cache: FolioCatalogCache?
+    /// Shared by every provider instance in the extension process.
+    private static let catalogCaches = FolioCatalogCaches()
 
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
@@ -49,12 +51,13 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
             return (FolioCatalog(service: service, cache: cache), service)
         }
         guard let server = SharedConfiguration.serverURL() else {
-            ProcessCatalogCache.clear()
+            Self.catalogCaches.clear()
             throw NSFileProviderError(.notAuthenticated)
         }
         // One read of the server keeps the service and the cache it fills on the same server.
         let service = SharedConfiguration.makeService(for: server, downloadDirectory: downloadDirectory)
-        return (FolioCatalog(service: service, cache: ProcessCatalogCache.cache(for: server)), service)
+        let cache = Self.catalogCaches.cache(for: server, credentials: try? KeychainCredentialStore().load())
+        return (FolioCatalog(service: service, cache: cache), service)
     }
 
     func item(
@@ -449,25 +452,6 @@ extension FolioItemID {
         } else {
             self.init(rawValue: providerIdentifier.rawValue)
         }
-    }
-}
-
-/// One catalog cache per server for the whole extension process, shared by every provider instance.
-private enum ProcessCatalogCache {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var current: (server: URL, cache: FolioCatalogCache)?
-
-    static func cache(for server: URL) -> FolioCatalogCache {
-        lock.withLock {
-            if let current, current.server == server { return current.cache }
-            let cache = FolioCatalogCache()
-            current = (server, cache)
-            return cache
-        }
-    }
-
-    static func clear() {
-        lock.withLock { current = nil }
     }
 }
 

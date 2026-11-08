@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import os
 
 /// Recent vault and folder listings for one File Provider process.
 ///
@@ -79,5 +81,42 @@ public actor FolioCatalogCache {
         generation += 1
         listings.removeAll()
         listingRequests.removeAll()
+    }
+}
+
+/// One catalog cache per sign-in for a whole File Provider process, shared by every provider instance.
+///
+/// The key is the server and a digest of the stored refresh token. Signing in again, as any account, starts an
+/// empty cache, so the extension never serves the previous account's listings. A token refresh does too, which
+/// costs one refetch. Signed out, nothing is kept.
+public final class FolioCatalogCaches: Sendable {
+    private struct Key: Equatable {
+        let server: URL
+        let signIn: String
+    }
+
+    private let current = OSAllocatedUnfairLock<(key: Key, cache: FolioCatalogCache)?>(initialState: nil)
+
+    public init() {}
+
+    /// The cache for `credentials` on `server`, or nil when they are signed out or belong to another server.
+    public func cache(for server: URL, credentials: OAuthCredentials?) -> FolioCatalogCache? {
+        guard let credentials, credentials.isSignedIn, credentials.serverURL == server else {
+            clear()
+            return nil
+        }
+        let token = credentials.tokens.refreshToken ?? credentials.tokens.accessToken
+        let digest = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+        let key = Key(server: server, signIn: digest)
+        return current.withLock { current in
+            if let current, current.key == key { return current.cache }
+            let cache = FolioCatalogCache()
+            current = (key, cache)
+            return cache
+        }
+    }
+
+    public func clear() {
+        current.withLock { $0 = nil }
     }
 }
