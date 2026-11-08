@@ -47,13 +47,6 @@ esac
 
 (cd "$folio_dir" && xcodegen generate --quiet)
 
-# The App Store profile has no Associated Domains capability; the key would break signing.
-if [ "$mode" = official ] &&
-    grep -q com.apple.developer.associated-domains "$folio_dir/Resources/Folio.entitlements"; then
-    echo "FAIL  Resources/Folio.entitlements contains com.apple.developer.associated-domains"
-    failures=$((failures + 1))
-fi
-
 # Prints KEY's value from `xcodebuild -showBuildSettings` output on stdin; empty when unset.
 setting() {
     awk -v key="$1" '
@@ -72,6 +65,18 @@ expect() {
         failures=$((failures + 1))
     fi
 }
+
+# Handoff needs every activity type the app advertises or accepts declared in its Info.plist.
+activity_types="$(plutil -extract NSUserActivityTypes json -o - "$folio_dir/Resources/Folio-Info.plist" || true)"
+expect "Folio-Info.plist NSUserActivityTypes" "$activity_types" \
+    '["com.cedricziel.folio.document","com.cedricziel.folio.library","com.cedricziel.folio.saved-view"]'
+
+# The App Store profile has no Associated Domains capability; the key would break signing.
+if [ "$mode" = official ] &&
+    grep -q com.apple.developer.associated-domains "$folio_dir/Resources/Folio.entitlements"; then
+    echo "FAIL  Resources/Folio.entitlements contains com.apple.developer.associated-domains"
+    failures=$((failures + 1))
+fi
 
 # target  bundle-id-suffix  entitlements  profile-key-suffix
 targets=(

@@ -64,6 +64,8 @@ targets:
         LSApplicationCategoryType: public.app-category.productivity
         NSUserActivityTypes:
           - com.cedricziel.folio.document
+          - com.cedricziel.folio.library
+          - com.cedricziel.folio.saved-view
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(FOLIO_BUNDLE_ID)
