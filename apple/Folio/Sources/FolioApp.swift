@@ -176,6 +176,8 @@ final class AppModel {
                 session = .signedOut
                 FileProviderDomain.unregister()
             } catch {
+                // Still signed in, so keep recording against a session.
+                FolioTelemetry.shared.signedIn()
                 operationError = error.localizedDescription
             }
         }

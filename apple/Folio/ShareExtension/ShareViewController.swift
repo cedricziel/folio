@@ -11,7 +11,10 @@ struct ShareRoot: View {
     var body: some View {
         Group {
             if let model {
-                ShareView(model: model) { finish(model.state == .done ? nil : .shareCancel) }
+                ShareView(model: model) {
+                    // A queued upload was handed to the background session, so it was submitted too.
+                    finish(model.state == .done || model.state == .queued ? nil : .shareCancel)
+                }
             } else if loaded, let attachments, !attachments.canUpload {
                 VStack(alignment: .leading, spacing: FolioTheme.Spacing.space3) {
                     Text(attachments.files.isEmpty ? "No readable attachments" : "Some attachments could not be read")
