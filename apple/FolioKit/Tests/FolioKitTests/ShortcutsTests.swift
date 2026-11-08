@@ -137,7 +137,9 @@ struct DocumentCatalogTests {
 
     @Test func fileForUnknownDocumentFails() async {
         let (catalog, _) = await makeCatalog()
-        await #expect(throws: ShortcutFailure.documentNotFound) { try await catalog.file(for: UUID()) }
+        await #expect(throws: ShortcutFailure.documentNotFound) {
+            try await catalog.file(for: DocumentEntityID(documentID: UUID()))
+        }
     }
 }
 
