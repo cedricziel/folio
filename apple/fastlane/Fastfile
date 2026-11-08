@@ -6,7 +6,8 @@ TEAM_ID = "WPW3QSLZ2F"
 APP_IDENTIFIER = "com.cedricziel.folio"
 SHARE_IDENTIFIER = "#{APP_IDENTIFIER}.share"
 FILE_PROVIDER_IDENTIFIER = "#{APP_IDENTIFIER}.fileprovider"
-IDENTIFIERS = [APP_IDENTIFIER, SHARE_IDENTIFIER, FILE_PROVIDER_IDENTIFIER].freeze
+WIDGETS_IDENTIFIER = "#{APP_IDENTIFIER}.widgets"
+BASE_IDENTIFIERS = [APP_IDENTIFIER, SHARE_IDENTIFIER, FILE_PROVIDER_IDENTIFIER].freeze
 APP_GROUP = "group.#{APP_IDENTIFIER}"
 XCODEBUILD_FLAGS = "-skipPackagePluginValidation -skipMacroValidation"
 
@@ -15,6 +16,16 @@ default_platform(:ios)
 before_all do |_lane, _options|
   # Without setup_ci, codesign on macOS runners hangs on a keychain prompt.
   setup_ci if is_ci
+end
+
+# The widget extension is built in only with FOLIO_WIDGETS=YES (see docs/apple-widgets.md), so its App ID and
+# profiles are only registered and fetched then; otherwise match would look for a profile nobody created yet.
+def widgets_enabled?
+  ENV["FOLIO_WIDGETS"].to_s.strip.casecmp?("YES")
+end
+
+def identifiers
+  widgets_enabled? ? BASE_IDENTIFIERS + [WIDGETS_IDENTIFIER] : BASE_IDENTIFIERS
 end
 
 def load_app_store_connect_api_key
@@ -53,7 +64,8 @@ def register_bundle_ids
     APP_IDENTIFIER => "Folio",
     SHARE_IDENTIFIER => "Folio Share Extension",
     FILE_PROVIDER_IDENTIFIER => "Folio File Provider",
-  }
+    WIDGETS_IDENTIFIER => "Folio Widgets",
+  }.slice(*identifiers)
   names.each do |identifier, name|
     bundle = Spaceship::ConnectAPI::BundleId.all(filter: { identifier: identifier }).find { |b| b.identifier == identifier }
     if bundle
@@ -77,7 +89,7 @@ def register_bundle_ids
   UI.important(<<~MSG)
     An API key cannot create an App Group or assign one to an identifier. In the developer portal:
       1. Identifiers -> App Groups -> "+" -> #{APP_GROUP}
-      2. For #{IDENTIFIERS.join(', ')}: Edit -> App Groups -> assign #{APP_GROUP}
+      2. For #{identifiers.join(', ')}: Edit -> App Groups -> assign #{APP_GROUP}
     Then run `bundle exec fastlane bootstrap` again so the profiles carry the group.
   MSG
 
@@ -97,7 +109,7 @@ def sign(platform:, force: false)
   match_params = {
     type: "appstore",
     platform: platform,
-    app_identifier: IDENTIFIERS,
+    app_identifier: identifiers,
     readonly: is_ci && !force,
     force: force,
     api_key: load_app_store_connect_api_key,
@@ -168,8 +180,9 @@ lane :test do
 end
 
 desc "One-time local setup: register bundle ids with App Groups, then create signing assets with match"
-desc "  force:true regenerates the profiles"
+desc "  force:true regenerates the profiles; widgets:true also registers #{WIDGETS_IDENTIFIER} and its profiles"
 lane :bootstrap do |options|
+  ENV["FOLIO_WIDGETS"] = "YES" if options[:widgets].to_s == "true"
   register_bundle_ids
   force = options[:force].to_s == "true"
   sign(platform: "ios", force: force)

@@ -1,0 +1,53 @@
+# The widget extension (#360, #361). project.yml includes this file only when FOLIO_WIDGETS=YES is set while
+# generating, because embedding the extension needs the com.cedricziel.folio.widgets App ID and match profiles.
+# See docs/apple-widgets.md.
+targets:
+  Folio:
+    dependencies:
+      - target: FolioWidgets
+    info:
+      properties:
+        FolioWidgetsEnabled: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.cedricziel.folio.widgets
+            CFBundleURLSchemes:
+              - com.cedricziel.folio.widgets
+  FolioWidgets:
+    type: app-extension
+    supportedDestinations:
+      - iOS
+      - macOS
+    sources:
+      - path: Widgets
+    dependencies:
+      - package: FolioKit
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    entitlements:
+      path: Resources/FolioWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.cedricziel.folio
+        com.apple.security.app-sandbox: true
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.cedricziel.folio
+    info:
+      path: Resources/FolioWidgets-Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: Folio
+        FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.widgets
+        ENABLE_APP_SANDBOX: 'YES'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Distribution
+          CODE_SIGN_IDENTITY[sdk=macosx*]: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER[sdk=iphoneos*]: match AppStore com.cedricziel.folio.widgets
+          PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]: match AppStore com.cedricziel.folio.widgets macos

@@ -11,12 +11,20 @@ struct FolioApp: App {
     #endif
     @State private var model = AppModel()
     @State private var security = AppLockLifecycle()
+    @State private var widgets = WidgetSync()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView(model: model, lock: security.lock)
-                .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
+                .onChange(of: security.lock.isEnabled) { _, enabled in
+                    security.refreshCovers()
+                    if enabled { widgets.hideTitles() } else { refreshWidgets() }
+                }
+                .onChange(of: model.session) { refreshWidgets() }
+                .onOpenURL { url in
+                    if let link = WidgetLink(url: url) { IntentRouter.shared.route(link.request) }
+                }
                 .tint(.archive)
                 .onReceive(
                     NotificationCenter.default.publisher(for: Notification.Name("FolioSessionChanged")).receive(
@@ -29,9 +37,12 @@ struct FolioApp: App {
                     case .active:
                         FolioTelemetry.shared.lifecycle("active")
                         model.restore()
+                        refreshWidgets()
                         Task { await ShareSessionCoordinator.shared.recoverInterrupted() }
                     case .inactive: FolioTelemetry.shared.lifecycle("inactive")
-                    case .background: FolioTelemetry.shared.lifecycle("background")
+                    case .background:
+                        FolioTelemetry.shared.lifecycle("background")
+                        refreshWidgets()
                     @unknown default: break
                     }
                 }
@@ -55,6 +66,10 @@ struct FolioApp: App {
             }
             .windowResizability(.contentSize)
         #endif
+    }
+
+    private func refreshWidgets() {
+        widgets.update(session: model.session, revealsTitles: !security.lock.isEnabled)
     }
 }
 
