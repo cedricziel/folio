@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block screen %}{% if view_all %}documents{% else %}inbox{% endif %}{% endblock %}
 {% import "partials/counts.html" as counts %}
 
 {% block title %}{{ heading }} - Folio{% endblock %}
@@ -12,7 +13,7 @@
 
     <details class="panel" {% if has_review_filters %}open{% endif %}>
         <summary>Review and document date filters{% if has_review_filters %} (applied){% endif %}</summary>
-        <form action="{{ "/"|vault_url }}" method="get">
+        <form action="{{ "/"|vault_url }}" method="get" data-folio-action="browse.filter.change">
             {% if view_all %}<input type="hidden" name="view" value="all">{% endif %}
             {% if !correspondent_filter.is_empty() %}<input type="hidden" name="correspondent_id" value="{{ correspondent_filter }}">{% endif %}
             {% if !type_filter.is_empty() %}<input type="hidden" name="document_type_id" value="{{ type_filter }}">{% endif %}

@@ -20,6 +20,17 @@ import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { registerInstrumentations } from "@opentelemetry/instrumentation";
 import { FetchInstrumentation } from "@opentelemetry/instrumentation-fetch";
 import { XMLHttpRequestInstrumentation } from "@opentelemetry/instrumentation-xml-http-request";
+import {
+  actionName,
+  randomId,
+  sanitizeLog,
+  ScreenTracker,
+  screenName,
+  SESSION_KEY,
+  SessionStore,
+  UiEventLimiter,
+  uploadSource,
+} from "./telemetry-session.mjs";
 
 const configFetch = window.fetch.bind(window);
 const installationKey = "folio.telemetry.installation.id";
@@ -86,6 +97,21 @@ let starting;
 let telemetry;
 let navigationStart;
 let initialLoad = true;
+const sessionPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const sessions = new SessionStore({
+  storage: {
+    getItem: (key) => localStorage.getItem(key),
+    setItem: (key, value) => localStorage.setItem(key, value),
+    removeItem: (key) => localStorage.removeItem(key),
+  },
+});
+const screens = new ScreenTracker();
+const limiter = new UiEventLimiter();
+sessions.refresh();
+addEventListener("storage", (changed) => {
+  if (changed.key === SESSION_KEY || changed.key === null) sessions.refresh();
+});
 
 function routeFor(value) {
   try {
@@ -101,17 +127,6 @@ function routeFor(value) {
   } catch {
     return "/unknown";
   }
-}
-
-function randomId() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function installationId() {
@@ -186,6 +201,10 @@ function safeSpan(span) {
     attributes["http.route"] = routeFor(source["http.route"]);
   if (typeof source["folio.navigation.type"] === "string")
     attributes["folio.navigation.type"] = source["folio.navigation.type"];
+  if (sessionPattern.test(source["session.id"]))
+    attributes["session.id"] = source["session.id"];
+  if (typeof source["app.screen.name"] === "string")
+    attributes["app.screen.name"] = screenName(source["app.screen.name"]);
   return {
     ...span,
     spanContext: () => span.spanContext(),
@@ -197,6 +216,54 @@ function safeSpan(span) {
     links: [],
     status: { code: span.status.code },
   };
+}
+
+/** Adds the session and current screen to every span and log record. */
+function stamp(record) {
+  const id = sessions.current();
+  if (id && record.attributes["session.id"] === undefined)
+    record.setAttribute("session.id", id);
+  if (screens.current && record.attributes["app.screen.name"] === undefined)
+    record.setAttribute("app.screen.name", screens.current);
+}
+
+const spanStamper = {
+  onStart: stamp,
+  onEnd() {},
+  forceFlush: () => Promise.resolve(),
+  shutdown: () => Promise.resolve(),
+};
+
+/** Stamps, then keeps only the fixed log vocabulary before export. */
+const logSanitizer = {
+  onEmit(record) {
+    stamp(record);
+    sanitizeLog(record);
+  },
+  forceFlush: () => Promise.resolve(),
+  shutdown: () => Promise.resolve(),
+};
+
+/** The server request span named in Server-Timing on a full page load. */
+function serverContext() {
+  try {
+    const [entry] = performance.getEntriesByType("navigation");
+    // Back and forward can replay a cached response whose traceparent belongs to an earlier request.
+    if (entry?.type === "back_forward") return ROOT_CONTEXT;
+    const value = entry?.serverTiming?.find(
+      (timing) => timing.name === "traceparent",
+    )?.description;
+    const match = /^00-([0-9a-f]{32})-([0-9a-f]{16})-0([01])$/.exec(value);
+    if (!match) return ROOT_CONTEXT;
+    return trace.setSpanContext(ROOT_CONTEXT, {
+      traceId: match[1],
+      spanId: match[2],
+      traceFlags: Number(match[3]),
+      isRemote: true,
+    });
+  } catch {
+    return ROOT_CONTEXT;
+  }
 }
 
 function gatedExporter(exporter, sanitize = (value) => value) {
@@ -245,6 +312,7 @@ function createTelemetry(config) {
       linkCountLimit: 0,
     },
     spanProcessors: [
+      spanStamper,
       new BatchSpanProcessor({
         ...batchOptions,
         exporter: gatedExporter(
@@ -272,6 +340,7 @@ function createTelemetry(config) {
   const logs = new LoggerProvider({
     resource,
     processors: [
+      logSanitizer,
       new BatchLogRecordProcessor({
         ...batchOptions,
         exporter: gatedExporter(new OTLPLogExporter(exporterOptions("logs"))),
@@ -295,20 +364,102 @@ function createTelemetry(config) {
   registerInstrumentations({ tracerProvider: traces, instrumentations });
   const meter = meters.getMeter("folio.web");
   const navigations = meter.createCounter("folio.web.navigation.count");
+  const dropped = meter.createCounter("folio.telemetry.ui_events.dropped");
   const duration = meter.createHistogram("folio.web.navigation.duration", {
     unit: "s",
   });
   const logger = logs.getLogger("folio.web");
   const tracer = traces.getTracer("folio.web");
 
+  function event(eventName, attributes = {}, timestamp) {
+    logger.emit({
+      eventName,
+      severityNumber: 9,
+      severityText: "INFO",
+      attributes,
+      timestamp,
+    });
+  }
+
+  function sessionEvents(events) {
+    for (const item of events) {
+      const attributes = { "session.id": item.id };
+      if (item.previousId) attributes["session.previous_id"] = item.previousId;
+      if (item.reason) attributes["folio.session.end_reason"] = item.reason;
+      event(item.name, attributes, item.time);
+    }
+  }
+
+  function uiEvent(eventName, attributes) {
+    if (limiter.allow()) event(eventName, attributes);
+    const count = limiter.takeDropped();
+    if (count) dropped.add(count);
+  }
+
+  function flush() {
+    return Promise.allSettled([
+      traces.forceFlush(),
+      meters.forceFlush(),
+      logs.forceFlush(),
+    ]);
+  }
+
+  async function screen() {
+    const name = screenName(
+      document.querySelector('meta[name="folio-screen"]')?.content,
+    );
+    let session;
+    try {
+      session = await sessions.touchLocked(navigator.locks);
+    } catch {
+      session = sessions.touch();
+    }
+    sessionEvents(session.events);
+    if (screens.view(name)) uiEvent("folio.screen.view", { "app.screen.name": name });
+  }
+
+  /** Logs and traces only: metrics wait for their interval, so actions don't spend the relay budget. */
+  function flushEvents() {
+    return Promise.allSettled([traces.forceFlush(), logs.forceFlush()]);
+  }
+
+  async function action(name, { source, leavesPage = false } = {}) {
+    const attributes = { "folio.action.name": name };
+    if (source) attributes["folio.upload.source"] = source;
+    if (name === "auth.sign_out") {
+      uiEvent("folio.action", attributes);
+      sessionEvents(sessions.end("sign_out"));
+      void flushEvents();
+      return;
+    }
+    // Extending a live session needs no lock, and the event must be queued before a link or form unloads
+    // the page. Only a rotation waits for the lock, unless the page is about to unload.
+    let session;
+    if (leavesPage || sessions.current()) session = sessions.touch();
+    else {
+      try {
+        session = await sessions.touchLocked(navigator.locks);
+      } catch {
+        session = sessions.touch();
+      }
+    }
+    sessionEvents(session.events);
+    uiEvent("folio.action", attributes);
+    if (leavesPage) void flushEvents();
+  }
+
   function navigation(type, start = performance.now()) {
     if (!enabled) return;
     const route = routeFor(location.href);
     const elapsed = Math.max(0, performance.now() - start);
-    const span = tracer.startSpan("folio.navigation", {
-      startTime: performance.timeOrigin + start,
-      attributes: { "http.route": route, "folio.navigation.type": type },
-    });
+    const span = tracer.startSpan(
+      "folio.navigation",
+      {
+        startTime: performance.timeOrigin + start,
+        attributes: { "http.route": route, "folio.navigation.type": type },
+      },
+      type === "document" ? serverContext() : ROOT_CONTEXT,
+    );
     const spanContext = trace.setSpan(ROOT_CONTEXT, span);
     const attributes = { "http.route": route, "folio.navigation.type": type };
     navigations.add(1, attributes, spanContext);
@@ -324,23 +475,45 @@ function createTelemetry(config) {
   }
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && enabled) {
-      void Promise.allSettled([
-        traces.forceFlush(),
-        meters.forceFlush(),
-        logs.forceFlush(),
-      ]);
-    }
+    if (document.visibilityState === "hidden" && enabled) void flush();
   });
-  return { instrumentations, navigation };
+  addEventListener("pagehide", () => {
+    if (enabled) void flush();
+  });
+  return { instrumentations, navigation, screen, action };
 }
 
 function isSignInPage() {
   return /^\/(?:login|setup)(?:\/|$)/.test(location.pathname);
 }
 
+function declaredAction(element) {
+  return actionName(element?.getAttribute?.("data-folio-action") ?? undefined);
+}
+
+// Bubble phase: a cancelled confirmation stops propagation and records nothing.
+document.addEventListener("submit", (submitted) => {
+  const name = declaredAction(submitted.target);
+  const leavesPage = submitted.target?.getAttribute?.("data-turbo") === "false";
+  if (enabled && name) void telemetry.action(name, { leavesPage });
+});
+document.addEventListener("click", (clicked) => {
+  const element = clicked.target?.closest?.("[data-folio-action]");
+  if (!element || element.tagName === "FORM") return;
+  const name = declaredAction(element);
+  if (enabled && name) void telemetry.action(name);
+});
+// Scripted actions (uploads, tags, vault switch, search) announce themselves by name.
+document.addEventListener("folio:action", (announced) => {
+  const detail = announced.detail ?? {};
+  const name = actionName(detail.name);
+  if (enabled && name)
+    void telemetry.action(name, { source: uploadSource(detail.source) });
+});
+
 async function configure() {
   if (isSignInPage()) {
+    sessions.clear();
     enabled = false;
     for (const instrumentation of telemetry?.instrumentations ?? [])
       instrumentation.disable();
@@ -367,6 +540,7 @@ async function configure() {
         else instrumentation.disable();
       }
       if (enabled) {
+        await telemetry.screen();
         telemetry.navigation(
           initialLoad ? "document" : "turbo",
           initialLoad ? 0 : navigationStart,

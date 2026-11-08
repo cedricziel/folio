@@ -1,4 +1,6 @@
-{% extends "base.html" %} {% block title %}Trash - Folio{% endblock %} {% block
+{% extends "base.html" %}
+{% block screen %}trash{% endblock %}
+ {% block title %}Trash - Folio{% endblock %} {% block
 content %}
 <section class="page" data-view="trash">
   <header class="page-head">
@@ -40,6 +42,7 @@ content %}
         {% else if row.can_delete %}
         <div class="doc-actions">
           <form
+            data-folio-action="document.restore"
             action="{{ "/documents"|vault_url }}/{{ row.id }}/restore"
             method="post"
             data-turbo="false"
@@ -47,6 +50,7 @@ content %}
             <button type="submit" class="f-btn">Restore</button>
           </form>
           <form
+            data-folio-action="document.purge"
             action="{{ "/documents"|vault_url }}/{{ row.id }}/delete-forever"
             method="post"
             data-turbo="false"

@@ -384,6 +384,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             JobType::ExecuteWorkflowRun { run_id: run.id },
             Utc::now(),
             MAX_ATTEMPTS as i32,
+            crate::queue::JobTraceContext::current().as_ref(),
         )
         .await?;
         tx.commit().await.map_err(repo_err)?;

@@ -110,6 +110,7 @@ actor MockFolioService: FolioService {
     private(set) var deleted: [Document.ID] = []
     private var trashedDocuments: [Document.ID: Document] = [:]
     private(set) var pings = 0
+    private(set) var downloads = 0
     private var documentGate: CheckedContinuation<[Document], Never>?
     private var documentStarted: CheckedContinuation<Void, Never>?
     private var suspendDocumentRequests = false
@@ -409,6 +410,7 @@ actor MockFolioService: FolioService {
 
     func downloadFile(for document: Document) async throws -> URL {
         try Task.checkCancellation()
+        downloads += 1
         if let failure {
             throw failure
         }

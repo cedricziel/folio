@@ -1,5 +1,4 @@
 import AppIntents
-import CoreSpotlight
 import Foundation
 import UniformTypeIdentifiers
 
@@ -282,18 +281,3 @@ extension UploadFile {
 }
 
 public enum FolioIntentsPackage: AppIntentsPackage {}
-
-/// Re-indexes a document in Spotlight when someone opens it.
-public enum SpotlightDonor {
-    public static func donate(_ summary: DocumentSummary, vaultID: UUID) async {
-        try? await CSSearchableIndex.default().indexSearchableItems([searchableItem(summary, vaultID: vaultID)])
-    }
-
-    static func searchableItem(_ summary: DocumentSummary, vaultID: UUID) -> CSSearchableItem {
-        CSSearchableItem(
-            uniqueIdentifier: DocumentLink(documentID: summary.id, vaultID: vaultID).spotlightIdentifier,
-            domainIdentifier: "com.cedricziel.folio.documents",
-            attributeSet: DocumentEntity(summary).attributeSet
-        )
-    }
-}

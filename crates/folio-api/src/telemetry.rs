@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use axum::http::{header, HeaderValue};
 use axum::{
     extract::{MatchedPath, Request, State},
     middleware::{self, Next},
@@ -10,7 +11,8 @@ use axum::{
     Router,
 };
 use opentelemetry::metrics::{Histogram, UpDownCounter};
-use opentelemetry::{global, KeyValue};
+use opentelemetry::trace::TraceContextExt;
+use opentelemetry::{global, Array, KeyValue, StringValue, Value};
 use opentelemetry_http::HeaderExtractor;
 use tower_http::trace::TraceLayer;
 use tracing::{field, info_span, Span};
@@ -50,6 +52,7 @@ impl HttpMetrics {
 /// are added so the matched route is known when the span opens.
 pub fn instrument(router: Router<crate::AppState>) -> Router<crate::AppState> {
     router
+        .layer(middleware::from_fn(server_timing))
         .layer(middleware::from_fn_with_state(
             HttpMetrics::new(),
             record_metrics,
@@ -115,7 +118,85 @@ fn make_span(request: &Request) -> Span {
         propagator.extract(&HeaderExtractor(request.headers()))
     });
     let _ = span.set_parent(parent);
+    if let Some((scope, filters)) = route
+        .as_deref()
+        .and_then(|route| browse_context(route, request.uri().query()))
+    {
+        span.set_attribute("folio.browse.scope", scope);
+        let filters = filters.into_iter().map(StringValue::from).collect();
+        span.set_attribute("folio.browse.filters", Value::Array(Array::String(filters)));
+    }
     span
+}
+
+/// Which document list a page request shows and which kinds of filter it uses.
+/// Only fixed names are returned, never the filter values.
+fn browse_context(route: &str, query: Option<&str>) -> Option<(&'static str, Vec<&'static str>)> {
+    let pairs = || {
+        url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+            .filter(|(_, value)| !value.is_empty())
+    };
+    match route {
+        "/" => {
+            // Taxonomy filters count only when they are IDs, as the index page ignores anything else.
+            let id = |value: &str| uuid::Uuid::parse_str(value).is_ok();
+            let mut filters: Vec<&'static str> = pairs()
+                .filter_map(|(key, value)| match key.as_ref() {
+                    "reviewed" => Some("reviewed"),
+                    "document_date_from" | "document_date_to" => Some("document_date"),
+                    "correspondent_id" if id(&value) => Some("correspondent"),
+                    "document_type_id" if id(&value) => Some("document_type"),
+                    "tag_id" if id(&value) => Some("tag"),
+                    _ => None,
+                })
+                .collect();
+            filters.sort_unstable();
+            filters.dedup();
+            // Mirrors the index page: a taxonomy filter or view=all lists every document.
+            let all = pairs().any(|(key, value)| key == "view" && value == "all")
+                || filters
+                    .iter()
+                    .any(|kind| matches!(*kind, "correspondent" | "document_type" | "tag"));
+            Some((if all { "all" } else { "inbox" }, filters))
+        }
+        "/documents" => Some(("all", Vec::new())),
+        "/documents/search" | "/api/documents/search" => {
+            let text = pairs().any(|(key, _)| key == "q");
+            Some(("search", if text { vec!["text"] } else { Vec::new() }))
+        }
+        _ => None,
+    }
+}
+
+/// Names the server request span on HTML responses, so a full page load's browser
+/// navigation span can join the same trace. Holds only trace and span IDs.
+async fn server_timing(request: Request, next: Next) -> Response {
+    if request.uri().path().starts_with("/api/") {
+        return next.run(request).await;
+    }
+    let context = Span::current().context();
+    let span = context.span();
+    let span_context = span.span_context().clone();
+    let mut response = next.run(request).await;
+    let html = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/html"));
+    if html && span_context.is_valid() {
+        let value = format!(
+            "traceparent;desc=\"00-{}-{}-{:02x}\"",
+            span_context.trace_id(),
+            span_context.span_id(),
+            span_context.trace_flags().to_u8()
+        );
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            response
+                .headers_mut()
+                .append(header::HeaderName::from_static("server-timing"), value);
+        }
+    }
+    response
 }
 
 async fn record_metrics(
