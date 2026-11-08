@@ -163,6 +163,34 @@ struct SpotlightIndexTests {
         #expect(await fake.items.isEmpty)
     }
 
+    @Test func signingInAgainOnTheSameServerClearsThePreviousAccount() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await spotlight.donate(summary("Account X"), vaultID: vault)
+        await spotlight.sessionChanged(to: .interrupted(serverA)).value
+
+        await spotlight.signedIn(to: serverA).value
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let fromY = summary("Account Y")
+        await spotlight.donate(fromY, vaultID: vault)
+
+        #expect(await fake.documentIDs == [fromY.id])
+    }
+
+    @Test func removalStillAppliesWhileTheSessionIsInterrupted() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let gone = summary("Gone")
+        await spotlight.donate(gone, vaultID: vault)
+
+        await spotlight.sessionChanged(to: .unavailable(server: serverA, message: "keychain")).value
+        await spotlight.remove(documentID: gone.id).value
+
+        #expect(await fake.items.isEmpty)
+    }
+
     @Test func donationInFlightDuringSignOutDoesNotSurviveIt() async throws {
         let fake = FakeSpotlightIndex()
         let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
@@ -248,6 +276,58 @@ struct SpotlightIndexTests {
         #expect(await fake.documentIDs == [doc.id])
     }
 
+    @Test func deleteConfirmedAfterTheSessionDroppedStillRemovesTheEntry() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let doc = Document(title: "Gone")
+        await spotlight.donate(summary(doc.title, id: doc.id), vaultID: vault)
+        let service = MockFolioService(documents: [doc])
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1), spotlight: spotlight)
+        await model.load()
+        await spotlight.sessionChanged(to: .interrupted(serverA)).value
+
+        #expect(await model.delete(doc))
+        await spotlight.idle()
+
+        #expect(await fake.items.isEmpty)
+    }
+
+    @Test func documentGoneFromTheServerIsRemovedWhenLookedUp() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let goneElsewhere = summary("Deleted on the web")
+        let trashed = Document(title: "Trashed", deletedAt: Date(timeIntervalSince1970: 0))
+        await spotlight.donate(goneElsewhere, vaultID: vault)
+        await spotlight.donate(summary(trashed.title, id: trashed.id), vaultID: vault)
+        let model = DocumentListViewModel(
+            service: MockFolioService(documents: [trashed]), searchDebounce: .milliseconds(1), spotlight: spotlight)
+
+        await model.resolveDocument(goneElsewhere.id)
+        await model.resolveDocument(trashed.id)
+        await spotlight.idle()
+
+        #expect(model.documentError(for: goneElsewhere.id) != nil)
+        #expect(await fake.items.isEmpty)
+    }
+
+    @Test func unreachableServerKeepsTheEntryOnLookup() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        let doc = Document(title: "Kept")
+        await spotlight.donate(summary(doc.title, id: doc.id), vaultID: vault)
+        let service = MockFolioService(documents: [doc])
+        await service.setFailure(.unreachable)
+        let model = DocumentListViewModel(service: service, searchDebounce: .milliseconds(1), spotlight: spotlight)
+
+        await model.resolveDocument(doc.id)
+        await spotlight.idle()
+
+        #expect(await fake.documentIDs == [doc.id])
+    }
+
     @Test func signOutThroughTheSessionStoreClearsSpotlight() async throws {
         let fake = FakeSpotlightIndex()
         let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
@@ -273,7 +353,7 @@ struct SpotlightIndexTests {
         await spotlight.sessionChanged(to: .signedIn(serverA)).value
         await spotlight.donate(summary("From A"), vaultID: vault)
         let model = OnboardingViewModel(store: MemoryServerConfigStore(), makeService: { _ in MockFolioService() }) {
-            _ = spotlight.sessionChanged(to: .signedIn($0))
+            _ = spotlight.signedIn(to: $0)
         }
         model.address = serverB.absoluteString
 
@@ -285,6 +365,24 @@ struct SpotlightIndexTests {
         #expect(model.state == .idle)
         #expect(await fake.documentIDs == [fromB.id])
         #expect(await fake.items.values.allSatisfy { $0.domain.hasPrefix(SpotlightIndex.domain(for: serverB)) })
+    }
+
+    @Test func signingInAgainAsAnotherAccountOnTheSameServerClearsTheOldOne() async {
+        let fake = FakeSpotlightIndex()
+        let spotlight = SpotlightIndex(index: fake, defaults: scopeDefaults())
+        await spotlight.sessionChanged(to: .signedIn(serverA)).value
+        await spotlight.donate(summary("Account X"), vaultID: vault)
+        await spotlight.sessionChanged(to: .interrupted(serverA)).value
+        let model = OnboardingViewModel(store: MemoryServerConfigStore(), makeService: { _ in MockFolioService() }) {
+            _ = spotlight.signedIn(to: $0)
+        }
+        model.address = serverA.absoluteString
+
+        await model.connect()
+        await spotlight.idle()
+
+        #expect(model.state == .idle)
+        #expect(await fake.items.isEmpty)
     }
 
     @Test func donationRacingSignOutThroughTheSessionStoreStaysCleared() async throws {
