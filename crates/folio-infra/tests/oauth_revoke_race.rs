@@ -97,12 +97,22 @@ async fn rotate(server: &OAuthServer, client_id: &str, refresh: &str) -> Option<
     Some(tokens["refresh_token"].as_str().unwrap().to_string())
 }
 
-async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>) {
+/// How a running refresh rotation gets cut off.
+#[derive(Clone, Copy)]
+enum Revoke {
+    /// The user disconnects the client.
+    Disconnect,
+    /// An already rotated refresh token comes back, which ends its grant.
+    Replay,
+}
+
+async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>, how: Revoke) {
     let client = seed(&store).await;
     let server = OAuthServer::new(store.clone());
     for round in 0..ROUNDS {
         let code = issue_code(&server, &client).await;
-        let mut refresh = exchange(&server, &client.client_id, code).await.unwrap();
+        let first = exchange(&server, &client.client_id, code).await.unwrap();
+        let mut refresh = rotate(&server, &client.client_id, &first).await.unwrap();
         let revoked = Arc::new(AtomicBool::new(false));
         let rotator = {
             let server = server.clone();
@@ -120,10 +130,13 @@ async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>) {
             })
         };
         tokio::time::sleep(Duration::from_micros(200 * (round as u64 % 10))).await;
-        store
-            .revoke_client_tokens("ada", &client.client_id)
-            .await
-            .unwrap();
+        match how {
+            Revoke::Disconnect => store
+                .revoke_client_tokens("ada", &client.client_id)
+                .await
+                .unwrap(),
+            Revoke::Replay => assert!(rotate(&server, &client.client_id, &first).await.is_none()),
+        }
         revoked.store(true, Ordering::SeqCst);
         let last = rotator
             .await
@@ -184,7 +197,14 @@ async fn code_exchange_never_outlives_a_revoke(store: Arc<dyn AuthStore>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sqlite_refresh_rotation_never_outlives_a_revoke() {
     let (_dir, db) = common::sqlite_database().await;
-    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth).await;
+    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::Disconnect)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_refresh_rotation_never_outlives_a_replay() {
+    let (_dir, db) = common::sqlite_database().await;
+    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::Replay).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -193,7 +213,17 @@ async fn postgres_refresh_rotation_never_outlives_a_revoke() {
     else {
         return;
     };
-    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth).await;
+    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::Disconnect)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn postgres_refresh_rotation_never_outlives_a_replay() {
+    let Some((_container, db)) = common::postgres_database("PostgreSQL (OAuth revoke race)").await
+    else {
+        return;
+    };
+    refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::Replay).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -209,4 +239,62 @@ async fn postgres_code_exchange_never_outlives_a_revoke() {
         return;
     };
     code_exchange_never_outlives_a_revoke(db.repositories().await.auth).await;
+}
+
+/// New authorization codes reference the client row; an exchange holding the
+/// client lock must not make consent wait.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn postgres_exchange_lock_leaves_new_codes_unblocked() {
+    use testcontainers_modules::testcontainers::{runners::AsyncRunner, ImageExt};
+    let Some(container) = common::container_or_skip(
+        "PostgreSQL (OAuth revoke race)",
+        testcontainers_modules::postgres::Postgres::default()
+            .with_tag("17-alpine")
+            .start()
+            .await,
+    ) else {
+        return;
+    };
+    let url = format!(
+        "postgres://postgres:postgres@{}:{}/postgres",
+        container.get_host().await.unwrap(),
+        container.get_host_port_ipv4(5432).await.unwrap()
+    );
+    let db = folio_infra::Database::connect(&url).await.unwrap();
+    db.migrate().await.unwrap();
+    let store = db.repositories().await.auth;
+    let client = seed(&store).await;
+    let server = OAuthServer::new(store.clone());
+    let code = issue_code(&server, &client).await;
+
+    // The exchange runs on its own runtime so its blocking check stalls nothing here.
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let slow = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                let db = folio_infra::Database::connect(&url).await.unwrap();
+                db.repositories()
+                    .await
+                    .auth
+                    .exchange_code(
+                        "client",
+                        &folio_auth::crypto::hash_token(&code),
+                        Box::new(move |_| {
+                            locked_tx.send(()).unwrap();
+                            std::thread::sleep(Duration::from_secs(3));
+                            None
+                        }),
+                    )
+                    .await
+                    .unwrap();
+            })
+    });
+    tokio::task::spawn_blocking(move || locked_rx.recv().unwrap())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), issue_code(&server, &client))
+        .await
+        .expect("issuing a code waited for the exchange's lock");
+    slow.join().unwrap();
 }
