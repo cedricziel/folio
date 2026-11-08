@@ -26,6 +26,9 @@ public protocol FolioService: DocumentEntryService {
     /// Returns a bounded JPEG preview, or nil when the document or thumbnail is unavailable.
     func thumbnail(id: Document.ID) async throws -> Data?
     func upload(_ file: UploadFile) async throws -> Document
+    /// Uploads with an `Idempotency-Key`: sending the same key again returns the document the first request
+    /// created instead of a second one.
+    func upload(_ file: UploadFile, idempotencyKey: UUID) async throws -> Document
     func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry]
     func saveTaxonomy(_ kind: TaxonomyKind, id: UUID?, name: String) async throws
     func deleteTaxonomy(_ kind: TaxonomyKind, id: UUID) async throws
@@ -86,6 +89,10 @@ public struct NoToken: BearerTokenProvider {
 }
 
 public extension FolioService {
+    func upload(_ file: UploadFile, idempotencyKey _: UUID) async throws -> Document {
+        try await upload(file)
+    }
+
     func taxonomy(_ kind: TaxonomyKind, deleted: Bool) async throws -> [TaxonomyEntry] {
         throw FolioError.server(status: 501, message: "Classification management is unavailable.")
     }
