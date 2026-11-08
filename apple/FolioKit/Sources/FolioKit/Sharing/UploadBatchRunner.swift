@@ -28,9 +28,14 @@ public struct UploadBatchProgress: Codable, Equatable, Sendable {
 public enum UploadBatchError: Error, Equatable, LocalizedError {
     /// The same files are being uploaded by another Shortcut run or share sheet right now.
     case alreadyRunning
+    /// A tag chosen for the upload was deleted; the documents are uploaded, the tag cannot be attached.
+    case tagNoLongerExists
 
     public var errorDescription: String? {
-        "These files are already being uploaded. Try again in a moment."
+        switch self {
+        case .alreadyRunning: "These files are already being uploaded. Try again in a moment."
+        case .tagNoLongerExists: "A tag chosen for this upload no longer exists. Choose the tags again."
+        }
     }
 }
 
@@ -152,7 +157,7 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
 /// document the server already created; a 409 means the first attempt is still storing it, so the key is kept for
 /// the next run. Tag assignment is idempotent on the server, so a tag whose answer was lost is simply sent again. A
 /// document deleted before its tags were attached (404 while tagging, 410 for its key) is uploaded again under a new
-/// key.
+/// key. A deleted tag stops the batch with its progress kept; nothing is uploaded again for it.
 public struct UploadBatchRunner: Sendable {
     private let service: any FolioService
     private let store: any UploadProgressStoring
@@ -240,7 +245,12 @@ public struct UploadBatchRunner: Sendable {
                         record()
                     }
                     break
-                } catch FolioError.server(status: 404, message: _) where !restarted {
+                } catch FolioError.server(status: 404, message: let message) {
+                    // The server answers 404 for a deleted document and for a deleted tag; only the first is
+                    // uploaded again.
+                    record()
+                    guard try await isDeleted(documentID) else { throw UploadBatchError.tagNoLongerExists }
+                    guard !restarted else { throw FolioError.server(status: 404, message: message) }
                     restarted = true
                     restart(index)
                 } catch {
@@ -260,6 +270,15 @@ public struct UploadBatchRunner: Sendable {
             }
         }
         return result
+    }
+
+    private func isDeleted(_ id: Document.ID) async throws -> Bool {
+        do {
+            _ = try await service.document(id: id)
+            return false
+        } catch FolioError.server(status: 404, message: _) {
+            return true
+        }
     }
 
     /// A document created by an earlier attempt; if it can't be read back, what the upload sent describes it.
