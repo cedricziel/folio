@@ -11,7 +11,9 @@ use uuid::Uuid;
 use super::planner::{may_edit, EditCache};
 use super::templates::{test_payload, widgets_payload, AlertSummary};
 use crate::error::Result;
-use crate::models::{Id, NotificationKind, NotificationScope, PushDevice, PushTokenKind, UserId};
+use crate::models::{
+    Id, NotificationKind, NotificationScope, PushDevice, PushDeviceState, PushTokenKind, UserId,
+};
 use crate::ports::{
     AccessPolicy, DocumentLookup, GrantLiveness, PushDeviceRepository, PushLimitsSource,
     PushMessage, PushOutcome, PushTransport, PushType,
@@ -171,7 +173,27 @@ impl NotificationSender {
     /// Give back a claimed device untouched, for the next flush
     async fn unclaim(&self, id: Uuid, pass: &Pass) -> Result<()> {
         let state = self.devices.state(id).await?;
-        self.devices.release(id, pass.holder, &state).await?;
+        self.release(id, pass, &state, false).await
+    }
+
+    /// Store the state and end this flush's lease. When another sender has taken the device
+    /// meanwhile, its state wins: after a send (`sent`) this flush's rate-window count or
+    /// backoff is lost, which the warning makes visible. Pending rows and delivery times are
+    /// already written either way.
+    async fn release(
+        &self,
+        id: Uuid,
+        pass: &Pass,
+        state: &PushDeviceState,
+        sent: bool,
+    ) -> Result<()> {
+        if !self.devices.release(id, pass.holder, state).await? {
+            if sent {
+                warn!(device = %id, "Another sender took over the device during a send; its rate count and backoff stand");
+            } else {
+                debug!(device = %id, "Another sender took over the device");
+            }
+        }
         Ok(())
     }
 
@@ -212,7 +234,7 @@ impl NotificationSender {
         let Some(token) = device.alert_token.as_ref().filter(|_| !summary.is_empty()) else {
             self.devices.remove_pending(id, &summary.items()).await?;
             state.batch_id = None;
-            self.devices.release(id, pass.holder, &state).await?;
+            self.release(id, pass, &state, false).await?;
             return Ok(Flushed::Sent(0));
         };
 
@@ -228,7 +250,7 @@ impl NotificationSender {
             state.backoff_until = state
                 .window_started_at
                 .map(|start| start + Duration::hours(1));
-            self.devices.release(id, pass.holder, &state).await?;
+            self.release(id, pass, &state, false).await?;
             return Ok(Flushed::Sent(0));
         }
 
@@ -282,12 +304,12 @@ impl NotificationSender {
             }
             PushOutcome::CredentialError { reason } => {
                 warn!(%reason, "APNs refused the provider credentials");
-                self.devices.release(id, pass.holder, &state).await?;
+                self.release(id, pass, &state, true).await?;
                 return Ok(Flushed::Refused);
             }
         };
         if self.devices.get(id).await?.is_some() {
-            self.devices.release(id, pass.holder, &state).await?;
+            self.release(id, pass, &state, true).await?;
         }
         Ok(Flushed::Sent(sent))
     }
@@ -335,7 +357,7 @@ impl NotificationSender {
         let mut state = self.devices.state(id).await?;
         let Some(token) = device.widget_token.as_ref() else {
             state.widgets_dirty_at = None;
-            self.devices.release(id, pass.holder, &state).await?;
+            self.release(id, pass, &state, false).await?;
             return Ok(Flushed::Sent(0));
         };
         if !self.renew(id, pass).await? {
@@ -377,12 +399,12 @@ impl NotificationSender {
             }
             PushOutcome::CredentialError { reason } => {
                 warn!(%reason, "APNs refused the provider credentials");
-                self.devices.release(id, pass.holder, &state).await?;
+                self.release(id, pass, &state, true).await?;
                 return Ok(Flushed::Refused);
             }
         };
         if self.devices.get(id).await?.is_some() {
-            self.devices.release(id, pass.holder, &state).await?;
+            self.release(id, pass, &state, true).await?;
         }
         Ok(Flushed::Sent(sent))
     }
