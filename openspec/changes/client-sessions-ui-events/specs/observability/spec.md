@@ -23,3 +23,19 @@ The system SHALL expose authenticated GET `/api/telemetry/config` returning enab
 
 - **WHEN** an authenticated client sends POST `/api/telemetry/v1/traces` or `/api/telemetry/v1/logs` with OTLP whose records carry `session.id`, `app.screen.name` and `folio.action.name`
 - **THEN** the relay returns 200 and the upstream receives a body identical to the one posted
+
+## ADDED Requirements
+
+### Requirement: Page loads join their server request
+
+HTML responses SHALL carry `Server-Timing: traceparent;desc="<W3C traceparent of the server request span>"`. On a full page load, the browser's first `folio.navigation` span SHALL use that context as its parent. Server-Timing values SHALL carry only trace and span IDs and the sampled flag.
+
+#### Scenario: Full page load
+
+- **WHEN** a signed-in browser loads GET `/` directly and the server returns 200
+- **THEN** the exported `folio.navigation` span has the same trace ID as the server's `GET /` span
+
+#### Scenario: JSON API responses
+
+- **WHEN** a client calls a JSON API route under `/api/`
+- **THEN** the response carries no `Server-Timing` traceparent
