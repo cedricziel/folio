@@ -4,6 +4,12 @@ import Testing
 @testable import FolioKit
 
 struct DocumentDateTests {
+    @Test func startsAtMidnightInTheGivenTimeZone() throws {
+        let day = try #require(DocumentDate(rawValue: "2024-03-01"))
+        #expect(day.start(in: TimeZone(identifier: "UTC")!) == Date(timeIntervalSince1970: 1_709_251_200))
+        #expect(day.start(in: TimeZone(secondsFromGMT: 3600)!) == Date(timeIntervalSince1970: 1_709_247_600))
+    }
+
     @Test(arguments: ["2024-02-29", "2000-02-29", "0001-01-01", "9999-12-31", "2026-11-02"])
     func calendarDatesRoundTrip(value: String) throws {
         let date = try #require(DocumentDate(rawValue: value))
