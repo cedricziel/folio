@@ -1,4 +1,3 @@
-import AppIntents
 import FolioKit
 import SwiftUI
 
@@ -21,19 +20,6 @@ extension View {
     /// Lets a row be dragged out as its document.
     func draggableDocument(_ document: Document, vaultID: UUID) -> some View {
         draggable(DocumentEntity(DocumentSummary(document, correspondent: nil, documentType: nil, vaultID: vaultID)))
-    }
-
-    /// Tells the system which document each row of a list shows.
-    @ViewBuilder
-    func documentEntityIdentifiers(vaultID: UUID) -> some View {
-        if #available(iOS 18.4, macOS 15.4, *) {
-            appEntityIdentifier(forSelectionType: Document.ID.self) { id in
-                EntityIdentifier(
-                    for: DocumentEntity.self, identifier: DocumentEntityID(documentID: id, vaultID: vaultID))
-            }
-        } else {
-            self
-        }
     }
 }
 
