@@ -293,7 +293,8 @@ async fn main() -> Result<()> {
         repos.access,
     )
     .with_health_checks(health_checks)
-    .with_mcp_default(mcp_default);
+    .with_mcp_default(mcp_default)
+    .with_apple_app_ids_default(config.apple.parsed().map_err(anyhow::Error::msg)?);
 
     state.client_telemetry =
         folio_api::client_telemetry::ClientTelemetry::from_lookup(|key| std::env::var(key).ok())

@@ -62,6 +62,8 @@ pub struct AppState {
     pub access: Arc<dyn folio_core::ports::AccessPolicy>,
     /// Whether `/mcp` is served while the `mcp.enabled` setting is unset
     pub mcp_default: bool,
+    /// App IDs from `config.toml`/env, used while the `apple.app_ids` setting is empty
+    pub apple_app_ids_default: Vec<folio_core::models::AppleAppId>,
     pub client_telemetry: Option<Arc<crate::client_telemetry::ClientTelemetry>>,
     /// Instance permissions of the caller; [`crate::create_router`] binds it to the auth store
     pub callers: Arc<dyn CallerResolver>,
@@ -150,6 +152,7 @@ impl AppState {
             vaults,
             access,
             mcp_default: false,
+            apple_app_ids_default: Vec::new(),
             client_telemetry: None,
             callers: Arc::new(NoInstanceRights),
         }
@@ -158,6 +161,12 @@ impl AppState {
     /// What /settings shows for `mcp.enabled` until an admin saves a choice.
     pub fn with_mcp_default(mut self, enabled: bool) -> Self {
         self.mcp_default = enabled;
+        self
+    }
+
+    /// The Apple app IDs served while the `apple.app_ids` setting is empty
+    pub fn with_apple_app_ids_default(mut self, ids: Vec<folio_core::models::AppleAppId>) -> Self {
+        self.apple_app_ids_default = ids;
         self
     }
 
