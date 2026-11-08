@@ -39,8 +39,14 @@ public final class ShareSessionCoordinator {
         return true
     }
 
-    /// Reattaches every session that still has pending uploads older than `grace` and fails those without a task.
-    public func recoverInterrupted(now: Date = .now, grace: TimeInterval = ShareSessionCoordinator.grace) async {
+    /// Fails stale pending uploads that never got a session and, with `reattachingSessions`, reattaches every
+    /// session that still has pending uploads older than `grace` and fails those without a task.
+    ///
+    /// Only the app may reattach: a background session belongs to one process at a time, and an extension that
+    /// opens one the app (or another sheet) still runs sees none of its tasks and would fail running uploads.
+    public func recoverInterrupted(
+        now: Date = .now, grace: TimeInterval = ShareSessionCoordinator.grace, reattachingSessions: Bool = true
+    ) async {
         let before = now.addingTimeInterval(-grace)
         let stale = store.all().filter { $0.status == .pending && $0.updatedAt < before }
         if stale.contains(where: { $0.sessionIdentifier == nil }) {
@@ -48,6 +54,7 @@ public final class ShareSessionCoordinator {
                 onChange?(record)
             }
         }
+        guard reattachingSessions else { return }
         for identifier in Set(stale.compactMap(\.sessionIdentifier)) {
             let uploader = uploader(for: identifier)
             let running = await uploader.reconcile(interruptedBefore: before)

@@ -1,24 +1,7 @@
 import Foundation
 
-/// A request plus the multipart body written to disk, which is what background sessions upload from.
-public struct ShareUploadRequest {
-    public let request: URLRequest
-    public let bodyFile: URL
-
-    public static func make(
-        file: UploadFile, serverURL: URL, token: String?, directory: URL, vaultID: UUID? = nil
-    ) throws
-        -> ShareUploadRequest
-    {
-        let form = MultipartForm(file: file)
-        let bodyFile = directory.appending(path: "upload-\(UUID().uuidString).multipart")
-        try form.body.write(to: bodyFile)
-        let request = request(
-            serverURL: serverURL, contentType: form.contentType, token: token, vaultID: vaultID,
-            idempotencyKey: UUID())
-        return ShareUploadRequest(request: request, bodyFile: bodyFile)
-    }
-
+/// The upload request a background share sends with its retained body.
+enum ShareUploadRequest {
     static func request(
         serverURL: URL, contentType: String, token: String?, vaultID: UUID?, idempotencyKey: UUID
     ) -> URLRequest {
@@ -192,7 +175,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     /// interrupted, so they can be retried. Returns how many of its uploads are still running.
     @discardableResult
     public func reconcile(interruptedBefore before: Date) async -> Int {
-        let live = Set(await session.allTasks.compactMap { $0.taskDescription.flatMap(UUID.init(uuidString:)) })
+        let live = Set(await session.allTasks.compactMap { $0.taskDescription.flatMap { ShareTask($0) }?.id })
         for record in store.markInterrupted(sessionIdentifier: identifier, live: live, before: before) {
             onChange?(record)
         }
@@ -210,7 +193,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
             idempotencyKey: record.id
         )
         let task = session.uploadTask(with: request, fromFile: store.bodyFile(for: record.id))
-        task.taskDescription = record.id.uuidString
+        task.taskDescription = ShareTask(id: record.id, attempt: record.attempts).description
         task.resume()
     }
 
@@ -226,18 +209,47 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
 
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
         guard let description = task.taskDescription else { return }
-        guard let id = UUID(uuidString: description) else {
+        guard let shareTask = ShareTask(description) else {
             // Tasks enqueued by earlier versions carry the path of their body instead of a record.
             try? FileManager.default.removeItem(atPath: description)
             return
         }
         let failure = ShareUploadFailure.classify(response: task.response, error: error)
-        if let record = store.complete(id, failure: failure) {
+        if let record = store.complete(shareTask.id, attempt: shareTask.attempt, failure: failure) {
             onChange?(record)
         }
     }
 
     public func urlSessionDidFinishEvents(forBackgroundURLSession _: URLSession) {
         onEventsFinished?()
+    }
+}
+
+/// Which record and attempt a background task uploads, kept in its `taskDescription` so the outcome finds them
+/// after a relaunch.
+struct ShareTask: Equatable, LosslessStringConvertible {
+    let id: UUID
+    /// Nil for tasks started before attempts were recorded.
+    let attempt: Int?
+
+    init(id: UUID, attempt: Int?) {
+        self.id = id
+        self.attempt = attempt
+    }
+
+    init?(_ description: String) {
+        let parts = description.split(separator: " ", omittingEmptySubsequences: false)
+        guard let id = parts.first.flatMap({ UUID(uuidString: String($0)) }) else { return nil }
+        switch parts.count {
+        case 1: self.init(id: id, attempt: nil)
+        case 2:
+            guard let attempt = Int(parts[1]) else { return nil }
+            self.init(id: id, attempt: attempt)
+        default: return nil
+        }
+    }
+
+    var description: String {
+        attempt.map { "\(id.uuidString) \($0)" } ?? id.uuidString
     }
 }

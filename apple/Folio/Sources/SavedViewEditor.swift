@@ -64,6 +64,7 @@ struct SavedViewEditor: View {
             }
             .disabled(workspace.isSavingView)
         }
+        .telemetryScreen(.savedViewEditor)
     }
 
     private var summary: String {
