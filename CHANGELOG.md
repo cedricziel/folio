@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.12.0](https://github.com/cedricziel/folio/compare/v0.11.1...v0.12.0) (2026-11-08)
+
+
+### Features
+
+* **api:** record browse scope on list spans and link page loads to their trace ([0f2f781](https://github.com/cedricziel/folio/commit/0f2f781830763ab792a5ef634ee485e139baa1f0))
+* **apple:** classify documents from the detail view ([832e923](https://github.com/cedricziel/folio/commit/832e923032463d0f018cfbdb932913f69d40a72d)), closes [#135](https://github.com/cedricziel/folio/issues/135)
+* **apple:** classify documents from the detail view ([#391](https://github.com/cedricziel/folio/issues/391)) ([de9c3f9](https://github.com/cedricziel/folio/commit/de9c3f9e2ea8e5d8fc34fc165eeac21e7d540dbe))
+* **web:** client sessions, screen and action telemetry ([#386](https://github.com/cedricziel/folio/issues/386)) ([19355a0](https://github.com/cedricziel/folio/commit/19355a02e2e86a613f3de03909cb22652dcbe12e))
+* **web:** export session, screen and action events ([ba7d7bc](https://github.com/cedricziel/folio/commit/ba7d7bcde71d70718913930a69b048eacd64fd38))
+* **web:** session store and UI event vocabulary for telemetry ([ee0b8da](https://github.com/cedricziel/folio/commit/ee0b8dacac07c6d1412209b5d6801c1c83940d28))
+
+
+### Bug Fixes
+
+* **api:** count only ID taxonomy filters, scope palette search and time error pages ([777a6fa](https://github.com/cedricziel/folio/commit/777a6face6b77b468d8decb4b6ddc1afb03c7257))
+* **apple:** bound the share flush, retry telemetry after outages, refresh after uploads ([5fd6601](https://github.com/cedricziel/folio/commit/5fd660168e64981d9c496912295e9c332181c6d8))
+* **apple:** coalesce extension flushes and close cache and server races ([4ccdb94](https://github.com/cedricziel/folio/commit/4ccdb94e19d50463e972da355bfd3bc349a87af6))
+* **apple:** follow server review rules and keep saves through reloads ([c577a26](https://github.com/cedricziel/folio/commit/c577a2601d139f84d97c1a75c3364c3356f78bf4))
+* **apple:** keep refreshed document details consistent under races ([5fa4e87](https://github.com/cedricziel/folio/commit/5fa4e87a35bcf697202d46bb913a215bc84705bb))
+* **apple:** load Files folders without per-item list downloads; keep extension telemetry ([#377](https://github.com/cedricziel/folio/issues/377)) ([0ced603](https://github.com/cedricziel/folio/commit/0ced603a7dfec7328e56e71ccf549ad2ea287d70))
+* **apple:** refresh the selected document's details when list data changes ([#379](https://github.com/cedricziel/folio/issues/379)) ([c29c2b6](https://github.com/cedricziel/folio/commit/c29c2b61742a3a8233fd1ce440d950a550f133f0))
+* **apple:** remove Spotlight entries after deletion and sign-out ([#380](https://github.com/cedricziel/folio/issues/380)) ([4bd0656](https://github.com/cedricziel/folio/commit/4bd065643b89eef74add835a7646eacfe89e8410))
+* **apple:** resolve the flush plan without a circular reference ([391541e](https://github.com/cedricziel/folio/commit/391541e5e1ef4e03e54ea59881401a19cf7bb6b4))
+* **apple:** scope Spotlight entries to the account and drop stale ones ([62a6d55](https://github.com/cedricziel/folio/commit/62a6d55d13e77f5cf13009287a5aa2e4b5e0cca9))
+* **auth:** revoke replayed refresh grants under the client lock ([9330b84](https://github.com/cedricziel/folio/commit/9330b84645e4c31a1b282784765933abd83a1aed))
+* **auth:** revoke replayed refresh grants under the client lock ([#414](https://github.com/cedricziel/folio/issues/414)) ([69b1769](https://github.com/cedricziel/folio/commit/69b1769845673f95f2b34e3e97cea4494c023704))
+* **auth:** serialize token issuance with client disconnect ([6f7fab9](https://github.com/cedricziel/folio/commit/6f7fab9b2b88583a19f3f72c732328b16ea77b09)), closes [#306](https://github.com/cedricziel/folio/issues/306)
+* **auth:** serialize token issuance with client disconnect ([#409](https://github.com/cedricziel/folio/issues/409)) ([f2ad4d9](https://github.com/cedricziel/folio/commit/f2ad4d947ea1210ba2c9bd4938dee775065fceb3))
+* **server:** continue request traces into queued jobs ([feac1fa](https://github.com/cedricziel/folio/commit/feac1faa238c353aef92803e7ca08dee73c687c0))
+* **server:** continue request traces into queued jobs ([#390](https://github.com/cedricziel/folio/issues/390)) ([5d10916](https://github.com/cedricziel/folio/commit/5d109163a9c0f4bcd22c48d9d179c4116b4c23eb))
+* **server:** keep job traces bounded and parented by the caller ([c718908](https://github.com/cedricziel/folio/commit/c7189089c7a6721496abdf5c27252ba983705aae))
+* **web:** keep sessions when storage refuses writes and spare the relay budget ([797cb2e](https://github.com/cedricziel/folio/commit/797cb2eb998b876be3ed2f087fdadf5cf8b8f506))
+
 ## [0.11.1](https://github.com/cedricziel/folio/compare/v0.11.0...v0.11.1) (2026-11-08)
 
 

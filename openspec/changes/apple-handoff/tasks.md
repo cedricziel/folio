@@ -6,14 +6,14 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 1. Apple app ID model and startup configuration
 
-- [ ] 1.1 Add `folio_core::models::AppleAppId` with `FromStr` and `parse_list`. First write failing folio-core unit tests:
+- [x] 1.1 Add `folio_core::models::AppleAppId` with `FromStr` and `parse_list`. First write failing folio-core unit tests:
   - `ABCDE12345.com.example.folio` is accepted
   - `com.example.folio`, `abcde12345.x`, `ABCDE1234.x` and an empty string are rejected
   - comma- and newline-separated lists are split and trimmed
 
   Commit `feat(core): validate Apple app IDs`.
 
-- [ ] 1.2 Add `Config.apple: AppleConfig { app_ids }` in `crates/folio-infra/src/config.rs` as a TOML array. Register `FOLIO_APPLE__APP_IDS` in the env-setting table with the existing `ValueKind::List` (the comma-list parsing already used for `import_roots` and forward-auth), with no custom deserialiser. Validate the entries in `Config::validate`. First write failing config tests:
+- [x] 1.2 Add `Config.apple: AppleConfig { app_ids }` in `crates/folio-infra/src/config.rs` as a TOML array. Register `FOLIO_APPLE__APP_IDS` in the env-setting table with the existing `ValueKind::List` (the comma-list parsing already used for `import_roots` and forward-auth), with no custom deserialiser. Validate the entries in `Config::validate`. First write failing config tests:
   - a TOML array is parsed
   - an env comma list is parsed and overrides TOML
   - an invalid entry fails startup with a message naming `apple.app_ids`
@@ -23,8 +23,8 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 2. Apple app site association route
 
-- [ ] 2.1 Create `crates/folio-api/tests/apple_links.rs` with a failing test: `GET /.well-known/apple-app-site-association` returns 404 when no app IDs are configured, also with auth enabled and no session (no `/login` redirect). Then add `routes/apple.rs`, merged at the root, plus `AppState.apple_app_ids_default`. Commit `feat(api): serve apple-app-site-association when configured`.
-- [ ] 2.2 Write a failing test for an `apple.app_ids` set in startup config:
+- [x] 2.1 Create `crates/folio-api/tests/apple_links.rs` with a failing test: `GET /.well-known/apple-app-site-association` returns 404 when no app IDs are configured, also with auth enabled and no session (no `/login` redirect). Then add `routes/apple.rs`, merged at the root, plus `AppState.apple_app_ids_default`. Commit `feat(api): serve apple-app-site-association when configured`.
+- [x] 2.2 Write a failing test for an `apple.app_ids` set in startup config:
   - the route returns 200 with `Content-Type: application/json`, `Cache-Control: public, max-age=3600` and no `Set-Cookie`
   - the body equals the design §8 snapshot: three components with `????????-????-????-????-????????????` masks, no `*` and no `exclude`
   - with `server.public_url = https://example.com/folio`, every pattern starts with `/folio/vaults/`
@@ -32,11 +32,11 @@ Server and Apple sections are independent and can land in either order; within e
 
   Implement the body builder. Commit `feat(api): applinks components for document, vault and saved-view pages`.
 
-- [ ] 2.3 Write a failing test: a non-empty `apple.app_ids` row in the settings table replaces the config value on the next request without a restart, and an empty row falls back to config. Implement the lookup through `SettingsRepository`. Commit `feat(api): settings table overrides apple.app_ids`.
+- [x] 2.3 Write a failing test: a non-empty `apple.app_ids` row in the settings table replaces the config value on the next request without a restart, and an empty row falls back to config. Implement the lookup through `SettingsRepository`. Commit `feat(api): settings table overrides apple.app_ids`.
 
 ## 3. Admin setting at /settings
 
-- [ ] 3.1 Write failing tests in `apple_links.rs`:
+- [x] 3.1 Write failing tests in `apple_links.rs`:
   - `POST /settings/apple` with two valid IDs returns 303 to `/settings?saved=apple` and stores newline-separated text
   - an invalid line returns 422 naming it and leaves the stored value unchanged
   - a non-admin gets 403
@@ -44,11 +44,11 @@ Server and Apple sections are independent and can land in either order; within e
 
   Implement the handler and the template section with existing design-system tokens only. Commit `feat(api): edit Apple app links in settings`.
 
-- [ ] 3.2 Document `apple.app_ids` in `docs/configuration.md`: TOML, env and precedence, including the limitation that an empty `/settings` value falls back to config, so a config value can only be turned off by removing it. Document the Universal Links operator steps in `docs/deployment.md`: public HTTPS, the proxy rule for a path prefix, the CDN refresh delay, and `?mode=developer` for private servers. Write a config test that parses the doc's TOML example. Commit `docs: Apple app links setting`.
+- [x] 3.2 Document `apple.app_ids` in `docs/configuration.md`: TOML, env and precedence, including the limitation that an empty `/settings` value falls back to config, so a config value can only be turned off by removing it. Document the Universal Links operator steps in `docs/deployment.md`: public HTTPS, the proxy rule for a path prefix, the CDN refresh delay, and `?mode=developer` for private servers. Write a config test that parses the doc's TOML example. Commit `docs: Apple app links setting`.
 
 ## 4. Stable web URLs
 
-- [ ] 4.1 Add regression tests to `crates/folio-api/tests/web.rs` that pin the handed-over pages:
+- [x] 4.1 Add regression tests to `crates/folio-api/tests/web.rs` that pin the handed-over pages:
   - `GET /vaults/{vault_id}/documents/{id}` returns 200 for an active document and 404 for a trashed one
   - `GET /vaults/{vault_id}/` and `?view=all` return 200
   - `GET /vaults/{vault_id}/saved-views/{id}` returns 200, or 404 for another user's private view
@@ -167,7 +167,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 - [ ] 9.1 Run `make format`, `make lint` and `make test`. All pass.
 - [ ] 9.2 Run `cd apple && bundle exec fastlane test` (FolioKit `swift test`, iOS and macOS builds, `FolioAuthTests`) and `apple/scripts/check-build-settings.sh`. All pass, and CI's `apple.yml` on macos-26 is green.
-- [ ] 9.3 Use the `verify` skill against an ephemeral instance with `FOLIO_APPLE__APP_IDS=ABCDE12345.com.example.folio`:
+- [x] 9.3 Use the `verify` skill against an ephemeral instance with `FOLIO_APPLE__APP_IDS=ABCDE12345.com.example.folio`:
   - `curl -i /.well-known/apple-app-site-association` returns 200 with the masked components, and 404 without the variable
   - `/settings` shows the section with the CDN note
 

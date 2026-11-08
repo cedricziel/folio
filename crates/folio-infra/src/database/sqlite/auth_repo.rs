@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use folio_auth::{
     AccessToken, AuthCode, AuthError, AuthStore, ConnectedClient, GrantCheck, Group, GroupSource,
-    IssuedTokens, OAuthClient, OidcLogin, PasskeyRecord, PersonalToken, RefreshToken, Session,
-    TotpRecord, User,
+    IssuedTokens, OAuthClient, OidcLogin, PasskeyRecord, PersonalToken, RefreshExchange,
+    RefreshToken, Session, TotpRecord, User,
 };
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 
@@ -17,63 +17,93 @@ impl SqliteAuthStore {
         Self { pool }
     }
 
-    /// Takes a grant with `take_sql` and stores the tokens `check` issues for
-    /// it, in one transaction that serializes with `revoke_client_tokens`.
-    async fn exchange<G>(
+    /// Starts a transaction that serializes with every other writer, so token
+    /// exchanges and disconnects of a client run one after the other.
+    async fn begin_locked(
         &self,
+        _client_id: &str,
+    ) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, AuthError> {
+        self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)
+    }
+
+    /// Takes a grant with `take_sql` and stores the tokens `check` issues for it.
+    async fn take_and_issue<G>(
+        tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
         client_id: &str,
         take_sql: &'static str,
         hash: &str,
         from_row: fn(SqliteRow) -> G,
         check: GrantCheck<'_, G>,
     ) -> Result<Option<G>, AuthError> {
-        // The write lock up front serializes with revoke_client_tokens.
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         let Some(row) = sqlx::query(take_sql)
             .bind(hash)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(err)?
         else {
             return Ok(None);
         };
         let grant = from_row(row);
-        if let Some(IssuedTokens { access, refresh }) = check(&grant) {
-            sqlx::query(MARK_CLIENT_USED)
-                .bind(client_id)
-                .bind(folio_auth::server::now())
-                .execute(&mut *tx)
+        let Some(IssuedTokens { access, refresh }) = check(&grant) else {
+            return Ok(Some(grant));
+        };
+        if access.client_id != client_id || refresh.client_id != client_id {
+            // Only the locked client's tokens are serialized with its disconnect.
+            return Err(AuthError::Store(
+                "issued tokens belong to another client".into(),
+            ));
+        }
+        sqlx::query(MARK_CLIENT_USED)
+            .bind(client_id)
+            .bind(folio_auth::server::now())
+            .execute(&mut **tx)
+            .await
+            .map_err(err)?;
+        let a = &access;
+        insert_token(
+            &mut **tx,
+            INSERT_ACCESS,
+            &a.token_hash,
+            &a.client_id,
+            &a.user_id,
+            &a.scopes,
+            &a.audience,
+            a.expires_at,
+            &a.grant_id,
+        )
+        .await?;
+        let r = &refresh;
+        insert_token(
+            &mut **tx,
+            INSERT_REFRESH,
+            &r.token_hash,
+            &r.client_id,
+            &r.user_id,
+            &r.scopes,
+            &r.audience,
+            r.expires_at,
+            &r.grant_id,
+        )
+        .await?;
+        Ok(Some(grant))
+    }
+
+    /// Deletes every token of a grant inside `tx`.
+    async fn delete_grant(
+        tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
+        grant_id: &str,
+    ) -> Result<(), AuthError> {
+        for sql in [
+            "DELETE FROM oauth_access_tokens WHERE grant_id = $1",
+            "DELETE FROM oauth_refresh_tokens WHERE grant_id = $1",
+        ] {
+            sqlx::query(sql)
+                .bind(grant_id)
+                .execute(&mut **tx)
                 .await
                 .map_err(err)?;
-            let a = &access;
-            insert_token(
-                &mut *tx,
-                INSERT_ACCESS,
-                &a.token_hash,
-                &a.client_id,
-                &a.user_id,
-                &a.scopes,
-                &a.audience,
-                a.expires_at,
-                &a.grant_id,
-            )
-            .await?;
-            let r = &refresh;
-            insert_token(
-                &mut *tx,
-                INSERT_REFRESH,
-                &r.token_hash,
-                &r.client_id,
-                &r.user_id,
-                &r.scopes,
-                &r.audience,
-                r.expires_at,
-                &r.grant_id,
-            )
-            .await?;
         }
-        tx.commit().await.map_err(err)?;
-        Ok(Some(grant))
+        Ok(())
     }
 }
 
@@ -476,8 +506,12 @@ impl AuthStore for SqliteAuthStore {
         code_hash: &str,
         check: GrantCheck<'_, AuthCode>,
     ) -> Result<Option<AuthCode>, AuthError> {
-        self.exchange(client_id, TAKE_CODE, code_hash, code_from, check)
-            .await
+        let mut tx = self.begin_locked(client_id).await?;
+        let taken =
+            Self::take_and_issue(&mut tx, client_id, TAKE_CODE, code_hash, code_from, check)
+                .await?;
+        tx.commit().await.map_err(err)?;
+        Ok(taken)
     }
 
     async fn insert_personal_token(&self, token: PersonalToken) -> Result<(), AuthError> {
@@ -586,9 +620,43 @@ impl AuthStore for SqliteAuthStore {
         client_id: &str,
         token_hash: &str,
         check: GrantCheck<'_, RefreshToken>,
-    ) -> Result<Option<RefreshToken>, AuthError> {
-        self.exchange(client_id, TAKE_REFRESH, token_hash, refresh_from, check)
-            .await
+    ) -> Result<RefreshExchange, AuthError> {
+        let mut tx = self.begin_locked(client_id).await?;
+        let taken = Self::take_and_issue(
+            &mut tx,
+            client_id,
+            TAKE_REFRESH,
+            token_hash,
+            refresh_from,
+            check,
+        )
+        .await?;
+        if let Some(token) = taken {
+            tx.commit().await.map_err(err)?;
+            return Ok(RefreshExchange::Rotated(token));
+        }
+        let used: Option<(String, String)> = sqlx::query_as(
+            "SELECT grant_id, client_id FROM oauth_refresh_tokens WHERE token_hash = $1 AND used = 1",
+        )
+        .bind(token_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(err)?;
+        let Some((grant_id, owner)) = used else {
+            tx.commit().await.map_err(err)?;
+            return Ok(RefreshExchange::Unknown);
+        };
+        // Rotations of the grant hold its owner's lock; revoking under that lock
+        // keeps a rotation racing the replay from keeping its new tokens.
+        if owner != client_id {
+            tx.commit().await.map_err(err)?;
+            tx = self.begin_locked(&owner).await?;
+        }
+        if !grant_id.is_empty() {
+            Self::delete_grant(&mut tx, &grant_id).await?;
+        }
+        tx.commit().await.map_err(err)?;
+        Ok(RefreshExchange::Replayed)
     }
 
     async fn used_refresh_grant(&self, token_hash: &str) -> Result<Option<String>, AuthError> {
@@ -629,24 +697,29 @@ impl AuthStore for SqliteAuthStore {
                 "DELETE FROM oauth_refresh_tokens WHERE token_hash = $1",
             ),
         ];
+        // Rotations of the grant hold the same lock, so none can outlive this.
+        let mut tx = self.begin_locked(client_id).await?;
         for (select, delete) in lookups {
             let found: Option<String> = sqlx::query_scalar(select)
                 .bind(token_hash)
                 .bind(client_id)
-                .fetch_optional(&self.pool)
+                .fetch_optional(&mut *tx)
                 .await
                 .map_err(err)?;
             if let Some(grant_id) = found {
                 // Tokens from before grants existed are revoked on their own.
                 sqlx::query(delete)
                     .bind(token_hash)
-                    .execute(&self.pool)
+                    .execute(&mut *tx)
                     .await
                     .map_err(err)?;
-                return self.revoke_grant(&grant_id).await;
+                if !grant_id.is_empty() {
+                    Self::delete_grant(&mut tx, &grant_id).await?;
+                }
+                break;
             }
         }
-        Ok(())
+        tx.commit().await.map_err(err)
     }
 
     async fn insert_oidc_login(&self, login: OidcLogin) -> Result<(), AuthError> {
@@ -761,8 +834,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError> {
-        // Takes the write lock up front, so token exchanges run wholly before or after.
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
+        let mut tx = self.begin_locked(client_id).await?;
         for sql in [
             "DELETE FROM oauth_codes WHERE user_id = $1 AND client_id = $2",
             "DELETE FROM oauth_access_tokens WHERE user_id = $1 AND client_id = $2",

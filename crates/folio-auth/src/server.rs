@@ -9,7 +9,7 @@ use crate::{
     crypto::{ct_eq, hash_token, random_token, verify_pkce},
     model::{AccessToken, AuthCode, OAuthClient, RefreshToken, SCOPES},
     redirect::{redirect_uri_matches, validate_redirect_uri},
-    store::{AuthError, AuthStore, IssuedTokens},
+    store::{AuthError, AuthStore, IssuedTokens, RefreshExchange},
 };
 
 pub const CODE_TTL_SECS: i64 = 60;
@@ -427,17 +427,17 @@ impl OAuthServer {
         let check = |record: &RefreshToken| {
             settle(&mut outcome, check_refresh(base, client_id, req, record))
         };
-        let taken = self
+        match self
             .store
             .exchange_refresh_token(client_id, &token_hash, Box::new(check))
-            .await?;
-        if taken.is_none() {
-            // A rotated token coming back means it leaked: end the whole grant.
-            if let Some(grant_id) = self.store.used_refresh_grant(&token_hash).await? {
-                tracing::warn!("refresh token reuse detected; revoking its grant");
-                self.store.revoke_grant(&grant_id).await?;
+            .await?
+        {
+            RefreshExchange::Rotated(_) => {}
+            RefreshExchange::Replayed => {
+                tracing::warn!("refresh token reuse detected; revoked its grant");
+                return Err(invalid_grant("invalid refresh token"));
             }
-            return Err(invalid_grant("invalid refresh token"));
+            RefreshExchange::Unknown => return Err(invalid_grant("invalid refresh token")),
         }
         outcome.unwrap_or_else(|| Err(invalid_grant("invalid refresh token")))
     }
