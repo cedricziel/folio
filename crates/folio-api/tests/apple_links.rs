@@ -120,3 +120,60 @@ async fn legacy_root_path_is_not_served() {
     assert_ne!(response.status(), StatusCode::OK);
     assert!(!text(response).await.contains("applinks"));
 }
+
+async fn served_app_ids(app: &Router) -> Option<Vec<String>> {
+    let response = app.clone().oneshot(get(AASA)).await.unwrap();
+    if response.status() == StatusCode::NOT_FOUND {
+        return None;
+    }
+    let body = json(response).await;
+    Some(
+        body["applinks"]["details"][0]["appIDs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_str().unwrap().to_string())
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn settings_row_replaces_config_without_a_restart_and_empty_falls_back() {
+    let h = harness().await;
+    let app = app_with(&h, &["ABCDE12345.com.example.folio"], false);
+    let settings = &h.state.settings_repo;
+
+    settings
+        .set(
+            "apple.app_ids",
+            "FGHIJ67890.org.example.one\nFGHIJ67890.org.example.two",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        served_app_ids(&app).await.unwrap(),
+        ["FGHIJ67890.org.example.one", "FGHIJ67890.org.example.two"]
+    );
+
+    settings.set("apple.app_ids", "").await.unwrap();
+    assert_eq!(
+        served_app_ids(&app).await.unwrap(),
+        ["ABCDE12345.com.example.folio"]
+    );
+}
+
+#[tokio::test]
+async fn settings_row_alone_publishes_the_association() {
+    let h = harness().await;
+    let app = app_with(&h, &[], false);
+    assert_eq!(served_app_ids(&app).await, None);
+    h.state
+        .settings_repo
+        .set("apple.app_ids", "FGHIJ67890.org.example.one")
+        .await
+        .unwrap();
+    assert_eq!(
+        served_app_ids(&app).await.unwrap(),
+        ["FGHIJ67890.org.example.one"]
+    );
+}

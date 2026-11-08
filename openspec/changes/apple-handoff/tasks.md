@@ -32,7 +32,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Implement the body builder. Commit `feat(api): applinks components for document, vault and saved-view pages`.
 
-- [ ] 2.3 Write a failing test: a non-empty `apple.app_ids` row in the settings table replaces the config value on the next request without a restart, and an empty row falls back to config. Implement the lookup through `SettingsRepository`. Commit `feat(api): settings table overrides apple.app_ids`.
+- [x] 2.3 Write a failing test: a non-empty `apple.app_ids` row in the settings table replaces the config value on the next request without a restart, and an empty row falls back to config. Implement the lookup through `SettingsRepository`. Commit `feat(api): settings table overrides apple.app_ids`.
 
 ## 3. Admin setting at /settings
 
