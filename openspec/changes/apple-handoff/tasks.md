@@ -6,7 +6,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 1. Apple app ID model and startup configuration
 
-- [ ] 1.1 Add `folio_core::models::AppleAppId` with `FromStr` and `parse_list`. First write failing folio-core unit tests:
+- [x] 1.1 Add `folio_core::models::AppleAppId` with `FromStr` and `parse_list`. First write failing folio-core unit tests:
   - `ABCDE12345.com.example.folio` is accepted
   - `com.example.folio`, `abcde12345.x`, `ABCDE1234.x` and an empty string are rejected
   - comma- and newline-separated lists are split and trimmed
