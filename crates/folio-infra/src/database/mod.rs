@@ -147,6 +147,8 @@ pub struct Repositories {
     pub members: Arc<dyn MembershipRepository>,
     pub audit: Arc<dyn AuditLog>,
     pub access: Arc<dyn AccessPolicy>,
+    pub push: Arc<dyn folio_core::ports::PushDeviceRepository>,
+    pub grants: Arc<dyn folio_core::ports::GrantLiveness>,
 }
 
 impl Database {
@@ -180,6 +182,7 @@ impl Database {
         match self {
             Self::Sqlite(pool) => {
                 let vaults = Arc::new(SqliteVaultRepository::new(pool.clone()));
+                let push = Arc::new(sqlite::SqlitePushRepository::new(pool.clone()));
                 let imports = Arc::new(sqlite::SqliteImportRepository::new(pool.clone()));
                 let wake = Arc::new(Notify::new());
                 let documents = |origin| {
@@ -221,10 +224,13 @@ impl Database {
                     members: vaults.clone(),
                     audit: vaults.clone(),
                     access: vaults,
+                    push: push.clone(),
+                    grants: push,
                 }
             }
             Self::Postgres(pool) => {
                 let vaults = Arc::new(PostgresVaultRepository::new(pool.clone()));
+                let push = Arc::new(postgres::PostgresPushRepository::new(pool.clone()));
                 let imports = Arc::new(postgres::PostgresImportRepository::new(pool.clone()));
                 let wake = Arc::new(Notify::new());
                 let documents = |origin| {
@@ -268,6 +274,8 @@ impl Database {
                     members: vaults.clone(),
                     audit: vaults.clone(),
                     access: vaults,
+                    push: push.clone(),
+                    grants: push,
                 }
             }
         }

@@ -16,6 +16,7 @@ mod import_runs;
 mod ingest_outcomes;
 mod ingest_repo;
 mod outbox;
+mod push_repo;
 mod search;
 mod settings_repo;
 mod vault_repo;
@@ -43,6 +44,7 @@ pub use outbox::{
     insert_domain_event, insert_domain_event_with_origin, insert_event_with_envelope,
     SqliteOutboxStore,
 };
+pub use push_repo::SqlitePushRepository;
 pub use search::SqliteSearchService;
 pub use settings_repo::SqliteSettingsRepository;
 pub use vault_repo::SqliteVaultRepository;

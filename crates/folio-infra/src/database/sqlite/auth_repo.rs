@@ -548,17 +548,20 @@ impl AuthStore for SqliteAuthStore {
         if grant_id.is_empty() {
             return Ok(());
         }
+        // Push devices registered under the grant go with it.
+        let mut tx = self.pool.begin().await.map_err(err)?;
         for sql in [
             "DELETE FROM oauth_access_tokens WHERE grant_id = $1",
             "DELETE FROM oauth_refresh_tokens WHERE grant_id = $1",
+            "DELETE FROM push_devices WHERE grant_id = $1",
         ] {
             sqlx::query(sql)
                 .bind(grant_id)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(err)?;
         }
-        Ok(())
+        tx.commit().await.map_err(err)
     }
 
     async fn revoke_token(&self, token_hash: &str, client_id: &str) -> Result<(), AuthError> {
@@ -709,6 +712,7 @@ impl AuthStore for SqliteAuthStore {
             "DELETE FROM oauth_codes WHERE user_id = $1 AND client_id = $2",
             "DELETE FROM oauth_access_tokens WHERE user_id = $1 AND client_id = $2",
             "DELETE FROM oauth_refresh_tokens WHERE user_id = $1 AND client_id = $2",
+            "DELETE FROM push_devices WHERE user_id = $1 AND client_id = $2",
         ] {
             sqlx::query(sql)
                 .bind(user_id)
