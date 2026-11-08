@@ -2,6 +2,10 @@ import CoreSpotlight
 import FolioKit
 import SwiftUI
 
+#if os(macOS)
+    import AppKit
+#endif
+
 /// SwiftUI declares its own `Document`; the app means the archive document.
 typealias Document = FolioKit.Document
 
@@ -164,6 +168,10 @@ struct RootView: View {
     let lock: AppLock
     /// Identifies this window to the continuation inbox.
     @State private var sceneID = UUID()
+    @State private var handoffAlert: HandoffAlert?
+    #if os(iOS)
+        @State private var browserPage: BrowserPage?
+    #endif
     #if os(iOS)
         @State private var showLockSettings = false
     #endif
@@ -186,6 +194,27 @@ struct RootView: View {
             }
             .onDisappear { continuations.sceneClosed(sceneID) }
             .onChange(of: deliveryState, initial: true) { deliverContinuation() }
+            .alert(
+                handoffAlert?.title ?? "",
+                isPresented: Binding(get: { handoffAlert != nil }, set: { if !$0 { handoffAlert = nil } }),
+                presenting: handoffAlert
+            ) { alert in
+                ForEach(alert.actions, id: \.title) { action in
+                    switch action {
+                    case let .openInBrowser(url):
+                        Button(action.title) { openInBrowser(url) }
+                    case .cancel:
+                        Button(action.title, role: .cancel) {}
+                    }
+                }
+            } message: { alert in
+                Text(alert.message)
+            }
+            #if os(iOS)
+                .sheet(item: $browserPage) { page in
+                    SafariView(url: page.url).ignoresSafeArea()
+                }
+            #endif
             .alert(
                 "Couldn't complete sign-in change",
                 isPresented: Binding(
@@ -284,7 +313,26 @@ struct RootView: View {
         present(HandoffPresentation.from(decision, currentServer: model.session.serverURL))
     }
 
-    private func present(_ presentation: HandoffPresentation) {}
+    private func present(_ presentation: HandoffPresentation) {
+        switch presentation {
+        case let .alert(title, message, _):
+            handoffAlert = HandoffAlert(title: title, message: message, actions: presentation.actions)
+        case let .browser(url):
+            openInBrowser(url)
+        case .navigate, .prefillSignIn, .nothing:
+            break
+        }
+    }
+
+    /// The web page in a browser that never hands the link back to Folio.
+    private func openInBrowser(_ url: URL) {
+        guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { return }
+        #if os(iOS)
+            browserPage = BrowserPage(url: url)
+        #else
+            NSWorkspace.shared.open(url)
+        #endif
+    }
 
     private func recovery(title: String, message: String, server: URL?, retry: Bool) -> some View {
         ContentUnavailableView {

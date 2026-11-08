@@ -58,4 +58,18 @@ struct HandoffPresentationTests {
         }
         #expect(text == message)
     }
+
+    @Test func onlyTheOtherServerAlertOffersButtons() {
+        let page = web(.document(UUID()))
+        let alert = HandoffPresentation.from(.otherServer(host: "a.folio.example", web: page), currentServer: serverB)
+        #expect(alert.actions == [.openInBrowser(page), .cancel])
+        #expect(alert.actions.map(\.title) == ["Open in Browser", "Cancel"])
+
+        let others: [HandoffPresentation] = [
+            .navigate(route), .browser(page), .prefillSignIn(serverA), .nothing,
+        ]
+        for presentation in others {
+            #expect(presentation.actions.isEmpty, "\(presentation)")
+        }
+    }
 }
