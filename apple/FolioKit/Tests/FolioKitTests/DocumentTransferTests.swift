@@ -28,6 +28,11 @@ struct DocumentTransferTypeTests {
         #expect(DocumentTransfer.contentType(mimeType: nil, filename: nil) == .data)
     }
 
+    @Test func unknownMimeTypesDoNotHideTheFilenamesType() {
+        #expect(DocumentTransfer.contentType(mimeType: "application/x-folio-unknown", filename: "letter.pdf") == .pdf)
+        #expect(DocumentTransfer.contentType(mimeType: "application/x-folio-unknown", filename: "a.zzfolio") == .data)
+    }
+
     @Test func everyExportedFileTypeIsOfferedOnceAndDataIsTheLastResort() {
         #expect(Set(DocumentTransfer.fileTypes).count == DocumentTransfer.fileTypes.count)
         #expect(DocumentTransfer.fileTypes.contains(.pdf))
@@ -117,6 +122,14 @@ struct DocumentTransferCatalogTests {
         let catalog = DocumentCatalog(service: MockFolioService(documents: [target]), locator: DocumentLocator())
 
         #expect(try await catalog.recognizedText(for: target.id) == "Amount due: 42 EUR")
+    }
+
+    @Test func finishedScanWithoutTextHasNoTextToShare() async {
+        let blank = pdf("Blank page", content: "", ocr: .done)
+        let catalog = DocumentCatalog(service: MockFolioService(documents: [blank]), locator: DocumentLocator())
+
+        await #expect(throws: ShortcutFailure.noRecognizedText) { try await catalog.recognizedText(for: blank.id) }
+        #expect(!ShortcutError(mapping: ShortcutFailure.noRecognizedText).message.contains("yet"))
     }
 
     @Test func documentWithoutRecognizedTextHasNoTextToShare() async {
