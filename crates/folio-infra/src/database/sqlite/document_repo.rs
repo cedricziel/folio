@@ -761,6 +761,15 @@ impl DocumentRepository for SqliteDocumentRepository {
             .await
     }
 
+    async fn create_for_upload_as(
+        &self,
+        vault: VaultId,
+        id: Id,
+        params: CreateDocument,
+    ) -> Result<Document> {
+        self.create_reserved(vault, id, None, true, params).await
+    }
+
     async fn create_imported(
         &self,
         vault: VaultId,

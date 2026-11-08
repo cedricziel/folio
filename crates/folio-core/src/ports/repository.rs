@@ -64,6 +64,15 @@ pub trait DocumentRepository: Send + Sync {
     /// Create an upload without announcing creation until its original is finalized.
     async fn create_for_upload(&self, vault: VaultId, params: CreateDocument) -> Result<Document>;
 
+    /// [`create_for_upload`](Self::create_for_upload) under an id reserved in advance. A repeat returns the
+    /// document already created under that id instead of a second one.
+    async fn create_for_upload_as(
+        &self,
+        vault: VaultId,
+        id: Id,
+        params: CreateDocument,
+    ) -> Result<Document>;
+
     /// Create an imported document with its tags, metadata values, notes and
     /// embedding job in one transaction, announced with origin `Import` so it
     /// starts no workflows. `Conflict` when the ID or the external reference
