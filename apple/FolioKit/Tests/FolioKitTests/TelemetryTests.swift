@@ -37,7 +37,7 @@ private final class TelemetryCapture: @unchecked Sendable {
     }
 }
 
-@Suite(.serialized) struct TelemetryTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct TelemetryTests {
     private let baseURL = URL(string: "https://folio.example")!
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["FOLIO_TELEMETRY_SMOKE_URL"] != nil))

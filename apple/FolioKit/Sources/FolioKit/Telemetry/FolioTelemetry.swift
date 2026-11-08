@@ -490,7 +490,9 @@ private final class TelemetryInstrumentation: @unchecked Sendable {
     static let shared = TelemetryInstrumentation()
 
     /// Installed on first use while no lock is held: installing swizzles URLSession for the whole process, and
-    /// requests on other threads call back into `target` meanwhile.
+    /// requests on other threads call back into `target` meanwhile. An empty delegate class list skips the
+    /// startup scan of every Objective-C class, which realizes classes on worker threads while others run. A
+    /// session's delegate class is still instrumented when its first task resumes.
     private static let installed = URLSessionInstrumentation(
         configuration: .init(
             shouldRecordPayload: { _ in false },
@@ -499,6 +501,7 @@ private final class TelemetryInstrumentation: @unchecked Sendable {
                 TelemetryInstrumentation.shared.target?.customize(request, builder)
             },
             shouldInjectTracingHeaders: { TelemetryInstrumentation.shared.target?.allows($0) ?? false },
+            delegateClassesToInstrument: [],
             semanticConvention: .stable
         ))
 
