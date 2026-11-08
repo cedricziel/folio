@@ -77,6 +77,7 @@ jobs:
   # The REST reader against real Paperless-ngx 2.20 and 3.4 in Docker
   paperless-contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
