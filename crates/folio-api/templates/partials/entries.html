@@ -24,7 +24,7 @@
 {% if has_cursor %}<a class="f-btn f-btn-quiet" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}">First {{ heading|lower }}</a>{% endif %}
 {% match next %}{% when Some with (cursor) %}<a class="f-btn" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}&amp;cursor={{ cursor }}">Next {{ heading|lower }}</a>{% when None %}{% endmatch %}
 {% if can_create %}<details {% if error.is_some() && edit_id.is_none() %}open{% endif %}><summary class="f-btn">Add {{ kind }}</summary>
-<form action="{{ "/documents"|vault_url }}/{{ document }}/entries" method="post">
+<form data-folio-action="discussion.post" action="{{ "/documents"|vault_url }}/{{ document }}/entries" method="post">
 <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="kind" value="{{ kind }}"><input type="hidden" name="idempotency_key" value="{{ key }}">
 <label for="new-{{ kind }}">New {{ kind }}</label><textarea class="input" id="new-{{ kind }}" name="body" required>{% if edit_id.is_none() %}{{ draft }}{% endif %}</textarea>
 <button class="f-btn f-btn-primary" type="submit">Save {{ kind }}</button> <a class="f-btn f-btn-quiet" href="{{ "/documents"|vault_url }}/{{ document }}/entries?kind={{ kind }}">Cancel</a>

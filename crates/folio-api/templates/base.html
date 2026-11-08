@@ -9,6 +9,7 @@ counts %}
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <title>{% block title %}Folio{% endblock %}</title>
+    <meta name="folio-screen" content="{% block screen %}other{% endblock %}">
     {% block head %}{% endblock %}
     <meta
       name="theme-color"
@@ -123,6 +124,9 @@ const vaultURL = (path) => {
 
 const uploadDestination = () => document.getElementById("upload-vault");
 const uploadURL = (id) => `/vaults/${id}/documents/upload`;
+// Telemetry records the action by name only; see web/telemetry-session.mjs for the vocabulary.
+const folioAction = (name) =>
+  document.dispatchEvent(new CustomEvent("folio:action", { detail: name }));
 
 const escapeHtml = (text) => {
   const div = document.createElement("div");
@@ -344,6 +348,7 @@ Stimulus.register(
 
 Stimulus.register("vault-picker", class extends Controller {
   change(event) {
+    folioAction("vault.switch");
     Turbo.visit(`/vaults/${event.target.value}/`);
   }
 });
@@ -756,6 +761,7 @@ Stimulus.register(
       this.buttonTarget.disabled = true;
       this.statusTarget.textContent = "Uploading to " + destinationName + "…";
       try {
+        folioAction("document.upload");
         const response = await fetch(uploadURL(destination), {
           method: "POST",
           headers: { Accept: "text/vnd.turbo-stream.html" },
@@ -1084,6 +1090,7 @@ Stimulus.register(
           reject(new Error("Upload failed: Network error"));
         });
 
+        folioAction("document.upload");
         xhr.open("POST", uploadURL(vaultId));
         xhr.setRequestHeader("Accept", "text/vnd.turbo-stream.html");
         xhr.send(formData);
@@ -1173,6 +1180,7 @@ Stimulus.register(
 
     async addTag(event) {
       const { tagId, tagName, tagTone } = event.currentTarget.dataset;
+      folioAction("document.tag.add");
 
       try {
         const response = await fetch(
@@ -1197,6 +1205,7 @@ Stimulus.register(
 
     async removeTag(event) {
       const tagId = event.currentTarget.dataset.tagId;
+      folioAction("document.tag.remove");
 
       try {
         const response = await fetch(
@@ -2117,7 +2126,7 @@ Stimulus.register("integrations", class extends Controller {
               <span class="side-name">{{ user.name }}</span>
               {% if !user.role.is_empty() %}<span class="side-role">{{ user.role }}</span>{% endif %}
             </span>
-            <form action="/logout" method="post" data-turbo="false">
+            <form action="/logout" method="post" data-turbo="false" data-folio-action="auth.sign_out">
               <input type="hidden" name="csrf" value="{{ user.csrf }}" />
               <button type="submit" class="f-btn f-btn-quiet">Sign out</button>
             </form>

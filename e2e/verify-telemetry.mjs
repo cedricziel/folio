@@ -175,9 +175,39 @@ try {
       "private-query",
     ),
   );
+  await expect
+    .poll(
+      () =>
+        captures
+          .filter((capture) => capture.signal === "logs")
+          .flatMap((capture) => capture.body.resourceLogs)
+          .flatMap((resource) => resource.scopeLogs)
+          .flatMap((scope) => scope.logRecords)
+          .filter((record) => record.eventName === "folio.screen.view")
+          .map((record) => attributes(record.attributes)),
+      { timeout: 15_000 },
+    )
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          "app.screen.name": "inbox",
+          "session.id": expect.stringMatching(/^[0-9a-f-]{36}$/),
+        }),
+      ]),
+    );
+  const pageLoad = spans.find(
+    (span) =>
+      span.name === "folio.navigation" &&
+      attributes(span.attributes)["folio.navigation.type"] === "document",
+  );
+  assert.match(
+    pageLoad?.parentSpanId ?? "",
+    /^[0-9a-f]{16}$/,
+    "the page load joined the server request named in Server-Timing",
+  );
   assert.deepEqual(errors, []);
   console.log(
-    "Authenticated browser → Folio → local OTLP receiver verified: traces, metrics, logs, traceparent, private resources, server-only credentials.",
+    "Authenticated browser → Folio → local OTLP receiver verified: traces, metrics, logs, traceparent, session and screen events, Server-Timing page-load link, private resources, server-only credentials.",
   );
 } finally {
   await browser?.close();

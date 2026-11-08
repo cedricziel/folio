@@ -1,4 +1,4 @@
-<a class="f-row" id="document-{{ row.id }}" href="{{ "/documents"|vault_url }}/{{ row.id }}" data-turbo-frame="_top" data-can-edit="{{ row.can_edit }}">
+<a class="f-row" data-folio-action="document.open" id="document-{{ row.id }}" href="{{ "/documents"|vault_url }}/{{ row.id }}" data-turbo-frame="_top" data-can-edit="{{ row.can_edit }}">
     <div class="f-thumb"><img src="{{ "/documents"|vault_url }}/{{ row.id }}/thumbnail?v={{ row.version }}" alt="" loading="lazy"></div>
     <div class="row-main">
         <div class="f-row-title">{{ row.title }}</div>
