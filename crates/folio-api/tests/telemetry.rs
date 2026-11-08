@@ -103,3 +103,129 @@ async fn a_request_produces_a_server_span_and_duration_metric() {
         "{names:?}"
     );
 }
+
+fn install_tracer() -> (InMemorySpanExporter, tracing::subscriber::DefaultGuard) {
+    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("folio-test")));
+    (exporter, tracing::subscriber::set_default(subscriber))
+}
+
+async fn server_span(
+    app: &axum::Router,
+    exporter: &InMemorySpanExporter,
+    uri: &str,
+) -> (opentelemetry_sdk::trace::SpanData, axum::http::HeaderMap) {
+    exporter.reset();
+    let response = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{uri}: {}",
+        response.status()
+    );
+    let headers = response.headers().clone();
+    drop(response);
+    let span = exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .find(|span| span.span_kind == SpanKind::Server)
+        .expect("a server span");
+    (span, headers)
+}
+
+fn value(span: &opentelemetry_sdk::trace::SpanData, key: &str) -> Option<opentelemetry::Value> {
+    span.attributes
+        .iter()
+        .find(|kv| kv.key.as_str() == key)
+        .map(|kv| kv.value.clone())
+}
+
+fn filters(span: &opentelemetry_sdk::trace::SpanData) -> Option<Vec<String>> {
+    match value(span, "folio.browse.filters")? {
+        opentelemetry::Value::Array(opentelemetry::Array::String(values)) => {
+            Some(values.into_iter().map(|v| v.to_string()).collect())
+        }
+        other => panic!("filters must be a string array, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn document_list_spans_record_browse_scope_and_filter_kinds_only() {
+    let (exporter, _guard) = install_tracer();
+    let harness = common::harness().await;
+    let tag = Uuid::new_v4();
+
+    let (inbox, _) = server_span(&harness.app, &exporter, "/").await;
+    assert_eq!(
+        attribute(inbox.attributes.iter(), "folio.browse.scope").as_deref(),
+        Some("inbox")
+    );
+    assert_eq!(filters(&inbox), Some(vec![]));
+
+    let uri = format!("/?view=all&tag_id={tag}&reviewed=false&document_date_from=2026-01-01");
+    let (all, _) = server_span(&harness.app, &exporter, &uri).await;
+    assert_eq!(
+        attribute(all.attributes.iter(), "folio.browse.scope").as_deref(),
+        Some("all")
+    );
+    assert_eq!(
+        filters(&all),
+        Some(vec![
+            "document_date".into(),
+            "reviewed".into(),
+            "tag".into()
+        ])
+    );
+
+    let (tagged, _) = server_span(&harness.app, &exporter, &format!("/?tag_id={tag}")).await;
+    assert_eq!(
+        attribute(tagged.attributes.iter(), "folio.browse.scope").as_deref(),
+        Some("all")
+    );
+
+    let (search, _) =
+        server_span(&harness.app, &exporter, "/documents/search?q=private+words").await;
+    assert_eq!(
+        attribute(search.attributes.iter(), "folio.browse.scope").as_deref(),
+        Some("search")
+    );
+    assert_eq!(filters(&search), Some(vec!["text".into()]));
+
+    for span in [&inbox, &all, &tagged, &search] {
+        for kv in span.attributes.iter() {
+            let text = kv.value.to_string();
+            assert!(!text.contains(&tag.to_string()), "{kv:?}");
+            assert!(!text.contains("private"), "{kv:?}");
+            assert!(!text.contains("2026-01-01"), "{kv:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn html_responses_name_their_server_trace_for_the_browser() {
+    let (exporter, _guard) = install_tracer();
+    let harness = common::harness().await;
+
+    let (span, headers) = server_span(&harness.app, &exporter, "/").await;
+    let expected = format!(
+        "traceparent;desc=\"00-{}-{}-01\"",
+        span.span_context.trace_id(),
+        span.span_context.span_id()
+    );
+    assert_eq!(
+        headers.get("server-timing").and_then(|v| v.to_str().ok()),
+        Some(expected.as_str())
+    );
+
+    let (_, json) = server_span(&harness.app, &exporter, "/api/tags").await;
+    assert!(json.get("server-timing").is_none());
+}
