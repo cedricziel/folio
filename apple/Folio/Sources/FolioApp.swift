@@ -78,8 +78,13 @@ struct FolioApp: App {
 @MainActor @Observable
 final class AppModel {
     private(set) var session: SessionRestoration = .restoring {
-        didSet { SpotlightIndex.shared.sessionChanged(to: session) }
+        didSet {
+            SpotlightIndex.shared.sessionChanged(to: session)
+            TransferFileCache.shared.sessionChanged(to: session)
+        }
     }
+    /// Counts sign-ins through the browser, which may be another account even on the same server.
+    private(set) var interactiveSignIns = 0
     private(set) var isWorking = false
     var operationError: String?
     private var restorationTask: Task<Void, Never>?
@@ -132,6 +137,8 @@ final class AppModel {
         restorationTask?.cancel()
         restorationGeneration += 1
         SpotlightIndex.shared.signedIn(to: url)
+        TransferFileCache.shared.signedIn(to: url)
+        interactiveSignIns += 1
         session = .signedIn(url)
         FolioTelemetry.shared.signedIn()
         FileProviderDomain.register()
@@ -188,12 +195,19 @@ final class AppModel {
 struct RootView: View {
     let model: AppModel
     let lock: AppLock
+    /// This window's open document, as the system sees it.
+    @State private var activity = DocumentActivityTracker()
     #if os(iOS)
         @State private var showLockSettings = false
     #endif
 
     var body: some View {
         content
+            .environment(activity)
+            .onChange(of: model.session, initial: true) { _, session in activity.sessionChanged(to: session) }
+            .onChange(of: model.interactiveSignIns) {
+                if case let .signedIn(url) = model.session { activity.signedIn(to: url) }
+            }
             .alert(
                 "Couldn't complete sign-in change",
                 isPresented: Binding(

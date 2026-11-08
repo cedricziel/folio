@@ -1,6 +1,7 @@
 import AppIntents
 import CoreSpotlight
 import Foundation
+import UniformTypeIdentifiers
 
 public struct DocumentEntity: AppEntity, IndexedEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
@@ -8,7 +9,7 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
     )
     public static let defaultQuery = DocumentEntityQuery()
 
-    public let id: UUID
+    public let id: DocumentEntityID
 
     @Property(title: "Title")
     public var title: String
@@ -25,8 +26,18 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
     @Property(title: "Tags")
     public var tags: [String]
 
+    /// What the original file is, so a transfer offers it under its own type.
+    public let contentType: UTType
+    public let hasRecognizedText: Bool
+
+    public var documentID: Document.ID {
+        id.documentID
+    }
+
     public init(_ summary: DocumentSummary) {
-        id = summary.id
+        id = DocumentEntityID(documentID: summary.id, vaultID: summary.vaultID)
+        contentType = DocumentTransfer.contentType(mimeType: summary.mimeType, filename: summary.originalFilename)
+        hasRecognizedText = summary.hasRecognizedText
         title = summary.title
         correspondent = summary.correspondent
         documentType = summary.documentType
@@ -61,8 +72,15 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
 public struct DocumentEntityQuery: EntityStringQuery {
     public init() {}
 
-    public func entities(for identifiers: [UUID]) async throws -> [DocumentEntity] {
-        try await IntentEnvironment.run { try await $0.documents(ids: identifiers) }.map(DocumentEntity.init)
+    /// Documents gone from the vault their id names leave Spotlight. An id without a vault is looked up in the
+    /// default vault, where other vaults' documents miss, and one the server couldn't answer for keeps its entry.
+    public func entities(for identifiers: [DocumentEntityID]) async throws -> [DocumentEntity] {
+        let resolution = try await IntentEnvironment.run { try await $0.resolve(ids: identifiers) }
+        let gone = resolution.missing.filter { $0.vaultID != nil }.map(\.documentID)
+        if !gone.isEmpty {
+            IntentEnvironment.spotlight.remove(documentIDs: gone, fallbackServer: IntentEnvironment.serverURL())
+        }
+        return resolution.found.map(DocumentEntity.init)
     }
 
     public func entities(matching string: String) async throws -> [DocumentEntity] {
