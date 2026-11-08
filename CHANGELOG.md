@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.0](https://github.com/cedricziel/folio/compare/v0.12.0...v0.13.0) (2026-11-08)
+
+
+### Features
+
+* **apple:** float the inbox Scan button on Liquid Glass ([#408](https://github.com/cedricziel/folio/issues/408)) ([35c9aa7](https://github.com/cedricziel/folio/commit/35c9aa7d5ed5fae792bab7f64abc424db67dc50d))
+* serve apple-app-site-association for self-built apps ([#403](https://github.com/cedricziel/folio/issues/403)) ([bfe2ad1](https://github.com/cedricziel/folio/commit/bfe2ad16c02aa3652ba3f7f844310716763b18d3))
+
+
+### Bug Fixes
+
+* **apple:** keep the File Provider cache across token refreshes ([9054b86](https://github.com/cedricziel/folio/commit/9054b86743d83316dc89d8af4382a286d275daa0)), closes [#398](https://github.com/cedricziel/folio/issues/398)
+* **apple:** keep the File Provider cache across token refreshes ([#421](https://github.com/cedricziel/folio/issues/421)) ([f818092](https://github.com/cedricziel/folio/commit/f818092cbbe6e68d9caa518cdc89d31c51174398))
+* **apple:** retry unfinished share and Shortcut steps without duplicates ([#383](https://github.com/cedricziel/folio/issues/383)) ([296405c](https://github.com/cedricziel/folio/commit/296405c45422df2253eaf96ffac31b4b6e9b8d9a))
+* **apple:** scope the File Provider catalog cache to the sign-in and refresh vaults on enumeration ([#402](https://github.com/cedricziel/folio/issues/402)) ([e48323e](https://github.com/cedricziel/folio/commit/e48323e642e26085341af2d39913b110ebfeef7e))
+* **auth:** serialize RFC 7009 revocation with token exchanges ([#415](https://github.com/cedricziel/folio/issues/415)) ([70d53f6](https://github.com/cedricziel/folio/commit/70d53f6e01d0aca117c473e0342ed52bd6b51b7b))
+
+
+### Performance Improvements
+
+* **apple:** render scan PDFs off the main actor ([bddceb9](https://github.com/cedricziel/folio/commit/bddceb945f882080a8304e00a1178f809a0b7b7c)), closes [#201](https://github.com/cedricziel/folio/issues/201)
+* **apple:** render scan PDFs off the main actor ([#419](https://github.com/cedricziel/folio/issues/419)) ([9909f9f](https://github.com/cedricziel/folio/commit/9909f9f6453de619fec34df924539975063624b8))
+
 ## [0.12.0](https://github.com/cedricziel/folio/compare/v0.11.1...v0.12.0) (2026-11-08)
 
 

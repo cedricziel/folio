@@ -37,6 +37,9 @@ public enum ShareUploadFailure: Codable, Equatable, Sendable {
     public var message: String {
         switch self {
         case .unauthorized: "Folio no longer accepts your sign-in. Open Folio to sign in again, then retry."
+        case .rejected(409): "Folio is still filing an earlier attempt of this share. Retry in a moment."
+        case .rejected(410):
+            "Folio filed this share, but the document has been deleted since. Share the file again to file it anew."
         case let .rejected(status) where status >= 500: "The server failed while filing it (status \(status))."
         case let .rejected(status): "The server refused it (status \(status))."
         case let .transport(message): message
@@ -83,9 +86,12 @@ public final class ShareUploadStore: @unchecked Sendable {
     public static let failedRetention: TimeInterval = 7 * 24 * 60 * 60
     /// A retry claim left behind by a process that died stops blocking the record after this.
     static let claimTimeout: TimeInterval = 60
+    /// Retained bodies of failed shares beyond this many bytes are dropped, oldest first.
+    public static let retainedBodyLimit = 512 * 1024 * 1024
 
     public let directory: URL
     private let lock = NSLock()
+    private var claims: [UUID: UUID] = [:]
 
     public init(directory: URL) {
         self.directory = directory.appending(path: "share-uploads", directoryHint: .isDirectory)
@@ -129,10 +135,19 @@ public final class ShareUploadStore: @unchecked Sendable {
     }
 
     /// Records the outcome of a finished upload. The body is kept only while the server may still accept it.
+    ///
+    /// Every attempt sends the same `Idempotency-Key`, so an accepted attempt means the document exists, whichever
+    /// attempt it was. A failure counts only for the latest attempt (`attempt` nil for tasks started before
+    /// attempts were tracked), and nothing downgrades an accepted upload. Returns nil when nothing changed.
     @discardableResult
-    public func complete(_ id: UUID, failure: ShareUploadFailure?, at date: Date = .now) -> ShareUploadRecord? {
+    public func complete(_ id: UUID, attempt: Int? = nil, failure: ShareUploadFailure?, at date: Date = .now)
+        -> ShareUploadRecord?
+    {
         lock.withLock {
-            guard var record = read(recordFile(for: id)) else { return nil }
+            guard var record = read(recordFile(for: id)), record.status != .uploaded else { return nil }
+            if failure != nil, let attempt, attempt != record.attempts {
+                return nil
+            }
             record.status = failure.map(ShareUploadRecord.Status.failed) ?? .uploaded
             record.updatedAt = date
             write(record)
@@ -169,39 +184,65 @@ public final class ShareUploadStore: @unchecked Sendable {
         }
     }
 
-    /// Forgets accepted uploads after a day and failed ones after a week.
-    public func prune(now: Date = .now) {
+    /// Forgets accepted uploads after a day and failed ones after a week, then the oldest failed ones while their
+    /// bodies take more than `bodyLimit` bytes. Also deletes bodies left behind by builds that kept them outside
+    /// this store.
+    public func prune(now: Date = .now, bodyLimit: Int = ShareUploadStore.retainedBodyLimit) {
+        var failed: [ShareUploadRecord] = []
         for record in all() {
             switch record.status {
             case .uploaded where record.updatedAt < now.addingTimeInterval(-Self.uploadedRetention),
                 .failed where record.updatedAt < now.addingTimeInterval(-Self.failedRetention):
                 remove(record.id)
+            case .failed:
+                failed.append(record)
             default:
                 break
             }
         }
+        var retained = failed.reduce(0) { $0 + bodySize($1.id) }
+        for record in failed.reversed() where retained > bodyLimit {
+            retained -= bodySize(record.id)
+            remove(record.id)
+        }
+        removeLegacyBodies(before: now.addingTimeInterval(-Self.uploadedRetention))
     }
 
     /// Reserves a record for one retry across the app and its extensions. Returns false while another process
     /// holds it.
     public func claim(_ id: UUID, now: Date = .now) -> Bool {
-        let file = claimFile(for: id)
-        if let created = try? file.resourceValues(forKeys: [.creationDateKey]).creationDate,
-            created < now.addingTimeInterval(-Self.claimTimeout)
-        {
-            try? FileManager.default.removeItem(at: file)
-        }
-        do {
-            try prepareDirectory()
-            try Data().write(to: file, options: .withoutOverwriting)
-            return true
-        } catch {
-            return false
-        }
+        guard let token = lease(for: id).acquire(now: now) else { return false }
+        lock.withLock { claims[id] = token }
+        return true
     }
 
+    /// Ends this store's claim on `id`, leaving a claim another process has taken over since in place.
     public func unclaim(_ id: UUID) {
-        try? FileManager.default.removeItem(at: claimFile(for: id))
+        guard let token = lock.withLock({ claims.removeValue(forKey: id) }) else { return }
+        lease(for: id).release(token)
+    }
+
+    private func lease(for id: UUID) -> FileLease {
+        FileLease(file: claimFile(for: id), timeout: Self.claimTimeout)
+    }
+
+    private func bodySize(_ id: UUID) -> Int {
+        (try? bodyFile(for: id).resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    }
+
+    /// Builds before bodies were kept per record wrote `upload-<uuid>.multipart` next to this store's directory.
+    private func removeLegacyBodies(before cutoff: Date) {
+        let parent = directory.deletingLastPathComponent()
+        let files =
+            (try? FileManager.default.contentsOfDirectory(
+                at: parent, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for file in files
+        where file.lastPathComponent.hasPrefix("upload-") && file.pathExtension == "multipart" {
+            let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+            if let modified, modified < cutoff {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
     }
 
     private func unlockedAll() -> [ShareUploadRecord] {

@@ -125,7 +125,10 @@ final class AppModel {
                 session = restored
                 if case .signedIn = restored { FileProviderDomain.register() }
             }
-            if case .signedIn = restored { FileProviderDomain.signalChanges() }
+            if case .signedIn = restored {
+                FolioTelemetry.shared.signedIn()
+                FileProviderDomain.signalChanges()
+            }
         }
     }
 
@@ -141,6 +144,7 @@ final class AppModel {
         continuations.signedIn(to: url)
         interactiveSignIns += 1
         session = .signedIn(url)
+        FolioTelemetry.shared.signedIn()
         FileProviderDomain.register()
     }
 
@@ -175,12 +179,17 @@ final class AppModel {
         Task {
             defer { isWorking = false }
             do {
+                // Sent while the token still works; best effort, sign-out never waits more than briefly.
+                FolioTelemetry.shared.action(.signOut)
+                await FolioTelemetry.shared.endSession(.signOut)
                 try await SharedConfiguration.tokenProvider().signOut()
                 FolioTelemetry.shared.stop()
                 continuations.clear()
                 session = .signedOut
                 FileProviderDomain.unregister()
             } catch {
+                // Still signed in, so keep recording against a session.
+                FolioTelemetry.shared.signedIn()
                 operationError = error.localizedDescription
             }
         }

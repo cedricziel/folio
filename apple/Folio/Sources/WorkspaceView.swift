@@ -34,11 +34,7 @@ struct WorkspaceView: View {
             List(
                 selection: Binding(
                     get: { Optional(workspace.destination) },
-                    set: {
-                        if let destination = $0 {
-                            workspace.destination = destination
-                        }
-                    }
+                    set: { if let destination = $0 { navigate(to: destination) } }
                 )
             ) {
                 if workspace.isReady {
@@ -66,6 +62,7 @@ struct WorkspaceView: View {
                     Section("Saved views") {
                         ForEach(workspace.savedViews) { view in
                             Button {
+                                FolioTelemetry.shared.action(.savedViewOpen)
                                 Task { await workspace.openSavedView(view.id) }
                             } label: {
                                 Label(view.name, systemImage: view.visibility == .private ? "bookmark" : "person.2")
@@ -101,7 +98,7 @@ struct WorkspaceView: View {
                     canEdit: workspace.canEdit, canUpload: workspace.canUpload,
                     makeUploadDestination: workspace.uploadDestination,
                     onSignOut: onSignOut,
-                    onNavigate: { workspace.destination = $0 },
+                    onNavigate: { navigate(to: $0) },
                     onOpenDocument: { workspace.open($0, vaultID: $1) },
                     advertisedList: advertisedList
                 )
@@ -178,6 +175,7 @@ struct WorkspaceView: View {
             ), presenting: pendingViewDelete
         ) { view in
             Button("Delete saved view", role: .destructive) {
+                FolioTelemetry.shared.action(.savedViewDelete)
                 Task { await workspace.deleteSavedView(view.id) }
             }
         } message: { _ in
@@ -224,6 +222,15 @@ struct WorkspaceView: View {
         }
     }
 
+    /// Moves to `destination` at the person's request; a scope change is recorded only when it differs.
+    /// Choosing the current destination still assigns it, which closes an open saved view.
+    private func navigate(to destination: WorkspaceDestination) {
+        if destination != workspace.destination {
+            FolioTelemetry.shared.action(.browseScopeChange)
+        }
+        workspace.destination = destination
+    }
+
     @ViewBuilder private var vaultPicker: some View {
         if workspace.catalog.vaults.count > 1 {
             Picker(
@@ -232,6 +239,7 @@ struct WorkspaceView: View {
                     get: { workspace.selectedVaultID },
                     set: {
                         if let id = $0 {
+                            FolioTelemetry.shared.action(.vaultSwitch)
                             workspace.selectVault(id)
                         }
                     }

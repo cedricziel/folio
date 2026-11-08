@@ -70,6 +70,7 @@ struct DocumentDetailView: View {
             model.summary, vaultID: vaultID, previewFile: model.previewFile, showingDiscussion: showingDiscussion,
             page: page)
         .documentTransferCommands(model.summary, vaultID: vaultID)
+        .telemetryScreen(.documentDetail)
         .onChange(of: continuation, initial: true) { _, continuation in
             guard let continuation else { return }
             if continuation.pane == .discussion { showingDiscussion = true }

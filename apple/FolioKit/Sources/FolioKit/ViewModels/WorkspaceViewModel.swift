@@ -301,6 +301,7 @@ public final class WorkspaceViewModel {
         all.list.sort = view.query.sort
         all.presentation = view.presentation
         all.savedViewName = view.name
+        all.list.showsSavedView = true
         selectedSavedViewID = view.id
         navigationError = nil
     }

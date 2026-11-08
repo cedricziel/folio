@@ -17,6 +17,7 @@ struct AppLockView: View {
         }
         .background(Color.paper)
         .navigationTitle("Folio")
+        .telemetryScreen(.appLock)
     }
 }
 

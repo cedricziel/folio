@@ -165,7 +165,7 @@ The Apple `app.session.start` event is renamed `folio.telemetry.configured`, bec
 | `document.detail`     | DocumentDetailView (tag only)            | `document_view.html` (`/documents/{id}`)                        |
 | `document.preview`    | QuickLookPreview                         | —                                                               |
 | `document.discussion` | DocumentDiscussionView                   | — (part of the detail page)                                     |
-| `document.processing` | DocumentProcessingView                   | —                                                               |
+| `document.processing` | — (part of the detail view)              | —                                                               |
 | `scan.review`         | ScanReviewView                           | —                                                               |
 | `upload.review`       | UploadReviewView                         | —                                                               |
 | `taxonomy`            | TaxonomyView                             | `manage.html`                                                   |

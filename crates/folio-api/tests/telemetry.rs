@@ -12,6 +12,31 @@ use tower::ServiceExt;
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
+/// The finished server span. It ends when its last handle is dropped, and SQLite's worker thread drops the one it
+/// holds for a query just after sending the result, so the span can finish a moment after the response is dropped.
+async fn finished_server_span(
+    exporter: &InMemorySpanExporter,
+) -> opentelemetry_sdk::trace::SpanData {
+    for _ in 0..200 {
+        if let Some(span) = exporter
+            .get_finished_spans()
+            .unwrap()
+            .into_iter()
+            .find(|span| span.span_kind == SpanKind::Server)
+        {
+            return span;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let names: Vec<_> = exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .map(|span| span.name)
+        .collect();
+    panic!("no server span within two seconds; finished: {names:?}")
+}
+
 fn attribute<'a>(
     attributes: impl Iterator<Item = &'a opentelemetry::KeyValue>,
     key: &str,
@@ -61,11 +86,7 @@ async fn a_request_produces_a_server_span_and_duration_metric() {
     // The span ends when the response body is dropped.
     drop(response);
 
-    let spans = span_exporter.get_finished_spans().unwrap();
-    let server = spans
-        .iter()
-        .find(|span| span.span_kind == SpanKind::Server)
-        .expect("a server span");
+    let server = finished_server_span(&span_exporter).await;
     assert_eq!(server.name, "GET /api/documents/{id}");
     assert_eq!(
         server.span_context.trace_id().to_string(),
@@ -133,13 +154,7 @@ async fn server_span(
     );
     let headers = response.headers().clone();
     drop(response);
-    let span = exporter
-        .get_finished_spans()
-        .unwrap()
-        .into_iter()
-        .find(|span| span.span_kind == SpanKind::Server)
-        .expect("a server span");
-    (span, headers)
+    (finished_server_span(exporter).await, headers)
 }
 
 fn value(span: &opentelemetry_sdk::trace::SpanData, key: &str) -> Option<opentelemetry::Value> {
@@ -269,12 +284,7 @@ async fn html_responses_name_their_server_trace_for_the_browser() {
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     drop(missing);
-    let span = exporter
-        .get_finished_spans()
-        .unwrap()
-        .into_iter()
-        .find(|span| span.span_kind == SpanKind::Server)
-        .expect("a server span for the error page");
+    let span = finished_server_span(&exporter).await;
     assert_eq!(
         timing.as_deref(),
         Some(

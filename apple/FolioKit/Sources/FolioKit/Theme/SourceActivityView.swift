@@ -51,6 +51,7 @@ public struct SourceActivityView: View {
             .refreshable { await model.load() }
             .task { if !model.hasLoaded { await model.load() } }
         }
+        .telemetryScreen(.sources)
     }
 }
 
