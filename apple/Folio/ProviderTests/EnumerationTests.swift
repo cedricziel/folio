@@ -197,7 +197,8 @@ final class EnumerationTests: XCTestCase {
 
         XCTAssertNil(observer.error)
         XCTAssertEqual(observer.updated.map(\.filename), ["After"])
-        XCTAssertNotEqual(observer.updated.first?.itemVersion, FolioProviderItem(original).itemVersion)
+        XCTAssertNotEqual(
+            observer.updated.first?.itemVersion, FolioProviderItem(original, local: LocalItemMetadata()).itemVersion)
         XCTAssertNotEqual(observer.anchor, anchor)
         XCTAssertTrue(observer.deleted.isEmpty)
     }

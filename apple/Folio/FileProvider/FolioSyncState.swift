@@ -12,12 +12,17 @@ actor FolioSyncState {
     private let catalog: FolioCatalog
     private let container: FolioItemID.Folder?
     private let directory: URL
+    private let localMetadata: LocalItemMetadataStore
     private var initial: Task<Snapshot, Error>?
 
-    init(catalog: FolioCatalog, container: FolioItemID.Folder?, directory: URL) {
+    init(
+        catalog: FolioCatalog, container: FolioItemID.Folder?, directory: URL,
+        localMetadata: LocalItemMetadataStore = .scratch()
+    ) {
         self.catalog = catalog
         self.container = container
         self.directory = directory
+        self.localMetadata = localMetadata
     }
 
     static func directory(domain: NSFileProviderDomain, container: NSFileProviderItemIdentifier) throws -> URL {
@@ -32,7 +37,16 @@ actor FolioSyncState {
         .appendingPathComponent("FolioSync", isDirectory: true).appendingPathComponent(key, isDirectory: true)
     }
 
-    static func metadataVersion(_ node: FolioNode) -> Data {
+    /// Items without local metadata keep the version they had before it existed.
+    static func metadataVersion(_ node: FolioNode, local: LocalItemMetadata = LocalItemMetadata()) -> Data {
+        let version = serverVersion(node)
+        guard local != LocalItemMetadata() else { return version }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return Data(SHA256.hash(data: version + ((try? encoder.encode(local)) ?? Data())))
+    }
+
+    private static func serverVersion(_ node: FolioNode) -> Data {
         let fields = [
             node.id.rawValue, node.parent.rawValue, node.name, node.contentType ?? "",
             String(node.isFolder), String(node.modified.timeIntervalSince1970),
@@ -83,7 +97,10 @@ actor FolioSyncState {
         } else {
             nodes = try await catalog.allNodes()
         }
-        let versions = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id.rawValue, Self.metadataVersion($0)) })
+        let versions = Dictionary(
+            uniqueKeysWithValues: nodes.map {
+                ($0.id.rawValue, Self.metadataVersion($0, local: localMetadata.metadata(for: $0.id.providerIdentifier)))
+            })
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let data = try encoder.encode(versions)
