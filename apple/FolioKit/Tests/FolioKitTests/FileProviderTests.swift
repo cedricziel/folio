@@ -492,13 +492,37 @@ struct FolioCatalogCacheTests {
         #expect(try await catalog.children(of: .scoped(personal.id, .all)).isEmpty)
     }
 
-    private func signIn(_ refreshToken: String?, on server: URL) -> OAuthCredentials {
+    private func signIn(_ refreshToken: String?, on server: URL, id: UUID? = nil) -> OAuthCredentials {
         OAuthCredentials(
             serverURL: server, clientID: "folio-client", tokenEndpoint: server.appending(path: "api/oauth/token"),
             revocationEndpoint: nil,
             tokens: OAuthTokens(
                 accessToken: "access-\(refreshToken ?? "none")", refreshToken: refreshToken,
-                expiresAt: .distantFuture))
+                expiresAt: .distantFuture),
+            signInID: id)
+    }
+
+    @Test func aTokenRefreshKeepsTheCacheAndTheNextSignInDoesNot() throws {
+        let server = URL(string: "https://folio.example")!
+        let caches = FolioCatalogCaches()
+        let id = UUID()
+        let cache = try #require(caches.cache(for: server, credentials: signIn("r1", on: server, id: id)))
+        #expect(caches.cache(for: server, credentials: signIn("r2", on: server, id: id)) === cache)
+        #expect(caches.cache(for: server, credentials: signIn("r2", on: server, id: UUID())) !== cache)
+    }
+
+    @Test func concurrentEnumerationsShareTheVaultRequestInFlight() async throws {
+        let cache = FolioCatalogCache()
+        let gate = VaultGate()
+        let fetch: @Sendable () async throws -> VaultCatalog = { await gate.fetch() }
+        async let first = cache.vaults(maxAge: .zero, fetch: fetch)
+        async let second = cache.vaults(maxAge: .zero, fetch: fetch)
+        await gate.waitForFirstFetch()
+        // Gives the second caller time to start its own fetch, should it not join the first.
+        try await Task.sleep(for: .milliseconds(100))
+        await gate.release()
+        _ = try await (first, second)
+        #expect(await gate.fetches == 1)
     }
 
     @Test func aSignInOnTheSameServerNeverServesThePreviousAccountsListings() async throws {
@@ -539,5 +563,32 @@ struct FolioCatalogCacheTests {
         }
 
         #expect(await source.queries.count == letters.count)
+    }
+}
+
+/// Holds every vault fetch until released, counting them.
+private actor VaultGate {
+    private(set) var fetches = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var started: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func fetch() async -> VaultCatalog {
+        fetches += 1
+        started?.resume()
+        started = nil
+        if !released { await withCheckedContinuation { waiting.append($0) } }
+        return .empty
+    }
+
+    func waitForFirstFetch() async {
+        guard fetches == 0 else { return }
+        await withCheckedContinuation { started = $0 }
+    }
+
+    func release() {
+        released = true
+        waiting.forEach { $0.resume() }
+        waiting = []
     }
 }
