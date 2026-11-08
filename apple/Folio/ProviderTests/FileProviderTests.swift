@@ -180,4 +180,71 @@ final class FileProviderTests: XCTestCase {
         }
         await fulfillment(of: [refused], timeout: 5)
     }
+
+    #if os(macOS)
+        func testKeepDownloadedIsStoredAndReportedAsContentPolicy() async throws {
+            let document = Document(title: "Bill", originalFilename: "bill.pdf")
+            let folder = FolioItemID.Folder.scoped(MockFolioService.defaultVault.id, .all)
+            let id = FolioItemID.document(document.id, in: folder).providerIdentifier
+            let provider = FolioFileProvider(
+                domain: NSFileProviderDomain(identifier: .init("keep-downloaded-test"), displayName: "Test"),
+                service: MockFolioService(documents: [document]))
+
+            let before = try await lookUp(id, in: provider)
+            XCTAssertEqual(before.contentPolicy, .inherited)
+            XCTAssertEqual(before.userInfo??["keptDownloaded"] as? Bool, false)
+
+            try await perform(FolioProviderItem.keepDownloadedAction, on: [id], in: provider)
+            let kept = try await lookUp(id, in: provider)
+            XCTAssertEqual(kept.contentPolicy, .downloadEagerlyAndKeepDownloaded)
+            XCTAssertEqual(kept.userInfo??["keptDownloaded"] as? Bool, true)
+            XCTAssertNotEqual(kept.itemVersion?.metadataVersion, before.itemVersion?.metadataVersion)
+
+            try await perform(FolioProviderItem.allowEvictionAction, on: [id], in: provider)
+            let released = try await lookUp(id, in: provider)
+            XCTAssertEqual(released.contentPolicy, .inherited)
+            XCTAssertEqual(released.itemVersion?.metadataVersion, before.itemVersion?.metadataVersion)
+        }
+
+        func testUnknownActionsAreRefused() async {
+            let provider = FolioFileProvider(
+                domain: NSFileProviderDomain(identifier: .init("unknown-action-test"), displayName: "Test"),
+                service: MockFolioService())
+            do {
+                try await perform(.init("com.example.unknown"), on: [.rootContainer], in: provider)
+                XCTFail("Unknown action was performed")
+            } catch {
+                XCTAssertEqual((error as NSError).code, NSFeatureUnsupportedError)
+            }
+        }
+
+        private func lookUp(
+            _ id: NSFileProviderItemIdentifier, in provider: FolioFileProvider
+        ) async throws -> NSFileProviderItem {
+            try await withCheckedThrowingContinuation { continuation in
+                _ = provider.item(for: id, request: NSFileProviderRequest()) { item, error in
+                    if let item {
+                        continuation.resume(returning: item)
+                    } else {
+                        continuation.resume(throwing: error ?? NSFileProviderError(.noSuchItem))
+                    }
+                }
+            }
+        }
+
+        private func perform(
+            _ action: NSFileProviderExtensionActionIdentifier, on ids: [NSFileProviderItemIdentifier],
+            in provider: FolioFileProvider
+        ) async throws {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                _ = provider.performAction(identifier: action, onItemsWithIdentifiers: ids) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+        }
+    #endif
 }

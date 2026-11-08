@@ -1,12 +1,13 @@
 import FileProvider
 import Foundation
 
-/// What Files and Finder record about an item on this device: when it was last used (Recents), its
-/// Finder tags and its favorite rank. Folio has no server field for any of them.
+/// What this device records about an item: when it was last used (Recents), its Finder tags, its favorite
+/// rank and whether to keep it downloaded. Folio has no server field for any of them.
 struct LocalItemMetadata: Codable, Equatable, Sendable {
     var lastUsedDate: Date?
     var tagData: Data?
     var favoriteRank: UInt64?
+    var keepDownloaded: Bool?
 
     static let fields: NSFileProviderItemFields = [.lastUsedDate, .tagData, .favoriteRank]
 }
@@ -50,13 +51,31 @@ final class LocalItemMetadataStore: @unchecked Sendable {
             if fields.contains(.lastUsedDate) { metadata.lastUsedDate = item.lastUsedDate ?? nil }
             if fields.contains(.tagData) { metadata.tagData = item.tagData ?? nil }
             if fields.contains(.favoriteRank) { metadata.favoriteRank = (item.favoriteRank ?? nil)?.uint64Value }
-            var updated = entries
-            updated[key] = metadata == LocalItemMetadata() ? nil : metadata
-            try FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(updated).write(to: file, options: .atomic)
-            entries = updated
+            try save([key: metadata])
             return metadata
         }
+    }
+
+    func setKeepDownloaded(_ keep: Bool, for ids: [NSFileProviderItemIdentifier]) throws {
+        try lock.withLock {
+            var changed: [String: LocalItemMetadata] = [:]
+            for id in ids {
+                var metadata = entries[id.rawValue] ?? LocalItemMetadata()
+                metadata.keepDownloaded = keep ? true : nil
+                changed[id.rawValue] = metadata
+            }
+            try save(changed)
+        }
+    }
+
+    /// Callers hold the lock. Writes the file first, so a failed write leaves memory unchanged.
+    private func save(_ changed: [String: LocalItemMetadata]) throws {
+        var updated = entries
+        for (key, metadata) in changed {
+            updated[key] = metadata == LocalItemMetadata() ? nil : metadata
+        }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(updated).write(to: file, options: .atomic)
+        entries = updated
     }
 }

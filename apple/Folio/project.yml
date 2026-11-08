@@ -177,6 +177,16 @@ targets:
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FolioFileProvider
           NSExtensionFileProviderSupportsEnumeration: true
           NSExtensionFileProviderDocumentGroup: group.com.cedricziel.folio
+          NSExtensionFileProviderActions:
+            - NSExtensionFileProviderActionIdentifier: com.cedricziel.folio.keep-downloaded
+              NSExtensionFileProviderActionName: Keep Downloaded
+              NSExtensionFileProviderActionActivationRule: >-
+                SUBQUERY(fileproviderItems, $item, $item.userInfo.canKeepDownloaded == YES
+                AND $item.userInfo.keptDownloaded == NO).@count > 0
+            - NSExtensionFileProviderActionIdentifier: com.cedricziel.folio.allow-eviction
+              NSExtensionFileProviderActionName: Don't Keep Downloaded
+              NSExtensionFileProviderActionActivationRule: >-
+                SUBQUERY(fileproviderItems, $item, $item.userInfo.keptDownloaded == YES).@count > 0
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cedricziel.folio.fileprovider

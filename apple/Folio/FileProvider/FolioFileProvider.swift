@@ -1,14 +1,15 @@
-import CryptoKit
 import FileProvider
 import FolioKit
 import UniformTypeIdentifiers
 
 /// Folio as a location in Files and Finder.
 ///
-/// Read-only except for creating files in Inbox, which uploads them, and for the metadata Files and Finder
-/// keep on this device (Recents, tags, favorites). Rename, move and delete are refused with a clean
+/// Read-only except for creating files in Inbox, which uploads them, and for what this device keeps about
+/// items (Recents, tags, favorites, Keep Downloaded). Rename, move and delete are refused with a clean
 /// "unsupported" error.
-final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFileProviderThumbnailing {
+final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFileProviderThumbnailing,
+    NSFileProviderCustomAction
+{
     private let domain: NSFileProviderDomain
     private let service: (any FolioService)?
     private let temporaryDirectory: (() throws -> URL)?
@@ -232,6 +233,34 @@ final class FolioFileProvider: NSObject, NSFileProviderReplicatedExtension, NSFi
         )
     }
 
+    /// The two Keep Downloaded menu actions; the extension's Info.plist declares them.
+    func performAction(
+        identifier actionIdentifier: NSFileProviderExtensionActionIdentifier,
+        onItemsWithIdentifiers itemIdentifiers: [NSFileProviderItemIdentifier],
+        completionHandler: @escaping ((any Error)?) -> Void
+    ) -> Progress {
+        let progress = Progress(totalUnitCount: 1)
+        defer { progress.completedUnitCount = 1 }
+        let keep: Bool
+        switch actionIdentifier {
+        case FolioProviderItem.keepDownloadedAction: keep = true
+        case FolioProviderItem.allowEvictionAction: keep = false
+        default:
+            completionHandler(Self.unsupported)
+            return progress
+        }
+        do {
+            try localMetadata.setKeepDownloaded(keep, for: itemIdentifiers)
+        } catch {
+            ProviderDiagnostics.failure(operation: "performAction", phase: "local-metadata", error: error)
+            completionHandler(error.providerError)
+            return progress
+        }
+        completionHandler(nil)
+        NSFileProviderManager(for: domain)?.signalEnumerator(for: .workingSet) { _ in }
+        return progress
+    }
+
     private static var unsupported: NSError {
         NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError)
     }
@@ -245,7 +274,8 @@ final class FolioEnumerator: NSObject, NSFileProviderEnumerator {
         catalog: FolioCatalog, container: FolioItemID.Folder?, directory: URL,
         localMetadata: LocalItemMetadataStore = .scratch()
     ) {
-        state = FolioSyncState(catalog: catalog, container: container, directory: directory)
+        state = FolioSyncState(
+            catalog: catalog, container: container, directory: directory, localMetadata: localMetadata)
         self.localMetadata = localMetadata
     }
 
@@ -340,16 +370,30 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
         local.favoriteRank.map { NSNumber(value: $0) }
     }
 
-    /// Items without local metadata keep the version the sync snapshots use.
+    static let keepDownloadedAction = NSFileProviderExtensionActionIdentifier("com.cedricziel.folio.keep-downloaded")
+    static let allowEvictionAction = NSFileProviderExtensionActionIdentifier("com.cedricziel.folio.allow-eviction")
+
+    /// Read by the menu actions' activation rules. Only macOS can keep an item downloaded, so only macOS
+    /// offers the actions.
+    var userInfo: [AnyHashable: Any]? {
+        #if os(macOS)
+            return ["canKeepDownloaded": true, "keptDownloaded": local.keepDownloaded == true]
+        #else
+            return [:]
+        #endif
+    }
+
+    #if os(macOS)
+        /// Contents of a kept folder report `.inherited` and so stay downloaded too.
+        var contentPolicy: NSFileProviderContentPolicy {
+            local.keepDownloaded == true ? .downloadEagerlyAndKeepDownloaded : .inherited
+        }
+    #endif
+
     var itemVersion: NSFileProviderItemVersion {
         let stamp = Data(String(node.modified.timeIntervalSince1970).utf8)
-        var metadata = FolioSyncState.metadataVersion(node)
-        if local != LocalItemMetadata() {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = .sortedKeys
-            metadata = Data(SHA256.hash(data: metadata + ((try? encoder.encode(local)) ?? Data())))
-        }
-        return NSFileProviderItemVersion(contentVersion: stamp, metadataVersion: metadata)
+        return NSFileProviderItemVersion(
+            contentVersion: stamp, metadataVersion: FolioSyncState.metadataVersion(node, local: local))
     }
 }
 
