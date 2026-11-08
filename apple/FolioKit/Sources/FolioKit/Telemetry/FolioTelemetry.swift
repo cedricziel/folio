@@ -132,17 +132,21 @@ public final class FolioTelemetry: @unchecked Sendable {
             if accepted { next.event("app.session.start") } else { next.shutdown() }
         } catch {
             // Optional observability must never block sign-in or document access. A server that refuses the
-            // settings request stops collection; a transport failure keeps the current runtime until it recovers.
-            if let refused = error as? URLError,
-                [.badServerResponse, .userAuthenticationRequired].contains(refused.code)
-            {
-                let stale = lock.withLock { () -> TelemetryRuntime? in
-                    guard generation == ticket else { return nil }
-                    defer { runtime = nil }
-                    return runtime
+            // settings request (401, 403, no token) stops collection. Any other failure, such as a 5xx while the
+            // server restarts or no network, keeps the current runtime and lets the next call retry.
+            let refused =
+                (error as? TelemetryHTTPStatus).map { [401, 403].contains($0.code) } ?? false
+                || (error as? URLError)?.code == .userAuthenticationRequired
+            let stale = lock.withLock { () -> TelemetryRuntime? in
+                guard generation == ticket else { return nil }
+                guard refused else {
+                    lastConfiguration = .distantPast
+                    return nil
                 }
-                if let stale { Task.detached { stale.shutdown() } }
+                defer { runtime = nil }
+                return runtime
             }
+            if let stale { Task.detached { stale.shutdown() } }
         }
     }
 
@@ -224,12 +228,17 @@ public final class FolioTelemetry: @unchecked Sendable {
     /// Flushes and waits at most `timeout`, for a process the system is about to suspend.
     public func flush(timeout: Duration) async {
         guard let runtime = current else { return }
-        let export = Task.detached { runtime.flush() }
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await export.value }
-            group.addTask { try? await Task.sleep(for: timeout) }
-            await group.next()
-            group.cancelAll()
+        // Whichever finishes first resumes the caller; a slow export keeps running on its own.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let once = ResumeOnce(continuation)
+            Task.detached {
+                runtime.flush()
+                once.resume()
+            }
+            Task.detached {
+                try? await Task.sleep(for: timeout)
+                once.resume()
+            }
         }
     }
 
@@ -398,6 +407,29 @@ final class TelemetryRedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
     }
 }
 
+/// A telemetry request the server answered with a non-2xx status.
+struct TelemetryHTTPStatus: Error, Equatable {
+    let code: Int
+}
+
+/// Resumes a continuation once, from whichever caller gets there first.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume() {
+        let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume()
+    }
+}
+
 final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
     let baseURL: URL
     private let provider: any BearerTokenProvider
@@ -434,7 +466,7 @@ final class TelemetryHTTPClient: HTTPClient, @unchecked Sendable {
             (data, response) = try await session.data(for: signed(fresh))
         }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+            throw TelemetryHTTPStatus(code: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
         return (data, http)
     }

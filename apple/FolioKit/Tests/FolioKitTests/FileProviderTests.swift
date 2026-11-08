@@ -465,6 +465,18 @@ struct FolioCatalogCacheTests {
         #expect(await source.queries.count == 2)
     }
 
+    @Test func anUploadMakesTheNextLookupListTheFolderAgain() async throws {
+        let source = MockFolioService(documents: letters)
+        let catalog = FolioCatalog(service: source, cache: FolioCatalogCache())
+        let file = UploadFile(data: Data(), filename: "new.pdf", mimeType: "application/pdf")
+
+        _ = try await catalog.children(of: .scoped(vault, .inbox))
+        _ = try await catalog.upload(file, to: .scoped(vault, .inbox))
+        _ = try await catalog.node(for: .document(letters[0].id, in: .scoped(vault, .inbox)))
+
+        #expect(await source.queries.count == 2)
+    }
+
     @Test func withoutACacheEveryLookupListsTheFolder() async throws {
         let source = MockFolioService(documents: letters)
         let catalog = FolioCatalog(service: source)

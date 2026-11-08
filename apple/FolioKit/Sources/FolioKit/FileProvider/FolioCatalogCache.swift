@@ -23,6 +23,11 @@ public actor FolioCatalogCache {
     private var vaultRequest: Request<VaultCatalog>?
     private var listings: [FolioItemID.Folder: Entry<[FolioNode]>] = [:]
     private var listingRequests: [FolioItemID.Folder: Request<[FolioNode]>] = [:]
+    /// Bumped by ``invalidateListings()``; responses to requests from an earlier generation are not stored.
+    private var generation = 0
+
+    /// No caller reuses a listing older than this, so older ones are dropped whenever a listing is stored.
+    private static let retention: Duration = .seconds(60)
 
     public init() {}
 
@@ -55,12 +60,24 @@ public actor FolioCatalogCache {
             return try await request.task.value
         }
         let request = Request(task: Task { try await fetch() }, started: now)
+        let requestGeneration = generation
         listingRequests[folder] = request
         defer { if listingRequests[folder]?.started == request.started { listingRequests[folder] = nil } }
         let value = try await request.task.value
+        guard generation == requestGeneration else { return value }
         if (listings[folder]?.started).map({ $0 <= request.started }) ?? true {
             listings[folder] = Entry(value: value, started: request.started)
         }
+        let cutoff = clock.now
+        listings = listings.filter { cutoff - $0.value.started < Self.retention }
         return value
+    }
+
+    /// Forgets every folder listing, for example after an upload added a document to some of them.
+    /// Requests already in flight finish for their callers but are not stored.
+    func invalidateListings() {
+        generation += 1
+        listings.removeAll()
+        listingRequests.removeAll()
     }
 }

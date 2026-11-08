@@ -419,6 +419,41 @@ private final class TelemetryCapture: @unchecked Sendable {
 
         #expect(telemetry.current == nil)
     }
+
+    @Test func failedRefreshKeepsTheRuntimeAndRetries() async throws {
+        let capture = TelemetryCapture()
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [TelemetryURLProtocol.self]
+        let outage = TelemetryCapture()
+        TelemetryURLProtocol.handler = { request, body in
+            capture.append(request, body)
+            if request.url?.path == "/api/telemetry/config" {
+                return (
+                    outage.requests.isEmpty ? 200 : 503,
+                    Data(#"{"enabled":true,"endpoint":"/api/telemetry","serviceNamespace":"folio"}"#.utf8)
+                )
+            }
+            return (200, Data("{}".utf8))
+        }
+        let telemetry = FolioTelemetry(
+            session: URLSession(configuration: config), installationStore: TestInstallationIDStore()
+        )
+        defer { telemetry.stop() }
+        telemetry.refreshInterval = 0
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let running = try #require(telemetry.current)
+
+        outage.append(URLRequest(url: baseURL), Data())
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        #expect(telemetry.current === running)
+
+        // The failed attempt does not count as a configuration: even with the normal interval, the next call
+        // asks again instead of waiting five minutes.
+        telemetry.refreshInterval = 300
+        await telemetry.configure(baseURL: baseURL, tokenProvider: TelemetryToken())
+        let configRequests = capture.requests.filter { $0.0.url?.path == "/api/telemetry/config" }
+        #expect(configRequests.count == 3)
+    }
 }
 
 private final class TelemetryURLProtocol: URLProtocol, @unchecked Sendable {

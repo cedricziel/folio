@@ -135,6 +135,7 @@ public struct FolioCatalog: Sendable {
         guard let context = try await context(for: folder) else { throw FolioError.server(status: 404, message: nil) }
         guard context.vault.role.canUpload else { throw FolioError.server(status: 403, message: nil) }
         let document = try await context.service.upload(file)
+        await cache?.invalidateListings()
         return documentNodes([document], in: folder)[0]
     }
 
