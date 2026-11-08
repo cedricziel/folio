@@ -508,3 +508,51 @@ async fn test_notifications_are_limited_to_one_a_minute() {
         Err(TestRefusal::Unavailable)
     );
 }
+
+/// Access is decided per vault and uploader, whatever order the pending rows come in.
+async fn lost_vault_is_dropped(lost_first: bool) {
+    let w = world();
+    let lost = VaultId::new();
+    w.roles.grant(&w.alice.user_id, lost, VaultRole::Editor);
+    let (first, second) = if lost_first {
+        (lost, w.vault)
+    } else {
+        (w.vault, lost)
+    };
+    let a = queue(&w, first, NotificationKind::NeedsReview, w.start).await;
+    let b = queue(
+        &w,
+        second,
+        NotificationKind::NeedsReview,
+        w.start + Duration::seconds(1),
+    )
+    .await;
+    w.roles.revoke(&w.alice.user_id, lost);
+
+    w.sender
+        .flush(w.start + Duration::minutes(1))
+        .await
+        .unwrap();
+
+    let sent = w.transport.sent();
+    assert_eq!(sent.len(), 1);
+    let kept = if first == w.vault { a.id } else { b.id };
+    assert_eq!(
+        sent[0].payload["folio"]["document"],
+        serde_json::json!(kept)
+    );
+    assert_eq!(
+        sent[0].payload["folio"]["vault"],
+        serde_json::json!(w.vault)
+    );
+}
+
+#[tokio::test]
+async fn a_vault_lost_while_pending_is_dropped_when_its_row_comes_first() {
+    lost_vault_is_dropped(true).await;
+}
+
+#[tokio::test]
+async fn a_vault_lost_while_pending_is_dropped_when_its_row_comes_second() {
+    lost_vault_is_dropped(false).await;
+}

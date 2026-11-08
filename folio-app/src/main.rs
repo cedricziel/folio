@@ -208,24 +208,6 @@ async fn main() -> Result<()> {
     )
     .with_workflow_runner(workflow_runner);
 
-    // Delivers committed events to workflows and live clients, including those
-    // left over from before a restart. Stops when the shutdown signal flips.
-    let dispatcher = Arc::new(OutboxDispatcher::new(
-        outbox.clone(),
-        vec![
-            Arc::new(BroadcastConsumer(event_broadcaster.clone())),
-            workflow_engine,
-            Arc::new(NotificationPlanner::new(
-                push_devices.clone(),
-                Arc::new(RepositoryDocuments(document_repo.clone())),
-                push_access.clone(),
-                push_wake.clone(),
-            )),
-        ],
-        DispatcherConfig::default(),
-    ));
-    tokio::spawn(dispatcher.run(shutdown_tx.subscribe()));
-
     // Stops on its own when the shutdown signal flips
     tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 
@@ -290,8 +272,8 @@ async fn main() -> Result<()> {
         thumbnail_service,
         job_queue,
         store,
-        event_broadcaster,
-        outbox,
+        event_broadcaster.clone(),
+        outbox.clone(),
         workflow_repo,
         webhook_client,
         public_url,
@@ -363,13 +345,35 @@ async fn main() -> Result<()> {
     let push_sender = Arc::new(NotificationSender::new(
         push_devices.clone(),
         Arc::new(RepositoryDocuments(document_repo.clone())),
-        push_access,
+        push_access.clone(),
         push_grants,
         push_settings.clone(),
         push_settings.clone(),
         SenderConfig::default(),
     ));
-    tokio::spawn(push_sender.clone().run(push_wake, shutdown_tx.subscribe()));
+    // Delivers committed events to workflows and live clients, including those
+    // left over from before a restart. Stops when the shutdown signal flips.
+    let dispatcher = Arc::new(OutboxDispatcher::new(
+        outbox.clone(),
+        vec![
+            Arc::new(BroadcastConsumer(event_broadcaster.clone())),
+            workflow_engine,
+            Arc::new(NotificationPlanner::new(
+                push_devices.clone(),
+                Arc::new(RepositoryDocuments(document_repo.clone())),
+                push_access.clone(),
+                push_settings.clone(),
+                push_wake.clone(),
+            )),
+        ],
+        DispatcherConfig::default(),
+    ));
+    tokio::spawn(dispatcher.run(shutdown_tx.subscribe()));
+    tokio::spawn(
+        push_sender
+            .clone()
+            .run(push_wake.clone(), shutdown_tx.subscribe()),
+    );
     state.push = Some(folio_api::routes::devices::PushState {
         devices: push_devices,
         sender: push_sender,
