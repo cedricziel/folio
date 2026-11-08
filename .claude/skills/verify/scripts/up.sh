@@ -49,6 +49,7 @@ fi
     FOLIO_PROCESSING__AUTO_OCR="${FOLIO_VERIFY_AUTO_OCR:-true}" \
     FOLIO_PROCESSING__AUTO_EMBED="${FOLIO_VERIFY_AUTO_EMBED:-true}" \
     FOLIO_AUTH__REQUIRED="${FOLIO_VERIFY_AUTH_REQUIRED:-false}" \
+    FOLIO_APPLE__APP_IDS="${FOLIO_VERIFY_APPLE_APP_IDS:-}" \
     "${extra[@]}" \
     "$bin"
 ) >"$dir/server.log" 2>&1 &
@@ -56,6 +57,7 @@ pid=$!
 
 printf 'BASE_URL=%s\nPID=%s\nVERIFY_DIR=%s\n' "$base" "$pid" "$dir" >"$dir/env"
 printf 'FOLIO_VERIFY_AUTO_OCR=%q\n' "${FOLIO_VERIFY_AUTO_OCR:-true}" >>"$dir/env"
+printf 'FOLIO_VERIFY_APPLE_APP_IDS=%q\n' "${FOLIO_VERIFY_APPLE_APP_IDS:-}" >>"$dir/env"
 
 # Readiness: /readyz when the health-endpoints PR has landed (404 before), else /.
 for _ in $(seq 1 60); do

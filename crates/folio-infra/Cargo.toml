@@ -41,6 +41,7 @@ async-trait = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
+url = "2"
 chrono = { workspace = true }
 
 # HTTP client (AI APIs, Paperless)

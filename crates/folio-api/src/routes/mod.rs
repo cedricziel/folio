@@ -1,5 +1,6 @@
 //! API routes
 
+mod apple;
 mod assets;
 pub mod auth;
 pub(crate) mod browse;
@@ -112,6 +113,8 @@ pub fn create_router(mut state: AppState, auth: auth::AuthState) -> Router {
         .merge(events::router())
         // Login, setup and OAuth authorization server
         .merge(auth_routes)
+        // Apple app site association for self-built apps
+        .merge(apple::router())
         // Static files
         .merge(assets::router())
         // Unknown paths answer 404 through the layers, so browsers get an HTML page

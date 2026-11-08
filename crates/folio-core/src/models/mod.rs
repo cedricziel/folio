@@ -1,5 +1,6 @@
 //! Domain models
 
+mod apple_app_id;
 mod caller;
 mod correspondent;
 mod document;
@@ -29,6 +30,7 @@ mod workflow;
 mod workflow_event_conditions;
 mod workflow_trigger;
 
+pub use apple_app_id::{AppleAppId, InvalidAppleAppId};
 pub use caller::Caller;
 pub use correspondent::{Correspondent, CreateCorrespondent, UpdateCorrespondent};
 pub use document::{
