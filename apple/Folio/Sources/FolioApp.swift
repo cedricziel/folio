@@ -16,6 +16,10 @@ struct FolioApp: App {
                 .onChange(of: security.lock.isEnabled) { _, _ in security.refreshCovers() }
                 .onChange(of: model.session, initial: true) { _, session in
                     DocumentActivityTracker.shared.sessionChanged(to: session)
+                    DocumentHandoff.shared.sessionChanged(to: session)
+                }
+                .onContinueUserActivity(DocumentActivityPayload.activityType) { activity in
+                    DocumentHandoff.shared.receive(activity.userInfo, session: model.session)
                 }
                 .tint(.archive)
                 .onReceive(
@@ -158,6 +162,7 @@ final class AppModel {
 struct RootView: View {
     let model: AppModel
     let lock: AppLock
+    private let handoff = DocumentHandoff.shared
     #if os(iOS)
         @State private var showLockSettings = false
     #endif
@@ -174,6 +179,17 @@ struct RootView: View {
                 Button("OK") { model.operationError = nil }
             } message: {
                 Text(model.operationError ?? "")
+            }
+            .alert(
+                "Couldn't continue this document",
+                isPresented: Binding(
+                    get: { handoff.problem != nil },
+                    set: { if !$0 { handoff.dismissProblem() } }
+                )
+            ) {
+                Button("OK") { handoff.dismissProblem() }
+            } message: {
+                Text(handoff.problem ?? "")
             }
     }
 

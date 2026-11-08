@@ -89,7 +89,7 @@ public final class DocumentLocator: Sendable {
 }
 
 /// The document on screen, as the system sees it: one activity per open document that tells Siri and
-/// Apple Intelligence which document is visible. Cleared when the document closes, is deleted, or the
+/// Apple Intelligence which document is visible and lets another device continue reading it. Cleared when the document closes, is deleted, or the
 /// session ends or moves to another server.
 @MainActor @Observable
 public final class DocumentActivityTracker {
@@ -135,14 +135,14 @@ public final class DocumentActivityTracker {
     }
 
     /// Writes the current document into the scene's activity. The activity stays out of Spotlight and
-    /// public indexing; only the app's own scenes and the system's on-screen awareness read it.
+    /// public indexing; Handoff, the app's own scenes and the system's on-screen awareness read it.
     public func configure(_ activity: NSUserActivity) {
         activity.isEligibleForSearch = false
         activity.isEligibleForPublicIndexing = false
         #if os(iOS)
             activity.isEligibleForPrediction = false
         #endif
-        activity.isEligibleForHandoff = false
+        activity.isEligibleForHandoff = current != nil
         activity.title = current == nil ? nil : title
         activity.targetContentIdentifier = current?.documentID.uuidString.lowercased()
         activity.requiredUserInfoKeys = current == nil ? [] : DocumentActivityPayload.requiredKeys
