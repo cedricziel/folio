@@ -63,7 +63,10 @@ struct ShareRoot: View {
         let uploader = BackgroundUploader(
             serverURL: serverURL, tokens: tokens, identifier: BackgroundUploader.makeIdentifier()
         )
-        let model = ShareViewModel(files: files, service: service, background: uploader)
+        let model = ShareViewModel(
+            files: files, service: service, background: uploader,
+            progressStore: FileUploadProgressStore.shared, progressScope: serverURL.absoluteString
+        )
         uploader.onChange = { _ in
             Task { @MainActor [weak model] in model?.refreshRetained() }
         }

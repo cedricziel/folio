@@ -15,10 +15,11 @@ struct ShareView: View {
                 TextField("Title", text: $model.title)
                     .textFieldStyle(.roundedBorder)
                     .font(FolioTheme.Typography.body)
+                    .disabled(model.hasUnfinishedBatch)
             }
 
             VaultDestinationPicker(destination: model.destination)
-                .disabled(model.state == .uploading)
+                .disabled(model.state == .uploading || model.hasUnfinishedBatch)
 
             if !model.tags.isEmpty {
                 VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
@@ -42,6 +43,7 @@ struct ShareView: View {
                             )
                             .toggleStyle(.button)
                             .font(FolioTheme.Typography.bodySm)
+                            .disabled(model.hasUnfinishedBatch)
                         }
                     }
                 }
@@ -55,12 +57,17 @@ struct ShareView: View {
                 Label(message, systemImage: "exclamationmark.triangle")
                     .font(FolioTheme.Typography.bodySm)
                     .foregroundStyle(Color.danger)
+                if let progress = model.progress {
+                    Text("\(progress.uploaded) of \(progress.total) sent. Retry finishes only the remaining steps.")
+                        .font(FolioTheme.Typography.bodySm)
+                        .foregroundStyle(Color.inkMuted)
+                }
             }
 
             HStack {
                 Button("Cancel", role: .cancel, action: onFinish)
                 Spacer()
-                Button(model.state == .uploading ? "Uploading…" : "Upload") {
+                Button(uploadTitle) {
                     Task {
                         await model.upload()
                         if model.state == .done || model.state == .queued {
@@ -69,7 +76,8 @@ struct ShareView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.state == .uploading || !model.destination.canUpload)
+                .disabled(
+                    model.state == .uploading || (!model.hasUnfinishedBatch && !model.destination.canUpload))
             }
         }
         .padding(FolioTheme.Spacing.space4)
@@ -77,6 +85,11 @@ struct ShareView: View {
         .background(Color.paper)
         .tint(.archive)
         .task(id: model.destination.selectedVaultID) { await model.loadTags() }
+    }
+
+    private var uploadTitle: String {
+        if model.state == .uploading { return "Uploading…" }
+        return model.hasUnfinishedBatch ? "Retry" : "Upload"
     }
 
     private var summary: String {
