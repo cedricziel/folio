@@ -161,15 +161,26 @@ public struct GetLatestDocumentIntent: AppIntent {
     }
 }
 
-public struct OpenDocumentIntent: OpenIntent {
+public struct OpenDocumentIntent: OpenIntent, PredictableIntent {
     public static let title: LocalizedStringResource = "Open a document"
     public static let description = IntentDescription(
         "Opens a document in Folio.", categoryName: "Documents"
     )
     public static let openAppWhenRun = true
 
-    @Parameter(title: "Document")
+    @Parameter(title: "Document", requestValueDialog: "Which document?")
     public var target: DocumentEntity
+
+    // Spotlight offers an intent only when its summary shows every required parameter.
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Open \(\.$target)")
+    }
+
+    public static var predictionConfiguration: some IntentPredictionConfiguration {
+        IntentPrediction(parameters: (\Self.$target)) { target in
+            DisplayRepresentation(title: "Open \(target.title)")
+        }
+    }
 
     public init() {}
 

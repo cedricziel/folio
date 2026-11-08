@@ -89,6 +89,8 @@ public final class DocumentListViewModel {
     private var latestFetch = 0
     /// Told about every confirmed deletion, including a redone one, so the scene can drop the document's activity.
     @ObservationIgnored public var onRemove: (@MainActor (Document.ID) -> Void)?
+    /// The Spotlight session the current query started in; its results are indexed only under that session.
+    private var spotlightScope: SpotlightIndex.Scope?
 
     public init(
         service: any FolioService, searchDebounce: Duration = .milliseconds(300), spotlight: SpotlightIndex = .shared
@@ -121,7 +123,9 @@ public final class DocumentListViewModel {
         async let lookups: Void = loadLookups()
         await fetch(request, ticket: ticket, afterUpload: afterUpload, restoredDocumentID: restoredDocumentID)
         await lookups
-        if isCurrent(ticket) { rebuildRows() }
+        guard isCurrent(ticket) else { return }
+        rebuildRows()
+        indexInSpotlight(documents, scope: spotlightScope)
     }
 
     public func search(_ text: String) async {
@@ -133,11 +137,13 @@ public final class DocumentListViewModel {
         if !lookupsLoaded { await loadLookups() }
         guard isCurrent(ticket) else { return }
         await fetch(request, ticket: ticket)
+        if isCurrent(ticket), phase == .loaded { indexInSpotlight(documents, scope: spotlightScope) }
     }
 
     public func loadNextPage() async {
         guard canLoadMore, !isLoadingMore, let cursor = nextCursor, let request = activeQuery else { return }
         let ticket = latestFetch
+        let scope = spotlightScope
         isLoadingMore = true
         pageError = nil
         defer { if ticket == latestFetch { isLoadingMore = false } }
@@ -147,6 +153,7 @@ public final class DocumentListViewModel {
             documents.append(contentsOf: keepingNewer(page.documents))
             nextCursor = page.nextCursor
             rebuildRows()
+            indexInSpotlight(page.documents, scope: scope)
         } catch {
             guard isCurrent(ticket) else { return }
             pageError = error.localizedDescription
@@ -250,6 +257,7 @@ public final class DocumentListViewModel {
 
     private func begin(_ request: DocumentBrowseQuery) -> Int {
         latestFetch += 1
+        spotlightScope = spotlight.currentScope
         activeQuery = request
         nextCursor = nil
         loadedVaultID = nil
@@ -352,6 +360,16 @@ public final class DocumentListViewModel {
 
     private func showsFiled(_ filter: DocumentFilter) -> Bool {
         scope == .all || filter.reviewed != nil
+    }
+
+    /// Lists are how Spotlight learns about documents nobody opened yet; names come from the loaded lookups.
+    private func indexInSpotlight(_ listed: [Document], scope: SpotlightIndex.Scope?) {
+        guard let vault = loadedVaultID else { return }
+        let summaries = listed.filter { $0.deletedAt == nil }.map {
+            DocumentSummary(
+                $0, correspondent: correspondentName(for: $0), documentType: typeName(for: $0), vaultID: vault)
+        }
+        spotlight.index(summaries, vaultID: vault, scope: scope)
     }
 
     private func rebuildRows() {
