@@ -29,7 +29,8 @@ public enum ShareUploadFailure: Codable, Equatable, Sendable {
     public var isRetryable: Bool {
         switch self {
         case .unauthorized, .transport: true
-        case let .rejected(status): status == 408 || status == 429 || status >= 500
+        // 409: an earlier attempt with the same Idempotency-Key is still storing the file.
+        case let .rejected(status): [408, 409, 429].contains(status) || status >= 500
         }
     }
 

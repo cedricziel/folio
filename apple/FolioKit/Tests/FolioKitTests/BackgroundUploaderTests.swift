@@ -185,6 +185,9 @@ struct ShareUploadFailureTests {
         #expect(ShareUploadFailure.transport("offline").isRetryable)
         #expect(ShareUploadFailure.rejected(status: 503).isRetryable)
         #expect(ShareUploadFailure.rejected(status: 429).isRetryable)
+        #expect(
+            ShareUploadFailure.rejected(status: 409).isRetryable,
+            "the server answers 409 while an earlier attempt with the same key is still storing the file")
         #expect(!ShareUploadFailure.rejected(status: 415).isRetryable)
         #expect(!ShareUploadFailure.rejected(status: 413).isRetryable)
     }
