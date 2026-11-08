@@ -71,7 +71,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 6. FolioKit Handoff core (pure, `swift test`)
 
-- [ ] 6.1 Add `Handoff/ServerIdentity.swift`. First write a failing `ServerIdentityTests` table:
+- [x] 6.1 Add `Handoff/ServerIdentity.swift`. First write a failing `ServerIdentityTests` table:
   - ignored: host case, default port, trailing slash, user info and query
   - IDNA: `https://bücher.example` equals `https://xn--bcher-kva.example`, and also its percent-encoded spelling
   - `http://[::1]:8080/` equals `http://[::1]:8080`, and is not equal to `http://[::1]`
