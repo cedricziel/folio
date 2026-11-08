@@ -83,13 +83,17 @@ public final class DocumentListViewModel {
     private var lookupError: (id: Document.ID, message: String)?
     private let service: any FolioService
     private let searchDebounce: Duration
+    private let spotlight: SpotlightIndex
     private var documents: [Document] = []
     private var lookupsLoaded = false
     private var latestFetch = 0
 
-    public init(service: any FolioService, searchDebounce: Duration = .milliseconds(300)) {
+    public init(
+        service: any FolioService, searchDebounce: Duration = .milliseconds(300), spotlight: SpotlightIndex = .shared
+    ) {
         self.service = service
         self.searchDebounce = searchDebounce
+        self.spotlight = spotlight
     }
 
     public var lookups: DocumentLookups {
@@ -166,9 +170,11 @@ public final class DocumentListViewModel {
             if !lookupsLoaded { await loadLookups() }
             let document = try await fetched
             guard document.id == id else { throw FolioError.unreadableResponse }
+            if document.deletedAt != nil { spotlight.remove(documentID: id) }
             guard !Task.isCancelled, ticket == latestLookup else { return }
             resolvedDocument = document
         } catch {
+            if case .server(status: 404, _)? = error as? FolioError { spotlight.remove(documentID: id) }
             guard !Task.isCancelled, ticket == latestLookup else { return }
             lookupError = (id, error.localizedDescription)
         }
@@ -179,6 +185,7 @@ public final class DocumentListViewModel {
         actionError = nil
         do {
             try await service.deleteDocument(id: document.id)
+            spotlight.remove(documentID: document.id)
             let wasVisible = rows.contains { $0.id == document.id }
             documents.removeAll { $0.id == document.id }
             if resolvedDocument?.id == document.id {
