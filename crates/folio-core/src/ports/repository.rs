@@ -122,10 +122,26 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Commit a stored original's path and announce creation once, atomically.
     /// The caller must successfully store the original before finalizing.
-    async fn finalize_upload(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
+    async fn finalize_upload(
+        &self,
+        vault: VaultId,
+        id: Id,
+        file_path: &str,
+        file_size: u64,
+    ) -> Result<()>;
 
-    /// Update the file path for a document
+    /// Update the file path for a document; a new path forgets the recorded size
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
+
+    /// Documents with a stored original whose size was never recorded, in ID
+    /// order after `after`
+    async fn list_missing_file_size(&self, after: Option<Id>, limit: u32) -> Result<Vec<Document>>;
+
+    /// Record the size of the original at `file_path`. Does nothing once the
+    /// document points at another file, and leaves `updated_at` alone, since
+    /// the document itself did not change.
+    async fn set_file_size(&self, vault: VaultId, id: Id, file_path: &str, size: u64)
+        -> Result<()>;
 
     /// Update the page count for a document
     async fn set_page_count(&self, vault: VaultId, id: Id, page_count: u32) -> Result<()>;

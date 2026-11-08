@@ -686,7 +686,8 @@ extension Document {
             documentDate: LiveFolioService.documentDate(raw.documentDate),
             reviewedAt: raw.reviewedAt, reviewedBy: raw.reviewedBy, reviewOrigin: raw.reviewOrigin,
             createdAt: raw.createdAt, updatedAt: raw.updatedAt,
-            createdBy: raw.createdBy, updatedBy: raw.updatedBy, deletedAt: raw.deletedAt
+            createdBy: raw.createdBy, updatedBy: raw.updatedBy, deletedAt: raw.deletedAt,
+            fileSize: raw.fileSize
         )
     }
 }

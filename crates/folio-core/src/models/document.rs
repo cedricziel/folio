@@ -119,6 +119,10 @@ pub struct Document {
     /// Path to the stored file (relative to storage root)
     pub file_path: Option<String>,
 
+    /// Size of the stored original in bytes, null until recorded
+    #[serde(default)]
+    pub file_size: Option<u64>,
+
     /// MIME type of the original document
     pub mime_type: Option<String>,
 
@@ -174,6 +178,7 @@ impl Document {
             content: None,
             original_filename: None,
             file_path: None,
+            file_size: None,
             mime_type: None,
             correspondent_id: None,
             document_type_id: None,

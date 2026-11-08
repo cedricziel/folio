@@ -3,6 +3,7 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod file_sizes;
 pub mod import;
 mod importer;
 mod ingest;
@@ -12,6 +13,7 @@ mod paperless_sources;
 mod vaults;
 mod workflow_engine;
 
+pub use file_sizes::backfill_file_sizes;
 pub use importer::Importer;
 pub use ingest::{content_key, IngestPipeline, IngestScheduler};
 pub use library::{

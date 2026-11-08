@@ -362,6 +362,10 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
         node.created
     }
 
+    var documentSize: NSNumber? {
+        node.document?.fileSize.map { NSNumber(value: $0) }
+    }
+
     var lastUsedDate: Date? {
         local.lastUsedDate
     }

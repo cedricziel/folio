@@ -6459,6 +6459,15 @@
             ],
             "description": "Path to the stored file (relative to storage root)"
           },
+          "file_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Size of the stored original in bytes, null until recorded",
+            "minimum": 0
+          },
           "id": {
             "type": "string",
             "format": "uuid",

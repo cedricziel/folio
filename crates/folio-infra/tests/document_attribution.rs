@@ -75,7 +75,8 @@ async fn attribution_contract(db: Database) {
     .unwrap();
     with_actor(
         Some(creator.clone()),
-        r.documents.finalize_upload(vault, staged.id, "staged.pdf"),
+        r.documents
+            .finalize_upload(vault, staged.id, "staged.pdf", 0),
     )
     .await
     .unwrap();
@@ -87,7 +88,8 @@ async fn attribution_contract(db: Database) {
         .unwrap();
     with_actor(
         Some(editor.clone()),
-        r.documents.finalize_upload(vault, staged.id, "staged.pdf"),
+        r.documents
+            .finalize_upload(vault, staged.id, "staged.pdf", 0),
     )
     .await
     .unwrap();
