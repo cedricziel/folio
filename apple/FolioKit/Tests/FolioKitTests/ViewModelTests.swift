@@ -103,6 +103,25 @@ struct DocumentStatusTests {
         #expect(model.phase == .failed("Couldn't reach the server."))
     }
 
+    @Test func failedRefreshKeepsRowsForTheSameQuery() async {
+        let service = MockFolioService(documents: [document("Letter")])
+        let model = makeModel(service)
+        await model.load()
+        await service.setFailure(.unreachable)
+        await model.load()
+        #expect(model.rows.count == 1)
+    }
+
+    @Test func failedSearchDoesNotPassOffEarlierRowsAsResults() async {
+        let service = MockFolioService(documents: [document("Letter")])
+        let model = makeModel(service)
+        await model.load()
+        await service.setFailure(.unreachable)
+        model.searchText = "invoice"
+        await model.load()
+        #expect(model.rows.isEmpty)
+    }
+
     @Test func lookupFailureDoesNotBlockTheList() async {
         let service = MockFolioService(documents: [document("Letter")])
         await service.setFailLookups(true)
