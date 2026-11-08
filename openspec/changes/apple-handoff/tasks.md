@@ -48,7 +48,7 @@ Server and Apple sections are independent and can land in either order; within e
 
 ## 4. Stable web URLs
 
-- [ ] 4.1 Add regression tests to `crates/folio-api/tests/web.rs` that pin the handed-over pages:
+- [x] 4.1 Add regression tests to `crates/folio-api/tests/web.rs` that pin the handed-over pages:
   - `GET /vaults/{vault_id}/documents/{id}` returns 200 for an active document and 404 for a trashed one
   - `GET /vaults/{vault_id}/` and `?view=all` return 200
   - `GET /vaults/{vault_id}/saved-views/{id}` returns 200, or 404 for another user's private view
