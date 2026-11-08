@@ -305,10 +305,10 @@ struct SpotlightIndexTests {
             service: MockFolioService(documents: [trashed]), searchDebounce: .milliseconds(1), spotlight: spotlight)
 
         await model.resolveDocument(goneElsewhere.id)
+        #expect(model.documentError(for: goneElsewhere.id) != nil)
         await model.resolveDocument(trashed.id)
         await spotlight.idle()
 
-        #expect(model.documentError(for: goneElsewhere.id) != nil)
         #expect(await fake.items.isEmpty)
     }
 
