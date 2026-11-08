@@ -117,6 +117,11 @@ for name in Folio FolioShare FolioFileProvider; do
     expect "$name.entitlements application-groups" \
         "$(plist_value com.apple.security.application-groups:0 "$entitlements")" '$(FOLIO_APP_GROUP)'
 done
+push_entitlements="$folio_dir/Push/FolioPush.entitlements"
+expect "FolioPush.entitlements keychain-access-groups" "$(plist_value keychain-access-groups:0 "$push_entitlements")" \
+    '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
+expect "FolioPush.entitlements application-groups" \
+    "$(plist_value com.apple.security.application-groups:0 "$push_entitlements")" '$(FOLIO_APP_GROUP)'
 expect "FolioFileProvider-Info.plist NSExtensionFileProviderDocumentGroup" \
     "$(plist_value NSExtension:NSExtensionFileProviderDocumentGroup "$folio_dir/Resources/FolioFileProvider-Info.plist")" \
     '$(FOLIO_APP_GROUP)'

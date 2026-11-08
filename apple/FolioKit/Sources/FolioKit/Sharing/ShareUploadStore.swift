@@ -5,12 +5,17 @@ public enum ShareUploadFailure: Codable, Equatable, Sendable {
     case unauthorized
     case rejected(status: Int)
     case transport(String)
+    /// The share's key was already used for a different file, so sending it again never succeeds.
+    case keyReused
 
     /// The upload's task disappeared without reporting back, e.g. because the app was force-quit.
     public static let interrupted = ShareUploadFailure.transport("The upload stopped before Folio answered.")
 
-    /// Classifies a finished upload task. Returns nil when the server accepted the file.
-    public static func classify(response: URLResponse?, error: (any Error)?) -> ShareUploadFailure? {
+    /// Classifies a finished upload task from its response and, when it was delivered, the start of its body.
+    /// Returns nil when the server accepted the file.
+    public static func classify(response: URLResponse?, error: (any Error)?, body: Data? = nil)
+        -> ShareUploadFailure?
+    {
         let status = (response as? HTTPURLResponse)?.statusCode
         if let status, (200..<300).contains(status) {
             return nil
@@ -21,6 +26,11 @@ public enum ShareUploadFailure: Codable, Equatable, Sendable {
         switch status {
         case nil: return .transport(FolioError.unreadableResponse.localizedDescription)
         case 401?: return .unauthorized
+        case 409?:
+            if let http = response as? HTTPURLResponse, KeyedUploadConflict(response: http, body: body) == .keyReused {
+                return .keyReused
+            }
+            return .rejected(status: 409)
         case let status?: return .rejected(status: status)
         }
     }
@@ -29,6 +39,7 @@ public enum ShareUploadFailure: Codable, Equatable, Sendable {
     public var isRetryable: Bool {
         switch self {
         case .unauthorized, .transport: true
+        case .keyReused: false
         // 409: an earlier attempt with the same Idempotency-Key is still storing the file.
         case let .rejected(status): [408, 409, 429].contains(status) || status >= 500
         }
@@ -43,6 +54,7 @@ public enum ShareUploadFailure: Codable, Equatable, Sendable {
         case let .rejected(status) where status >= 500: "The server failed while filing it (status \(status))."
         case let .rejected(status): "The server refused it (status \(status))."
         case let .transport(message): message
+        case .keyReused: "Folio refused it because its upload key was used for a different file. Share the file again."
         }
     }
 }
@@ -91,7 +103,7 @@ public final class ShareUploadStore: @unchecked Sendable {
 
     public let directory: URL
     private let lock = NSLock()
-    private var claims: [UUID: UUID] = [:]
+    private var claims: [UUID: Int] = [:]
 
     public init(directory: URL) {
         self.directory = directory.appending(path: "share-uploads", directoryHint: .isDirectory)
@@ -178,34 +190,63 @@ public final class ShareUploadStore: @unchecked Sendable {
 
     public func remove(_ id: UUID) {
         lock.withLock {
-            try? FileManager.default.removeItem(at: bodyFile(for: id))
-            try? FileManager.default.removeItem(at: recordFile(for: id))
-            try? FileManager.default.removeItem(at: claimFile(for: id))
+            unlockedRemove(id)
+            claims[id] = nil
         }
+        lease(for: id).removeAll()
     }
 
     /// Forgets accepted uploads after a day and failed ones after a week, then the oldest failed ones while their
-    /// bodies take more than `bodyLimit` bytes. Also deletes bodies left behind by builds that kept them outside
-    /// this store.
+    /// bodies take more than `bodyLimit` bytes, always keeping the most recent failure. Also deletes bodies left
+    /// behind by builds that kept them outside this store.
+    ///
+    /// A record is only removed while this store holds its retry claim and it is still in the state it was chosen
+    /// for, so a share another process is retrying keeps its body.
     public func prune(now: Date = .now, bodyLimit: Int = ShareUploadStore.retainedBodyLimit) {
+        func expired(_ record: ShareUploadRecord) -> Bool {
+            switch record.status {
+            case .uploaded: record.updatedAt < now.addingTimeInterval(-Self.uploadedRetention)
+            case .failed: record.updatedAt < now.addingTimeInterval(-Self.failedRetention)
+            case .pending: false
+            }
+        }
         var failed: [ShareUploadRecord] = []
         for record in all() {
-            switch record.status {
-            case .uploaded where record.updatedAt < now.addingTimeInterval(-Self.uploadedRetention),
-                .failed where record.updatedAt < now.addingTimeInterval(-Self.failedRetention):
-                remove(record.id)
-            case .failed:
+            if expired(record) {
+                removeIfUnclaimed(record.id, now: now, where: expired)
+            } else if case .failed = record.status {
                 failed.append(record)
-            default:
-                break
             }
         }
         var retained = failed.reduce(0) { $0 + bodySize($1.id) }
-        for record in failed.reversed() where retained > bodyLimit {
-            retained -= bodySize(record.id)
-            remove(record.id)
+        for record in failed.dropFirst().reversed() where retained > bodyLimit {
+            let size = bodySize(record.id)
+            if removeIfUnclaimed(record.id, now: now, where: { $0 == record }) {
+                retained -= size
+            }
         }
         removeLegacyBodies(before: now.addingTimeInterval(-Self.uploadedRetention))
+    }
+
+    @discardableResult
+    private func removeIfUnclaimed(_ id: UUID, now: Date, where unchanged: (ShareUploadRecord) -> Bool) -> Bool {
+        guard claim(id, now: now) else { return false }
+        let removed = lock.withLock {
+            guard let record = read(recordFile(for: id)), unchanged(record) else { return false }
+            unlockedRemove(id)
+            return true
+        }
+        if removed {
+            remove(id)
+        } else {
+            unclaim(id)
+        }
+        return removed
+    }
+
+    private func unlockedRemove(_ id: UUID) {
+        try? FileManager.default.removeItem(at: bodyFile(for: id))
+        try? FileManager.default.removeItem(at: recordFile(for: id))
     }
 
     /// Reserves a record for one retry across the app and its extensions. Returns false while another process
@@ -214,6 +255,13 @@ public final class ShareUploadStore: @unchecked Sendable {
         guard let token = lease(for: id).acquire(now: now) else { return false }
         lock.withLock { claims[id] = token }
         return true
+    }
+
+    /// Keeps this store's claim on `id` from being taken over while a retry waits, e.g. for a token refresh. False
+    /// when it no longer holds the claim.
+    public func renewClaim(_ id: UUID, now: Date = .now) -> Bool {
+        guard let token = lock.withLock({ claims[id] }) else { return false }
+        return lease(for: id).renew(token, now: now)
     }
 
     /// Ends this store's claim on `id`, leaving a claim another process has taken over since in place.

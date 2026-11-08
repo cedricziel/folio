@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The app's entitlements plus push notifications, used when FOLIO_PUSH = YES.
+  Keep the other keys in step with the Folio target's entitlements in project.yml.
+-->
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+	<key>com.apple.developer.aps-environment</key>
+	<string>$(APS_ENVIRONMENT)</string>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(FOLIO_APP_GROUP)</string>
+	</array>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)</string>
+	</array>
+</dict>
+</plist>

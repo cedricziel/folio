@@ -84,6 +84,18 @@ def register_bundle_ids
     end
   end
 
+  # The app registers for push notifications (#359); its profiles must carry aps-environment.
+  app_bundle = Spaceship::ConnectAPI::BundleId.all(filter: { identifier: APP_IDENTIFIER }).find { |b| b.identifier == APP_IDENTIFIER }
+  push = Spaceship::ConnectAPI::BundleIdCapability::Type::PUSH_NOTIFICATIONS
+  if app_bundle && !app_bundle.get_capabilities.map(&:capability_type).include?(push)
+    begin
+      app_bundle.create_capability(push)
+      UI.success("Enabled Push Notifications on #{APP_IDENTIFIER}; run `bootstrap force:true`, then set FOLIO_PUSH to YES")
+    rescue StandardError => e
+      UI.important("Could not enable Push Notifications on #{APP_IDENTIFIER}: #{e.message}")
+    end
+  end
+
   # Keychain Sharing is an entitlement, not a portal capability, so nothing to enable there.
   UI.important(<<~MSG)
     An API key cannot create an App Group or assign one to an identifier. In the developer portal:

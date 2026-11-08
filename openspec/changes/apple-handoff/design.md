@@ -182,7 +182,7 @@ Other teams can build Folio only if these come from variables:
 - **`project.yml`** references only variables:
   - `DEVELOPMENT_TEAM: $(FOLIO_DEVELOPMENT_TEAM)`
   - `PRODUCT_BUNDLE_IDENTIFIER: $(FOLIO_BUNDLE_ID)`, `$(FOLIO_BUNDLE_ID).share` and `$(FOLIO_BUNDLE_ID).fileprovider`
-  - `CODE_SIGN_ENTITLEMENTS[sdk=*]: $(FOLIO_APP_ENTITLEMENTS)` in the app target's settings. XcodeGen writes the unconditional `CODE_SIGN_ENTITLEMENTS` from `entitlements.path` at the same level and overrides a plain key, so the condition, which matches every SDK, is what makes the variable win. CI's `--local` check confirmed the plain key did not win.
+  - `CODE_SIGN_ENTITLEMENTS[sdk=*]: $(FOLIO_APP_ENTITLEMENTS)` in the app target's settings. XcodeGen writes the unconditional `CODE_SIGN_ENTITLEMENTS` from `entitlements.path` at the same level and overrides a plain key, so the condition, which matches every SDK, is what makes the variable win. CI's `--local` check confirmed the plain key did not win. The push-notification switch from #359 (`FOLIO_ENTITLEMENTS_$(FOLIO_PUSH)`) goes through the same conditional key, with `FOLIO_ENTITLEMENTS_NO = $(FOLIO_APP_ENTITLEMENTS)`.
   - Release `CODE_SIGN_STYLE: $(FOLIO_RELEASE_SIGN_STYLE)`, `PROVISIONING_PROFILE_SPECIFIER[sdk=…]: $(FOLIO_PROFILE_…)` and `CODE_SIGN_IDENTITY[sdk=…]: $(FOLIO_RELEASE_IDENTITY)`
   - entitlements `com.apple.security.application-groups: [$(FOLIO_APP_GROUP)]` and `keychain-access-groups: [$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)]`
   - Info.plist `FolioKeychainGroup: $(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)`, new `FolioAppGroup: $(FOLIO_APP_GROUP)` and `FolioCallbackScheme: $(FOLIO_BUNDLE_ID)` in all three targets, and `NSExtensionFileProviderDocumentGroup: $(FOLIO_APP_GROUP)`

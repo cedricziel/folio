@@ -159,6 +159,7 @@ async fn unverified_requests_do_not_reach_mutations() {
                     client_id: "forged".into(),
                     scopes: vec!["documents:write".into()],
                     audience: "http://localhost/api".into(),
+                    grant_id: String::new(),
                 })
                 .header("x-folio-actor", "alice")
                 .body(Body::from(r#"{"actor":"alice"}"#))

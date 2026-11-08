@@ -675,6 +675,226 @@
         ]
       }
     },
+    "/api/devices": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "listDevices",
+        "responses": {
+          "200": {
+            "description": "The caller's devices, without tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/devices/{installation_id}": {
+      "put": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "registerDevice",
+        "parameters": [
+          {
+            "name": "installation_id",
+            "in": "path",
+            "description": "Stable ID of the app installation",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceRegistrationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Device updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistrationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Device registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceRegistrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "Only apps signed in through OAuth can register",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid platform, environment, token, locale or vault",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "deleteDevice",
+        "parameters": [
+          {
+            "name": "installation_id",
+            "in": "path",
+            "description": "Stable ID of the app installation",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The device is not registered (any more)"
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/devices/{installation_id}/test": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "operationId": "sendTestNotification",
+        "parameters": [
+          {
+            "name": "installation_id",
+            "in": "path",
+            "description": "Stable ID of the app installation",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A test notification is on its way"
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "No such device",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Push notifications are not available on this server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "A test was sent less than a minute ago",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/document_types": {
       "get": {
         "tags": [
@@ -6416,6 +6636,138 @@
           }
         ]
       },
+      "DeviceList": {
+        "type": "object",
+        "required": [
+          "devices",
+          "push_available"
+        ],
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeviceView"
+            }
+          },
+          "push_available": {
+            "type": "boolean",
+            "description": "Whether this server can deliver notifications right now"
+          }
+        }
+      },
+      "DevicePlatform": {
+        "type": "string",
+        "enum": [
+          "ios",
+          "macos"
+        ]
+      },
+      "DeviceRegistrationInput": {
+        "type": "object",
+        "required": [
+          "platform",
+          "environment",
+          "locale"
+        ],
+        "properties": {
+          "alert_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "APNs device token for alerts, hexadecimal; absent keeps the stored one"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/PushEnvironment"
+          },
+          "locale": {
+            "type": "string",
+            "description": "BCP 47 language tag the alerts are written in, such as `de-DE`"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/DevicePlatform"
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/NotificationPreferences"
+          },
+          "widget_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "WidgetKit push token, hexadecimal; absent keeps the stored one"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeviceRegistrationResponse": {
+        "type": "object",
+        "required": [
+          "device",
+          "push_available"
+        ],
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DeviceView"
+          },
+          "push_available": {
+            "type": "boolean",
+            "description": "Whether this server can deliver notifications right now"
+          }
+        }
+      },
+      "DeviceView": {
+        "type": "object",
+        "required": [
+          "installation_id",
+          "platform",
+          "environment",
+          "locale",
+          "preferences",
+          "has_alert_token",
+          "has_widget_token",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/PushEnvironment"
+          },
+          "has_alert_token": {
+            "type": "boolean"
+          },
+          "has_widget_token": {
+            "type": "boolean"
+          },
+          "installation_id": {
+            "type": "string"
+          },
+          "last_delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "locale": {
+            "type": "string"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/DevicePlatform"
+          },
+          "preferences": {
+            "$ref": "#/components/schemas/NotificationPreferences"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Document": {
         "type": "object",
         "description": "A document in the system",
@@ -7626,6 +7978,48 @@
           }
         }
       },
+      "NotificationPreferences": {
+        "type": "object",
+        "description": "What a device wants to hear about",
+        "properties": {
+          "failed": {
+            "type": "boolean",
+            "description": "Processing failed after its retries",
+            "default": true
+          },
+          "needs_review": {
+            "type": "boolean",
+            "description": "First processing finished on an unreviewed document",
+            "default": true
+          },
+          "processed": {
+            "type": "boolean",
+            "description": "First processing finished on a reviewed document",
+            "default": false
+          },
+          "scope": {
+            "$ref": "#/components/schemas/NotificationScope",
+            "default": "mine"
+          },
+          "show_titles": {
+            "type": "boolean",
+            "description": "Let the device fetch and show document titles",
+            "default": false
+          },
+          "vaults": {
+            "$ref": "#/components/schemas/VaultSelection",
+            "default": "all"
+          }
+        }
+      },
+      "NotificationScope": {
+        "type": "string",
+        "description": "Whose documents a device hears about",
+        "enum": [
+          "mine",
+          "editable"
+        ]
+      },
       "PaperlessConfig": {
         "type": "object",
         "description": "A Paperless-ngx library reached over its REST API",
@@ -7742,6 +8136,14 @@
           "done",
           "failed",
           "skipped"
+        ]
+      },
+      "PushEnvironment": {
+        "type": "string",
+        "description": "The APNs environment a token was issued for",
+        "enum": [
+          "sandbox",
+          "production"
         ]
       },
       "RunStatus": {
@@ -8601,6 +9003,24 @@
         },
         "additionalProperties": false
       },
+      "VaultSelection": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "all"
+            ]
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "\"all\" or a list of vault IDs"
+      },
       "VaultSummary": {
         "type": "object",
         "required": [
@@ -9322,6 +9742,10 @@
     {
       "name": "events",
       "description": "Real-time updates"
+    },
+    {
+      "name": "devices",
+      "description": "Apple devices registered for push notifications"
     },
     {
       "name": "workflows",

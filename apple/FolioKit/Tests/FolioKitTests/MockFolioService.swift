@@ -120,6 +120,7 @@ actor MockFolioService: FolioService {
     private(set) var uploadKeys: [UUID] = []
     var failLookups = false
     var uploadDelay: Duration?
+    private var uploadConflicts: [KeyedUploadConflict] = []
     var tagList: [Tag] = []
     private(set) var tagged: [TagAssignment] = []
     private(set) var untagged: [TagAssignment] = []
@@ -279,6 +280,11 @@ actor MockFolioService: FolioService {
 
     func setTags(_ tags: [Tag]) {
         tagList = tags
+    }
+
+    /// Answers the next keyed uploads with these conflicts, in order.
+    func setUploadConflicts(_ conflicts: [KeyedUploadConflict]) {
+        uploadConflicts = conflicts
     }
 
     func setUploadDelay(_ delay: Duration?) {
@@ -483,6 +489,9 @@ actor MockFolioService: FolioService {
     /// Like the server: a key seen before returns its document, or 410 once that document was deleted.
     func upload(_ file: UploadFile, idempotencyKey: UUID) async throws -> Document {
         uploadKeys.append(idempotencyKey)
+        if !uploadConflicts.isEmpty {
+            throw uploadConflicts.removeFirst()
+        }
         if let earlier = keyedUploads[idempotencyKey] {
             if deletedDocumentIDs.contains(earlier.id) {
                 throw FolioError.server(status: 410, message: nil)

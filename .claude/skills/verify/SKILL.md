@@ -87,6 +87,18 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; a PDF with an existing text layer bypasses the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
 - Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
+## Push notifications
+
+Run `FOLIO_BIN=<new binary> npm test --prefix e2e -- push.spec.ts`. It starts a
+cleartext HTTP/2 APNs stub and its own instance with auth on and
+`FOLIO_PUSH__APNS__BASE_URL` pointing at the stub (extra settings go through
+`FOLIO_VERIFY_EXTRA_ENV`, a file of `FOLIO_*=value` lines that `up.sh` passes
+into the scrubbed environment). It creates the owner, signs an app in through
+OAuth with PKCE, registers a device, uploads a document and checks that the
+stub receives exactly the generic alert, without the title. Never point
+`base_url` or a key at Apple from a verify run. Include `settings` in the
+screen tour after changing the Push notifications card.
+
 ## Document tags
 
 Run `FOLIO_BIN=<new binary> npm test --prefix e2e -- tags.spec.ts` against the
