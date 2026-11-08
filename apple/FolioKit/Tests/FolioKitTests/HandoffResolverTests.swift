@@ -10,7 +10,9 @@ private let vault = UUID()
 private let document = UUID()
 private let payload = HandoffPayload(server: serverA, vaultID: vault, target: .document(document, pane: .discussion))
 private let route = HandoffRoute(vaultID: vault, target: .document(document, pane: .discussion))
-private let web = URL(string: "https://a.folio.example/vaults/\(vault.uuidString.lowercased())/documents/\(document.uuidString.lowercased())")!
+private let web = URL(
+    string:
+        "https://a.folio.example/vaults/\(vault.uuidString.lowercased())/documents/\(document.uuidString.lowercased())")!
 private let elsewhere = HandoffDecision.otherServer(host: "a.folio.example", web: web)
 private let spotlight = HandoffIncoming.spotlight(DocumentLink(documentID: document, vaultID: vault))
 private let spotlightRoute = HandoffRoute(vaultID: vault, target: .document(document))
@@ -80,7 +82,9 @@ struct HandoffResolverTests {
     }
 
     @Test func universalLinksRouteLikeHandoff() {
-        #expect(decide(.universalLink(web), .signedIn(serverA)) == .open(HandoffRoute(vaultID: vault, target: .document(document))))
+        #expect(
+            decide(.universalLink(web), .signedIn(serverA))
+                == .open(HandoffRoute(vaultID: vault, target: .document(document))))
         #expect(decide(.universalLink(web), .signedIn(serverB)) == elsewhere)
     }
 }

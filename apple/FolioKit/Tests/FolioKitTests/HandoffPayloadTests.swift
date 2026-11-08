@@ -28,11 +28,12 @@ struct HandoffPayloadTests {
     }
 
     @Test func activityTypesAreFixed() {
-        #expect(payloads.map(\.activityType) == [
-            "com.cedricziel.folio.document", "com.cedricziel.folio.document", "com.cedricziel.folio.document",
-            "com.cedricziel.folio.library",
-            "com.cedricziel.folio.library", "com.cedricziel.folio.saved-view",
-        ])
+        #expect(
+            payloads.map(\.activityType) == [
+                "com.cedricziel.folio.document", "com.cedricziel.folio.document", "com.cedricziel.folio.document",
+                "com.cedricziel.folio.library",
+                "com.cedricziel.folio.library", "com.cedricziel.folio.saved-view",
+            ])
         #expect(HandoffActivityType.all.count == 3)
     }
 
@@ -98,8 +99,9 @@ struct HandoffPayloadTests {
     @Test func thePageRoundTrips() {
         let payload = payloads[2]
         #expect(payload.userInfo["page"] as? Int == 7)
-        #expect(HandoffPayload(activityType: payload.activityType, userInfo: payload.userInfo)?.target
-            == .document(document, pane: .discussion, page: 7))
+        #expect(
+            HandoffPayload(activityType: payload.activityType, userInfo: payload.userInfo)?.target
+                == .document(document, pane: .discussion, page: 7))
     }
 
     @Test func pagesThatAreNotIntegersAreDropped() {

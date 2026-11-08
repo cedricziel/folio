@@ -12,15 +12,24 @@ private let s = "66666666-7777-4888-8999-aaaaaaaaaaaa"
 
 struct HandoffLinkTests {
     @Test(arguments: [
-        ("https://folio.example.com", HandoffTarget.document(document), "https://folio.example.com/vaults/\(v)/documents/\(d)"),
-        ("https://folio.example.com/", .document(document, pane: .discussion), "https://folio.example.com/vaults/\(v)/documents/\(d)"),
+        (
+            "https://folio.example.com", HandoffTarget.document(document),
+            "https://folio.example.com/vaults/\(v)/documents/\(d)"
+        ),
+        (
+            "https://folio.example.com/", .document(document, pane: .discussion),
+            "https://folio.example.com/vaults/\(v)/documents/\(d)"
+        ),
         ("https://folio.example.com", .library(.inbox), "https://folio.example.com/vaults/\(v)/"),
         ("https://folio.example.com", .library(.all), "https://folio.example.com/vaults/\(v)/?view=all"),
         ("https://folio.example.com", .savedView(savedView), "https://folio.example.com/vaults/\(v)/saved-views/\(s)"),
         ("https://example.com/folio", .document(document), "https://example.com/folio/vaults/\(v)/documents/\(d)"),
         ("https://example.com/folio/", .library(.inbox), "https://example.com/folio/vaults/\(v)/"),
         ("https://example.com/folio", .library(.all), "https://example.com/folio/vaults/\(v)/?view=all"),
-        ("http://folio.lan:3000/folio", .savedView(savedView), "http://folio.lan:3000/folio/vaults/\(v)/saved-views/\(s)"),
+        (
+            "http://folio.lan:3000/folio", .savedView(savedView),
+            "http://folio.lan:3000/folio/vaults/\(v)/saved-views/\(s)"
+        ),
     ])
     func webURLsPointAtTheSameTarget(_ server: String, _ target: HandoffTarget, _ expected: String) throws {
         let payload = HandoffPayload(server: try #require(URL(string: server)), vaultID: vault, target: target)

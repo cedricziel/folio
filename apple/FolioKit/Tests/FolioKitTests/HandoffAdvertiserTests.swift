@@ -27,7 +27,8 @@ struct HandoffAdvertiserTests {
         #expect(
             HandoffAdvertiser.payload(for: state(document: document, discussion: true))?.target
                 == .document(document, pane: .discussion))
-        #expect(HandoffAdvertiser.payload(for: state(document: document, discussion: false))?.target == .document(document))
+        #expect(
+            HandoffAdvertiser.payload(for: state(document: document, discussion: false))?.target == .document(document))
     }
 
     @Test(arguments: [

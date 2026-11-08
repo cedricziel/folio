@@ -18,7 +18,8 @@ extension View {
         _ summary: DocumentSummary, vaultID: UUID, showingDiscussion: Bool = false, page: Int? = nil
     ) -> some View {
         modifier(
-            DocumentActivityModifier(summary: summary, vaultID: vaultID, showingDiscussion: showingDiscussion, page: page)
+            DocumentActivityModifier(
+                summary: summary, vaultID: vaultID, showingDiscussion: showingDiscussion, page: page)
         )
     }
 
@@ -46,13 +47,14 @@ private struct DocumentActivityModifier: ViewModifier {
     func body(content: Content) -> some View {
         let payload = payload
         content
-            .userActivity(DocumentActivityPayload.activityType, isActive: tracker.isCurrent(summary.id) && payload != nil)
-        {
-            HandoffActivity.configure($0, payload: payload, tracker: tracker)
-        }
-        .onAppear { tracker.show(summary, vaultID: vaultID) }
-        .onChange(of: summary) { _, summary in tracker.show(summary, vaultID: vaultID) }
-        .onDisappear { tracker.hide(documentID: summary.id) }
+            .userActivity(
+                DocumentActivityPayload.activityType, isActive: tracker.isCurrent(summary.id) && payload != nil
+            ) {
+                HandoffActivity.configure($0, payload: payload, tracker: tracker)
+            }
+            .onAppear { tracker.show(summary, vaultID: vaultID) }
+            .onChange(of: summary) { _, summary in tracker.show(summary, vaultID: vaultID) }
+            .onDisappear { tracker.hide(documentID: summary.id) }
     }
 }
 

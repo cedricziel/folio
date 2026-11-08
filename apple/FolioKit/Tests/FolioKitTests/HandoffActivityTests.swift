@@ -43,11 +43,14 @@ private let vault = UUID()
         let activity = NSUserActivity(activityType: payload.activityType)
         activity.title = "Stale"
 
-        HandoffActivity.configure(activity, payload: payload, tracker: DocumentActivityTracker(locator: DocumentLocator()))
+        HandoffActivity.configure(
+            activity, payload: payload, tracker: DocumentActivityTracker(locator: DocumentLocator()))
 
         #expect(activity.title == nil)
         #expect(HandoffPayload(activityType: activity.activityType, userInfo: activity.userInfo) == payload)
-        #expect(activity.webpageURL?.absoluteString == "https://folio.example.com/folio/vaults/\(vault.uuidString.lowercased())/?view=all")
+        #expect(
+            activity.webpageURL?.absoluteString
+                == "https://folio.example.com/folio/vaults/\(vault.uuidString.lowercased())/?view=all")
         #expect(activity.isEligibleForHandoff)
     }
 

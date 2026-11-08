@@ -5,7 +5,9 @@ import Testing
 
 struct AppConfigurationTests {
     @Test func readsTheAppGroupAndCallbackSchemeFromInfoPlist() {
-        let info: [String: Any] = ["FolioAppGroup": "group.com.example.folio", "FolioCallbackScheme": "com.example.folio"]
+        let info: [String: Any] = [
+            "FolioAppGroup": "group.com.example.folio", "FolioCallbackScheme": "com.example.folio",
+        ]
 
         #expect(AppConfiguration.appGroup(in: info) == "group.com.example.folio")
         #expect(AppConfiguration.callbackScheme(in: info) == "com.example.folio")
