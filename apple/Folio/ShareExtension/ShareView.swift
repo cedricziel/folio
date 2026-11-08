@@ -106,10 +106,8 @@ private struct RetainedSharesView: View {
                             Button("Retry") { Task { await model.retry(record.id) } }
                                 .disabled(model.retrying.contains(record.id))
                         }
-                        if record.status != .pending {
-                            Button(record.status == .uploaded ? "Dismiss" : "Discard", role: .destructive) {
-                                model.discard(record.id)
-                            }
+                        Button(record.status == .uploaded ? "Dismiss" : "Discard", role: .destructive) {
+                            model.discard(record.id)
                         }
                     }
                     .font(FolioTheme.Typography.bodySm)
