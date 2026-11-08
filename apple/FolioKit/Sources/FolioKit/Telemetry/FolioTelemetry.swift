@@ -7,6 +7,7 @@ import OpenTelemetryProtocolExporterCommon
 import OpenTelemetryProtocolExporterHttp
 import OpenTelemetrySdk
 import URLSessionInstrumentation
+import os
 
 /// Collects app operations only after the signed-in server enables its telemetry relay.
 public final class FolioTelemetry: @unchecked Sendable {
@@ -35,6 +36,9 @@ public final class FolioTelemetry: @unchecked Sendable {
     private var lastScreenAt = ContinuousClock.Instant.now - .seconds(60)
     private var pendingBoundaries: [SessionBoundary] = []
     private var limiter = UIEventLimiter()
+    /// The last session and screen stamped, for URLSession span callbacks. Those run inside swizzled task
+    /// creation, so they take only this leaf lock: never `lock`, the session lock or the session file lock.
+    private let lastStamp = OSAllocatedUnfairLock<[String: AttributeValue]>(uncheckedState: [:])
 
     public convenience init(
         session: URLSession? = nil,
@@ -224,6 +228,7 @@ public final class FolioTelemetry: @unchecked Sendable {
     public func stop() {
         _ = sessions.end(.signOut)
         configCache.clear()
+        lastStamp.withLockUnchecked { $0 = [:] }
         let previous = lock.withLock {
             pendingBoundaries = []
             currentScreen = nil
@@ -242,6 +247,7 @@ public final class FolioTelemetry: @unchecked Sendable {
     /// Ends the session and sends its `session.end` while credentials still work. Call before signing out.
     public func endSession(_ reason: SessionEndReason) async {
         let boundaries = sessions.end(reason)
+        lastStamp.withLockUnchecked { $0 = [:] }
         lock.withLock {
             pendingBoundaries = []
             currentScreen = nil
@@ -322,6 +328,7 @@ public final class FolioTelemetry: @unchecked Sendable {
         var stamped: [String: AttributeValue] = [:]
         if let id = sessions.current() { stamped["session.id"] = .string(id) }
         if let screen = lock.withLock({ currentScreen }) { stamped["app.screen.name"] = .string(screen.rawValue) }
+        lastStamp.withLockUnchecked { $0 = stamped }
         return stamped.merging(attributes) { _, explicit in explicit }
     }
 
@@ -422,8 +429,9 @@ public final class FolioTelemetry: @unchecked Sendable {
         return TelemetryRequestPolicy.allows(request.url, origin: runtime.baseURL)
     }
 
+    /// Reads the last stamp rather than calling `stamp()`, so swizzled task creation never takes the heavier locks.
     fileprivate func customize(_ request: URLRequest, _ builder: any SpanBuilder) {
-        for (key, value) in stamp() {
+        for (key, value) in lastStamp.withLockUnchecked({ $0 }) {
             builder.setAttribute(key: key, value: value)
         }
         builder.setAttribute(key: "url.full", value: TelemetryRequestPolicy.redactedURL(request.url))
