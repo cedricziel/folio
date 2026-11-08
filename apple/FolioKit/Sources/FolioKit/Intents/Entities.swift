@@ -1,6 +1,7 @@
 import AppIntents
 import CoreSpotlight
 import Foundation
+import UniformTypeIdentifiers
 
 public struct DocumentEntity: AppEntity, IndexedEntity {
     public static let typeDisplayRepresentation = TypeDisplayRepresentation(
@@ -25,8 +26,14 @@ public struct DocumentEntity: AppEntity, IndexedEntity {
     @Property(title: "Tags")
     public var tags: [String]
 
+    /// What the original file is, so a transfer offers it under its own type.
+    public let contentType: UTType
+    public let hasRecognizedText: Bool
+
     public init(_ summary: DocumentSummary) {
         id = summary.id
+        contentType = DocumentTransfer.contentType(mimeType: summary.mimeType, filename: summary.originalFilename)
+        hasRecognizedText = summary.hasRecognizedText
         title = summary.title
         correspondent = summary.correspondent
         documentType = summary.documentType

@@ -364,6 +364,7 @@ struct InboxView: View {
             Button("Move to Trash", role: .destructive) {
                 Task {
                     if await trashHistory.moveToTrash(document, undoManager: undoManager) {
+                        DocumentActivityTracker.shared.documentRemoved(document.id)
                         if session.selection == document.id {
                             session.selection = nil
                         }
@@ -432,6 +433,7 @@ struct InboxView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("document-\(row.id)")
+                    .documentEntityIdentifier(row.id)
                     .contextMenu {
                         if canEdit {
                             Button("Move to Trash", systemImage: "trash", role: .destructive) {
@@ -472,6 +474,7 @@ struct InboxView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("document-\(row.id)")
+        .documentEntityIdentifier(row.id)
     }
 
     @ViewBuilder
