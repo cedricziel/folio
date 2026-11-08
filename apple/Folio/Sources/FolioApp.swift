@@ -172,6 +172,7 @@ struct RootView: View {
     let lock: AppLock
     /// Identifies this window to the continuation inbox.
     @State private var sceneID = UUID()
+    @Environment(\.scenePhase) private var scenePhase
     /// This window's open document, as the system sees it and as Handoff offers it.
     @State private var activity = DocumentActivityTracker(isEligibleForHandoff: true)
     @State private var handoffAlert: HandoffAlert?
@@ -203,6 +204,11 @@ struct RootView: View {
                 continuations.receive(.spotlight(link), scene: sceneID)
             }
             .onDisappear { continuations.sceneClosed(sceneID) }
+            // A destroyed iPad scene may never call onDisappear; it always reaches the background first,
+            // and a backgrounded window is no longer the one to show the continuation in.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { continuations.sceneClosed(sceneID) }
+            }
             .onChange(of: deliveryState, initial: true) { deliverContinuation() }
             .alert(
                 handoffAlert?.title ?? "",
@@ -244,7 +250,7 @@ struct RootView: View {
         } else if case let .signedIn(url) = model.session {
             WorkspaceView(
                 serverURL: url, service: AppModel.makeService(for: url), onSignOut: model.signOut,
-                pendingContinuation: continuations.pending?.id,
+                pendingContinuation: continuations.pending,
                 takeContinuation: {
                     continuations.take(
                         scene: sceneID, isLocked: lock.isLocked, session: model.session, where: { $0.route != nil }
@@ -291,13 +297,14 @@ struct RootView: View {
     }
 
     private struct DeliveryState: Equatable {
-        let pending: UUID?
+        /// The whole item, so closing the window that received it lets this window try again.
+        let pending: ContinuationInbox.Item?
         let session: SessionRestoration
         let isLocked: Bool
     }
 
     private var deliveryState: DeliveryState {
-        DeliveryState(pending: continuations.pending?.id, session: model.session, isLocked: lock.isLocked)
+        DeliveryState(pending: continuations.pending, session: model.session, isLocked: lock.isLocked)
     }
 
     private var signInPrefill: URL? {

@@ -5,8 +5,8 @@ struct WorkspaceView: View {
     let serverURL: URL
     let service: any FolioService
     let onSignOut: () -> Void
-    /// Changes whenever another continuation is waiting for a window.
-    let pendingContinuation: UUID?
+    /// The waiting continuation, compared whole so that closing the window that received it re-triggers.
+    let pendingContinuation: ContinuationInbox.Item?
     /// Takes the waiting continuation when it opens a target in this window.
     let takeContinuation: () -> HandoffRoute?
     @State private var showTaxonomy = false
@@ -18,7 +18,7 @@ struct WorkspaceView: View {
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
-        workspace: WorkspaceViewModel? = nil, pendingContinuation: UUID? = nil,
+        workspace: WorkspaceViewModel? = nil, pendingContinuation: ContinuationInbox.Item? = nil,
         takeContinuation: @escaping () -> HandoffRoute? = { nil }
     ) {
         self.serverURL = serverURL
@@ -203,7 +203,7 @@ struct WorkspaceView: View {
 
     private struct ContinuationTrigger: Equatable {
         let isReady: Bool
-        let pending: UUID?
+        let pending: ContinuationInbox.Item?
     }
 
     private var manageSection: some View {

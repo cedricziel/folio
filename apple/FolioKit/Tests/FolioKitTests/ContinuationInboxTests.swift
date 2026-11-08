@@ -56,6 +56,20 @@ private func opening(_ document: UUID) -> HandoffDecision {
         #expect(inbox.take(scene: firstWindow, isLocked: false, session: .signedIn(serverA)) == nil)
     }
 
+    @Test func closingTheReceivingWindowChangesWhatWindowsObserve() {
+        let inbox = ContinuationInbox()
+        inbox.receive(handoff(), scene: firstWindow)
+        let before = inbox.pending
+
+        inbox.sceneClosed(secondWindow)
+        #expect(inbox.pending == before)
+
+        inbox.sceneClosed(firstWindow)
+        #expect(inbox.pending != before)
+        #expect(inbox.pending?.id == before?.id)
+        #expect(inbox.pending?.sceneIsOpen == false)
+    }
+
     @Test func aWindowTakesOnlyTheDecisionsItHandles() {
         let inbox = ContinuationInbox()
         inbox.receive(handoff(server: serverB), scene: firstWindow)
