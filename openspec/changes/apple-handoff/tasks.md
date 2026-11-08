@@ -95,7 +95,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Commit `feat(apple): web URLs and universal-link parsing`.
 
-- [ ] 6.4 Add `HandoffResolver.decide(incoming:session:)`. First write a failing `HandoffResolverTests` with one case per row of the design §4 table:
+- [x] 6.4 Add `HandoffResolver.decide(incoming:session:)`. First write a failing `HandoffResolverTests` with one case per row of the design §4 table:
   - `restoring` → hold
   - `signedOut` → signIn, and Spotlight → ignore
   - `signedIn` same → open, other → otherServer
