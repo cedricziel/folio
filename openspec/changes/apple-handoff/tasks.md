@@ -44,7 +44,7 @@ Server and Apple sections are independent and can land in either order; within e
 
   Implement the handler and the template section with existing design-system tokens only. Commit `feat(api): edit Apple app links in settings`.
 
-- [ ] 3.2 Document `apple.app_ids` in `docs/configuration.md`: TOML, env and precedence, including the limitation that an empty `/settings` value falls back to config, so a config value can only be turned off by removing it. Document the Universal Links operator steps in `docs/deployment.md`: public HTTPS, the proxy rule for a path prefix, the CDN refresh delay, and `?mode=developer` for private servers. Write a config test that parses the doc's TOML example. Commit `docs: Apple app links setting`.
+- [x] 3.2 Document `apple.app_ids` in `docs/configuration.md`: TOML, env and precedence, including the limitation that an empty `/settings` value falls back to config, so a config value can only be turned off by removing it. Document the Universal Links operator steps in `docs/deployment.md`: public HTTPS, the proxy rule for a path prefix, the CDN refresh delay, and `?mode=developer` for private servers. Write a config test that parses the doc's TOML example. Commit `docs: Apple app links setting`.
 
 ## 4. Stable web URLs
 

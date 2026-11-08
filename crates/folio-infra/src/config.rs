@@ -1404,6 +1404,27 @@ vault = "{VAULT}"
     }
 
     #[test]
+    fn apple_app_links_doc_example_parses() {
+        let docs = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/configuration.md"
+        ))
+        .unwrap();
+        let section = docs
+            .split("## Apple app links")
+            .nth(1)
+            .expect("docs/configuration.md has an Apple app links section");
+        let example = section
+            .split("```toml\n")
+            .nth(1)
+            .and_then(|rest| rest.split("```").next())
+            .expect("the section has a TOML example");
+        let config = load_toml(example).unwrap();
+        assert_eq!(config.apple.app_ids, ["ABCDE12345.com.example.folio"]);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn every_setting_is_set_by_its_env_var() {
         for setting in SETTINGS {
             let (sample, expected) = match (setting.key, setting.kind) {
