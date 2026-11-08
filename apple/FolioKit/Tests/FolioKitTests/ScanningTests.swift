@@ -16,6 +16,11 @@ private func page(width: Int, height: Int) -> CGImage {
     return context.makeImage()!
 }
 
+/// `Thread.isMainThread` is unavailable in async closures, so render closures ask through this.
+private func isOnMainThread() -> Bool {
+    Thread.isMainThread
+}
+
 /// Stands in for a slow render that occupies its thread.
 private func blockThread(for seconds: TimeInterval) {
     Thread.sleep(forTimeInterval: seconds)
@@ -169,7 +174,7 @@ struct UploadFileTests {
         let model = ScanReviewViewModel(
             pages: [page(width: 10, height: 10)], service: MockFolioService(),
             renderPDF: { images in
-                recorder.yield(Thread.isMainThread)
+                recorder.yield(isOnMainThread())
                 recorder.finish()
                 return try PDFBuilder.makePDF(from: images)
             }
