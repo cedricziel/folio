@@ -58,6 +58,7 @@ struct DocumentDetailView: View {
         .task(id: model.summary.indexedFields) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
         .documentActivity(model.summary, vaultID: vaultID, previewFile: model.previewFile)
         .documentTransferCommands(model.summary, vaultID: vaultID)
+        .telemetryScreen(.documentDetail)
     }
 
     @ViewBuilder

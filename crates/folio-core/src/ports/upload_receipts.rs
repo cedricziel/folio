@@ -35,7 +35,8 @@ pub enum UploadClaim {
         token: Id,
         created: bool,
     },
-    /// An earlier request with the same content completed and created this document
+    /// An earlier request with the same content completed and created this document. The replay counts as
+    /// activity, so the receipt is kept for another [`UPLOAD_RECEIPT_RETENTION`].
     Completed(Id),
     /// Another request holds the key and may still be storing this document
     InProgress(Id),

@@ -45,5 +45,6 @@ public struct SourceOutcomesView: View {
             }
         }
         .task { if !model.hasLoaded { await model.load() } }
+        .telemetryScreen(.sourceOutcomes)
     }
 }

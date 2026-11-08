@@ -7,7 +7,7 @@
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.12.0"
+    "version": "0.13.0"
   },
   "paths": {
     "/api/auth/tokens": {
@@ -1914,7 +1914,7 @@
             "description": "The vault or resource is not visible"
           },
           "409": {
-            "description": "The Idempotency-Key was already used for a different file (permanent), or its first request is still storing the document. In the second case the response has Retry-After; a request that stopped answering is taken over after at most 2 minutes.",
+            "description": "The Idempotency-Key was already used for a different file (code `idempotency_key_mismatch`, permanent), or its first request is still storing the document (code `upload_in_progress`, with Retry-After; a request that stopped answering is taken over after at most 2 minutes).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1924,7 +1924,7 @@
             }
           },
           "410": {
-            "description": "The document an earlier request with this Idempotency-Key created has been deleted",
+            "description": "The document an earlier request with this Idempotency-Key created has been deleted (code `upload_deleted`)",
             "content": {
               "application/json": {
                 "schema": {
