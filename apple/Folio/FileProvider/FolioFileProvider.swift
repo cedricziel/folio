@@ -275,11 +275,11 @@ final class FolioProviderItem: NSObject, NSFileProviderItem {
     }
 
     var contentModificationDate: Date? {
-        node.isFolder ? nil : node.modified
+        node.isFolder ? node.created : node.modified
     }
 
     var creationDate: Date? {
-        node.isFolder ? nil : node.document?.createdAt
+        node.created
     }
 
     var itemVersion: NSFileProviderItemVersion {

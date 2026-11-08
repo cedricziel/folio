@@ -36,7 +36,7 @@ actor FolioSyncState {
         let fields = [
             node.id.rawValue, node.parent.rawValue, node.name, node.contentType ?? "",
             String(node.isFolder), String(node.modified.timeIntervalSince1970),
-            String(node.document?.createdAt.timeIntervalSince1970 ?? 0),
+            String(node.created?.timeIntervalSince1970 ?? 0),
             String(node.canUpload),
         ]
         let encoded = fields.map { "\($0.utf8.count):\($0)" }.joined()

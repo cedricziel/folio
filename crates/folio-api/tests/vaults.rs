@@ -836,6 +836,10 @@ async fn discovery_lists_accessible_vaults_and_the_default() {
     assert_eq!(body["vaults"].as_array().unwrap().len(), 1);
     assert_eq!(body["vaults"][0]["id"], alice.vault.to_string());
     assert_eq!(body["vaults"][0]["role"], "owner");
+    let created_at: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(body["vaults"][0]["created_at"].clone()).unwrap();
+    let vault = h.vault_repository.find(alice.vault).await.unwrap().unwrap();
+    assert_eq!(created_at, vault.created_at);
     assert!(!body.to_string().contains(&bob.vault.to_string()));
 }
 

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use folio_core::models::{Document, UserId, VaultAction, VaultId, VaultRole};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -9,6 +10,7 @@ pub struct VaultSummary {
     pub name: String,
     #[schema(value_type = String, example = "owner")]
     pub role: VaultRole,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]

@@ -121,7 +121,11 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             let request = URLRequest(url: endpoint("api/vaults"))
             let (data, response) = try await authorizedTransfer(request) { try await session.data(for: $0) }
             try check(response, body: data)
-            guard let catalog = try? JSONDecoder().decode(VaultCatalog.self, from: data),
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .custom { decoder in
+                try LenientDateTranscoder().decode(decoder.singleValueContainer().decode(String.self))
+            }
+            guard let catalog = try? decoder.decode(VaultCatalog.self, from: data),
                   let defaultID = catalog.defaultVaultID,
                   catalog.vaults.contains(where: { $0.id == defaultID })
             else { throw FolioError.unreadableResponse }
@@ -456,7 +460,9 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     public func tags() async throws -> [Tag] {
         try await call("tags.list") {
             try await client.listTags().ok.body.json.map {
-                try Tag(id: Self.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
+                try Tag(
+                    id: Self.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt,
+                    createdAt: $0.createdAt)
             }
         }
     }
@@ -464,7 +470,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     public func correspondents() async throws -> [Correspondent] {
         try await call("correspondents.list") {
             try await client.listCorrespondents().ok.body.json.map {
-                try Correspondent(id: Self.uuid($0.id), name: $0.name)
+                try Correspondent(id: Self.uuid($0.id), name: $0.name, createdAt: $0.createdAt)
             }
         }
     }
@@ -472,7 +478,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     public func documentTypes() async throws -> [DocumentType] {
         try await call("document_types.list") {
             try await client.listDocumentTypes().ok.body.json.map {
-                try DocumentType(id: Self.uuid($0.id), name: $0.name)
+                try DocumentType(id: Self.uuid($0.id), name: $0.name, createdAt: $0.createdAt)
             }
         }
     }

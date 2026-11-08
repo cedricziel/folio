@@ -20,11 +20,19 @@ public struct Vault: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public let name: String
     public let role: Role
+    /// Absent from older servers.
+    public let createdAt: Date?
 
-    public init(id: UUID, name: String, role: Role) {
+    enum CodingKeys: String, CodingKey {
+        case id, name, role
+        case createdAt = "created_at"
+    }
+
+    public init(id: UUID, name: String, role: Role, createdAt: Date? = nil) {
         self.id = id
         self.name = name
         self.role = role
+        self.createdAt = createdAt
     }
 }
 
