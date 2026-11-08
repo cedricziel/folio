@@ -258,11 +258,21 @@ public struct UploadBatchRunner: Sendable {
             record()
         }
 
+        /// Confirms this run still holds its lock before a request. The renewal task only notices a takeover on
+        /// its next tick, and a run suspended past the timeout must not write over the new holder's progress.
+        func ensureLease() throws {
+            try lease.check()
+            guard store.renew(key) else {
+                lease.markLost()
+                throw UploadBatchError.lockLost
+            }
+        }
+
         for index in files.indices {
             var restarted = false
             var waited = false
             while true {
-                try lease.check()
+                try ensureLease()
                 if progress.steps[index].documentID == nil {
                     do {
                         let document = try await service.upload(
@@ -292,7 +302,7 @@ public struct UploadBatchRunner: Sendable {
                 guard let documentID = progress.steps[index].documentID else { break }
                 do {
                     while let tagID = progress.steps[index].remainingTags.first {
-                        try lease.check()
+                        try ensureLease()
                         try await service.addTag(tagID, to: documentID)
                         progress.steps[index].remainingTags.removeFirst()
                         record()

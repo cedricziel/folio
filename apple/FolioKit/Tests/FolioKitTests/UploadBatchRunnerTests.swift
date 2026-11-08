@@ -225,16 +225,16 @@ struct UploadBatchRunnerTests {
         _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
         let renewals = store.renewals
 
-        #expect(renewals > 0)
+        #expect(renewals > 1, "renewed during the slow upload, not only before it")
         try await Task.sleep(for: .milliseconds(200))
         #expect(store.renewals == renewals, "renewal stops with the run")
     }
 
     @Test func aRunThatLosesItsLockStopsBeforeItsNextRequest() async throws {
         let service = MockFolioService()
-        await service.setUploadDelay(.milliseconds(300))
-        let store = RenewalCountingStore(holds: false)
-        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(50))
+        // Held for the upload and the tag of the first file; taken over before the second file.
+        let store = RenewalCountingStore(heldRenewals: 2)
+        let runner = UploadBatchRunner(service: service, store: store)
         let files = [file("a.pdf"), file("b.pdf")]
 
         await #expect(throws: UploadBatchError.lockLost) {
@@ -242,7 +242,20 @@ struct UploadBatchRunnerTests {
         }
 
         #expect(await service.uploads.map(\.filename) == ["a.pdf"])
-        #expect(await service.tagged.isEmpty)
+        #expect(await service.tagged.count == 1)
+    }
+
+    @Test func aRunSuspendedPastATakeoverSendsNothingMore() async throws {
+        let service = MockFolioService()
+        let store = RenewalCountingStore(heldRenewals: 0)
+        let runner = UploadBatchRunner(service: service, store: store)
+
+        await #expect(throws: UploadBatchError.lockLost) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        }
+
+        #expect(await service.uploads.isEmpty)
+        #expect(runner.progress(files: [file("a.pdf")], tagIDs: [], scope: "s") == nil, "nothing recorded")
     }
 
     @Test func anUploadStillBeingStoredIsTriedAgainAfterTheServersWait() async throws {
@@ -412,15 +425,15 @@ struct ShortcutUploadRetryTests {
     }
 }
 
-/// Counts lock renewals of an in-memory store, answering each with `holds`.
+/// Counts lock renewals of an in-memory store; renewals after the first `heldRenewals` report the lock lost.
 private final class RenewalCountingStore: UploadProgressStoring, @unchecked Sendable {
     private let base = InMemoryUploadProgressStore()
-    private let holds: Bool
+    private let heldRenewals: Int
     private let mutex = NSLock()
     private var count = 0
 
-    init(holds: Bool = true) {
-        self.holds = holds
+    init(heldRenewals: Int = .max) {
+        self.heldRenewals = heldRenewals
     }
 
     var renewals: Int { mutex.withLock { count } }
@@ -430,8 +443,10 @@ private final class RenewalCountingStore: UploadProgressStoring, @unchecked Send
     func remove(_ key: String) { base.remove(key) }
     func lock(_ key: String) -> Bool { base.lock(key) }
     func renew(_: String) -> Bool {
-        mutex.withLock { count += 1 }
-        return holds
+        mutex.withLock {
+            count += 1
+            return count <= heldRenewals
+        }
     }
     func unlock(_ key: String) { base.unlock(key) }
 }
