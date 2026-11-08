@@ -38,6 +38,7 @@ actor FolioSyncState {
             String(node.isFolder), String(node.modified.timeIntervalSince1970),
             String(node.created?.timeIntervalSince1970 ?? 0),
             String(node.canUpload),
+            node.document?.fileSize.map(String.init) ?? "",
         ]
         let encoded = fields.map { "\($0.utf8.count):\($0)" }.joined()
         return Data(SHA256.hash(data: Data(encoded.utf8)))

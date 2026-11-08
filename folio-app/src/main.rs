@@ -12,8 +12,8 @@ use tracing::info;
 use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{HealthCheck, SettingsRepository};
 use folio_core::services::{
-    BroadcastConsumer, DispatcherConfig, Importer, IngestPipeline, IngestScheduler, LibraryService,
-    OutboxDispatcher, VaultService, WorkflowEngine,
+    backfill_file_sizes, BroadcastConsumer, DispatcherConfig, Importer, IngestPipeline,
+    IngestScheduler, LibraryService, OutboxDispatcher, VaultService, WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
 use folio_infra::{
@@ -216,6 +216,15 @@ async fn main() -> Result<()> {
 
     // Stops on its own when the shutdown signal flips
     tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
+
+    let (sized_documents, sized_store) = (document_repo.clone(), store.clone());
+    tokio::spawn(async move {
+        match backfill_file_sizes(sized_documents.as_ref(), sized_store.as_ref()).await {
+            Ok(0) => {}
+            Ok(recorded) => info!("Recorded the file size of {recorded} documents"),
+            Err(e) => tracing::warn!("File size backfill stopped: {e}"),
+        }
+    });
 
     let worker_handle = tokio::spawn(async move {
         worker.run(shutdown_rx).await;

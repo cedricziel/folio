@@ -2312,7 +2312,7 @@ async fn event_context_contract(db: &Database) {
         .unwrap();
     assert!(flush_document_outbox(&r).await.is_empty());
     r.documents
-        .finalize_upload(vault, doc.id, "immutable/original")
+        .finalize_upload(vault, doc.id, "immutable/original", 0)
         .await
         .unwrap();
     let created = flush_document_outbox(&r).await.pop().unwrap();
@@ -2537,6 +2537,87 @@ async fn event_context_contract(db: &Database) {
     );
 }
 
+async fn file_size_contract(db: &Database) {
+    let r = db.repositories().await;
+    let vault = r.vaults.create("File sizes", None).await.unwrap().id;
+    let doc = r
+        .documents
+        .create_for_upload(vault, new_document("sized"))
+        .await
+        .unwrap();
+    assert_eq!(doc.file_size, None);
+    r.documents
+        .finalize_upload(vault, doc.id, "sized/original", 1234)
+        .await
+        .unwrap();
+    let stored = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.file_size, Some(1234));
+
+    r.documents
+        .set_file_path(vault, doc.id, "sized/replacement")
+        .await
+        .unwrap();
+    let replaced = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(replaced.file_size, None);
+    let missing: Vec<_> = r
+        .documents
+        .list_missing_file_size(None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    assert!(missing.contains(&doc.id));
+    assert!(r
+        .documents
+        .list_missing_file_size(Some(doc.id), 1000)
+        .await
+        .unwrap()
+        .iter()
+        .all(|d| d.id > doc.id));
+
+    r.documents
+        .set_file_size(vault, doc.id, "sized/original", 99)
+        .await
+        .unwrap();
+    let stale = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stale.file_size, None, "a size for an older path is ignored");
+    r.documents
+        .set_file_size(vault, doc.id, "sized/replacement", 4321)
+        .await
+        .unwrap();
+    let sized = r
+        .documents
+        .find_by_id(vault, doc.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sized.file_size, Some(4321));
+    assert_eq!(sized.updated_at, replaced.updated_at);
+    assert!(!r
+        .documents
+        .list_missing_file_size(None, 1000)
+        .await
+        .unwrap()
+        .iter()
+        .any(|d| d.id == doc.id));
+}
+
 async fn upload_finalization_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r
@@ -2555,7 +2636,7 @@ async fn upload_finalization_contract(db: &Database) {
     let outside = r.vaults.instance_default().await.unwrap();
     assert!(r
         .documents
-        .finalize_upload(outside, pending.id, "wrong")
+        .finalize_upload(outside, pending.id, "wrong", 0)
         .await
         .is_err());
     assert!(flush_document_outbox(&r).await.is_empty());
@@ -2566,7 +2647,7 @@ async fn upload_finalization_contract(db: &Database) {
     ).await;
     assert!(r
         .documents
-        .finalize_upload(vault, pending.id, "original")
+        .finalize_upload(vault, pending.id, "original", 0)
         .await
         .is_err());
     assert!(r
@@ -2587,8 +2668,10 @@ async fn upload_finalization_contract(db: &Database) {
     )
     .await;
     let (first, concurrent) = tokio::join!(
-        r.documents.finalize_upload(vault, pending.id, "original"),
-        r.documents.finalize_upload(vault, pending.id, "original"),
+        r.documents
+            .finalize_upload(vault, pending.id, "original", 0),
+        r.documents
+            .finalize_upload(vault, pending.id, "original", 0),
     );
     first.unwrap();
     concurrent.unwrap();
@@ -2612,7 +2695,7 @@ async fn upload_finalization_contract(db: &Database) {
         .await
         .unwrap();
     r.documents
-        .finalize_upload(vault, pending.id, "original")
+        .finalize_upload(vault, pending.id, "original", 0)
         .await
         .unwrap();
     assert!(
@@ -2630,7 +2713,7 @@ async fn upload_finalization_contract(db: &Database) {
         matches!(events[0].event, Some(DocumentEvent::Created { document_id }) if document_id == direct.id)
     );
     r.documents
-        .finalize_upload(vault, direct.id, "legacy-original")
+        .finalize_upload(vault, direct.id, "legacy-original", 0)
         .await
         .unwrap();
     assert!(
@@ -3913,6 +3996,7 @@ async fn run_contract(db: &Database) {
     ingestion_contract(&repos).await;
     event_context_contract(db).await;
     upload_finalization_contract(db).await;
+    file_size_contract(db).await;
     outbox_contract(db).await;
     ocr_completion_contract(db).await;
     run_atomicity_contract(db).await;

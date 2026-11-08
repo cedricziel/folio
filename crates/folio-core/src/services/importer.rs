@@ -58,13 +58,14 @@ impl DocumentImporter for Importer {
                 },
             )
             .await?;
+        let file_size = upload.data.len() as u64;
         let imported = async {
             let key = keys::original(document.id);
             if !self.files.exists(&key).await? {
                 self.files.put(&key, upload.data.into()).await?;
             }
             self.documents
-                .finalize_upload(vault, document.id, &key)
+                .finalize_upload(vault, document.id, &key, file_size)
                 .await?;
             if let Err(e) = self.queue.enqueue_processing(document.id).await {
                 tracing::error!("Failed to queue processing of {}: {e}", document.id);
@@ -117,10 +118,11 @@ impl DocumentImporter for Importer {
             .await?;
 
         let key = keys::original(document.id);
+        let file_size = upload.data.len() as u64;
         let stored = match self.files.put(&key, upload.data.into()).await {
             Ok(()) => {
                 self.documents
-                    .finalize_upload(vault, document.id, &key)
+                    .finalize_upload(vault, document.id, &key, file_size)
                     .await
             }
             Err(e) => Err(e),

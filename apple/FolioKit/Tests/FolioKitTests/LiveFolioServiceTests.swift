@@ -66,7 +66,7 @@ private let documentJSON = """
      "created_by": "archive-creator", "updated_by": "archive-editor",
      "content": "Rechnungsnummer 2025-00318", "original_filename": "bill.pdf",
      "file_path": "a/bill.pdf", "mime_type": "application/pdf", "correspondent_id": null,
-     "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3,
+     "document_type_id": "11111111-2222-4333-8444-555555555555", "page_count": 3, "file_size": 48213,
      "ocr_status": "done", "embed_status": "skipped",
      "correspondent": null, "document_type": "Invoice",
      "tags": [{"id": "99999999-8888-4777-8666-555555555555", "vault_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "name": "Taxes", "color": "#ff5733"}],
@@ -567,6 +567,7 @@ private let documentJSON = """
         let document = try #require(documents.first)
         #expect(document.title == "Jahresabrechnung 2025")
         #expect(document.pageCount == 3)
+        #expect(document.fileSize == 48213)
         #expect(document.correspondentID == nil)
         #expect(document.documentTypeID == UUID(uuidString: "11111111-2222-4333-8444-555555555555"))
         #expect(document.createdAt.timeIntervalSince1970 > 1_741_000_000)
@@ -580,11 +581,13 @@ private let documentJSON = """
         var payload = try #require(try JSONSerialization.jsonObject(with: Data(documentJSON.utf8)) as? [String: Any])
         payload.removeValue(forKey: "created_by")
         payload.removeValue(forKey: "updated_by")
+        payload.removeValue(forKey: "file_size")
         let body = try JSONSerialization.data(withJSONObject: payload)
         StubURLProtocol.handler = { _, _ in .init(body: body) }
         let document = try await makeService().document(id: UUID())
         #expect(document.createdBy == nil)
         #expect(document.updatedBy == nil)
+        #expect(document.fileSize == nil)
     }
 
     @Test func completedOcrWithoutTextDoesNotKeepReading() async throws {

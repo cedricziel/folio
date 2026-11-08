@@ -26,6 +26,8 @@ public struct Document: Identifiable, Hashable, Sendable {
     public var createdBy: String?
     public var updatedBy: String?
     public var deletedAt: Date?
+    /// Size of the original in bytes; nil until the server has recorded it.
+    public var fileSize: Int64?
 
     public init(
         id: UUID = UUID(),
@@ -50,7 +52,8 @@ public struct Document: Identifiable, Hashable, Sendable {
         updatedAt: Date = Date(),
         createdBy: String? = nil,
         updatedBy: String? = nil,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        fileSize: Int64? = nil
     ) {
         self.id = id
         self.title = title
@@ -75,6 +78,7 @@ public struct Document: Identifiable, Hashable, Sendable {
         self.createdBy = createdBy
         self.updatedBy = updatedBy
         self.deletedAt = deletedAt
+        self.fileSize = fileSize
     }
 }
 

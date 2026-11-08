@@ -110,6 +110,50 @@ fn upload() -> NewUpload {
 }
 
 #[tokio::test]
+async fn imports_record_the_size_of_the_original() {
+    let (_db, r, vault) = fixture().await;
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let importer = Importer::new(r.documents.clone(), store, Arc::new(r.jobs.clone()));
+
+    let document = importer.import(vault, upload()).await.unwrap();
+
+    assert_eq!(document.file_size, Some(b"uploaded document".len() as u64));
+}
+
+#[tokio::test]
+async fn backfill_records_sizes_from_storage_and_skips_missing_objects() {
+    let (_db, r, vault) = fixture().await;
+    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let stored = r
+        .documents
+        .create_for_upload(vault, Default::default())
+        .await
+        .unwrap();
+    let lost = r
+        .documents
+        .create_for_upload(vault, Default::default())
+        .await
+        .unwrap();
+    store
+        .put("stored/original", b"twelve bytes".as_slice().into())
+        .await
+        .unwrap();
+    for (id, path) in [(stored.id, "stored/original"), (lost.id, "lost/original")] {
+        r.documents.set_file_path(vault, id, path).await.unwrap();
+    }
+
+    let recorded = folio_core::services::backfill_file_sizes(r.documents.as_ref(), store.as_ref())
+        .await
+        .unwrap();
+
+    assert_eq!(recorded, 1);
+    for (id, size) in [(stored.id, Some(12)), (lost.id, None)] {
+        let document = r.documents.find_by_id(vault, id).await.unwrap().unwrap();
+        assert_eq!(document.file_size, size);
+    }
+}
+
+#[tokio::test]
 async fn failed_object_put_schedules_durable_cleanup_of_the_incomplete_upload() {
     let (_db, r, vault) = fixture().await;
     let importer = Importer::new(
@@ -488,7 +532,7 @@ async fn blocked_original_put_emits_no_created_event_until_atomic_finalization()
     assert_eq!(events[0].event.as_ref().unwrap().document_id(), document.id);
     assert_eq!(engine.handle(&events[0]).await.unwrap().len(), 1);
     r.documents
-        .finalize_upload(vault, document.id, document.file_path.as_ref().unwrap())
+        .finalize_upload(vault, document.id, document.file_path.as_ref().unwrap(), 0)
         .await
         .unwrap();
     assert_eq!(created_events(&r).await.len(), 1);
@@ -600,8 +644,12 @@ async fn awaited_upload_preserves_authenticated_actor_without_reusing_uploader_i
     );
     with_actor(
         Some(UserId::from("retrying-user")),
-        r.documents
-            .finalize_upload(vault, document.id, document.file_path.as_deref().unwrap()),
+        r.documents.finalize_upload(
+            vault,
+            document.id,
+            document.file_path.as_deref().unwrap(),
+            0,
+        ),
     )
     .await
     .unwrap();
