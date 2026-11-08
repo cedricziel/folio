@@ -25,5 +25,5 @@ pub use model::{
     AccessToken, AuthCode, AuthContext, ConnectedClient, Group, GroupSource, OAuthClient,
     OidcLogin, PasskeyRecord, PersonalToken, RefreshToken, Session, TotpRecord, User, SCOPES,
 };
-pub use store::{AuthError, AuthStore};
+pub use store::{AuthError, AuthStore, GrantCheck, IssuedTokens};
 pub use validator::{base_url, require_bearer, TokenValidator};
