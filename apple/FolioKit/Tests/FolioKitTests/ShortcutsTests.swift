@@ -150,7 +150,7 @@ private final class IntentRuns: @unchecked Sendable {
     }
 }
 
-@Suite(.serialized) struct IntentTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct IntentTests {
     private let runs = IntentRuns()
 
     private func install(_ documents: [Document] = []) async -> MockFolioService {

@@ -21,7 +21,8 @@ private func sharedDirectory() throws -> URL {
     return url
 }
 
-struct TelemetrySessionTests {
+// A hang in locking must fail this suite, not stall the whole test run.
+@Suite(.timeLimit(.minutes(1))) struct TelemetrySessionTests {
     private let clock = TestClock()
 
     /// A store over `directory` (or memory), signed in unless the test is about signing out.
@@ -164,24 +165,20 @@ struct TelemetrySessionTests {
         #expect(share.touch().id == next)
     }
 
-    @Test func concurrentRotationsInTwoProcessesStartOneSession() async throws {
+    @Test func concurrentRotationsInTwoProcessesStartOneSession() throws {
         let directory = try sharedDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let app = store(directory)
         let share = store(directory, signedIn: false)
         _ = app.touch()
         clock.advance(TelemetrySession.inactivity + 1)
-        let results = await withTaskGroup(of: (String?, [SessionBoundary]).self) { group in
-            for index in 0..<40 {
-                let sessions = index.isMultiple(of: 2) ? app : share
-                group.addTask {
-                    let result = sessions.touch()
-                    return (result.id, result.boundaries)
-                }
-            }
-            var all: [(String?, [SessionBoundary])] = []
-            for await result in group { all.append(result) }
-            return all
+        // flock blocks its thread, so the contention runs on Dispatch threads, never the shared Swift
+        // concurrency pool that every other suite needs.
+        let collected = NSLock()
+        nonisolated(unsafe) var results: [(String?, [SessionBoundary])] = []
+        DispatchQueue.concurrentPerform(iterations: 40) { index in
+            let result = (index.isMultiple(of: 2) ? app : share).touch()
+            collected.withLock { results.append((result.id, result.boundaries)) }
         }
         #expect(Set(results.compactMap { $0.0 }).count == 1)
         #expect(results.allSatisfy { $0.0 != nil })
