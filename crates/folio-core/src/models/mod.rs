@@ -58,7 +58,10 @@ pub use ingest_outcome::{
     SourceHealthChange,
 };
 pub use metadata::{MetadataKind, MetadataValue};
-pub use metadata_field::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
+pub use metadata_field::{
+    name_key as metadata_name_key, MetadataField, MetadataFieldInput, MetadataOption,
+    MetadataOptionInput,
+};
 pub use metadata_value::{DocumentMetadata, DocumentMetadataValue, MetadataChange};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};

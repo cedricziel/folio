@@ -82,7 +82,7 @@ Out of scope:
   - `documents`: `external_source`, `external_id`, `content_sha256`, with the paired-NULL CHECK and a partial unique index.
   - `document_entries`: `external_id`, so mirrored notes can be updated.
   - New tables: `import_runs`, `import_items`, `import_staging`, `paperless_documents` (the sync ledger), `paperless_taxonomy` (the taxonomy map) and `paperless_sync_state`.
-  - The `source_kind` CHECKs on `ingest_outcomes` and `source_health` gain `paperless`, and a partial unique index allows one live `paperless` source per vault.
+  - The `source_kind` CHECKs on `ingest_items` and `source_health` gain `paperless`, and a partial unique index allows one live `paperless` source per vault.
   - Existing rows keep NULL in the new columns, and nothing is backfilled.
 - **Depends on** `typed-document-metadata` persistence, which is already merged.
 - **Security:**
