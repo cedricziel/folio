@@ -133,6 +133,8 @@ struct InboxView: View {
                 handle(.document(link.documentID, vaultID: link.vaultID))
             }
         }
+        .telemetryScreen(
+            list.showsSavedView ? TelemetryScreen.savedView : list.scope == .inbox ? TelemetryScreen.inbox : .documents)
     }
 
     private func documentDestination(_ id: Document.ID) -> some View {
@@ -180,7 +182,11 @@ struct InboxView: View {
     private var scanAction: (() -> Void)? {
         guard canAcceptImport else { return nil }
         #if os(iOS)
-            return DocumentScanner.isSupported ? { showScanner = true } : nil
+            guard DocumentScanner.isSupported else { return nil }
+            return {
+                FolioTelemetry.shared.action(.scanStart)
+                showScanner = true
+            }
         #else
             return nil
         #endif
@@ -202,6 +208,7 @@ struct InboxView: View {
         case .inbox:
             onNavigate(.inbox)
         case let .document(id, vaultID):
+            FolioTelemetry.shared.action(.documentOpen)
             onOpenDocument(id, vaultID)
         }
     }
@@ -243,6 +250,7 @@ struct InboxView: View {
                             } else {
                                 Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
                                     pageTask?.cancel()
+                                    FolioTelemetry.shared.action(.browseLoadMore)
                                     pageTask = Task { await list.loadNextPage() }
                                 }
                                 .buttonStyle(.borderless)
@@ -261,7 +269,10 @@ struct InboxView: View {
         .navigationTitle(session.savedViewName ?? (list.scope == .inbox ? "Inbox" : "All documents"))
         .searchable(text: $list.searchText, prompt: "Search documents")
         .searchFocused($searchFocused)
-        .refreshable { await list.load() }
+        .refreshable {
+            FolioTelemetry.shared.action(.browseRefresh)
+            await list.load()
+        }
         .overlay { placeholder }
         .overlay {
             if isDropTargeted && canAcceptImport {
@@ -391,13 +402,24 @@ struct InboxView: View {
         }
     }
 
+    /// Opens a document the person picked from the list or grid.
+    private func open(_ id: Document.ID) {
+        FolioTelemetry.shared.action(.documentOpen)
+        session.selection = id
+        session.path = [id]
+    }
+
     private var documentSelection: Binding<Document.ID?>? {
         #if os(macOS)
             Binding(
                 get: { session.selection },
                 set: { id in
-                    session.selection = id
-                    session.path = id.map { [$0] } ?? []
+                    if let id, id != session.selection {
+                        open(id)
+                    } else {
+                        session.selection = id
+                        session.path = id.map { [$0] } ?? []
+                    }
                 }
             )
         #else
@@ -415,8 +437,7 @@ struct InboxView: View {
             ) {
                 ForEach(list.rows) { row in
                     Button {
-                        session.selection = row.id
-                        session.path = [row.id]
+                        open(row.id)
                     } label: {
                         VStack(alignment: .leading, spacing: FolioTheme.Spacing.space2) {
                             DocumentThumbnailView(document: row.document)
@@ -451,6 +472,7 @@ struct InboxView: View {
             if list.canLoadMore {
                 Button(list.pageError == nil ? "Load more documents" : "Retry loading documents") {
                     pageTask?.cancel()
+                    FolioTelemetry.shared.action(.browseLoadMore)
                     pageTask = Task { await list.loadNextPage() }
                 }
                 .disabled(list.isLoadingMore)
@@ -461,8 +483,7 @@ struct InboxView: View {
 
     private func documentLink(_ row: DocumentRow, showsPreview: Bool) -> some View {
         Button {
-            session.selection = row.id
-            session.path = [row.id]
+            open(row.id)
         } label: {
             HStack {
                 DocumentRowView(row: row)
@@ -571,7 +592,7 @@ struct InboxView: View {
             #if os(iOS)
                 Menu("Add", systemImage: "plus") {
                     if DocumentScanner.isSupported {
-                        Button("Scan document", systemImage: "doc.viewfinder") { showScanner = true }
+                        Button("Scan document", systemImage: "doc.viewfinder") { scanAction?() }
                     }
                     Button("Choose files", systemImage: "tray.and.arrow.down") { showFileImporter = true }
                     Button("Photos", systemImage: "photo") { showPhotosPicker = true }
@@ -594,6 +615,7 @@ struct InboxView: View {
     #if os(iOS)
         private var scanButton: some View {
             Button {
+                FolioTelemetry.shared.action(.scanStart)
                 showScanner = true
             } label: {
                 Label("Scan", systemImage: "doc.viewfinder").frame(maxWidth: .infinity)

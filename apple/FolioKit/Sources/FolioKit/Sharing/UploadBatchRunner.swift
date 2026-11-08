@@ -45,7 +45,13 @@ public protocol UploadProgressStoring: Sendable {
     func remove(_ key: String)
     /// Reserves `key` for one run across processes. Returns false while another run holds it.
     func lock(_ key: String) -> Bool
+    /// Keeps a held lock from being taken over as abandoned while its run goes on.
+    func renew(_ key: String)
     func unlock(_ key: String)
+}
+
+public extension UploadProgressStoring {
+    func renew(_: String) {}
 }
 
 public final class InMemoryUploadProgressStore: UploadProgressStoring, @unchecked Sendable {
@@ -68,12 +74,14 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
     public static let shared = FileUploadProgressStore(
         directory: SharedConfiguration.container ?? FileManager.default.temporaryDirectory)
 
-    /// A run lock left behind by a process that died stops blocking its batch after this.
+    /// A run lock left behind by a process that died stops blocking its batch after this. A running batch renews
+    /// its lock well within it.
     static let lockTimeout: TimeInterval = 5 * 60
 
     private let directory: URL
     private let maxAge: TimeInterval
     private let mutex = NSLock()
+    private var held: [String: UUID] = [:]
 
     /// - Parameter maxAge: Progress older than this is forgotten; the same files shared later are a new batch.
     public init(directory: URL, maxAge: TimeInterval = 24 * 60 * 60) {
@@ -108,21 +116,28 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
     }
 
     public func lock(_ key: String) -> Bool {
-        let file = lockFile(for: key)
-        if let modified = Self.modified(file), modified < .now.addingTimeInterval(-Self.lockTimeout) {
-            try? FileManager.default.removeItem(at: file)
-        }
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try Data().write(to: file, options: .withoutOverwriting)
-            return true
-        } catch {
-            return false
-        }
+        lock(key, now: .now)
     }
 
+    func lock(_ key: String, now: Date) -> Bool {
+        guard let token = lease(for: key).acquire(now: now) else { return false }
+        mutex.withLock { held[key] = token }
+        return true
+    }
+
+    public func renew(_ key: String) {
+        guard let token = mutex.withLock({ held[key] }) else { return }
+        lease(for: key).renew(token)
+    }
+
+    /// Ends this store's run, leaving a lock another run has taken over since in place.
     public func unlock(_ key: String) {
-        try? FileManager.default.removeItem(at: lockFile(for: key))
+        guard let token = mutex.withLock({ held.removeValue(forKey: key) }) else { return }
+        lease(for: key).release(token)
+    }
+
+    private func lease(for key: String) -> FileLease {
+        FileLease(file: directory.appending(path: "\(key).lock"), timeout: Self.lockTimeout)
     }
 
     /// Deletes progress nobody resumed in time, so abandoned batches don't pile up in the shared container.
@@ -144,10 +159,6 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
     private func file(for key: String) -> URL {
         directory.appending(path: "\(key).json")
     }
-
-    private func lockFile(for key: String) -> URL {
-        directory.appending(path: "\(key).lock")
-    }
 }
 
 /// Uploads files one at a time and attaches tags to each new document, recording every finished step. Running
@@ -162,13 +173,17 @@ public struct UploadBatchRunner: Sendable {
     private let service: any FolioService
     private let store: any UploadProgressStoring
     private let now: @Sendable () -> Date
+    private let lockRenewal: Duration
 
+    /// - Parameter lockRenewal: How often a run renews its lock, well within `FileUploadProgressStore.lockTimeout`.
     public init(
-        service: any FolioService, store: any UploadProgressStoring, now: @escaping @Sendable () -> Date = { .now }
+        service: any FolioService, store: any UploadProgressStoring, now: @escaping @Sendable () -> Date = { .now },
+        lockRenewal: Duration = .seconds(60)
     ) {
         self.service = service
         self.store = store
         self.now = now
+        self.lockRenewal = lockRenewal
     }
 
     /// Identifies a batch by its server and vault (`scope`), the files' names, titles, types and contents, and
@@ -199,7 +214,15 @@ public struct UploadBatchRunner: Sendable {
     public func run(_ files: [UploadFile], tagIDs: [Tag.ID], scope: String) async throws -> [Document] {
         let key = Self.key(files: files, tagIDs: tagIDs, scope: scope)
         guard store.lock(key) else { throw UploadBatchError.alreadyRunning }
-        defer { store.unlock(key) }
+        let renewal = Task { [store, lockRenewal] in
+            while (try? await Task.sleep(for: lockRenewal)) != nil {
+                store.renew(key)
+            }
+        }
+        defer {
+            renewal.cancel()
+            store.unlock(key)
+        }
         var progress =
             store.load(key).flatMap { $0.steps.count == files.count ? $0 : nil }
             ?? UploadBatchProgress(steps: files.map { _ in UploadStep(remainingTags: tagIDs) }, updatedAt: now())

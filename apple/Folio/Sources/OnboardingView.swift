@@ -76,5 +76,6 @@ struct OnboardingView: View {
         .frame(maxWidth: 440)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.paper)
+        .telemetryScreen(.onboarding)
     }
 }

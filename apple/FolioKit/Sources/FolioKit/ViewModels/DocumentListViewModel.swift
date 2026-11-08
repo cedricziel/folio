@@ -65,8 +65,14 @@ public final class DocumentListViewModel {
     public private(set) var isLoadingMore = false
     public private(set) var pageError: String?
 
+    /// Telemetry only: this list shows a saved view.
+    public var showsSavedView = false
+
     public var query: DocumentBrowseQuery {
-        .init(text: searchText.trimmingCharacters(in: .whitespacesAndNewlines), filter: filter, sort: sort)
+        .init(
+            text: searchText.trimmingCharacters(in: .whitespacesAndNewlines), filter: filter, sort: sort,
+            scope: showsSavedView ? BrowseScope.savedView : scope == .inbox ? BrowseScope.inbox : BrowseScope.all
+        )
     }
 
     public var canLoadMore: Bool {

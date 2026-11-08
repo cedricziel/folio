@@ -143,11 +143,54 @@ struct DocumentCatalogTests {
     }
 }
 
-@Suite(.serialized) struct IntentTests {
+private final class IntentRuns: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TelemetryIntent] = []
+
+    var all: [TelemetryIntent] { lock.withLock { recorded } }
+
+    func append(_ intent: TelemetryIntent) {
+        lock.withLock { recorded.append(intent) }
+    }
+}
+
+/// How many tags the service held at each flush, so a flush can be shown to follow the work.
+private actor FlushLog {
+    var taggedAtFlush: [Int] = []
+
+    func append(_ count: Int) {
+        taggedAtFlush.append(count)
+    }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1))) struct IntentTests {
+    private let runs = IntentRuns()
+
     private func install(_ documents: [Document] = []) async -> MockFolioService {
         let (_, service) = await makeCatalog(documents)
         IntentEnvironment.use { service }
+        let runs = runs
+        IntentEnvironment.recordRuns { runs.append($0) }
+        IntentEnvironment.flushRuns {}
         return service
+    }
+
+    @Test func everyShortcutRecordsItsRunByNameOnly() async throws {
+        let target = document("Gas bill", tags: [utilities])
+        _ = await install([target])
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        var search = SearchDocumentsIntent(query: "gas")
+        search.query = "gas"
+        _ = try await search.perform()
+        _ = try await GetLatestDocumentIntent().perform()
+        _ = try await FindDocumentsIntent().perform()
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(taxes)).perform()
+        _ = try await RemoveTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        _ = try await GetDocumentFileIntent(document: entity).perform()
+        #expect(
+            runs.all == [
+                .searchDocuments, .getLatestDocument, .findDocuments, .addTag, .removeTag, .getDocumentFile,
+            ])
     }
 
     @Test func searchReturnsEntitiesAndSaysHowMany() async throws {
@@ -239,6 +282,26 @@ struct DocumentCatalogTests {
         #expect(try await CorrespondentEntityQuery().suggestedEntities().map(\.name) == ["Stadtwerke Köln"])
         #expect(try await DocumentTypeEntityQuery().entities(for: [invoice.id]).map(\.name) == ["Invoice"])
         #expect(try await VaultEntityQuery().suggestedEntities().isEmpty)
+    }
+
+    @Test func performSendsTelemetryAfterItsWorkAndAfterAFailure() async throws {
+        let target = document("Gas bill")
+        let service = await install([target])
+        let flushes = FlushLog()
+        IntentEnvironment.flushRuns {
+            let tagged = await service.tagged.count
+            await flushes.append(tagged)
+        }
+        defer { IntentEnvironment.flushRuns {} }
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        #expect(await flushes.taggedAtFlush == [1])
+
+        IntentEnvironment.use { nil }
+        await #expect(throws: ShortcutError.notSignedIn) {
+            try await GetLatestDocumentIntent().perform()
+        }
+        #expect(await flushes.taggedAtFlush.count == 2)
     }
 
     @Test func notSignedInSaysToOpenTheApp() async {
