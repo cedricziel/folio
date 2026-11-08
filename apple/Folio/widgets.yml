@@ -29,15 +29,12 @@ targets:
         com.apple.security.application-groups:
           - group.com.cedricziel.folio
         com.apple.security.app-sandbox: true
-        keychain-access-groups:
-          - $(AppIdentifierPrefix)com.cedricziel.folio
     info:
       path: Resources/FolioWidgets-Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Folio
-        FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

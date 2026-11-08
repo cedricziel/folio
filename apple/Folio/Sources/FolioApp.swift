@@ -19,9 +19,9 @@ struct FolioApp: App {
             RootView(model: model, lock: security.lock)
                 .onChange(of: security.lock.isEnabled) { _, enabled in
                     security.refreshCovers()
-                    if enabled { widgets.hideTitles() } else { refreshWidgets() }
+                    if enabled { widgets.hideTitles() } else { refreshWidgets(force: true) }
                 }
-                .onChange(of: model.session) { refreshWidgets() }
+                .onChange(of: model.session) { refreshWidgets(force: true) }
                 .onOpenURL { url in
                     if let link = WidgetLink(url: url) { IntentRouter.shared.route(link.request) }
                 }
@@ -68,8 +68,8 @@ struct FolioApp: App {
         #endif
     }
 
-    private func refreshWidgets() {
-        widgets.update(session: model.session, revealsTitles: !security.lock.isEnabled)
+    private func refreshWidgets(force: Bool = false) {
+        widgets.update(session: model.session, revealsTitles: !security.lock.isEnabled, force: force)
     }
 }
 
