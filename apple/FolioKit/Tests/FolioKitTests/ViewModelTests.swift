@@ -404,6 +404,74 @@ extension JSONDecoder {
         #expect(model.preview == .ready(URL(filePath: "/tmp/bill.pdf")))
     }
 
+    @Test func refreshedListDataUpdatesTheSameDocumentAndKeepsThePreview() async {
+        let service = MockFolioService()
+        let original = Document(
+            title: "Scan 0001", originalFilename: "scan.pdf", updatedAt: Date(timeIntervalSince1970: 100),
+            updatedBy: "uploader")
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+        await model.loadPreview()
+
+        var processed = original
+        processed.title = "Electricity bill"
+        processed.pageCount = 3
+        processed.tags = [Tag(name: "Utilities")]
+        processed.updatedAt = Date(timeIntervalSince1970: 200)
+        processed.updatedBy = "classifier"
+        await service.setFailure(.unreachable)
+        model.update(document: processed, correspondent: "Stadtwerke Köln", type: "Invoice")
+        await model.loadPreview()
+
+        let byLabel = Dictionary(uniqueKeysWithValues: model.metadata.map { ($0.label, $0.value) })
+        let history = Dictionary(uniqueKeysWithValues: model.history.map { ($0.label, $0.value) })
+        #expect(model.document.title == "Electricity bill")
+        #expect(model.document.tags.map(\.name) == ["Utilities"])
+        #expect(byLabel["From"] == "Stadtwerke Köln")
+        #expect(byLabel["Type"] == "Invoice")
+        #expect(byLabel["Pages"] == "3")
+        #expect(history["Updated by"] == "classifier")
+        #expect(model.summary.title == "Electricity bill")
+        #expect(model.summary.correspondent == "Stadtwerke Köln")
+        #expect(model.summary.documentType == "Invoice")
+        #expect(model.summary.tags == ["Utilities"])
+        #expect(model.summary.pageCount == 3)
+        #expect(model.preview == .ready(URL(filePath: "/tmp/scan.pdf")))
+    }
+
+    @Test func anOlderListSnapshotDoesNotRevertFetchedDetails() async throws {
+        let service = MockFolioService()
+        let stale = Document(title: "Scan 0001", updatedAt: Date(timeIntervalSince1970: 100))
+        var current = stale
+        current.title = "Electricity bill"
+        current.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setDocuments([current])
+        let model = DocumentDetailViewModel(document: stale, correspondent: nil, type: nil, service: service)
+        await model.refreshMetadata()
+
+        model.update(document: stale, correspondent: "Stadtwerke Köln", type: nil)
+
+        #expect(model.document.title == "Electricity bill")
+        #expect(model.summary.title == "Electricity bill")
+        #expect(model.metadata.first { $0.label == "From" }?.value == "Stadtwerke Köln")
+    }
+
+    @Test func fetchedDetailsRefreshEveryField() async {
+        let service = MockFolioService()
+        let original = Document(title: "Scan 0001", updatedAt: Date(timeIntervalSince1970: 100))
+        var processed = original
+        processed.title = "Electricity bill"
+        processed.pageCount = 2
+        processed.updatedAt = Date(timeIntervalSince1970: 200)
+        await service.setDocuments([processed])
+        let model = DocumentDetailViewModel(document: original, correspondent: nil, type: nil, service: service)
+
+        await model.refreshMetadata()
+
+        #expect(model.metadata.first { $0.label == "Pages" }?.value == "2")
+        #expect(model.summary.title == "Electricity bill")
+        #expect(model.summary.pageCount == 2)
+    }
+
 }
 
 @MainActor struct UploadViewModelTests {

@@ -23,15 +23,17 @@ public final class DocumentDetailViewModel {
     public let discussion: DocumentDiscussionViewModel
     public private(set) var document: Document
     public private(set) var preview = Preview.loading
-    public private(set) var metadata: [MetadataField]
+    public private(set) var metadata: [MetadataField] = []
     public private(set) var metadataFailure: String?
-    public let history: [MetadataField]
+    public private(set) var history: [MetadataField] = []
     public private(set) var savingReview = false
     public private(set) var reviewFailure: String?
     /// The document as Spotlight and Shortcuts know it.
-    public let summary: DocumentSummary
+    public private(set) var summary: DocumentSummary
 
     private let service: any FolioService
+    private var correspondent: String?
+    private var documentType: String?
     private var loading = false
     private var metadataWrites = 0
 
@@ -41,10 +43,27 @@ public final class DocumentDetailViewModel {
         discussion = DocumentDiscussionViewModel(documentID: document.id, service: service)
         self.document = document
         self.service = service
+        self.correspondent = correspondent
+        documentType = type
         summary = DocumentSummary(document, correspondent: correspondent, documentType: type)
+        rebuildFields()
+    }
+
+    /// Takes newer list data for the same document without restarting its preview.
+    public func update(document updated: Document, correspondent: String?, type: String?) {
+        guard updated.id == document.id else { return }
+        self.correspondent = correspondent
+        documentType = type
+        if updated.updatedAt > document.updatedAt {
+            document = updated
+        }
+        rebuildFields()
+    }
+
+    private func rebuildFields() {
         var fields = [
             MetadataField(label: "From", value: correspondent ?? "Not set", isRecord: false),
-            MetadataField(label: "Type", value: type ?? "Not set", isRecord: false),
+            MetadataField(label: "Type", value: documentType ?? "Not set", isRecord: false),
             MetadataField(label: "Document date", value: document.documentDate?.rawValue ?? "Not set", isRecord: true),
             MetadataField(label: "Imported", value: FolioFormat.isoDay(document.createdAt), isRecord: true),
         ]
@@ -65,6 +84,7 @@ public final class DocumentDetailViewModel {
             history.append(MetadataField(label: "Deleted", value: deletedAt.formatted(), isRecord: true))
         }
         self.history = history
+        summary = DocumentSummary(document, correspondent: correspondent, documentType: documentType)
     }
 
     public var reviewDescription: String? {
@@ -113,10 +133,7 @@ public final class DocumentDetailViewModel {
 
     private func applyMetadata(_ updated: Document) {
         document = updated
-        if let index = metadata.firstIndex(where: { $0.label == "Document date" }) {
-            metadata[index] = MetadataField(
-                label: "Document date", value: updated.documentDate?.rawValue ?? "Not set", isRecord: true)
-        }
+        rebuildFields()
     }
 
     public func loadPreview() async {
