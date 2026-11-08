@@ -202,21 +202,22 @@ public final class FolioTelemetry: @unchecked Sendable {
     /// Flushes pending signals on a worker task, without delaying the caller. Calls made while a flush is
     /// pending share it, and flushes start at most once per second, so a burst of operations sends one export.
     public func flush() {
-        let plan = lock.withLock { () -> (TelemetryRuntime, Duration)? in
-            guard let runtime, !flushPending else { return nil }
-            flushPending = true
-            let elapsed = ContinuousClock.now - lastFlush
-            return (runtime, elapsed >= .seconds(1) ? .zero : .seconds(1) - elapsed)
-        }
-        guard let plan else { return }
-        let (runtime, wait) = plan
+        guard
+            let plan = lock.withLock({ () -> (TelemetryRuntime, Duration)? in
+                guard let active = self.runtime, !flushPending else { return nil }
+                flushPending = true
+                let elapsed = ContinuousClock.now - lastFlush
+                return (active, elapsed >= .seconds(1) ? .zero : .seconds(1) - elapsed)
+            })
+        else { return }
+        let (target, delay) = plan
         Task.detached { [self] in
-            if wait > .zero { try? await Task.sleep(for: wait) }
+            if delay > .zero { try? await Task.sleep(for: delay) }
             lock.withLock {
                 flushPending = false
                 lastFlush = .now
             }
-            runtime.flush()
+            target.flush()
         }
     }
 
