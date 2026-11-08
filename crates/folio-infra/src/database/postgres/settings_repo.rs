@@ -87,7 +87,7 @@ impl SettingsRepository for PostgresSettingsRepository {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip(self, value))]
     async fn set(&self, key: &str, value: &str) -> Result<Setting> {
         sqlx::query(UPSERT)
             .bind(key)

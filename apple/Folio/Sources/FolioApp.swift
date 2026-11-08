@@ -29,6 +29,7 @@ struct FolioApp: App {
                     case .active:
                         FolioTelemetry.shared.lifecycle("active")
                         model.restore()
+                        Task { await ShareSessionCoordinator.shared.recoverInterrupted() }
                     case .inactive: FolioTelemetry.shared.lifecycle("inactive")
                     case .background: FolioTelemetry.shared.lifecycle("background")
                     @unknown default: break
@@ -60,33 +61,16 @@ struct FolioApp: App {
 #if os(iOS)
     import UIKit
 
-    /// Receives the outcome of share-extension uploads that finish after the extension has gone, so failed
-    /// shares are recorded and kept for retry instead of staying pending forever.
+    /// Hands share-extension upload sessions the system relaunches the app for to the share coordinator, so
+    /// their outcome is recorded after the extension has gone.
     @MainActor final class FolioAppDelegate: NSObject, UIApplicationDelegate {
-        private var uploaders: [String: BackgroundUploader] = [:]
-        private var completions: [String: () -> Void] = [:]
-
         func application(
             _: UIApplication, handleEventsForBackgroundURLSession identifier: String,
             completionHandler: @escaping () -> Void
         ) {
-            guard identifier.hasPrefix(BackgroundUploader.identifierPrefix),
-                let serverURL = SharedConfiguration.serverURL()
-            else {
+            if !ShareSessionCoordinator.shared.handleEvents(for: identifier, completion: completionHandler) {
                 completionHandler()
-                return
             }
-            completions[identifier] = completionHandler
-            let uploader = BackgroundUploader(serverURL: serverURL, tokens: nil, identifier: identifier)
-            uploader.onEventsFinished = {
-                Task { @MainActor [weak self] in self?.finishEvents(for: identifier) }
-            }
-            uploaders[identifier] = uploader
-        }
-
-        private func finishEvents(for identifier: String) {
-            uploaders.removeValue(forKey: identifier)?.invalidate()
-            completions.removeValue(forKey: identifier)?()
         }
     }
 #endif

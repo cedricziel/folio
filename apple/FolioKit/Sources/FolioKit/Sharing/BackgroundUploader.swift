@@ -13,14 +13,19 @@ public struct ShareUploadRequest {
         let form = MultipartForm(file: file)
         let bodyFile = directory.appending(path: "upload-\(UUID().uuidString).multipart")
         try form.body.write(to: bodyFile)
-        let request = request(serverURL: serverURL, contentType: form.contentType, token: token, vaultID: vaultID)
+        let request = request(
+            serverURL: serverURL, contentType: form.contentType, token: token, vaultID: vaultID,
+            idempotencyKey: UUID())
         return ShareUploadRequest(request: request, bodyFile: bodyFile)
     }
 
-    static func request(serverURL: URL, contentType: String, token: String?, vaultID: UUID?) -> URLRequest {
+    static func request(
+        serverURL: URL, contentType: String, token: String?, vaultID: UUID?, idempotencyKey: UUID
+    ) -> URLRequest {
         var request = URLRequest(url: serverURL.appending(path: "api/documents/upload"))
         request.httpMethod = "POST"
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.setValue(idempotencyKey.uuidString.lowercased(), forHTTPHeaderField: "Idempotency-Key")
         if let vaultID {
             request.setValue(vaultID.uuidString.lowercased(), forHTTPHeaderField: "X-Folio-Vault")
         }
@@ -33,9 +38,17 @@ public struct ShareUploadRequest {
 
 public enum ShareRetryError: Error, Equatable, LocalizedError {
     case unavailable
+    /// Another sheet or the app is retrying the same share right now.
+    case inProgress
+    /// The share was sent to a server Folio is no longer connected to.
+    case otherServer
 
     public var errorDescription: String? {
-        "This share can no longer be retried. Share the file again."
+        switch self {
+        case .unavailable: "This share can no longer be retried. Share the file again."
+        case .inProgress: "This share is already being retried."
+        case .otherServer: "This share was meant for another server. Discard it and share the file again."
+        }
     }
 }
 
@@ -64,7 +77,8 @@ public extension BackgroundUploading {
 /// Uploads through a background `URLSession`, so large files finish after the share sheet has closed.
 ///
 /// Each upload is recorded in a `ShareUploadStore` before it starts. Its body stays on disk until the server
-/// accepts it, so rejected, unauthorized and interrupted shares remain visible and can be retried.
+/// accepts it, so rejected, unauthorized and interrupted shares remain visible and can be retried. Every attempt
+/// carries the record's id as `Idempotency-Key`, so a retry after a lost answer returns the first document.
 public final class BackgroundUploader: NSObject, BackgroundUploading, URLSessionTaskDelegate, @unchecked Sendable {
     public static let identifierPrefix = "com.cedricziel.folio.share."
 
@@ -72,7 +86,8 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
         identifierPrefix + UUID().uuidString
     }
 
-    private let serverURL: URL
+    public let identifier: String
+    private let serverURL: URL?
     private let tokens: (any BearerTokenProvider)?
     public let store: ShareUploadStore
     private let lock = NSLock()
@@ -80,11 +95,14 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     private var changeHandler: (@Sendable (ShareUploadRecord) -> Void)?
     private var eventsFinishedHandler: (@Sendable () -> Void)?
 
-    /// - Parameter configuration: Defaults to a background configuration named `identifier`.
+    /// - Parameters:
+    ///   - serverURL: Where new shares go; nil for an uploader that only collects the outcome of earlier ones.
+    ///   - configuration: Defaults to a background configuration named `identifier`.
     public init(
-        serverURL: URL, tokens: (any BearerTokenProvider)?, identifier: String, directory: URL? = nil,
+        serverURL: URL?, tokens: (any BearerTokenProvider)?, identifier: String, directory: URL? = nil,
         configuration: URLSessionConfiguration? = nil
     ) {
+        self.identifier = identifier
         self.serverURL = serverURL
         self.tokens = tokens
         store = ShareUploadStore(
@@ -118,11 +136,13 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func enqueue(_ file: UploadFile, vaultID: UUID?) async throws {
+        guard let serverURL else { throw ShareRetryError.otherServer }
         let token = try await tokens?.token()
         let form = MultipartForm(file: file)
         let record = ShareUploadRecord(
             id: UUID(), filename: file.filename, title: file.title, vaultID: vaultID,
-            contentType: form.contentType, status: .pending, attempts: 1, updatedAt: .now
+            contentType: form.contentType, status: .pending, attempts: 1, updatedAt: .now,
+            serverURL: serverURL, sessionIdentifier: identifier
         )
         try store.prepareDirectory()
         let body = store.bodyFile(for: record.id)
@@ -133,18 +153,23 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
             try? FileManager.default.removeItem(at: body)
             throw error
         }
-        start(record, token: token)
+        start(record, serverURL: serverURL, token: token)
     }
 
     public func retainedUploads() -> [ShareUploadRecord] {
-        store.pruneUploaded(before: .now.addingTimeInterval(-24 * 60 * 60))
+        store.prune()
         return store.all()
     }
 
     public func retry(_ id: UUID) async throws {
+        guard store.claim(id) else { throw ShareRetryError.inProgress }
+        defer { store.unclaim(id) }
         guard var record = store.record(id), record.canRetry,
             FileManager.default.fileExists(atPath: store.bodyFile(for: id).path)
         else { throw ShareRetryError.unavailable }
+        guard let serverURL, record.serverURL == nil || record.serverURL == serverURL else {
+            throw ShareRetryError.otherServer
+        }
         var token = try await tokens?.token()
         if record.status == .failed(.unauthorized), let tokens {
             token = try await tokens.refresh(rejecting: token)
@@ -153,22 +178,36 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
         record.status = .pending
         record.attempts += 1
         record.updatedAt = .now
+        record.serverURL = serverURL
+        record.sessionIdentifier = identifier
         try store.save(record)
-        start(record, token: token)
+        start(record, serverURL: serverURL, token: token)
     }
 
     public func discard(_ id: UUID) {
         store.remove(id)
     }
 
-    /// Tears the session down; for uploaders that use a foreground configuration.
+    /// Marks this session's pending uploads that no longer have a task, and have not changed since `before`, as
+    /// interrupted, so they can be retried. Returns how many of its uploads are still running.
+    @discardableResult
+    public func reconcile(interruptedBefore before: Date) async -> Int {
+        let live = Set(await session.allTasks.compactMap { $0.taskDescription.flatMap(UUID.init(uuidString:)) })
+        for record in store.markInterrupted(sessionIdentifier: identifier, live: live, before: before) {
+            onChange?(record)
+        }
+        return live.count
+    }
+
+    /// Tears the session down once its tasks have finished.
     public func invalidate() {
         session.finishTasksAndInvalidate()
     }
 
-    private func start(_ record: ShareUploadRecord, token: String?) {
+    private func start(_ record: ShareUploadRecord, serverURL: URL, token: String?) {
         let request = ShareUploadRequest.request(
-            serverURL: serverURL, contentType: record.contentType, token: token, vaultID: record.vaultID
+            serverURL: serverURL, contentType: record.contentType, token: token, vaultID: record.vaultID,
+            idempotencyKey: record.id
         )
         let task = session.uploadTask(with: request, fromFile: store.bodyFile(for: record.id))
         task.taskDescription = record.id.uuidString

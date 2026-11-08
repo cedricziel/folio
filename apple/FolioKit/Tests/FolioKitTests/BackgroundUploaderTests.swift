@@ -110,13 +110,27 @@ struct ShareUploadHarness: Sendable {
         ShareUploadProtocol.serve(host, replies)
     }
 
-    static func uploader(host: String, tokens: RotatingTokens, directory: URL) -> BackgroundUploader {
+    static func uploader(
+        host: String, tokens: RotatingTokens, directory: URL, identifier: String = "test"
+    ) -> BackgroundUploader {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ShareUploadProtocol.self]
         return BackgroundUploader(
-            serverURL: URL(string: "https://\(host)")!, tokens: tokens, identifier: "test",
+            serverURL: URL(string: "https://\(host)")!, tokens: tokens, identifier: identifier,
             directory: directory, configuration: configuration
         )
+    }
+
+    /// A pending share as an earlier process left it, with its body on disk.
+    func savePending(sessionIdentifier: String?, minutesAgo: Double) throws -> ShareUploadRecord {
+        let record = ShareUploadRecord(
+            id: UUID(), filename: "scan.pdf", contentType: "multipart/form-data; boundary=x", status: .pending,
+            attempts: 1, updatedAt: .now.addingTimeInterval(-minutesAgo * 60),
+            serverURL: URL(string: "https://\(host)"), sessionIdentifier: sessionIdentifier
+        )
+        try uploader.store.save(record)
+        try Data("--x--".utf8).write(to: uploader.store.bodyFile(for: record.id))
+        return record
     }
 
     func nextOutcome() async -> ShareUploadRecord? {
@@ -153,12 +167,17 @@ struct ShareUploadFailureTests {
         #expect(ShareUploadFailure.classify(response: nil, error: nil) != nil)
     }
 
-    @Test func transportErrorsWinOverAnyResponse() {
-        let failure = ShareUploadFailure.classify(response: response(200), error: URLError(.networkConnectionLost))
+    @Test func transportErrorsWithoutAnAcceptedResponseFail() {
+        let failure = ShareUploadFailure.classify(response: response(500), error: URLError(.networkConnectionLost))
         guard case .transport = failure else {
             Issue.record("Expected a transport failure, got \(String(describing: failure))")
             return
         }
+    }
+
+    /// The server stored the file; a transport error after its answer must not offer a retry.
+    @Test func anAcceptedResponseWinsOverALateTransportError() {
+        #expect(ShareUploadFailure.classify(response: response(201), error: URLError(.networkConnectionLost)) == nil)
     }
 
     @Test func onlyRepeatableFailuresAreRetryable() {
@@ -210,6 +229,9 @@ struct ShareUploadFailureTests {
         #expect(harness.tokens.rejected == ["stale"])
         let requests = ShareUploadProtocol.requests(to: harness.host)
         #expect(requests.map { $0.value(forHTTPHeaderField: "Authorization") } == ["Bearer stale", "Bearer fresh"])
+        #expect(
+            requests.map { $0.value(forHTTPHeaderField: "Idempotency-Key") }
+                == Array(repeating: failed.id.uuidString.lowercased(), count: 2))
         #expect(Set(requests.compactMap { $0.value(forHTTPHeaderField: "Content-Type") }).count == 1)
     }
 
@@ -255,6 +277,7 @@ struct ShareUploadFailureTests {
         let failed = try #require(await harness.nextOutcome())
         #expect(failed.status == .failed(.rejected(status: 415)))
         #expect(!failed.canRetry)
+        #expect(!harness.bodyExists(failed), "a body the server refused is not kept")
 
         await #expect(throws: ShareRetryError.unavailable) { try await harness.uploader.retry(failed.id) }
         #expect(ShareUploadProtocol.requests(to: harness.host).count == 1)
@@ -280,25 +303,130 @@ struct ShareUploadFailureTests {
         #expect(retained.first?.status == .failed(.rejected(status: 503)))
     }
 
-    @Test func acceptedUploadsArePrunedAfterADay() throws {
+    @Test func acceptedUploadsAgeOutAfterADayAndFailedOnesAfterAWeek() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "folio-share-\(UUID().uuidString)", directoryHint: .isDirectory)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ShareUploadStore(directory: directory)
-        let old = ShareUploadRecord(
-            id: UUID(), filename: "old.pdf", contentType: "multipart/form-data", status: .uploaded,
-            attempts: 1, updatedAt: .now.addingTimeInterval(-2 * 24 * 60 * 60)
-        )
-        let failed = ShareUploadRecord(
-            id: UUID(), filename: "failed.pdf", contentType: "multipart/form-data",
-            status: .failed(.rejected(status: 500)), attempts: 1, updatedAt: old.updatedAt
-        )
-        try store.save(old)
-        try store.save(failed)
+        func record(_ status: ShareUploadRecord.Status, daysAgo: Double) throws -> ShareUploadRecord {
+            let record = ShareUploadRecord(
+                id: UUID(), filename: "a.pdf", contentType: "multipart/form-data", status: status, attempts: 1,
+                updatedAt: .now.addingTimeInterval(-daysAgo * 24 * 60 * 60)
+            )
+            try store.save(record)
+            try Data("body".utf8).write(to: store.bodyFile(for: record.id))
+            return record
+        }
+        _ = try record(.uploaded, daysAgo: 2)
+        let recentUpload = try record(.uploaded, daysAgo: 0.5)
+        let recentFailure = try record(.failed(.rejected(status: 500)), daysAgo: 6)
+        let oldFailure = try record(.failed(.rejected(status: 500)), daysAgo: 8)
+        let pending = try record(.pending, daysAgo: 8)
 
-        store.pruneUploaded(before: .now.addingTimeInterval(-24 * 60 * 60))
+        store.prune()
 
-        #expect(store.all().map(\.id) == [failed.id])
+        #expect(Set(store.all().map(\.id)) == [recentUpload.id, recentFailure.id, pending.id])
+        #expect(!FileManager.default.fileExists(atPath: store.bodyFile(for: oldFailure.id).path))
+    }
+
+    @Test func pendingUploadWithoutATaskBecomesRetryable() async throws {
+        let harness = ShareUploadHarness([.status(201)])
+        defer { harness.tearDown() }
+        let record = try harness.savePending(sessionIdentifier: harness.uploader.identifier, minutesAgo: 10)
+        let recent = try harness.savePending(sessionIdentifier: harness.uploader.identifier, minutesAgo: 0)
+        let otherSession = try harness.savePending(sessionIdentifier: "elsewhere", minutesAgo: 10)
+
+        let running = await harness.uploader.reconcile(interruptedBefore: .now.addingTimeInterval(-60))
+
+        #expect(running == 0)
+        let interrupted = try #require(harness.uploader.store.record(record.id))
+        #expect(interrupted.status == .failed(.interrupted))
+        #expect(interrupted.canRetry)
+        #expect(harness.uploader.store.record(recent.id)?.status == .pending)
+        #expect(harness.uploader.store.record(otherSession.id)?.status == .pending)
+
+        try await harness.uploader.retry(record.id)
+        #expect(await harness.nextOutcome()?.status == .failed(.interrupted), "reconcile reports the change")
+        #expect(await harness.nextOutcome()?.status == .uploaded)
+    }
+
+    @Test func aRetryHeldByAnotherProcessIsRefused() async throws {
+        let harness = ShareUploadHarness([.status(503), .status(201)])
+        defer { harness.tearDown() }
+        try await harness.uploader.enqueue(pdf())
+        let failed = try #require(await harness.nextOutcome())
+
+        #expect(harness.uploader.store.claim(failed.id))
+        await #expect(throws: ShareRetryError.inProgress) { try await harness.uploader.retry(failed.id) }
+        harness.uploader.store.unclaim(failed.id)
+
+        try await harness.uploader.retry(failed.id)
+        #expect(await harness.nextOutcome()?.status == .uploaded)
+        #expect(ShareUploadProtocol.requests(to: harness.host).count == 2)
+    }
+
+    @Test func aShareForAnotherServerIsNotRetriedHere() async throws {
+        let harness = ShareUploadHarness([.status(503)])
+        defer { harness.tearDown() }
+        try await harness.uploader.enqueue(pdf())
+        var failed = try #require(await harness.nextOutcome())
+        failed.serverURL = URL(string: "https://other.example.com")
+        try harness.uploader.store.save(failed)
+
+        await #expect(throws: ShareRetryError.otherServer) { try await harness.uploader.retry(failed.id) }
+        #expect(ShareUploadProtocol.requests(to: harness.host).count == 1)
+    }
+}
+
+@MainActor @Suite(.timeLimit(.minutes(1))) struct ShareSessionCoordinatorTests {
+    @Test func relaunchedSessionEventsCompleteOnlyAfterTheSessionFinishes() async throws {
+        let harness = ShareUploadHarness([])
+        defer { harness.tearDown() }
+        var attached: [String] = []
+        let coordinator = ShareSessionCoordinator(store: harness.uploader.store) { identifier in
+            attached.append(identifier)
+            return harness.uploader
+        }
+        var completed = 0
+        let identifier = BackgroundUploader.identifierPrefix + "relaunch"
+
+        #expect(!coordinator.handleEvents(for: "com.example.other", completion: { completed += 1 }))
+        #expect(coordinator.handleEvents(for: identifier, completion: { completed += 1 }))
+        #expect(attached == [identifier])
+        #expect(completed == 0)
+
+        harness.uploader.onEventsFinished?()
+        for _ in 0..<50 where completed == 0 {
+            await Task.yield()
+        }
+
+        #expect(completed == 1)
+    }
+
+    @Test func openingTheAppFailsStalePendingSharesWithoutATask() async throws {
+        let harness = ShareUploadHarness([])
+        defer { harness.tearDown() }
+        let identifier = BackgroundUploader.identifierPrefix + "gone"
+        let stale = try harness.savePending(sessionIdentifier: identifier, minutesAgo: 10)
+        let orphan = try harness.savePending(sessionIdentifier: nil, minutesAgo: 10)
+        let fresh = try harness.savePending(sessionIdentifier: identifier, minutesAgo: 0)
+        let coordinator = ShareSessionCoordinator(store: harness.uploader.store) { identifier in
+            ShareUploadHarness.uploader(
+                host: harness.host, tokens: harness.tokens, directory: harness.directory, identifier: identifier)
+        }
+        var changed: [UUID] = []
+        coordinator.onChange = { changed.append($0.id) }
+
+        await coordinator.recoverInterrupted()
+
+        let store = harness.uploader.store
+        #expect(store.record(stale.id)?.status == .failed(.interrupted))
+        #expect(store.record(orphan.id)?.status == .failed(.interrupted))
+        #expect(store.record(fresh.id)?.status == .pending)
+        for _ in 0..<50 where changed.count < 2 {
+            await Task.yield()
+        }
+        #expect(Set(changed) == [stale.id, orphan.id])
     }
 }
 

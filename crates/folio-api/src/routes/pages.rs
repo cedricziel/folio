@@ -4,7 +4,7 @@ use crate::vault::filters;
 use askama::Template;
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
@@ -12,11 +12,12 @@ use axum::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
+use chrono::Utc;
 use folio_core::models::{
     Correspondent, Document, DocumentSource, DocumentStatus, DocumentType, SourceKind,
     UpdateDocument, UserId, VaultId,
 };
-use folio_core::ports::{keys, StoredObject};
+use folio_core::ports::{keys, upload_fingerprint, StoredObject, UploadClaim, UploadReceiptKey};
 use folio_core::services::NewUpload;
 use folio_infra::JobType;
 
@@ -564,6 +565,7 @@ pub(crate) async fn store_upload(
     uploaded_by: Option<UserId>,
     mut multipart: Multipart,
     source: SourceKind,
+    idempotency_key: Option<Uuid>,
 ) -> ApiResult<Document> {
     debug!("Starting document upload");
 
@@ -610,15 +612,50 @@ pub(crate) async fn store_upload(
         .or_else(|| filename.clone())
         .unwrap_or_else(|| "Untitled".to_string());
     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".to_string());
+    let filename = filename.unwrap_or_else(|| "upload".to_string());
+
+    let receipt =
+        match idempotency_key {
+            Some(key) => {
+                let receipt = UploadReceiptKey {
+                    vault,
+                    actor_scope: uploaded_by
+                        .as_ref()
+                        .map(|user| format!("user:{}", user.as_str()))
+                        .unwrap_or_else(|| "system".into()),
+                    key,
+                };
+                let fingerprint = upload_fingerprint(&filename, &mime_type, &title, &file_data);
+                match state
+                    .upload_receipts
+                    .claim(&receipt, &fingerprint, Utc::now())
+                    .await?
+                {
+                    UploadClaim::Claimed => Some(receipt),
+                    UploadClaim::Completed(id) => return replayed_upload(state, vault, id).await,
+                    UploadClaim::Mismatch => {
+                        return Err(ApiError::new(
+                            StatusCode::CONFLICT,
+                            "This Idempotency-Key was already used for a different upload",
+                        ))
+                    }
+                    UploadClaim::InProgress => return Err(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "An upload with this Idempotency-Key is still in progress; retry shortly",
+                    )),
+                }
+            }
+            None => None,
+        };
 
     // Storing and queueing (OCR, thumbnails, embedding) is shared with ingestion
-    let document = state
+    let imported = state
         .importer
         .import(
             vault,
             NewUpload {
                 title: Some(title),
-                filename: filename.unwrap_or_else(|| "upload".to_string()),
+                filename,
                 mime_type: Some(mime_type),
                 data: file_data,
                 source: DocumentSource::of(source),
@@ -626,11 +663,57 @@ pub(crate) async fn store_upload(
                 uploaded_by,
             },
         )
-        .await?;
+        .await;
+    let document = match (imported, receipt) {
+        (Ok(document), Some(receipt)) => {
+            state
+                .upload_receipts
+                .complete(&receipt, document.id)
+                .await?;
+            document
+        }
+        (Ok(document), None) => document,
+        (Err(e), receipt) => {
+            if let Some(receipt) = receipt {
+                if let Err(release) = state.upload_receipts.release(&receipt).await {
+                    error!("Failed to release upload receipt: {}", release);
+                }
+            }
+            return Err(e.into());
+        }
+    };
 
     folio_infra::telemetry::metrics().documents_changed(1);
 
     Ok(document)
+}
+
+/// The document an earlier request with the same `Idempotency-Key` created
+async fn replayed_upload(state: &AppState, vault: VaultId, id: Uuid) -> ApiResult<Document> {
+    state
+        .document_repo
+        .find_by_id(vault, id)
+        .await?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                "The document uploaded with this Idempotency-Key no longer exists",
+            )
+        })
+}
+
+/// Reads the optional `Idempotency-Key` header; a value must be a nonnil UUID
+pub(crate) fn idempotency_key(headers: &HeaderMap) -> ApiResult<Option<Uuid>> {
+    let Some(value) = headers.get("idempotency-key") else {
+        return Ok(None);
+    };
+    value
+        .to_str()
+        .ok()
+        .and_then(|value| Uuid::parse_str(value.trim()).ok())
+        .filter(|key| !key.is_nil())
+        .map(Some)
+        .ok_or_else(|| ApiError::bad_request("Idempotency-Key must be a nonnil UUID"))
 }
 
 /// Keeps the status the multipart parser chose, such as 413 for an oversized body
@@ -644,9 +727,12 @@ async fn upload_document(
     DefaultVault(vault): DefaultVault,
     Uploader(uploader): Uploader,
     State(state): State<AppState>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Response> {
-    let document = store_upload(&state, vault, uploader, multipart, SourceKind::Upload).await?;
+    let key = idempotency_key(&headers)?;
+    let document =
+        store_upload(&state, vault, uploader, multipart, SourceKind::Upload, key).await?;
     let html = DocumentStreams::added(&state, document).await?.into_html();
 
     Ok(([(header::CONTENT_TYPE, "text/vnd.turbo-stream.html")], html).into_response())

@@ -70,6 +70,12 @@ struct ShareRoot: View {
         uploader.onChange = { _ in
             Task { @MainActor [weak model] in model?.refreshRetained() }
         }
+        let coordinator = ShareSessionCoordinator.shared
+        coordinator.onChange = { [weak model] _ in model?.refreshRetained() }
+        Task { [weak model] in
+            await coordinator.recoverInterrupted()
+            model?.refreshRetained()
+        }
         return model
     }
 }
