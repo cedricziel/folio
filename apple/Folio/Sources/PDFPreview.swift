@@ -101,6 +101,7 @@ final class PDFReadingPosition: NSObject {
 }
 
 /// A PDF shown with PDFKit, so Handoff can carry and restore its page. Other files use QuickLook.
+@MainActor
 struct PDFPreview {
     let url: URL
     let pageRequest: PDFPageRequest?
