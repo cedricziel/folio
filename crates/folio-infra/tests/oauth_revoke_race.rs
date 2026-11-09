@@ -220,6 +220,29 @@ async fn postgres_refresh_rotation_never_outlives_a_revoke() {
         .await;
 }
 
+/// A loaded host stretches SQLite's lock waits; a short busy timeout makes a
+/// replay that waits behind a rotating client fail the same way, and a failed
+/// replay must not leave the grant alive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_replay_is_not_starved_by_a_rotating_client() {
+    use std::str::FromStr;
+    let (dir, _db) = common::sqlite_database().await;
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str(&format!(
+        "sqlite:{}",
+        dir.path().join("test.db").display()
+    ))
+    .unwrap()
+    .busy_timeout(Duration::from_millis(100));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let store: Arc<dyn AuthStore> =
+        Arc::new(folio_infra::database::sqlite::SqliteAuthStore::new(pool));
+    refresh_rotation_never_outlives_a_revoke(store, Revoke::Replay).await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn postgres_refresh_rotation_never_outlives_a_replay() {
     let Some((_container, db)) = common::postgres_database("PostgreSQL (OAuth revoke race)").await

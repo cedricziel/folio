@@ -7,23 +7,35 @@ use folio_auth::{
     RefreshToken, Session, TotpRecord, User,
 };
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use tokio::sync::{Mutex, MutexGuard};
 
 pub struct SqliteAuthStore {
     pool: SqlitePool,
+    /// Queues token exchanges and revocations first come, first served.
+    /// SQLite's busy handler is not fair: a client rotating in a tight loop can
+    /// keep retaking the write lock until a concurrent replay times out, and a
+    /// replay that fails leaves the grant it should have revoked alive.
+    exchanges: Mutex<()>,
 }
 
 impl SqliteAuthStore {
     pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            exchanges: Mutex::new(()),
+        }
     }
 
     /// Starts a transaction that serializes with every other writer, so token
-    /// exchanges and disconnects of a client run one after the other.
+    /// exchanges and disconnects of a client run one after the other. Keep the
+    /// guard until the transaction ends.
     async fn begin_locked(
         &self,
         _client_id: &str,
-    ) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, AuthError> {
-        self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)
+    ) -> Result<(MutexGuard<'_, ()>, sqlx::Transaction<'static, sqlx::Sqlite>), AuthError> {
+        let queued = self.exchanges.lock().await;
+        let tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
+        Ok((queued, tx))
     }
 
     /// Takes a grant with `take_sql` and stores the tokens `check` issues for it.
@@ -507,7 +519,7 @@ impl AuthStore for SqliteAuthStore {
         code_hash: &str,
         check: GrantCheck<'_, AuthCode>,
     ) -> Result<Option<AuthCode>, AuthError> {
-        let mut tx = self.begin_locked(client_id).await?;
+        let (_queued, mut tx) = self.begin_locked(client_id).await?;
         let taken =
             Self::take_and_issue(&mut tx, client_id, TAKE_CODE, code_hash, code_from, check)
                 .await?;
@@ -622,7 +634,7 @@ impl AuthStore for SqliteAuthStore {
         token_hash: &str,
         check: GrantCheck<'_, RefreshToken>,
     ) -> Result<RefreshExchange, AuthError> {
-        let mut tx = self.begin_locked(client_id).await?;
+        let (mut queued, mut tx) = self.begin_locked(client_id).await?;
         let taken = Self::take_and_issue(
             &mut tx,
             client_id,
@@ -651,12 +663,14 @@ impl AuthStore for SqliteAuthStore {
         // keeps a rotation racing the replay from keeping its new tokens.
         if owner != client_id {
             tx.commit().await.map_err(err)?;
-            tx = self.begin_locked(&owner).await?;
+            drop(queued);
+            (queued, tx) = self.begin_locked(&owner).await?;
         }
         if !grant_id.is_empty() {
             Self::delete_grant(&mut tx, &grant_id).await?;
         }
         tx.commit().await.map_err(err)?;
+        drop(queued);
         Ok(RefreshExchange::Replayed)
     }
 
@@ -702,7 +716,7 @@ impl AuthStore for SqliteAuthStore {
             ),
         ];
         // Rotations of the grant hold the same lock, so none can outlive this.
-        let mut tx = self.begin_locked(client_id).await?;
+        let (_queued, mut tx) = self.begin_locked(client_id).await?;
         for (select, delete) in lookups {
             let found: Option<String> = sqlx::query_scalar(select)
                 .bind(token_hash)
@@ -838,7 +852,7 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn revoke_client_tokens(&self, user_id: &str, client_id: &str) -> Result<(), AuthError> {
-        let mut tx = self.begin_locked(client_id).await?;
+        let (_queued, mut tx) = self.begin_locked(client_id).await?;
         for sql in [
             "DELETE FROM oauth_codes WHERE user_id = $1 AND client_id = $2",
             "DELETE FROM oauth_access_tokens WHERE user_id = $1 AND client_id = $2",
