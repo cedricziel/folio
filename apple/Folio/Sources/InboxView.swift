@@ -68,6 +68,7 @@ struct InboxView: View {
         _uploads = State(
             initialValue: UploadViewModel(service: service) {
                 Task { await list.load(afterUpload: true) }
+                NotificationCenter.default.post(name: .folioUploadFinished, object: nil)
             }
         )
     }
@@ -264,6 +265,7 @@ struct InboxView: View {
                         .listRowBackground(Color.paper)
                     }
                 }
+                .documentEntityIdentifiers(vaultID: vaultID)
             }
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: list.rowChangeRevision)
@@ -327,6 +329,7 @@ struct InboxView: View {
                 onFinished: { filed in
                     scannedPages.close(scan.id)
                     Task { await list.load(afterUpload: filed) }
+                    if filed { NotificationCenter.default.post(name: .folioUploadFinished, object: nil) }
                 }
             )
         }
@@ -637,6 +640,7 @@ struct InboxView: View {
         let list = session.list
         uploads = UploadViewModel(service: service, destination: makeUploadDestination()) {
             Task { await list.load(afterUpload: true) }
+            NotificationCenter.default.post(name: .folioUploadFinished, object: nil)
         }
         pendingUploads = UploadBatch(files: files)
     }
@@ -730,3 +734,8 @@ private struct UploadBatch: Identifiable {
         }
     }
 #endif
+
+extension Notification.Name {
+    /// An upload or scan reached the server; the app may ask for notification permission then.
+    static let folioUploadFinished = Notification.Name("FolioUploadFinished")
+}

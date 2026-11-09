@@ -42,6 +42,10 @@ use crate::routes::{
         vaults::grant_member,
         vaults::revoke_member,
         vaults::list_history,
+        crate::routes::devices::list_devices,
+        crate::routes::devices::register_device,
+        crate::routes::devices::delete_device,
+        crate::routes::devices::test_device,
         crate::routes::saved_views::list,
         crate::routes::saved_views::find,
         crate::routes::saved_views::create,
@@ -115,6 +119,7 @@ use crate::routes::{
         (name = "correspondents", description = "Senders of documents"),
         (name = "document_types", description = "Document classifications"),
         (name = "events", description = "Real-time updates"),
+        (name = "devices", description = "Apple devices registered for push notifications"),
         (name = "workflows", description = "Automations that react to document events, such as webhooks"),
         (name = "sources", description = "Consume folders and mailboxes that import documents automatically"),
     )

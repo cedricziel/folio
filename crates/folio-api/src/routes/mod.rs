@@ -5,6 +5,7 @@ mod assets;
 pub mod auth;
 pub(crate) mod browse;
 pub(crate) mod correspondents;
+pub mod devices;
 pub(crate) mod document_entries;
 pub(crate) mod document_types;
 pub(crate) mod documents;
@@ -173,6 +174,7 @@ fn api_router() -> Router<AppState> {
         )
         .route("/vaults/{vault_id}/history", get(vaults::list_history))
         .merge(saved_views::router())
+        .merge(devices::router())
         .nest("/telemetry", crate::client_telemetry::router())
         .nest("/documents", documents::router())
         .route("/documents/browse", get(browse::browse_default))

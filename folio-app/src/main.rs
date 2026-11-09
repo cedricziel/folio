@@ -10,12 +10,14 @@ use tokio::task::JoinHandle;
 use tracing::info;
 
 use folio_api::{create_router, AppState, AuthState, IngestionState};
-use folio_core::ports::{HealthCheck, SettingsRepository};
+use folio_core::ports::{HealthCheck, RepositoryDocuments, SettingsRepository};
+use folio_core::services::notifications::{NotificationPlanner, NotificationSender, SenderConfig};
 use folio_core::services::{
     backfill_file_sizes, BroadcastConsumer, DispatcherConfig, Importer, IngestPipeline,
     IngestScheduler, LibraryService, OutboxDispatcher, VaultService, WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
+use folio_infra::push::ConfiguredPush;
 use folio_infra::{
     build_store, telemetry, Config, Database, DatabaseHealthCheck, DynamicEmbeddingService,
     DynamicOcrService, PipelineContext, SourceFactory, StorageFileMetadata, ThumbnailService,
@@ -119,6 +121,10 @@ async fn main() -> Result<()> {
     let source_repo = repos.sources;
     let ledger = repos.ledger;
     let auth_store = repos.auth;
+    let push_devices = repos.push.clone();
+    let push_grants = repos.grants.clone();
+    let push_access = repos.access.clone();
+    let push_wake = Arc::new(tokio::sync::Notify::new());
     let vault_service =
         Arc::new(VaultService::new(repos.vaults.clone(), repos.members).with_audit(repos.audit));
 
@@ -202,18 +208,6 @@ async fn main() -> Result<()> {
     )
     .with_workflow_runner(workflow_runner);
 
-    // Delivers committed events to workflows and live clients, including those
-    // left over from before a restart. Stops when the shutdown signal flips.
-    let dispatcher = Arc::new(OutboxDispatcher::new(
-        outbox.clone(),
-        vec![
-            Arc::new(BroadcastConsumer(event_broadcaster.clone())),
-            workflow_engine,
-        ],
-        DispatcherConfig::default(),
-    ));
-    tokio::spawn(dispatcher.run(shutdown_tx.subscribe()));
-
     // Stops on its own when the shutdown signal flips
     tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 
@@ -243,6 +237,78 @@ async fn main() -> Result<()> {
         Arc::new(job_queue.clone()),
     ));
 
+    let secret_key = match config.auth.secret_key.as_deref().filter(|k| !k.is_empty()) {
+        Some(key) => {
+            if let Some(stored) = settings_repo.get(SECRET_KEY_SETTING).await? {
+                if stored.value != key {
+                    tracing::error!(
+                        "auth.secret_key differs from the database fallback key; existing TOTP enrollments and recovery codes created with the stored key will stop working. Restore that key or reset those enrollments"
+                    );
+                }
+            }
+            key.to_string()
+        }
+        None => {
+            tracing::warn!(
+                "auth.secret_key is not set; using a key kept in the database. Set FOLIO_AUTH__SECRET_KEY (or FOLIO_AUTH__SECRET_KEY_FILE) so a copy of the database alone cannot decrypt two-factor secrets"
+            );
+            match settings_repo.get(SECRET_KEY_SETTING).await? {
+                Some(setting) => setting.value,
+                None => {
+                    let key = folio_auth::secret::SecretBox::generate_key();
+                    settings_repo.set(SECRET_KEY_SETTING, &key).await?;
+                    key
+                }
+            }
+        }
+    };
+    // Push notifications: the planner queues, the sender delivers.
+    let external_secret = config
+        .auth
+        .secret_key
+        .as_deref()
+        .is_some_and(|k| !k.is_empty());
+    let push_settings = Arc::new(ConfiguredPush::new(
+        settings_repo.clone(),
+        config.push.clone(),
+        folio_auth::secret::SecretBox::new(&secret_key)
+            .ok()
+            .map(Arc::new),
+        external_secret,
+    ));
+    let push_sender = Arc::new(NotificationSender::new(
+        push_devices.clone(),
+        Arc::new(RepositoryDocuments(document_repo.clone())),
+        push_access.clone(),
+        push_grants,
+        push_settings.clone(),
+        push_settings.clone(),
+        SenderConfig::default(),
+    ));
+    // Delivers committed events to workflows and live clients, including those
+    // left over from before a restart. Stops when the shutdown signal flips.
+    let dispatcher = Arc::new(OutboxDispatcher::new(
+        outbox.clone(),
+        vec![
+            Arc::new(BroadcastConsumer(event_broadcaster.clone())),
+            workflow_engine,
+            Arc::new(NotificationPlanner::new(
+                push_devices.clone(),
+                Arc::new(RepositoryDocuments(document_repo.clone())),
+                push_access.clone(),
+                push_settings.clone(),
+                push_wake.clone(),
+            )),
+        ],
+        DispatcherConfig::default(),
+    ));
+    tokio::spawn(dispatcher.run(shutdown_tx.subscribe()));
+    tokio::spawn(
+        push_sender
+            .clone()
+            .run(push_wake.clone(), shutdown_tx.subscribe()),
+    );
+
     if matches!(mode, Mode::McpStdio) {
         let served = folio_mcp::serve_stdio(library, vault_service.clone()).await;
         stop_worker(shutdown_tx, worker_handle).await;
@@ -250,7 +316,6 @@ async fn main() -> Result<()> {
     }
 
     let mcp_settings: Arc<dyn SettingsRepository> = settings_repo.clone();
-    let auth_settings = settings_repo.clone();
     let mcp_default = config.mcp.enabled.unwrap_or(config.auth.required);
     if !config.auth.required && folio_mcp::is_enabled(mcp_settings.as_ref(), mcp_default).await {
         tracing::warn!(
@@ -271,7 +336,7 @@ async fn main() -> Result<()> {
         tag_repo,
         correspondent_repo,
         document_type_repo,
-        settings_repo,
+        settings_repo.clone(),
         ocr_service,
         embedding_service,
         search_service,
@@ -279,8 +344,8 @@ async fn main() -> Result<()> {
         thumbnail_service,
         job_queue,
         store,
-        event_broadcaster,
-        outbox,
+        event_broadcaster.clone(),
+        outbox.clone(),
         workflow_repo,
         webhook_client,
         public_url,
@@ -307,34 +372,15 @@ async fn main() -> Result<()> {
     if let Some(token) = config.auth.setup_token.as_deref().filter(|t| !t.is_empty()) {
         auth = auth.with_setup_token(token);
     }
-    let secret_key = match config.auth.secret_key.as_deref().filter(|k| !k.is_empty()) {
-        Some(key) => {
-            if let Some(stored) = auth_settings.get(SECRET_KEY_SETTING).await? {
-                if stored.value != key {
-                    tracing::error!(
-                        "auth.secret_key differs from the database fallback key; existing TOTP enrollments and recovery codes created with the stored key will stop working. Restore that key or reset those enrollments"
-                    );
-                }
-            }
-            key.to_string()
-        }
-        None => {
-            tracing::warn!(
-                "auth.secret_key is not set; using a key kept in the database. Set FOLIO_AUTH__SECRET_KEY (or FOLIO_AUTH__SECRET_KEY_FILE) so a copy of the database alone cannot decrypt two-factor secrets"
-            );
-            match auth_settings.get(SECRET_KEY_SETTING).await? {
-                Some(setting) => setting.value,
-                None => {
-                    let key = folio_auth::secret::SecretBox::generate_key();
-                    auth_settings.set(SECRET_KEY_SETTING, &key).await?;
-                    key
-                }
-            }
-        }
-    };
     auth = auth
         .with_secret_key(&secret_key)
         .map_err(|e| anyhow::anyhow!("invalid auth.secret_key: {e}"))?;
+
+    state.push = Some(folio_api::routes::devices::PushState {
+        devices: push_devices,
+        sender: push_sender,
+        settings: push_settings,
+    });
     let forward = &config.auth.forward;
     if forward.enabled {
         let settings = folio_auth::ForwardAuth::new(folio_auth::ForwardConfig {
