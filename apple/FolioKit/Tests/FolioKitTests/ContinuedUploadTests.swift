@@ -4,6 +4,7 @@ import Testing
 @testable import FolioKit
 
 /// User-started upload batches hand their progress to the system so they can finish in the background (#364).
+@Suite(.timeLimit(.minutes(1)))
 @MainActor struct ContinuedUploadTests {
     @Test func aBatchReportsSystemProgressUntilItFinishes() async {
         let scheduler = RecordingScheduler()
@@ -78,6 +79,60 @@ import Testing
 
         #expect(await service.uploads.map(\.filename) == ["a.pdf", "b.pdf"])
         #expect(model.state == .finished(count: 2))
+    }
+
+    @Test func aRetryWhoseEarlierDocumentWasDeletedUploadsTheFileAgainOnce() async {
+        let service = MockFolioService()
+        await service.setLoseUploadResponses(true)
+        let model = UploadViewModel(service: service) {}
+        let files = [file("a.pdf")]
+        await model.upload(files)
+        await service.setLoseUploadResponses(false)
+        let lost = await service.documentList[0].id
+        await service.markDeleted(lost)
+
+        await model.upload(files)
+
+        #expect(model.state == .finished(count: 1))
+        let keys = await service.uploadKeys
+        #expect(keys.count == 3, "first attempt, the retry answered 410, then a fresh key")
+        #expect(keys[1] == keys[0])
+        #expect(keys[2] != keys[0])
+        #expect(await service.uploads.map(\.filename) == ["a.pdf", "a.pdf"])
+    }
+
+    @Test func aSecondGoneAnswerFailsTheBatch() async {
+        let service = MockFolioService()
+        await service.setFailure(.server(status: 410, message: nil))
+        let model = UploadViewModel(service: service) {}
+
+        await model.upload([file("a.pdf")])
+
+        guard case .failed(_, uploaded: 0) = model.state else {
+            Issue.record("Expected the batch to fail, got \(model.state)")
+            return
+        }
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2, "the original key, then one fresh key, and no further attempts")
+        #expect(keys[0] != keys[1])
+    }
+
+    @Test func cancellingTheCallerStopsTheBatch() async {
+        let service = MockFolioService()
+        let scheduler = RecordingScheduler()
+        let model = UploadViewModel(service: service, continuedWork: scheduler) {}
+        await service.suspendUploads()
+        let caller = Task { await model.upload([file("a.pdf"), file("b.pdf")]) }
+        await service.waitForUploadRequest()
+        await service.setUploadDelay(.seconds(30))
+
+        caller.cancel()
+        await service.releaseUploads()
+        await caller.value
+
+        #expect(model.state == .failed(message: "Upload stopped.", uploaded: 0))
+        #expect(scheduler.work?.result == false)
+        #expect(await service.uploads.isEmpty)
     }
 
     private func file(_ name: String) -> UploadFile {

@@ -54,6 +54,8 @@ targets:
         UILaunchScreen: {}
         BGTaskSchedulerPermittedIdentifiers:
           - $(PRODUCT_BUNDLE_IDENTIFIER).continued.*
+        UIBackgroundModes:
+          - processing
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
