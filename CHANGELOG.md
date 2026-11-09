@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.16.0](https://github.com/cedricziel/folio/compare/v0.15.0...v0.16.0) (2026-11-09)
+
+
+### Features
+
+* **api:** report whether each listed vault is shared ([#435](https://github.com/cedricziel/folio/issues/435)) ([ee028b7](https://github.com/cedricziel/folio/commit/ee028b7155c40aa3804866a50227edcda04f033c))
+
+
+### Bug Fixes
+
+* **apple:** follow-ups for continued in-app uploads ([#445](https://github.com/cedricziel/folio/issues/445)) ([6f5e819](https://github.com/cedricziel/folio/commit/6f5e819d2778fa266f74dca52985fff97fda2fa9))
+* **apple:** keep every refusal's code; tidy an attribute ([#447](https://github.com/cedricziel/folio/issues/447)) ([0519067](https://github.com/cedricziel/folio/commit/051906756c1395af017db04c1bd56916f5463f78))
+* **apple:** lighter, more forgiving tag changes and pickers ([#446](https://github.com/cedricziel/folio/issues/446)) ([32ce0e0](https://github.com/cedricziel/folio/commit/32ce0e008ca2e8206755512674f5aea04166b812))
+* **apple:** match widget links in any case and finish background refreshes ([866c0bf](https://github.com/cedricziel/folio/commit/866c0bf64adf26eafd59a64fc268ab37a0be88ba)), closes [#360](https://github.com/cedricziel/folio/issues/360)
+* **apple:** serialize the scan telemetry test and cancel only the expiring refresh ([62952a0](https://github.com/cedricziel/folio/commit/62952a0b54209fdb295a7152b24e3b2d1a6f20e1)), closes [#360](https://github.com/cedricziel/folio/issues/360)
+* **apple:** sweep leftover transfer downloads off the session update ([#448](https://github.com/cedricziel/folio/issues/448)) ([05c29bc](https://github.com/cedricziel/folio/commit/05c29bcf476fc4c008827516c2c68b78c336d0ef))
+* **deps:** bump yanked spin 0.9.8 to 0.9.9 ([810df92](https://github.com/cedricziel/folio/commit/810df9202357162d7fd3556894d95eab80665598))
+* **deps:** bump yanked spin 0.9.8 to 0.9.9 ([#449](https://github.com/cedricziel/folio/issues/449)) ([07bd5f9](https://github.com/cedricziel/folio/commit/07bd5f99592090f7a5bf8ebcf22c1ef93839ab22))
+* **oauth:** keep a rotating client from starving a SQLite replay revoke ([86afc5f](https://github.com/cedricziel/folio/commit/86afc5fbb93d58376fc8927d06a6089b79b68272))
+* **oauth:** keep a rotating client from starving a SQLite replay revoke ([#460](https://github.com/cedricziel/folio/issues/460)) ([926c9e8](https://github.com/cedricziel/folio/commit/926c9e88573901a77def630e1a0cbec12c836a6c))
+* **oauth:** retry the client lookup when SQLite is locked ([15d9027](https://github.com/cedricziel/folio/commit/15d9027b24d0a9c022dadef4e91e1bd851b79739))
+* **oauth:** retry the replay revoke when its SQLite commit is busy ([22d3c20](https://github.com/cedricziel/folio/commit/22d3c20f6ff86cd19eecfb87a243e1b61bae9560))
+* **oauth:** retry the replay revoke when its SQLite commit is busy ([#462](https://github.com/cedricziel/folio/issues/462)) ([84facc0](https://github.com/cedricziel/folio/commit/84facc0fbd0a241ebeb23f39fb66f31d80597e50))
+* **oauth:** retry the SQLite write lock and require the replay to be rejected ([5bd71a4](https://github.com/cedricziel/folio/commit/5bd71a455930762147b8f8eab99c1e7e4cb81445))
+* **web:** limit PDF page navigation to the pages that have previews ([0d2a00d](https://github.com/cedricziel/folio/commit/0d2a00d316f399710634e34654ebb0a34ed9f946)), closes [#172](https://github.com/cedricziel/folio/issues/172)
+* **web:** limit PDF page navigation to the pages that have previews ([#454](https://github.com/cedricziel/folio/issues/454)) ([2df5d22](https://github.com/cedricziel/folio/commit/2df5d2228d1eedfe89bc742953f6b10c39701256))
+* **web:** refresh an open document's details as processing ends ([291318c](https://github.com/cedricziel/folio/commit/291318c14fb26c66b2203a3f6d46f85984b6428a)), closes [#126](https://github.com/cedricziel/folio/issues/126)
+* **web:** refresh an open document's details as processing ends ([#455](https://github.com/cedricziel/folio/issues/455)) ([850d731](https://github.com/cedricziel/folio/commit/850d7312cef06318ad99f5d49ccf8fb07b1c313b))
+
+
+### Performance Improvements
+
+* **web:** coalesce queued processing refreshes per document ([e284983](https://github.com/cedricziel/folio/commit/e2849837f5edd438b47b358c60adf5475956755b))
+* **web:** coalesce queued processing refreshes per document ([#457](https://github.com/cedricziel/folio/issues/457)) ([0c0515e](https://github.com/cedricziel/folio/commit/0c0515e73a91b2883362d5e39bb0bd297458c47c))
+
 ## [0.15.0](https://github.com/cedricziel/folio/compare/v0.14.0...v0.15.0) (2026-11-09)
 
 
