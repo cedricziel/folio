@@ -335,4 +335,89 @@ mod resume {
         assert!(text.contains("id: 1000000"));
         assert!(!text.lines().any(|line| line.starts_with("event:")));
     }
+
+    fn processing_event(
+        h: &Harness,
+        id: i64,
+        document: uuid::Uuid,
+    ) -> folio_core::events::OutboxEvent {
+        use folio_core::{DomainEventEnvelope, DomainEventSubject, EventAudience};
+        folio_core::events::OutboxEvent {
+            id,
+            event: None,
+            envelope: Some(
+                DomainEventEnvelope::new(
+                    "document.processing.ocr.started",
+                    h.vault,
+                    DomainEventSubject {
+                        subject_type: "document".into(),
+                        id: document,
+                    },
+                    Some(document),
+                    EventAudience::Vault,
+                    serde_json::json!({}),
+                )
+                .unwrap(),
+            ),
+            origin: folio_core::events::EventOrigin::User,
+            context: None,
+            created_at: chrono::Utc::now(),
+            attempts: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_processing_transitions_of_one_document_refresh_it_once() {
+        let h = harness().await;
+        let mut ids = Vec::new();
+        for title in ["first", "second"] {
+            ids.push(
+                h.state
+                    .document_repo
+                    .create(
+                        h.vault,
+                        CreateDocument {
+                            title: title.into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let response = h
+            .app
+            .clone()
+            .oneshot(Request::get("/events").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let mut body = response.into_body();
+        // Sent before the stream is read, as during a bulk reprocess
+        for (id, document) in [(1, ids[0]), (2, ids[1]), (3, ids[0]), (4, ids[0])] {
+            h.state
+                .event_broadcaster
+                .send(processing_event(&h, id, document));
+        }
+
+        let mut text = String::new();
+        while !text.contains("id: 4") {
+            let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
+                .await
+                .expect("the stream delivers the newest transition in time")
+                .expect("the stream stays open")
+                .unwrap();
+            if let Some(data) = frame.data_ref() {
+                text.push_str(&String::from_utf8_lossy(data));
+            }
+        }
+        let refreshed = |document: uuid::Uuid| {
+            text.matches(&format!(r#"target="document-{document}-processing""#))
+                .count()
+        };
+        assert_eq!(refreshed(ids[0]), 1);
+        assert_eq!(refreshed(ids[1]), 1);
+        assert!(text.contains("id: 2"));
+        assert!(!text.contains("id: 1\n") && !text.contains("id: 3\n"));
+    }
 }

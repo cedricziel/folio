@@ -140,7 +140,9 @@ pub(crate) async fn sse_handler(
                 _ => return None,
             }
         }
+        let superseded = conn.superseded(&event);
         let frames = match &conn.context {
+            _ if superseded => Vec::new(),
             Some(context) => {
                 crate::vault::CURRENT_VAULT
                     .scope(context.clone(), frames_for(&conn.state, conn.vault, &event))
@@ -212,6 +214,9 @@ fn processing_only(outbox_event: &OutboxEvent, vault: VaultId) -> Option<uuid::U
     if outbox_event.event.is_some() {
         return None;
     }
+    // `origin_vault` needs a legacy event to compare against. A domain-only row's envelope
+    // was captured from the document in the transaction that recorded the transition, so
+    // its vault is the origin vault and is checked directly.
     let envelope = outbox_event.envelope.as_ref()?;
     (envelope.vault_id() == vault
         && envelope.audience() == &folio_core::EventAudience::Vault
@@ -280,6 +285,22 @@ impl Connection {
             }
             Err(e) => tracing::warn!("Failed to replay events: {e}"),
         }
+    }
+
+    /// Whether a queued transition of the same document will refresh it anyway
+    ///
+    /// Each refresh re-reads the document and the counters, so a bulk reprocess would
+    /// otherwise render every page once per stage transition.
+    fn superseded(&mut self, event: &OutboxEvent) -> bool {
+        let Some(document) = processing_only(event, self.vault) else {
+            return false;
+        };
+        while let Ok(next) = self.rx.try_recv() {
+            self.pending.push_back(next);
+        }
+        self.pending.iter().any(|later| {
+            later.id > event.id && processing_only(later, self.vault) == Some(document)
+        })
     }
 
     /// The next event to send, or `None` once the server shuts down
