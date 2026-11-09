@@ -738,6 +738,45 @@ extension JSONDecoder {
         #expect(model.state == .idle)
     }
 
+    @Test func aHandoffPrefillOpensItsTargetAfterSigningInToThatServer() async throws {
+        let server = URL(string: "https://folio.example.com/folio")!
+        let route = HandoffRoute(vaultID: UUID(), target: .document(UUID()))
+        let window = UUID()
+        let inbox = ContinuationInbox()
+        inbox.receive(.payload(HandoffPayload(server: server, vaultID: route.vaultID, target: route.target)), scene: window)
+        guard case let .signIn(prefill, _) = inbox.decision(isLocked: false, session: .signedOut) else {
+            Issue.record("expected a sign-in decision")
+            return
+        }
+        var connected: URL?
+        let model = OnboardingViewModel(store: MemoryServerConfigStore(), makeService: { _ in MockFolioService() }) {
+            inbox.signedIn(to: $0)
+            connected = $0
+        }
+
+        model.prefill(prefill)
+        #expect(model.address == "https://folio.example.com/folio")
+        await model.connect()
+
+        let signedIn = try #require(connected)
+        #expect(inbox.take(scene: window, isLocked: false, session: .signedIn(signedIn)) == .open(route))
+    }
+
+    @Test func signingInToAnotherServerDropsTheHandoff() async {
+        let server = URL(string: "https://folio.example.com")!
+        let inbox = ContinuationInbox()
+        inbox.receive(.payload(HandoffPayload(server: server, vaultID: UUID(), target: .library(.all))), scene: UUID())
+        let model = OnboardingViewModel(store: MemoryServerConfigStore(), makeService: { _ in MockFolioService() }) {
+            inbox.signedIn(to: $0)
+        }
+
+        model.prefill(server)
+        model.address = "other.example.com"
+        await model.connect()
+
+        #expect(inbox.pending == nil)
+    }
+
     @Test func signsInBeforeCheckingTheServer() async {
         let service = MockFolioService()
         var events: [String] = []

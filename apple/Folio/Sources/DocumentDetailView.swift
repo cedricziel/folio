@@ -12,14 +12,22 @@ struct DocumentDetailView: View {
     @State private var showingDiscussion = false
     @State private var editingDate = false
     @State private var classifying = false
+    /// The PDF preview's current page, handed over with the document.
+    @State private var page: Int?
+    /// The page the latest continuation asked for; each continuation is a new request.
+    @State private var pageRequest: PDFPageRequest?
     let snapshot: Snapshot
     let vaultID: UUID
     /// Hands saved edits back to the list so its rows and inbox follow them.
     let onDocumentChange: @MainActor (Document) -> Void
+    /// How Handoff asked to show this document, if it did.
+    let continuation: DocumentContinuation?
+    let onContinued: () -> Void
 
     init(
         snapshot: Snapshot, service: any FolioService, vaultID: UUID,
-        onDocumentChange: @escaping @MainActor (Document) -> Void = { _ in }
+        onDocumentChange: @escaping @MainActor (Document) -> Void = { _ in },
+        continuation: DocumentContinuation? = nil, onContinued: @escaping () -> Void = {}
     ) {
         _model = State(
             initialValue: DocumentDetailViewModel(
@@ -27,6 +35,8 @@ struct DocumentDetailView: View {
         self.snapshot = snapshot
         self.vaultID = vaultID
         self.onDocumentChange = onDocumentChange
+        self.continuation = continuation
+        self.onContinued = onContinued
     }
 
     var body: some View {
@@ -56,9 +66,17 @@ struct DocumentDetailView: View {
         // List rows can omit fields such as tags, so a newer row is a cue to fetch the full document.
         .task(id: snapshot.document.updatedAt) { await model.refreshMetadata(after: snapshot.document.updatedAt) }
         .task(id: model.summary.indexedFields) { await SpotlightDonor.donate(model.summary, vaultID: vaultID) }
-        .documentActivity(model.summary, vaultID: vaultID, previewFile: model.previewFile)
+        .documentActivity(
+            model.summary, vaultID: vaultID, previewFile: model.previewFile, showingDiscussion: showingDiscussion,
+            page: page)
         .documentTransferCommands(model.summary, vaultID: vaultID)
         .telemetryScreen(.documentDetail)
+        .onChange(of: continuation, initial: true) { _, continuation in
+            guard let continuation else { return }
+            if continuation.pane == .discussion { showingDiscussion = true }
+            pageRequest = PDFPageRequest(page: continuation.page)
+            onContinued()
+        }
     }
 
     @ViewBuilder
@@ -69,7 +87,11 @@ struct DocumentDetailView: View {
                 .font(FolioTheme.Typography.body)
                 .foregroundStyle(Color.inkMuted)
         case let .ready(url):
-            QuickLookPreview(url: url)
+            if isPDF(url) {
+                PDFPreview(url: url, pageRequest: pageRequest) { page = $0 }
+            } else {
+                QuickLookPreview(url: url)
+            }
         case let .failed(message):
             ContentUnavailableView {
                 Label("Couldn't open this file", systemImage: "exclamationmark.triangle")
@@ -80,6 +102,10 @@ struct DocumentDetailView: View {
                 Button("Try again") { Task { await model.loadPreview() } }
             }
         }
+    }
+
+    private func isPDF(_ url: URL) -> Bool {
+        model.document.mimeType == "application/pdf" || url.pathExtension.lowercased() == "pdf"
     }
 
     private var metadataPanel: some View {

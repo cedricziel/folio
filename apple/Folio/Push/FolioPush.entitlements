@@ -14,7 +14,7 @@
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.cedricziel.folio</string>
+		<string>$(FOLIO_APP_GROUP)</string>
 	</array>
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
@@ -22,7 +22,7 @@
 	<true/>
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.cedricziel.folio</string>
+		<string>$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)</string>
 	</array>
 </dict>
 </plist>
