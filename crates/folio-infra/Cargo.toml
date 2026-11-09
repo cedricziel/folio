@@ -63,7 +63,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 
 # ES256 provider tokens for APNs
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem"] }
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8", "pem"] }
 base64 = { workspace = true }
 
 # Symlink-free opens under an import directory
