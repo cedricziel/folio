@@ -180,7 +180,9 @@ end
 
 desc "Run FolioKit tests and build the app for iOS Simulator and macOS"
 lane :test do
-  sh("cd '#{APPLE_DIR}/FolioKit' && xcrun swift test")
+  # A hung run records its test processes' stacks (TEST_WATCHDOG_DIR) before the watchdog stops it. Runs went
+  # on stalling with dozens of @MainActor tests started at once, so the tests run one at a time.
+  sh("cd '#{APPLE_DIR}/FolioKit' && '#{APPLE_DIR}/scripts/test-watchdog.sh' xcrun swift test --no-parallel")
   generate_project
   ["generic/platform=iOS Simulator", "platform=macOS"].each do |destination|
     sh("cd '#{APPLE_DIR}/Folio' && xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio " \
