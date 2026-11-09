@@ -22,7 +22,7 @@ public final class TransferFileCache: Sendable {
     private let now: @Sendable () -> Date
     private let entries = OSAllocatedUnfairLock(initialState: [DocumentEntityID: Entry]())
     private let server = OSAllocatedUnfairLock<URL?>(initialState: nil)
-    private let swept = OSAllocatedUnfairLock(initialState: false)
+    private let sweep = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     public init(
         directory: URL, maxAge: TimeInterval = 600, maxFiles: Int = 8, now: @escaping @Sendable () -> Date = Date.init
@@ -122,21 +122,28 @@ public final class TransferFileCache: Sendable {
         removeAll()
     }
 
+    /// Waits for this launch's sweep of earlier downloads, if one has started.
+    public func leftoversSwept() async {
+        await sweep.withLock { $0 }?.value
+    }
+
     /// Downloads from earlier launches aren't tracked in memory, so the first session update of a launch
-    /// applies the age and count limits to the folders they left behind.
+    /// applies the age and count limits to the folders they left behind, off the caller's thread.
     private func sweepLeftoversOnce() {
-        let first = swept.withLock { swept in
-            defer { swept = true }
-            return !swept
+        sweep.withLock { task in
+            guard task == nil else { return }
+            task = Task.detached(priority: .utility) { [self] in sweepLeftovers() }
         }
-        guard first else { return }
-        let tracked = entries.withLock { Set($0.values.map { $0.url.deletingLastPathComponent().standardizedFileURL }) }
-        let folders =
+    }
+
+    private func sweepLeftovers() {
+        let listed =
             (try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: [.contentModificationDateKey]))?
-            .filter { !tracked.contains($0.standardizedFileURL) } ?? []
+                at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        // Read what this launch tracks after listing, so a folder stored meanwhile counts as tracked.
+        let tracked = entries.withLock { Set($0.values.map { $0.url.deletingLastPathComponent().standardizedFileURL }) }
         let cutoff = now().addingTimeInterval(-maxAge)
-        let dated = folders.map { folder in
+        let dated = listed.filter { !tracked.contains($0.standardizedFileURL) }.map { folder in
             (folder, (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
                 ?? .distantPast)
         }
