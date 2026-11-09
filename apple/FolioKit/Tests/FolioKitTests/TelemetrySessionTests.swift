@@ -213,7 +213,7 @@ private func sharedDirectory() throws -> URL {
         #expect(
             Set(TelemetryIntent.allCases.map(\.rawValue)) == [
                 "scan_document", "upload_file", "search_documents", "find_documents", "get_latest_document",
-                "open_document", "add_tag", "remove_tag", "get_document_file",
+                "open_document", "add_tag", "remove_tag", "get_document_file", "tag_documents", "untag_documents",
             ])
         #expect(Set(BrowseScope.allCases.map(\.rawValue)) == ["inbox", "all", "saved_view", "intent"])
     }

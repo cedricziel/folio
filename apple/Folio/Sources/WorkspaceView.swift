@@ -5,6 +5,10 @@ struct WorkspaceView: View {
     let serverURL: URL
     let service: any FolioService
     let onSignOut: () -> Void
+    /// The waiting continuation, compared whole so that closing the window that received it re-triggers.
+    let pendingContinuation: ContinuationInbox.Item?
+    /// Takes the waiting continuation when it opens a target in this window.
+    let takeContinuation: () -> HandoffRoute?
     @State private var showTaxonomy = false
     @State private var showSavedViewEditor = false
     @State private var editingSavedView: SavedView?
@@ -14,11 +18,14 @@ struct WorkspaceView: View {
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
-        workspace: WorkspaceViewModel? = nil
+        workspace: WorkspaceViewModel? = nil, pendingContinuation: ContinuationInbox.Item? = nil,
+        takeContinuation: @escaping () -> HandoffRoute? = { nil }
     ) {
         self.serverURL = serverURL
         self.service = service
         self.onSignOut = onSignOut
+        self.pendingContinuation = pendingContinuation
+        self.takeContinuation = takeContinuation
         _workspace = State(initialValue: workspace ?? WorkspaceViewModel(service: service))
     }
 
@@ -92,7 +99,8 @@ struct WorkspaceView: View {
                     makeUploadDestination: workspace.uploadDestination,
                     onSignOut: onSignOut,
                     onNavigate: { navigate(to: $0) },
-                    onOpenDocument: { workspace.open($0, vaultID: $1) }
+                    onOpenDocument: { workspace.open($0, vaultID: $1) },
+                    advertisedList: advertisedList
                 )
                 .environment(\.thumbnailCache, workspace.thumbnails)
 
@@ -146,6 +154,11 @@ struct WorkspaceView: View {
             }
         }
         .task { await workspace.loadVaults() }
+        .onChange(of: ContinuationTrigger(isReady: workspace.isReady, pending: pendingContinuation), initial: true) {
+            _, trigger in
+            guard trigger.isReady, let route = takeContinuation() else { return }
+            Task { await workspace.open(route) }
+        }
         .task(id: workspace.selectedVaultID) { await workspace.loadSavedViews() }
         .sheet(isPresented: $showSavedViewEditor) {
             SavedViewEditor(workspace: workspace, existing: editingSavedView)
@@ -169,7 +182,7 @@ struct WorkspaceView: View {
             Text("Your documents will remain in the library.")
         }
         .alert(
-            "Document unavailable",
+            "Couldn't open this",
             isPresented: Binding(
                 get: { workspace.navigationError != nil },
                 set: {
@@ -183,6 +196,20 @@ struct WorkspaceView: View {
         } message: {
             Text(workspace.navigationError ?? "")
         }
+    }
+
+    /// The list Handoff offers while no document is selected.
+    private var advertisedList: AdvertisedList {
+        if let savedView = workspace.selectedSavedViewID { return .savedView(savedView) }
+        switch workspace.destination {
+        case .inbox: return .library(.inbox)
+        case .all: return .library(.all)
+        }
+    }
+
+    private struct ContinuationTrigger: Equatable {
+        let isReady: Bool
+        let pending: ContinuationInbox.Item?
     }
 
     private var manageSection: some View {

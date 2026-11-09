@@ -1,4 +1,3 @@
-import CoreSpotlight
 import FolioKit
 import PhotosUI
 import SwiftUI
@@ -16,6 +15,8 @@ struct InboxView: View {
     @Bindable var session: DocumentBrowserSession
     let onNavigate: (WorkspaceDestination) -> Void
     let onOpenDocument: (Document.ID, UUID?) -> Void
+    /// The library or saved view on screen, offered for Handoff when no document is selected.
+    let advertisedList: AdvertisedList
 
     private var list: DocumentListViewModel {
         session.list
@@ -51,7 +52,8 @@ struct InboxView: View {
         makeUploadDestination: @escaping () -> VaultDestinationViewModel,
         onSignOut: @escaping () -> Void,
         onNavigate: @escaping (WorkspaceDestination) -> Void,
-        onOpenDocument: @escaping (Document.ID, UUID?) -> Void
+        onOpenDocument: @escaping (Document.ID, UUID?) -> Void,
+        advertisedList: AdvertisedList = .library(.inbox)
     ) {
         self.serverURL = serverURL
         self.service = service
@@ -63,10 +65,11 @@ struct InboxView: View {
         self.onSignOut = onSignOut
         self.onNavigate = onNavigate
         self.onOpenDocument = onOpenDocument
+        self.advertisedList = advertisedList
         let list = session.list
         _trashHistory = State(initialValue: DocumentTrashHistory(list: list))
         _uploads = State(
-            initialValue: UploadViewModel(service: service) {
+            initialValue: UploadViewModel(service: service, continuedWork: SystemContinuedWork()) {
                 Task { await list.load(afterUpload: true) }
                 NotificationCenter.default.post(name: .folioUploadFinished, object: nil)
             }
@@ -105,6 +108,9 @@ struct InboxView: View {
                     documentDestination(id)
                 }
             }
+            .listActivity(
+                vaultID: vaultID, list: advertisedList,
+                selection: showsPreview ? session.selection : session.path.last)
             .onChange(of: showsPreview) { _, showsPreview in
                 session.adaptToLayout(showsPreview: showsPreview)
             }
@@ -132,12 +138,6 @@ struct InboxView: View {
             let activity = activity
             session.list.onRemove = { activity?.documentRemoved($0) }
         }
-        .onContinueUserActivity(CSSearchableItemActionType) { activity in
-            let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String
-            if let link = identifier.flatMap(DocumentLink.init(spotlightIdentifier:)) {
-                handle(.document(link.documentID, vaultID: link.vaultID))
-            }
-        }
         .telemetryScreen(
             list.showsSavedView ? TelemetryScreen.savedView : list.scope == .inbox ? TelemetryScreen.inbox : .documents)
     }
@@ -147,7 +147,9 @@ struct InboxView: View {
             if let document = list.document(for: id) {
                 DocumentDetailView(
                     snapshot: .init(document: document, lookups: list.lookups), service: service,
-                    vaultID: vaultID, onDocumentChange: { list.apply($0) }
+                    vaultID: vaultID, onDocumentChange: { list.apply($0) },
+                    continuation: session.continuation?.documentID == id ? session.continuation : nil,
+                    onContinued: { session.continuation = nil }
                 )
                 .id(id)
             } else if let message = list.documentError(for: id) {
@@ -638,7 +640,9 @@ struct InboxView: View {
     private func reviewUploads(_ files: [UploadFile]) {
         guard !files.isEmpty else { return }
         let list = session.list
-        uploads = UploadViewModel(service: service, destination: makeUploadDestination()) {
+        uploads = UploadViewModel(
+            service: service, destination: makeUploadDestination(), continuedWork: SystemContinuedWork()
+        ) {
             Task { await list.load(afterUpload: true) }
             NotificationCenter.default.post(name: .folioUploadFinished, object: nil)
         }

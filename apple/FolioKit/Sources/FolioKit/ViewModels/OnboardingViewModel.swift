@@ -30,6 +30,12 @@ public final class OnboardingViewModel {
         address = store.load()?.absoluteString ?? ""
     }
 
+    /// Fills in the server a continuation came from, unless a sign-in is already running.
+    public func prefill(_ server: URL) {
+        guard state != .checking else { return }
+        address = server.absoluteString
+    }
+
     public func connect() async {
         state = .checking
         do {
