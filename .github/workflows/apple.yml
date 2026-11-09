@@ -79,6 +79,17 @@ jobs:
           bundler-cache: true
       - run: brew install xcodegen
       - run: bundle exec fastlane test
+        env:
+          # FolioKit's `swift test` takes a few minutes; past this it counts as hung and its stacks are recorded.
+          TEST_WATCHDOG_LIMIT: "900"
+          TEST_WATCHDOG_DIR: ${{ github.workspace }}/apple/build/test-hang
+      - name: Upload the stacks of a hung test run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-hang-${{ matrix.toolchain.xcode }}
+          path: apple/build/test-hang
+          if-no-files-found: ignore
       - name: Test navigation on iPhone and iPad (26.6) or iPhone Duo (27.1)
         # The 27.1 leg runs the whole suite twice (iPhone, then iPhone Duo).
         timeout-minutes: 40
