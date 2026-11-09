@@ -266,6 +266,10 @@ actor MockFolioService: FolioService {
         failingTagIDs = ids
     }
 
+    func setDeletedDocuments(_ ids: Set<Document.ID>) {
+        deletedDocumentIDs = ids
+    }
+
     func setMissingTags(_ ids: Set<Tag.ID>) {
         missingTagIDs = ids
     }

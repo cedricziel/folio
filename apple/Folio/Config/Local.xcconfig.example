@@ -1,0 +1,23 @@
+// Copy to Local.xcconfig (git-ignored) to build and sign Folio under your own Apple team.
+// See apple/README.md, "Handoff and Universal Links".
+
+// Your 10-character Team ID and bundle identifiers you registered for it. The share and
+// file provider extensions use $(FOLIO_BUNDLE_ID).share and $(FOLIO_BUNDLE_ID).fileprovider.
+FOLIO_DEVELOPMENT_TEAM = ABCDE12345
+FOLIO_BUNDLE_ID = com.example.folio
+FOLIO_APP_GROUP = group.com.example.folio
+
+// Sign Release builds automatically with your development certificate instead of match profiles.
+FOLIO_RELEASE_SIGN_STYLE = Automatic
+FOLIO_RELEASE_IDENTITY = Apple Development
+FOLIO_PROFILE_APP_IOS =
+FOLIO_PROFILE_APP_MACOS =
+FOLIO_PROFILE_SHARE_IOS =
+FOLIO_PROFILE_SHARE_MACOS =
+FOLIO_PROFILE_FILEPROVIDER_IOS =
+FOLIO_PROFILE_FILEPROVIDER_MACOS =
+
+// Universal Links: your Folio server's host (several separated by spaces). Leave both lines out
+// if you only want Handoff. apple/scripts/associated-domains.sh writes the entitlements file.
+FOLIO_ASSOCIATED_DOMAINS = folio.example.com
+FOLIO_APP_ENTITLEMENTS = Resources/Folio-Local.entitlements

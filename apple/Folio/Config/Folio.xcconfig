@@ -1,0 +1,22 @@
+// Identifiers of the official Folio build. To build and sign Folio under your own team, copy
+// Local.xcconfig.example to Local.xcconfig (git-ignored) and override the values there.
+
+FOLIO_DEVELOPMENT_TEAM = WPW3QSLZ2F
+FOLIO_BUNDLE_ID = com.cedricziel.folio
+FOLIO_APP_GROUP = group.com.cedricziel.folio
+
+// Hosts for the associated-domains entitlement (applinks:), separated by spaces. The official
+// App Store build has none: every Folio server has its own domain.
+FOLIO_ASSOCIATED_DOMAINS =
+FOLIO_APP_ENTITLEMENTS = Resources/Folio.entitlements
+
+FOLIO_RELEASE_SIGN_STYLE = Manual
+FOLIO_RELEASE_IDENTITY = Apple Distribution
+FOLIO_PROFILE_APP_IOS = match AppStore $(FOLIO_BUNDLE_ID)
+FOLIO_PROFILE_APP_MACOS = match AppStore $(FOLIO_BUNDLE_ID) macos
+FOLIO_PROFILE_SHARE_IOS = match AppStore $(FOLIO_BUNDLE_ID).share
+FOLIO_PROFILE_SHARE_MACOS = match AppStore $(FOLIO_BUNDLE_ID).share macos
+FOLIO_PROFILE_FILEPROVIDER_IOS = match AppStore $(FOLIO_BUNDLE_ID).fileprovider
+FOLIO_PROFILE_FILEPROVIDER_MACOS = match AppStore $(FOLIO_BUNDLE_ID).fileprovider macos
+
+#include? "Local.xcconfig"

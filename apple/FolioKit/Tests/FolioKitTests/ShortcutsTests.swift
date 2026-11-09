@@ -230,7 +230,7 @@ private actor FlushLog {
     }
 
     @Test func removeTagCallsTheService() async throws {
-        let target = document("Gas bill")
+        let target = document("Gas bill", tags: [utilities])
         let service = await install([target])
         let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
         _ = try await RemoveTagIntent(document: entity, tag: TagEntity(utilities)).perform()
@@ -286,8 +286,9 @@ private actor FlushLog {
         #expect(try await DocumentEntityQuery().entities(matching: "gas").count == 1)
         #expect(try await TagEntityQuery().entities(matching: "util").map(\.name) == ["Utilities"])
         #expect(try await CorrespondentEntityQuery().suggestedEntities().map(\.name) == ["Stadtwerke Köln"])
-        #expect(try await DocumentTypeEntityQuery().entities(for: [invoice.id]).map(\.name) == ["Invoice"])
-        #expect(try await VaultEntityQuery().suggestedEntities().isEmpty)
+        #expect(
+            try await DocumentTypeEntityQuery().entities(for: [VaultScopedID(invoice.id)]).map(\.name) == ["Invoice"])
+        #expect(try await VaultEntityQuery().suggestedEntities().map(\.name) == ["Personal"])
     }
 
     private func installSpotlight(_ listed: [Document], vaultID: UUID) async -> FakeSpotlightIndex {
@@ -422,5 +423,75 @@ struct ShortcutErrorTests {
     @Test func messagesFollowTheVoice() {
         let messages = [ShortcutError.notSignedIn.message, ShortcutError(mapping: FolioError.unreachable).message]
         #expect(messages.allSatisfy { !$0.contains("!") && !$0.lowercased().contains("oops") })
+    }
+}
+
+extension IntentTests {
+    @Test func addTagLeavesADocumentThatAlreadyHasIt() async throws {
+        let target = document("Gas bill", tags: [utilities])
+        let service = await install([target])
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil))
+        _ = try await AddTagIntent(document: entity, tag: TagEntity(utilities)).perform()
+        #expect(await service.tagged.isEmpty)
+    }
+
+    @Test func tagIntentsRefuseATagFromAnotherVault() async {
+        let target = document("Gas bill")
+        _ = await install([target])
+        let entity = DocumentEntity(DocumentSummary(target, correspondent: nil, documentType: nil, vaultID: UUID()))
+        let tag = TagEntity(utilities, vaultID: UUID())
+        await #expect(throws: ShortcutError(mapping: ShortcutFailure.mixedVaults)) {
+            try await AddTagIntent(document: entity, tag: tag).perform()
+        }
+        await #expect(throws: ShortcutError(mapping: ShortcutFailure.mixedVaults)) {
+            try await RemoveTagIntent(document: entity, tag: tag).perform()
+        }
+    }
+
+    @Test func serviceIntentsWorkInTheVaultTheyAreGiven() async throws {
+        let family = Vault(id: UUID(), name: "Family", role: .editor)
+        let (_, scoped) = await makeCatalog([document("Lease", day: 1, tags: [utilities])])
+        let root = MockFolioService(
+            documents: [document("Personal letter")],
+            vaults: VaultCatalog(vaults: [MockFolioService.defaultVault, family], defaultVaultID: nil),
+            vaultServices: [family.id: scoped])
+        _ = await install()
+        IntentEnvironment.use { root }
+
+        let searched = try await SearchDocumentsIntent(query: "lease", vault: VaultEntity(family)).perform()
+        #expect(searched.value?.map(\.title) == ["Lease"])
+        #expect(searched.value?.first?.id.vaultID == family.id)
+        #expect(try await GetLatestDocumentIntent(vault: VaultEntity(family)).perform().value?.title == "Lease")
+
+        var find = FindDocumentsIntent()
+        find.tag = TagEntity(utilities, vaultID: family.id)
+        #expect(try await find.perform().value?.map(\.title) == ["Lease"])
+    }
+
+    @Test func vaultEntitiesReportTheirSharing() async throws {
+        let family = Vault(id: UUID(), name: "Family", role: .owner, shared: true)
+        let root = MockFolioService(vaults: VaultCatalog(vaults: [family], defaultVaultID: family.id))
+        _ = await install()
+        IntentEnvironment.use { root }
+
+        let vaults = try await VaultEntityQuery().entities(matching: "fam")
+        #expect(vaults.map(\.name) == ["Family"])
+        #expect(vaults.first?.sharing == .shared)
+        #expect(try await VaultEntityQuery().entities(for: [family.id]).map(\.id) == [family.id])
+    }
+
+    @Test func tagSuggestionsComeFromEveryVault() async throws {
+        let work = Vault(id: UUID(), name: "Work", role: .editor)
+        let workTags = MockFolioService(tags: [taxes])
+        let root = MockFolioService(
+            vaults: VaultCatalog(vaults: [MockFolioService.defaultVault, work], defaultVaultID: nil),
+            vaultServices: [work.id: workTags], tags: [utilities])
+        _ = await install()
+        IntentEnvironment.use { root }
+
+        let tags = try await TagEntityQuery().suggestedEntities()
+        #expect(tags.map(\.name) == ["Utilities", "Taxes"])
+        #expect(tags.map(\.id.vaultID) == [MockFolioService.defaultVault.id, work.id])
+        #expect(try await TagEntityQuery().entities(for: [tags[1].id]).map(\.name) == ["Taxes"])
     }
 }
