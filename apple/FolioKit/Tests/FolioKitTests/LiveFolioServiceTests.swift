@@ -122,11 +122,14 @@ private let documentJSON = """
         }
         #expect(try await makeService().documentIDs(filter: DocumentFilter(tagIDs: [tag])) == [UUID(uuidString: id)!])
 
-        StubURLProtocol.handler = { request, _ in
-            guard request.url?.path == "/api/documents" else { return .init(status: 400) }
-            return .init(body: Data("{\"documents\":[\(documentJSON)],\"count\":1}".utf8))
+        for status in [400, 403, 404, 405] {
+            StubURLProtocol.handler = { request, _ in
+                guard request.url?.path == "/api/documents" else { return .init(status: status) }
+                return .init(body: Data("{\"documents\":[\(documentJSON)],\"count\":1}".utf8))
+            }
+            let ids = try await makeService().documentIDs(filter: DocumentFilter(tagIDs: [tag]))
+            #expect(ids == [UUID(uuidString: id)!], "status \(status)")
         }
-        #expect(try await makeService().documentIDs(filter: DocumentFilter(tagIDs: [tag])) == [UUID(uuidString: id)!])
     }
 
     @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {

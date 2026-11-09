@@ -120,6 +120,21 @@ async fn creates_once_lists_metadata_and_revokes_only_owned_tokens() {
 }
 
 #[tokio::test]
+async fn read_tokens_list_document_ids() {
+    let h = harness_requiring_login().await;
+    let alice = account(&h, "ids-alice").await;
+    let created = create(&h, &alice, creation()).await;
+    let token = created["token"].as_str().unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(req("GET", "/api/documents/ids", "", token, Value::Null))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn token_management_requires_a_session_even_in_anonymous_mode() {
     let h = harness().await;
     let response = h

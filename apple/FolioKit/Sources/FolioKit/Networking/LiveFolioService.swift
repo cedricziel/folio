@@ -358,8 +358,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         }
     }
 
-    /// Servers without the IDs route answer 404, or 400 where `ids` is read as a document ID; those fall back to
-    /// the full list.
+    /// Servers without the IDs route answer 404, or 400 where `ids` is read as a document ID; a proxy or an older
+    /// token policy may answer 403 or 405. All of those fall back to the full list.
     public func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
         do {
             return try await call("documents.ids") {
@@ -373,7 +373,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 )
                 return try await client.listDocumentIds(query: query).ok.body.json.ids.map { try Self.uuid($0) }
             }
-        } catch FolioError.server(status: 400, _), FolioError.server(status: 404, _) {
+        } catch let FolioError.server(status, _) where [400, 403, 404, 405].contains(status) {
             return try await documents(filter: filter).map(\.id)
         }
     }
