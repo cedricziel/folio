@@ -10,8 +10,9 @@ use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
 use std::time::Duration;
 use tokio::sync::{Mutex, MutexGuard};
 
-/// Attempts at taking the write lock, each bounded by the busy timeout.
-const BEGIN_ATTEMPTS: u32 = 8;
+/// Attempts at a statement that keeps finding the database locked, each
+/// bounded by the busy timeout.
+const BUSY_ATTEMPTS: u32 = 8;
 
 pub struct SqliteAuthStore {
     pool: SqlitePool,
@@ -38,20 +39,9 @@ impl SqliteAuthStore {
         _client_id: &str,
     ) -> Result<(MutexGuard<'_, ()>, sqlx::Transaction<'static, sqlx::Sqlite>), AuthError> {
         let queued = self.exchanges.lock().await;
-        let mut backoff = Duration::from_millis(10);
-        for _ in 1..BEGIN_ATTEMPTS {
-            match self.pool.begin_with("BEGIN IMMEDIATE").await {
-                Ok(tx) => return Ok((queued, tx)),
-                // Writers outside this queue can hold the lock past the busy
-                // timeout, and a revoke that gives up leaves the grant alive.
-                Err(e) if is_busy(&e) => {
-                    tokio::time::sleep(backoff).await;
-                    backoff = (backoff * 2).min(Duration::from_millis(500));
-                }
-                Err(e) => return Err(err(e)),
-            }
-        }
-        let tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
+        // Writers outside this queue can hold the lock past the busy timeout,
+        // and a revoke that gives up leaves the grant alive.
+        let tx = retry_busy(|| self.pool.begin_with("BEGIN IMMEDIATE")).await?;
         Ok((queued, tx))
     }
 
@@ -145,6 +135,26 @@ fn is_busy(e: &sqlx::Error) -> bool {
     };
     code.and_then(|c| c.parse::<i32>().ok())
         .is_some_and(|c| matches!(c & 0xff, 5 | 6))
+}
+
+/// Runs `op` again with backoff while SQLite reports the database locked.
+/// Without WAL, every commit briefly locks out readers too.
+async fn retry_busy<T, F, Fut>(mut op: F) -> Result<T, AuthError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    let mut backoff = Duration::from_millis(10);
+    for _ in 1..BUSY_ATTEMPTS {
+        match op().await {
+            Err(e) if is_busy(&e) => {
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_millis(500));
+            }
+            result => return result.map_err(err),
+        }
+    }
+    op().await.map_err(err)
 }
 
 fn err(e: sqlx::Error) -> AuthError {
@@ -473,11 +483,13 @@ impl AuthStore for SqliteAuthStore {
     }
 
     async fn find_client(&self, client_id: &str) -> Result<Option<OAuthClient>, AuthError> {
-        let row = sqlx::query("SELECT * FROM oauth_clients WHERE client_id = $1")
-            .bind(client_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(err)?;
+        // Every token request starts here, a replay included.
+        let row = retry_busy(|| {
+            sqlx::query("SELECT * FROM oauth_clients WHERE client_id = $1")
+                .bind(client_id)
+                .fetch_optional(&self.pool)
+        })
+        .await?;
         row.map(|r| {
             let uris: String = r.get("redirect_uris");
             Ok(OAuthClient {

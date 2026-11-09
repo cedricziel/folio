@@ -150,10 +150,11 @@ async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>, how
                     )
                     .await;
                 // A store failure would leave the grant alive, so only a rejection counts.
+                let error = replay.err();
                 assert_eq!(
-                    replay.err().map(|e| e.error),
+                    error.as_ref().map(|e| e.error),
                     Some("invalid_grant"),
-                    "round {round}: the replay was not rejected"
+                    "round {round}: the replay was not rejected: {error:?}"
                 );
             }
             Revoke::TokenRevocation => server.revoke(&first, &client.client_id).await.unwrap(),
