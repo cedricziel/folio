@@ -14,19 +14,31 @@ limit=${TEST_WATCHDOG_LIMIT:-900}
 out=${TEST_WATCHDOG_DIR:-$PWD/build/test-hang}
 pattern=${TEST_WATCHDOG_PATTERN:-swiftpm-testing-helper|xctest|PackageTests}
 
-# Signals a process and everything below it: the test runner is a grandchild of the command (xcrun, swift test).
-kill_tree() {
-    local signal=$1 parent=$2 child
-    for child in $(pgrep -P "$parent"); do
-        kill_tree "$signal" "$child"
+# Lists a process and everything below it: the test runner is a grandchild of the command (xcrun, swift test).
+tree() {
+    local child
+    echo "$1"
+    for child in $(pgrep -P "$1"); do
+        tree "$child"
     done
-    kill "-$signal" "$parent" 2>/dev/null
+}
+
+# Stops the whole tree. The list is taken once, so a process that ignores TERM and loses its parent to it is still
+# killed: it would no longer be found below the command.
+stop_tree() {
+    local processes
+    processes=$(tree "$1")
+    # shellcheck disable=SC2086
+    kill -TERM $processes 2>/dev/null
+    sleep "$2"
+    # shellcheck disable=SC2086
+    kill -KILL $processes 2>/dev/null
 }
 
 "$@" &
 pid=$!
 # A cancelled job stops the whole run too, so no test process outlives the step.
-trap 'kill_tree TERM "$pid"; exit 143' INT TERM
+trap 'stop_tree "$pid" 2; exit 143' INT TERM
 deadline=$((SECONDS + limit))
 
 while kill -0 "$pid" 2>/dev/null; do
@@ -45,9 +57,7 @@ while kill -0 "$pid" 2>/dev/null; do
                     echo "could not spindump $target" >>"$out/errors.txt"
             fi
         done
-        kill_tree TERM "$pid"
-        sleep 5
-        kill_tree KILL "$pid"
+        stop_tree "$pid" 5
         exit 124
     fi
     sleep 5
