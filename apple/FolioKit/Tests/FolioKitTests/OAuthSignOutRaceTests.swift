@@ -4,18 +4,24 @@ import Testing
 @testable import FolioKit
 
 /// Holds every token-endpoint request until the test releases it; other requests (revocation) answer at once.
+///
+/// A held request waits without occupying a thread, so held requests never starve the thread pools other tests
+/// run on.
 private final class HeldTokenURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     private nonisolated(unsafe) static var status = 200
     private nonisolated(unsafe) static var body = ""
-    private nonisolated(unsafe) static var gate = DispatchSemaphore(value: 0)
+    private nonisolated(unsafe) static var waiting: [HeldTokenURLProtocol] = []
+    /// Releases that arrived before a request to answer, like signals on a semaphore.
+    private nonisolated(unsafe) static var releases = 0
     private nonisolated(unsafe) static var held = 0
 
     static func reset(status: Int, body: String) {
         lock.withLock {
             Self.status = status
             Self.body = body
-            gate = DispatchSemaphore(value: 0)
+            waiting = []
+            releases = 0
             held = 0
         }
     }
@@ -24,8 +30,18 @@ private final class HeldTokenURLProtocol: URLProtocol, @unchecked Sendable {
         lock.withLock { held }
     }
 
+    /// Answers the oldest held token request, or the next one to arrive.
     static func release() {
-        lock.withLock { gate }.signal()
+        let next = lock.withLock { () -> (HeldTokenURLProtocol, Int, String)? in
+            guard !waiting.isEmpty else {
+                releases += 1
+                return nil
+            }
+            return (waiting.removeFirst(), status, body)
+        }
+        if case let (request, status, body)? = next {
+            request.respond(status: status, body: body)
+        }
     }
 
     override class func canInit(with _: URLRequest) -> Bool {
@@ -38,13 +54,17 @@ private final class HeldTokenURLProtocol: URLProtocol, @unchecked Sendable {
 
     override func startLoading() {
         guard request.url?.path == "/oauth/token" else { return respond(status: 200, body: "") }
-        let (gate, status, body) = Self.lock.withLock {
+        let answer = Self.lock.withLock { () -> (Int, String)? in
             Self.held += 1
-            return (Self.gate, Self.status, Self.body)
+            guard Self.releases > 0 else {
+                Self.waiting.append(self)
+                return nil
+            }
+            Self.releases -= 1
+            return (Self.status, Self.body)
         }
-        DispatchQueue.global().async {
-            gate.wait()
-            self.respond(status: status, body: body)
+        if case let (status, body)? = answer {
+            respond(status: status, body: body)
         }
     }
 

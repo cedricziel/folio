@@ -10,7 +10,7 @@ private func file(_ name: String) -> UploadFile {
 private let first = Tag(name: "Insurance")
 private let second = Tag(name: "Taxes")
 
-struct UploadBatchRunnerTests {
+@Suite(.timeLimit(.minutes(1))) struct UploadBatchRunnerTests {
     @Test func uploadSucceedsTaggingFailsThenRetryAttachesOnlyTheRemainingTag() async throws {
         let service = MockFolioService()
         let store = InMemoryUploadProgressStore()
@@ -216,24 +216,32 @@ struct UploadBatchRunnerTests {
         #expect(store.load("current") == progress)
     }
 
-    @Test(.timeLimit(.minutes(1))) func aLongRunRenewsItsLock() async throws {
+    @Test func aLongRunRenewsItsLockUntilItEnds() async throws {
         let service = MockFolioService()
         await service.suspendUploads()
-        let store = RenewalCountingStore()
-        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(10))
+        let timer = ManualTimer()
+        let store = RenewalCountingStore(onRenew: { timer.recheck() })
+        let runner = UploadBatchRunner(
+            service: service, store: store, renewalSleep: { try await timer.sleep($0) })
+        // Waits on the timer give up once the run ends, so a run that fails early fails the test instead of hanging.
+        let run = Task {
+            defer { timer.finish() }
+            return try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        }
 
-        // The run renews once before it sends the upload. The upload then stays open until the timer has renewed
-        // too, however slowly it runs.
-        let run = Task { try await runner.run([file("a.pdf")], tagIDs: [], scope: "s") }
-        await service.waitForUploadRequest()
-        await store.waitForRenewals(2)
+        // The run renews once before its upload, which then stays open while the timer fires once.
+        await timer.waitUntil { $0.sleeping == 1 && store.renewals == 1 }
+        timer.fire()
+        await timer.waitUntil { $0.started == 2 }
+        #expect(store.renewals == 2, "the timer renewed the lock while the upload ran")
+
         await service.releaseUploads()
         _ = try await run.value
-        let renewals = store.renewals
 
-        // A renewal already past its sleep when the run ends may still land; none may follow it.
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(store.renewals <= renewals + 1, "renewal stops with the run")
+        let state = timer.state
+        #expect(state.cancelled == 1, "the run cancelled its renewal timer before it returned")
+        #expect(state.sleeping == 0)
+        #expect(state.started == 2, "and no renewal started after it")
     }
 
     @Test func aRunThatLosesItsLockStopsBeforeItsNextRequest() async throws {
@@ -435,40 +443,27 @@ struct ShortcutUploadRetryTests {
 private final class RenewalCountingStore: UploadProgressStoring, @unchecked Sendable {
     private let base = InMemoryUploadProgressStore()
     private let heldRenewals: Int
+    private let onRenew: (@Sendable () -> Void)?
     private let mutex = NSLock()
     private var count = 0
-    private var waiters: [(renewals: Int, continuation: CheckedContinuation<Void, Never>)] = []
 
-    init(heldRenewals: Int = .max) {
+    init(heldRenewals: Int = .max, onRenew: (@Sendable () -> Void)? = nil) {
         self.heldRenewals = heldRenewals
+        self.onRenew = onRenew
     }
 
     var renewals: Int { mutex.withLock { count } }
-
-    /// Returns once the lock has been renewed `renewals` times.
-    func waitForRenewals(_ renewals: Int) async {
-        await withCheckedContinuation { waiter in
-            let renewed = mutex.withLock {
-                if count >= renewals { return true }
-                waiters.append((renewals, waiter))
-                return false
-            }
-            if renewed { waiter.resume() }
-        }
-    }
 
     func load(_ key: String) -> UploadBatchProgress? { base.load(key) }
     func save(_ progress: UploadBatchProgress, for key: String) { base.save(progress, for: key) }
     func remove(_ key: String) { base.remove(key) }
     func lock(_ key: String) -> Bool { base.lock(key) }
     func renew(_: String) -> Bool {
-        let (held, waiting) = mutex.withLock {
+        let held = mutex.withLock { () -> Bool in
             count += 1
-            let ready = waiters.filter { $0.renewals <= count }
-            waiters.removeAll { $0.renewals <= count }
-            return (count <= heldRenewals, ready)
+            return count <= heldRenewals
         }
-        waiting.forEach { $0.continuation.resume() }
+        onRenew?()
         return held
     }
     func unlock(_ key: String) { base.unlock(key) }
@@ -483,5 +478,98 @@ private final class Waits: @unchecked Sendable {
 
     func add(_ wait: Duration) {
         mutex.withLock { waits.append(wait) }
+    }
+}
+
+/// Stands in for the runner's renewal timer: each sleep lasts until the test fires the timer or the sleeping task
+/// is cancelled, so nothing in the test depends on the wall clock.
+private final class ManualTimer: @unchecked Sendable {
+    struct State {
+        /// Sleeps begun so far.
+        var started = 0
+        var sleeping = 0
+        var cancelled = 0
+    }
+
+    private let mutex = NSLock()
+    private var current = State()
+    private var sleepers: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    private var observers: [(condition: @Sendable (State) -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
+    private var finished = false
+
+    var state: State { mutex.withLock { current } }
+
+    func sleep(_: Duration) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                let cancelled = update { (state: inout State) -> Bool in
+                    if Task.isCancelled { return true }
+                    sleepers[id] = continuation
+                    state.started += 1
+                    state.sleeping += 1
+                    return false
+                }
+                if cancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let sleeper = update { (state: inout State) -> CheckedContinuation<Void, any Error>? in
+                guard let sleeper = sleepers.removeValue(forKey: id) else { return nil }
+                state.sleeping -= 1
+                state.cancelled += 1
+                return sleeper
+            }
+            sleeper?.resume(throwing: CancellationError())
+        }
+    }
+
+    /// Ends every current sleep.
+    func fire() {
+        let woken = update { (state: inout State) -> [CheckedContinuation<Void, any Error>] in
+            defer { sleepers = [:] }
+            state.sleeping -= sleepers.count
+            return Array(sleepers.values)
+        }
+        woken.forEach { $0.resume() }
+    }
+
+    /// Returns once `condition` holds, or once `finish()` was called.
+    func waitUntil(_ condition: @escaping @Sendable (State) -> Bool) async {
+        await withCheckedContinuation { continuation in
+            let ready = mutex.withLock { () -> Bool in
+                if finished || condition(current) { return true }
+                observers.append((condition, continuation))
+                return false
+            }
+            if ready { continuation.resume() }
+        }
+    }
+
+    /// Releases every waiter; later waits return at once.
+    func finish() {
+        let waiting = mutex.withLock { () -> [CheckedContinuation<Void, Never>] in
+            finished = true
+            defer { observers = [] }
+            return observers.map { $0.continuation }
+        }
+        waiting.forEach { $0.resume() }
+    }
+
+    /// Re-evaluates waits whose condition reads state outside the timer.
+    func recheck() {
+        update { (_: inout State) in }
+    }
+
+    /// Applies `change` and wakes the observers whose condition now holds.
+    private func update<T>(_ change: (inout State) -> T) -> T {
+        let (result, ready) = mutex.withLock { () -> (T, [CheckedContinuation<Void, Never>]) in
+            let result = change(&current)
+            let state = current
+            let ready = observers.filter { $0.condition(state) }.map { $0.continuation }
+            observers.removeAll { $0.condition(state) }
+            return (result, ready)
+        }
+        ready.forEach { $0.resume() }
+        return result
     }
 }
