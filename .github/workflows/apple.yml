@@ -56,7 +56,7 @@ jobs:
               .github/workflows/apple.yml | design/tokens.json | \
               apple/FolioKit/Package.swift | apple/FolioKit/Package.resolved | \
               apple/FolioKit/Sources/FolioKit/Models/* | apple/FolioKit/Sources/FolioKit/Theme/* | \
-              apple/FolioKit/Sources/FolioKit/Resources/* | \
+              apple/FolioKit/Sources/FolioKit/Resources/* | apple/FolioKit/Sources/FolioKit/Telemetry/* | \
               apple/FolioKit/Sources/FolioKit/Networking/FolioService.swift | \
               apple/FolioKit/Sources/FolioKit/Storage/ServerConfig.swift)
                 classifications=true; thumbnails=true ;;
