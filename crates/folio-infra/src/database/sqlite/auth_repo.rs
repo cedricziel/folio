@@ -107,6 +107,30 @@ impl SqliteAuthStore {
         Ok(Some(grant))
     }
 
+    /// Revokes the grant of a replayed refresh token after its first attempt
+    /// found the database busy.
+    async fn revoke_replayed_grant(&self, grant_id: &str) -> Result<(), AuthError> {
+        let mut backoff = Duration::from_millis(10);
+        let mut attempt = 1;
+        loop {
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_millis(500));
+            let (_queued, mut tx) = self.begin_locked("").await?;
+            Self::delete_grant(&mut tx, grant_id).await?;
+            match tx.commit().await {
+                Ok(()) => return Ok(()),
+                Err(e) if is_busy(&e) && attempt < BUSY_ATTEMPTS => attempt += 1,
+                Err(e) => {
+                    tracing::error!(
+                        grant_id,
+                        "refresh token reuse detected but its grant could not be revoked: {e}"
+                    );
+                    return Err(err(e));
+                }
+            }
+        }
+    }
+
     /// Deletes every token of a grant, and the push devices it registered, inside `tx`.
     async fn delete_grant(
         tx: &mut sqlx::Transaction<'static, sqlx::Sqlite>,
@@ -708,8 +732,18 @@ impl AuthStore for SqliteAuthStore {
         if !grant_id.is_empty() {
             Self::delete_grant(&mut tx, &grant_id).await?;
         }
-        tx.commit().await.map_err(err)?;
+        let committed = tx.commit().await;
         drop(queued);
+        match committed {
+            Ok(()) => {}
+            // Without WAL the commit waits for readers and can time out; the
+            // failed commit rolled back, so revoke again rather than leave the
+            // grant alive until the token is reused once more.
+            Err(e) if is_busy(&e) && !grant_id.is_empty() => {
+                self.revoke_replayed_grant(&grant_id).await?
+            }
+            Err(e) => return Err(err(e)),
+        }
         Ok(RefreshExchange::Replayed)
     }
 
