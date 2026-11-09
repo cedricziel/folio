@@ -186,14 +186,18 @@ struct UploadFileTests {
     @Test func mainActorStaysResponsiveWhileRenderingAScan() async throws {
         let (renderTimes, recorder) = AsyncStream<Duration>.makeStream()
         let model = ScanReviewViewModel(
-            pages: letterScan(pages: 12), service: MockFolioService(),
+            pages: letterScan(pages: 4), service: MockFolioService(),
             renderPDF: { images in
+                // Renders until at least half a second has passed, so the hitch budget below stays well above
+                // scheduling noise even on a fast machine.
                 let start = ContinuousClock.now
-                defer {
-                    recorder.yield(start.duration(to: .now))
-                    recorder.finish()
+                var pdf = try PDFBuilder.makePDF(from: images)
+                while start.duration(to: .now) < .milliseconds(500) {
+                    pdf = try PDFBuilder.makePDF(from: images)
                 }
-                return try PDFBuilder.makePDF(from: images)
+                recorder.yield(start.duration(to: .now))
+                recorder.finish()
+                return pdf
             }
         )
         let filing = Task { await model.fileIt() }
@@ -212,7 +216,7 @@ struct UploadFileTests {
         let render = try #require(await recorded.next())
 
         reportMeasurement(
-            "Main actor during a 12-page scan render of \(render): \(ticks) ticks, worst hitch \(worstHitch)"
+            "Main actor during a scan render of \(render): \(ticks) ticks, worst hitch \(worstHitch)"
         )
         #expect(model.state == .filed)
         #expect(worstHitch < render / 2)
