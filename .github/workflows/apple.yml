@@ -115,6 +115,20 @@ jobs:
           cd Folio && xcodegen generate && ../scripts/associated-domains.sh && cd ..
           /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains' Folio/Resources/Folio-Local.entitlements
           scripts/check-build-settings.sh --local
+      # Releases build without the widget extension until its App ID and profiles exist (docs/apple-widgets.md).
+      - name: Check the default project leaves the widget extension out
+        run: "! grep -q FolioWidgets Folio/Folio.xcodeproj/project.pbxproj"
+      - name: Build with the widget extension
+        working-directory: apple/Folio
+        env:
+          FOLIO_WIDGETS: "YES"
+        run: |
+          xcodegen generate
+          grep -q FolioWidgets Folio.xcodeproj/project.pbxproj
+          for destination in "generic/platform=iOS Simulator" "platform=macOS"; do
+            xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio -destination "$destination" \
+              -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
+          done
       - name: Test navigation on iPhone and iPad (26.6) or iPhone Duo (27.1)
         # The 27.1 leg runs the whole suite twice (iPhone, then iPhone Duo).
         timeout-minutes: 40

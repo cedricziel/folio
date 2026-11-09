@@ -1,4 +1,8 @@
 name: Folio
+# Widgets and the Scan control need their own App ID and profiles; generate with FOLIO_WIDGETS=YES to build them in.
+include:
+  - path: widgets.yml
+    enable: ${FOLIO_WIDGETS}
 options:
   bundleIdPrefix: com.cedricziel
   deploymentTarget:
