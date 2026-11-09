@@ -14,9 +14,10 @@ struct FolioWidgets: WidgetBundle {
     }
 }
 
-/// Pulls FolioKit's intents into the extension's metadata, so the control and buttons can run `ScanDocumentIntent`.
+/// Registers only `ScanDocumentIntent` for the control and the Scan button, so the extension's process never
+/// offers FolioKit's data intents or entity queries.
 struct FolioWidgetIntents: AppIntentsPackage {
-    static var includedPackages: [any AppIntentsPackage.Type] { [FolioIntentsPackage.self] }
+    static var includedPackages: [any AppIntentsPackage.Type] { [FolioScanIntentPackage.self] }
 }
 
 struct SnapshotProvider: TimelineProvider {

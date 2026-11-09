@@ -21,6 +21,10 @@ struct FolioApp: App {
     @State private var widgets = WidgetSync()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        IntentEnvironment.recordScanRuns()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(model: model, lock: security.lock)
