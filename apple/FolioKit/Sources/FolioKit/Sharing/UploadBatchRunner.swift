@@ -181,23 +181,29 @@ public struct UploadBatchRunner: Sendable {
     private let now: @Sendable () -> Date
     private let lockRenewal: Duration
     private let sleep: @Sendable (Duration) async throws -> Void
+    private let renewalSleep: @Sendable (Duration) async throws -> Void
 
     /// The longest a run waits for an earlier attempt that is still storing a file.
     public static let maxConflictWait: Duration = .seconds(30)
     /// How long to wait for an earlier attempt when the server does not say.
     static let defaultConflictWait: Duration = .seconds(5)
 
-    /// - Parameter lockRenewal: How often a run renews its lock, well within `FileUploadProgressStore.lockTimeout`.
+    /// - Parameters:
+    ///   - lockRenewal: How often a run renews its lock, well within `FileUploadProgressStore.lockTimeout`.
+    ///   - sleep: Waits for an earlier attempt that is still storing a file.
+    ///   - renewalSleep: Waits between lock renewals; it must throw once its task is cancelled.
     public init(
         service: any FolioService, store: any UploadProgressStoring, now: @escaping @Sendable () -> Date = { .now },
         lockRenewal: Duration = .seconds(60),
-        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        renewalSleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.service = service
         self.store = store
         self.now = now
         self.lockRenewal = lockRenewal
         self.sleep = sleep
+        self.renewalSleep = renewalSleep
     }
 
     /// Identifies a batch by its server and vault (`scope`), the files' names, titles, types and contents, and
@@ -229,8 +235,8 @@ public struct UploadBatchRunner: Sendable {
         let key = Self.key(files: files, tagIDs: tagIDs, scope: scope)
         guard store.lock(key) else { throw UploadBatchError.alreadyRunning }
         let lease = LeaseState()
-        let renewal = Task { [store, lockRenewal] in
-            while (try? await Task.sleep(for: lockRenewal)) != nil {
+        let renewal = Task { [store, lockRenewal, renewalSleep] in
+            while (try? await renewalSleep(lockRenewal)) != nil {
                 if !store.renew(key) {
                     lease.markLost()
                     return
