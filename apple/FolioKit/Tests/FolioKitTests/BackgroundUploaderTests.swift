@@ -346,6 +346,19 @@ struct ShareUploadStoreTests {
         #expect(leftovers.isEmpty, "removing a record also forgets its claim")
     }
 
+    @Test func pruningAheadOfTimeNeverTakesOverALiveClaim() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareUploadStore(directory: directory)
+        let retrying = try saved(store, .failed(.rejected(status: 503)))
+        let other = ShareUploadStore(directory: directory)
+        #expect(other.claim(retrying.id))
+
+        store.prune(now: .now.addingTimeInterval(30 * 24 * 60 * 60))
+
+        #expect(store.record(retrying.id) != nil, "expired by that date, but another process holds it right now")
+        other.unclaim(retrying.id)
+    }
+
     @Test func pruningLeavesAShareThatChangedSinceItWasListed() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ShareUploadStore(directory: directory)
@@ -561,6 +574,24 @@ struct ShareUploadStoreTests {
         #expect(failed.status == .failed(.keyReused))
         #expect(!failed.canRetry)
         #expect(!harness.bodyExists(failed))
+        #expect(harness.uploader.heldAnswers == 0, "a finished task's answer is dropped")
+    }
+
+    @Test func answersOfTasksThatNeverFinishAreBoundedAndClearedWithTheSession() async throws {
+        let harness = ShareUploadHarness([])
+        defer { harness.tearDown() }
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let url = try #require(URL(string: "https://\(harness.host)/api/documents/upload"))
+
+        for _ in 0..<(BackgroundUploader.answeredTaskLimit + 10) {
+            let task = session.dataTask(with: url)
+            harness.uploader.urlSession(session, dataTask: task, didReceive: Data("{}".utf8))
+        }
+
+        #expect(harness.uploader.heldAnswers == BackgroundUploader.answeredTaskLimit)
+        harness.uploader.urlSession(session, didBecomeInvalidWithError: nil)
+        #expect(harness.uploader.heldAnswers == 0)
     }
 
     @Test func aRetryHeldByAnotherProcessIsRefused() async throws {
