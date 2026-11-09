@@ -59,7 +59,7 @@ public enum IntentEnvironment {
         return DocumentCatalog(service: service)
     }
 
-    /// Runs `work` and rewrites whatever it throws into a message the person can read. Telemetry is sent before
+    /// Runs `work` and rewrites whatever it throws, except cancellation, into a message the person can read. Telemetry is sent before
     /// returning, because the system may suspend an intent's process as soon as `perform` ends.
     public static func run<T>(_ work: (DocumentCatalog) async throws -> T) async throws -> T {
         let flush = flusher.withLock { $0 }
@@ -67,6 +67,9 @@ public enum IntentEnvironment {
             let result = try await work(catalog())
             await flush()
             return result
+        } catch is CancellationError {
+            await flush()
+            throw CancellationError()
         } catch {
             await flush()
             throw ShortcutError(mapping: error)
