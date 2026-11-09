@@ -1,5 +1,6 @@
 import Foundation
 import UniformTypeIdentifiers
+import os
 
 /// A document as Shortcuts, Siri and Spotlight see it: names instead of ids.
 public struct DocumentSummary: Identifiable, Hashable, Sendable {
@@ -153,17 +154,30 @@ public struct DocumentCatalog: Sendable {
         return vaults.first
     }
 
-    /// Runs `load` in every vault the account can reach. Without a vault list it runs here only.
+    /// Runs `load` in every vault the account can reach. Without a vault list it runs here only. A vault that fails
+    /// is left out, so one unreadable vault doesn't empty a picker; it throws only when every vault failed.
     public func acrossVaults<Value: Sendable>(
         _ load: (DocumentCatalog) async throws -> [Value]
     ) async throws -> [VaultScoped<Value>] {
         let vaults = (try? await service.vaults().vaults) ?? []
         guard !vaults.isEmpty else { return try await load(self).map { VaultScoped($0, vaultID: vaultID) } }
         var found: [VaultScoped<Value>] = []
+        var firstError: (any Error)?
+        var loaded = 0
         for vault in vaults {
             let name = vaults.count > 1 ? vault.name : nil
-            found += try await load(scoped(to: vault.id)).map { VaultScoped($0, vaultID: vault.id, vaultName: name) }
+            do {
+                found += try await load(scoped(to: vault.id)).map {
+                    VaultScoped($0, vaultID: vault.id, vaultName: name)
+                }
+                loaded += 1
+            } catch {
+                try Task.checkCancellation()
+                Self.logger.error("Skipped a vault that failed to load: \(String(describing: error), privacy: .public)")
+                firstError = firstError ?? error
+            }
         }
+        if loaded == 0, let firstError { throw firstError }
         return found
     }
 
@@ -388,6 +402,8 @@ public struct DocumentCatalog: Sendable {
                 vaultSharing: sharing)
         }
     }
+
+    private static let logger = Logger(subsystem: "com.cedricziel.folio", category: "shortcuts")
 
     private static func newestFirst(_ documents: [Document]) -> [Document] {
         documents.sorted { $0.createdAt > $1.createdAt }

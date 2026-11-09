@@ -18,6 +18,8 @@ public protocol FolioService: DocumentEntryService {
     func documents(matching query: String) async throws -> [Document]
     /// Server-side filtering; the filters combine with AND and a document must carry every tag listed.
     func documents(filter: DocumentFilter) async throws -> [Document]
+    /// IDs of the documents `documents(filter:)` would return, without their content.
+    func documentIDs(filter: DocumentFilter) async throws -> [Document.ID]
     func deleteDocument(id: Document.ID) async throws
     /// Restores a trashed document in this service's vault and returns its current metadata.
     func restoreDocument(id: Document.ID) async throws -> Document
@@ -93,6 +95,10 @@ public struct NoToken: BearerTokenProvider {
 }
 
 public extension FolioService {
+    func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
+        try await documents(filter: filter).map(\.id)
+    }
+
     func upload(_ file: UploadFile, idempotencyKey _: UUID) async throws -> Document {
         try await upload(file)
     }

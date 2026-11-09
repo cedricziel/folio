@@ -52,6 +52,7 @@ use crate::routes::{
         crate::routes::saved_views::update,
         crate::routes::saved_views::delete,
         documents::list_documents,
+        documents::list_document_ids,
         crate::routes::browse::browse_default,
         crate::routes::browse::browse_vault,
         documents::get_document,

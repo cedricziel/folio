@@ -358,6 +358,26 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         }
     }
 
+    /// Servers without the IDs route answer 404, or 400 where `ids` is read as a document ID; a proxy or an older
+    /// token policy may answer 403 or 405. All of those fall back to the full list.
+    public func documentIDs(filter: DocumentFilter) async throws -> [Document.ID] {
+        do {
+            return try await call("documents.ids") {
+                let query = Operations.ListDocumentIds.Input.Query(
+                    reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,
+                    documentDateTo: filter.documentDateTo?.rawValue,
+                    correspondentId: filter.correspondentID?.uuidString.lowercased(),
+                    documentTypeId: filter.documentTypeID?.uuidString.lowercased(),
+                    tagId: filter.tagIDs.isEmpty ? nil : filter.tagIDs.map { $0.uuidString.lowercased() },
+                    createdAfter: filter.createdAfter, createdBefore: filter.createdBefore
+                )
+                return try await client.listDocumentIds(query: query).ok.body.json.ids.map { try Self.uuid($0) }
+            }
+        } catch let FolioError.server(status, _) where [400, 403, 404, 405].contains(status) {
+            return try await documents(filter: filter).map(\.id)
+        }
+    }
+
     private func requireReviewFilters(_ filter: DocumentFilter, supported: Bool?) throws {
         if filter.requiresReviewSupport, supported != true {
             throw FolioError.server(
