@@ -1,5 +1,4 @@
 name: Folio
-# Widgets and the Scan control need their own App ID and profiles; generate with FOLIO_WIDGETS=YES to build them in.
 include:
   - path: widgets.yml
     enable: ${FOLIO_WIDGETS}
@@ -15,7 +14,7 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: 0.15.0
+    MARKETING_VERSION: 0.16.0
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: 'YES'
     DEVELOPMENT_TEAM: $(FOLIO_DEVELOPMENT_TEAM)
