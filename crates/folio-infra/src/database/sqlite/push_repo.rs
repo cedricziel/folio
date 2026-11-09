@@ -350,10 +350,11 @@ impl PushDeviceRepository for SqlitePushRepository {
         ceiling: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>> {
         // SQLite has one writer, so this UPDATE claims atomically.
         let ids: Vec<String> = sqlx::query_scalar(
-            "UPDATE push_devices SET claimed_until = ?1
+            "UPDATE push_devices SET claimed_until = ?1, claim_holder = ?6
              WHERE id IN (
                 SELECT d.id FROM push_devices d JOIN push_pending p ON p.device_id = d.id
                 WHERE (d.claimed_until IS NULL OR d.claimed_until <= ?2)
@@ -369,6 +370,7 @@ impl PushDeviceRepository for SqlitePushRepository {
         .bind(ts(now - quiet))
         .bind(ts(now - ceiling))
         .bind(i64::from(limit))
+        .bind(holder.to_string())
         .fetch_all(&self.pool)
         .await
         .map_err(err)?;
@@ -381,9 +383,10 @@ impl PushDeviceRepository for SqlitePushRepository {
         min_interval: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>> {
         let ids: Vec<String> = sqlx::query_scalar(
-            "UPDATE push_devices SET claimed_until = ?1
+            "UPDATE push_devices SET claimed_until = ?1, claim_holder = ?5
              WHERE id IN (
                 SELECT id FROM push_devices
                 WHERE widget_token IS NOT NULL AND widgets_dirty_at IS NOT NULL
@@ -397,6 +400,7 @@ impl PushDeviceRepository for SqlitePushRepository {
         .bind(ts(now))
         .bind(ts(now - min_interval))
         .bind(i64::from(limit))
+        .bind(holder.to_string())
         .fetch_all(&self.pool)
         .await
         .map_err(err)?;
@@ -436,7 +440,7 @@ impl PushDeviceRepository for SqlitePushRepository {
     async fn state(&self, device: Uuid) -> Result<PushDeviceState> {
         let row = sqlx::query(
             "SELECT window_started_at, alerts_in_window, backoff_until, failures,
-                widgets_dirty_at, widgets_sent_at, test_sent_at
+                widgets_dirty_at, widgets_sent_at, test_sent_at, batch_id
              FROM push_devices WHERE id = ?",
         )
         .bind(device.to_string())
@@ -454,19 +458,38 @@ impl PushDeviceRepository for SqlitePushRepository {
             widgets_dirty_at: parse_ts(row.get("widgets_dirty_at"))?,
             widgets_sent_at: parse_ts(row.get("widgets_sent_at"))?,
             test_sent_at: parse_ts(row.get("test_sent_at"))?,
+            batch_id: row
+                .get::<Option<String>, _>("batch_id")
+                .map(|id| id.parse().map_err(err))
+                .transpose()?,
         })
     }
 
-    async fn release(&self, device: Uuid, state: &PushDeviceState) -> Result<()> {
+    async fn renew(&self, device: Uuid, holder: Uuid, until: DateTime<Utc>) -> Result<bool> {
+        let renewed = sqlx::query(
+            "UPDATE push_devices SET claimed_until = ? WHERE id = ? AND claim_holder = ?",
+        )
+        .bind(ts(until))
+        .bind(device.to_string())
+        .bind(holder.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(err)?;
+        Ok(renewed.rows_affected() == 1)
+    }
+
+    async fn release(&self, device: Uuid, holder: Uuid, state: &PushDeviceState) -> Result<bool> {
         // Widgets dirtied after the state was read stay dirty.
-        sqlx::query(
-            "UPDATE push_devices SET claimed_until = NULL, window_started_at = ?,
+        let released = sqlx::query(
+            "UPDATE push_devices SET claimed_until = NULL, claim_holder = NULL, batch_id = ?,
+                window_started_at = ?,
                 alerts_in_window = ?, backoff_until = ?, failures = ?, widgets_sent_at = ?,
                 widgets_dirty_at = CASE
                     WHEN ? IS NULL AND widgets_dirty_at > COALESCE(?, '') THEN widgets_dirty_at
                     ELSE ? END
-             WHERE id = ?",
+             WHERE id = ? AND claim_holder = ?",
         )
+        .bind(state.batch_id.map(|id| id.to_string()))
         .bind(state.window_started_at.map(ts))
         .bind(i64::from(state.alerts_in_window))
         .bind(state.backoff_until.map(ts))
@@ -476,10 +499,11 @@ impl PushDeviceRepository for SqlitePushRepository {
         .bind(state.widgets_sent_at.map(ts))
         .bind(state.widgets_dirty_at.map(ts))
         .bind(device.to_string())
+        .bind(holder.to_string())
         .execute(&self.pool)
         .await
         .map_err(err)?;
-        Ok(())
+        Ok(released.rows_affected() == 1)
     }
 
     async fn mark_delivered(&self, device: Uuid, at: DateTime<Utc>) -> Result<()> {

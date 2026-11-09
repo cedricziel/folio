@@ -67,6 +67,7 @@ pub trait PushDeviceRepository: Send + Sync {
         ceiling: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>>;
 
     /// Claim devices with a widget token whose widgets are waiting for a reload
@@ -76,7 +77,12 @@ pub trait PushDeviceRepository: Send + Sync {
         min_interval: Duration,
         lease: Duration,
         limit: u32,
+        holder: Uuid,
     ) -> Result<Vec<Uuid>>;
+
+    /// Extend `holder`'s lease to `until`; `false` once another claim has taken the device.
+    /// Only the holder decides: a lease that ran out but was not claimed again is still renewed.
+    async fn renew(&self, device: Uuid, holder: Uuid, until: DateTime<Utc>) -> Result<bool>;
 
     async fn pending(&self, device: Uuid) -> Result<Vec<PendingNotification>>;
 
@@ -84,8 +90,9 @@ pub trait PushDeviceRepository: Send + Sync {
 
     async fn state(&self, device: Uuid) -> Result<PushDeviceState>;
 
-    /// Store the state and end the lease
-    async fn release(&self, device: Uuid, state: &PushDeviceState) -> Result<()>;
+    /// Store the state and end the lease, unless another claim has taken the device;
+    /// `true` when stored. Like `renew`, this depends on the holder only, not on `claimed_until`.
+    async fn release(&self, device: Uuid, holder: Uuid, state: &PushDeviceState) -> Result<bool>;
 
     async fn mark_delivered(&self, device: Uuid, at: DateTime<Utc>) -> Result<()>;
 
