@@ -74,6 +74,7 @@ public final class UploadViewModel {
                     } catch FolioError.server(status: 410, message: _) {
                         // The document an earlier attempt stored has been deleted since: upload the file again once.
                         let fresh = UUID()
+                        // Kept before the upload: if this answer is lost too, a retry must reuse the same key.
                         batchKeys[index] = fresh
                         _ = try await service.upload(files[index], idempotencyKey: fresh)
                     }

@@ -49,8 +49,8 @@ struct SystemContinuedWork: ContinuedWorkScheduling {
                         return
                     }
                     guard let work else {
-                        // The batch ended before the system started the task, and its own UI showed the outcome.
-                        task.setTaskCompleted(success: true)
+                        // The batch ended before the system started the task; its outcome is unknown here.
+                        task.setTaskCompleted(success: false)
                         return
                     }
                     work.attach(task, onCancel: onCancel)

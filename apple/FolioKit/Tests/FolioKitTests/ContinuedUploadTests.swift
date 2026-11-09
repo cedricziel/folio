@@ -4,6 +4,7 @@ import Testing
 @testable import FolioKit
 
 /// User-started upload batches hand their progress to the system so they can finish in the background (#364).
+@Suite(.timeLimit(.minutes(1)))
 @MainActor struct ContinuedUploadTests {
     @Test func aBatchReportsSystemProgressUntilItFinishes() async {
         let scheduler = RecordingScheduler()
@@ -98,6 +99,22 @@ import Testing
         #expect(keys[1] == keys[0])
         #expect(keys[2] != keys[0])
         #expect(await service.uploads.map(\.filename) == ["a.pdf", "a.pdf"])
+    }
+
+    @Test func aSecondGoneAnswerFailsTheBatch() async {
+        let service = MockFolioService()
+        await service.setFailure(.server(status: 410, message: nil))
+        let model = UploadViewModel(service: service) {}
+
+        await model.upload([file("a.pdf")])
+
+        guard case .failed(_, uploaded: 0) = model.state else {
+            Issue.record("Expected the batch to fail, got \(model.state)")
+            return
+        }
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2, "the original key, then one fresh key, and no further attempts")
+        #expect(keys[0] != keys[1])
     }
 
     @Test func cancellingTheCallerStopsTheBatch() async {
