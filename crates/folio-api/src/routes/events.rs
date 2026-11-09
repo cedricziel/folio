@@ -160,6 +160,9 @@ pub(crate) async fn sse_handler(
 
 /// The SSE messages for one event: the JSON event, then its Turbo Streams
 async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent) -> Vec<Event> {
+    if let Some(document_id) = processing_only(outbox_event, vault) {
+        return processing_frames(state, vault, outbox_event.id, document_id).await;
+    }
     if outbox_event.origin_vault() != Some(vault) {
         tracing::debug!(
             event_id = outbox_event.id,
@@ -202,6 +205,37 @@ async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent
     }
     frames.push(Event::default().id(id).data(html));
     frames
+}
+
+/// The document of a processing transition that has no legacy document event, such as a failed stage
+fn processing_only(outbox_event: &OutboxEvent, vault: VaultId) -> Option<uuid::Uuid> {
+    if outbox_event.event.is_some() {
+        return None;
+    }
+    let envelope = outbox_event.envelope.as_ref()?;
+    (envelope.vault_id() == vault
+        && envelope.audience() == &folio_core::EventAudience::Vault
+        && envelope.event_type().starts_with("document.processing."))
+    .then(|| envelope.document_id())
+    .flatten()
+}
+
+/// Turbo Streams alone for a processing transition: API clients follow the legacy events
+async fn processing_frames(
+    state: &AppState,
+    vault: VaultId,
+    id: i64,
+    document_id: uuid::Uuid,
+) -> Vec<Event> {
+    let event = DocumentEvent::Updated { document_id };
+    match turbo_streams_for(DefaultVault(vault), state, &event).await {
+        Ok(html) if !html.is_empty() => vec![Event::default().id(id.to_string()).data(html)],
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("Failed to render turbo streams: {e:?}");
+            Vec::new()
+        }
+    }
 }
 
 /// One open SSE connection

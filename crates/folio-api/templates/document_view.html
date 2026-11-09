@@ -11,7 +11,7 @@
         <div class="doc-head-row">
             <div class="doc-head-text">
                 <h1 class="title">{{ document.title }}</h1>
-                <p class="f-meta">{{ facts }}</p>
+                {% include "partials/document_facts.html" %}
             </div>
             <div class="doc-actions">
                 {% if document.file_path.is_some() %}
@@ -35,32 +35,7 @@
     </header>
 
     <div class="doc-layout">
-        <section class="pages" aria-label="Pages"
-                 data-controller="page-viewer"
-                 data-page-viewer-document-id-value="{{ document.id }}"
-                 data-page-viewer-page-count-value="{{ pages.len() }}">
-            <div class="f-sheet page-sheet">
-                <img src="{{ "/documents"|vault_url }}/{{ document.id }}/page/1/thumbnail" alt="Page 1 of {{ document.title }}" data-page-viewer-target="image">
-            </div>
-            {% if show_page_nav %}
-            <div class="page-nav">
-                <button type="button" class="f-btn f-btn-quiet" data-action="click->page-viewer#prevPage" data-page-viewer-target="prevBtn" disabled>Previous</button>
-                <span class="f-meta">Page <span data-page-viewer-target="currentPage">1</span> of {{ pages.len() }}</span>
-                <button type="button" class="f-btn f-btn-quiet" data-action="click->page-viewer#nextPage" data-page-viewer-target="nextBtn">Next</button>
-            </div>
-            <div class="page-thumbs">
-                {% for p in pages %}
-                <button type="button" class="f-thumb page-thumb" aria-label="Page {{ p }}" aria-current="{% if loop.first %}true{% else %}false{% endif %}"
-                        data-page="{{ p }}" data-page-viewer-target="thumb" data-action="click->page-viewer#select">
-                    <img src="{{ "/documents"|vault_url }}/{{ document.id }}/page/{{ p }}/thumbnail" alt="" loading="lazy">
-                </button>
-                {% endfor %}
-            </div>
-            {% if pages_without_preview %}
-            <p class="f-meta page-limit">Previews show the first {{ pages.len() }} of {{ page_count }} pages.{% if document.file_path.is_some() %} <a href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" download>Download the original</a> to read the rest.{% endif %}</p>
-            {% endif %}
-            {% endif %}
-        </section>
+        {% include "partials/document_pages.html" %}
 
         <aside class="doc-aside">
             <section class="panel">
@@ -190,22 +165,7 @@
             </section>
 
             {% include "partials/document_processing.html" %}
-            <section class="panel">
-                <h2 class="heading">Text Folio read</h2>
-                {% match document.content %}
-                {% when Some with (content) %}
-                <pre class="ocr">{{ content }}</pre>
-                {% when None %}
-                {% if document.ocr_status.as_str() == "failed" %}
-                <div class="f-notice f-notice-danger" role="status">
-                    <p>Text extraction did not finish. The original file is unchanged. Read it again, or move it to Trash.</p>
-                </div>
-                {% else %}
-                <p><span class="f-status f-status-pending">{{ reading }}</span></p>
-                <p class="hint">The text appears here once Folio has read the file.</p>
-                {% endif %}
-                {% endmatch %}
-            </section>
+            {% include "partials/document_text.html" %}
             <turbo-frame id="document-notes" data-entry-frame src="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note" loading="lazy"><section class="panel"><h2 class="heading">Notes</h2><p role="status">Loading notes…</p><a href="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note">Load notes</a></section></turbo-frame>
             <turbo-frame id="document-comments" data-entry-frame src="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=comment" loading="lazy"><section class="panel"><h2 class="heading">Comments</h2><p role="status">Loading comments…</p><a href="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=comment">Load comments</a></section></turbo-frame>
         </aside>
