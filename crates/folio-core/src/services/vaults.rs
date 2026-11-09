@@ -103,16 +103,15 @@ impl VaultService {
         }
     }
 
-    /// Whether a grant on the vault reaches anyone besides `user`. A group grant counts as shared.
-    /// Call it only for vaults [`Self::list`] returned for `user`.
-    pub async fn shared_beyond(&self, user: &UserId, id: VaultId) -> Result<bool> {
-        let me = Principal::User(user.clone());
-        Ok(self
-            .members
-            .list(id)
-            .await?
-            .iter()
-            .any(|member| member.principal != me))
+    /// Those of `vaults` with a grant to anyone besides `user`, in one query. A group grant counts
+    /// as shared, even when `user` is its only member. Call it only for vaults [`Self::list`]
+    /// returned for `user`.
+    pub async fn shared_beyond(
+        &self,
+        user: &UserId,
+        vaults: &[VaultId],
+    ) -> Result<std::collections::HashSet<VaultId>> {
+        self.members.shared_beyond(user, vaults).await
     }
 
     /// The vault a request lands in: the user's default (provisioned on first

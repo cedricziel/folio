@@ -277,13 +277,7 @@ pub(crate) async fn list_document_ids(
     RawQuery(query): RawQuery,
 ) -> ApiResult<Json<DocumentIdsResponse>> {
     let filter = ListDocumentsQuery::filter(query.as_deref())?;
-    let ids = state
-        .document_repo
-        .list(vault, filter)
-        .await?
-        .into_iter()
-        .map(|document| document.id)
-        .collect();
+    let ids = state.document_repo.list_ids(vault, filter).await?;
     Ok(Json(DocumentIdsResponse { ids }))
 }
 
