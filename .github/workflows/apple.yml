@@ -53,9 +53,10 @@ jobs:
           thumbnails=false
           while IFS= read -r file; do
             case "$file" in
-              # The fixtures load FolioKit's view models, which reach across the whole package.
-              .github/workflows/apple.yml | design/tokens.json | apple/FolioKit/Package.* | \
-              apple/FolioKit/Sources/*)
+              # The fixtures load FolioKit's view models, which reach across the whole package, and
+              # build FolioAPI, whose openapi.json is a symlink to the root schema.
+              .github/workflows/apple.yml | design/tokens.json | openapi/openapi.json | \
+              apple/FolioKit/Package.* | apple/FolioKit/Sources/*)
                 classifications=true; thumbnails=true ;;
               apple/ClassificationTests/* | apple/Folio/Sources/TaxonomyView.swift)
                 classifications=true ;;
