@@ -137,7 +137,25 @@ async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>, how
                 .revoke_client_tokens("ada", &client.client_id)
                 .await
                 .unwrap(),
-            Revoke::Replay => assert!(rotate(&server, &client.client_id, &first).await.is_none()),
+            Revoke::Replay => {
+                let replay = server
+                    .token(
+                        BASE,
+                        TokenRequest {
+                            grant_type: Some("refresh_token".into()),
+                            refresh_token: Some(first.clone()),
+                            client_id: Some(client.client_id.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                // A store failure would leave the grant alive, so only a rejection counts.
+                assert_eq!(
+                    replay.err().map(|e| e.error),
+                    Some("invalid_grant"),
+                    "round {round}: the replay was not rejected"
+                );
+            }
             Revoke::TokenRevocation => server.revoke(&first, &client.client_id).await.unwrap(),
         }
         revoked.store(true, Ordering::SeqCst);
@@ -232,7 +250,7 @@ async fn sqlite_replay_is_not_starved_by_a_rotating_client() {
         dir.path().join("test.db").display()
     ))
     .unwrap()
-    .busy_timeout(Duration::from_millis(500));
+    .busy_timeout(Duration::from_millis(100));
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)

@@ -7,7 +7,11 @@ use folio_auth::{
     RefreshToken, Session, TotpRecord, User,
 };
 use sqlx::{sqlite::SqliteRow, Row, SqlitePool};
+use std::time::Duration;
 use tokio::sync::{Mutex, MutexGuard};
+
+/// Attempts at taking the write lock, each bounded by the busy timeout.
+const BEGIN_ATTEMPTS: u32 = 8;
 
 pub struct SqliteAuthStore {
     pool: SqlitePool,
@@ -34,6 +38,19 @@ impl SqliteAuthStore {
         _client_id: &str,
     ) -> Result<(MutexGuard<'_, ()>, sqlx::Transaction<'static, sqlx::Sqlite>), AuthError> {
         let queued = self.exchanges.lock().await;
+        let mut backoff = Duration::from_millis(10);
+        for _ in 1..BEGIN_ATTEMPTS {
+            match self.pool.begin_with("BEGIN IMMEDIATE").await {
+                Ok(tx) => return Ok((queued, tx)),
+                // Writers outside this queue can hold the lock past the busy
+                // timeout, and a revoke that gives up leaves the grant alive.
+                Err(e) if is_busy(&e) => {
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_millis(500));
+                }
+                Err(e) => return Err(err(e)),
+            }
+        }
         let tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(err)?;
         Ok((queued, tx))
     }
@@ -118,6 +135,16 @@ impl SqliteAuthStore {
         }
         Ok(())
     }
+}
+
+/// `SQLITE_BUSY` or `SQLITE_LOCKED`, including their extended codes.
+fn is_busy(e: &sqlx::Error) -> bool {
+    let code = match e {
+        sqlx::Error::Database(db) => db.code(),
+        _ => None,
+    };
+    code.and_then(|c| c.parse::<i32>().ok())
+        .is_some_and(|c| matches!(c & 0xff, 5 | 6))
 }
 
 fn err(e: sqlx::Error) -> AuthError {
@@ -688,19 +715,8 @@ impl AuthStore for SqliteAuthStore {
         if grant_id.is_empty() {
             return Ok(());
         }
-        // Push devices registered under the grant go with it.
-        let mut tx = self.pool.begin().await.map_err(err)?;
-        for sql in [
-            "DELETE FROM oauth_access_tokens WHERE grant_id = $1",
-            "DELETE FROM oauth_refresh_tokens WHERE grant_id = $1",
-            "DELETE FROM push_devices WHERE grant_id = $1",
-        ] {
-            sqlx::query(sql)
-                .bind(grant_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(err)?;
-        }
+        let (_queued, mut tx) = self.begin_locked("").await?;
+        Self::delete_grant(&mut tx, grant_id).await?;
         tx.commit().await.map_err(err)
     }
 
