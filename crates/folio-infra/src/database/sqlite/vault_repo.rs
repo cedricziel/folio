@@ -523,6 +523,37 @@ impl MembershipRepository for SqliteVaultRepository {
         Ok(n as u64)
     }
 
+    async fn shared_beyond(
+        &self,
+        user: &UserId,
+        vaults: &[VaultId],
+    ) -> Result<std::collections::HashSet<VaultId>> {
+        if vaults.is_empty() {
+            return Ok(Default::default());
+        }
+        let mut qb = sqlx::QueryBuilder::<sqlx::Sqlite>::new(
+            "SELECT DISTINCT vault_id FROM vault_members WHERE (user_id IS NULL OR user_id <> ",
+        );
+        qb.push_bind(user.0.clone()).push(") AND vault_id IN (");
+        let mut ids = qb.separated(", ");
+        for vault in vaults {
+            ids.push_bind(vault.to_string());
+        }
+        qb.push(")");
+        let rows: Vec<(String,)> = qb
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        rows.into_iter()
+            .map(|(id,)| {
+                Uuid::parse_str(&id)
+                    .map(VaultId)
+                    .map_err(|e| Error::Repository(format!("invalid vault id {id}: {e}")))
+            })
+            .collect()
+    }
+
     async fn ensure_group(&self, source: &str, name: &str) -> Result<GroupId> {
         if !matches!(source, "local" | "external") {
             return Err(Error::Validation(format!(

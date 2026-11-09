@@ -389,6 +389,23 @@ pub trait MembershipRepository: Send + Sync {
     /// Owners of the vault that are users, not groups
     async fn direct_owner_count(&self, vault: VaultId) -> Result<u64>;
 
+    /// Those of `vaults` with a grant to anyone besides `user`. A group grant counts, even when
+    /// `user` is the group's only member.
+    async fn shared_beyond(
+        &self,
+        user: &UserId,
+        vaults: &[VaultId],
+    ) -> Result<std::collections::HashSet<VaultId>> {
+        let me = Principal::User(user.clone());
+        let mut shared = std::collections::HashSet::new();
+        for &vault in vaults {
+            if self.list(vault).await?.iter().any(|m| m.principal != me) {
+                shared.insert(vault);
+            }
+        }
+        Ok(shared)
+    }
+
     /// The group with this namespace and name, created when nobody has used it yet
     async fn ensure_group(&self, source: &str, name: &str) -> Result<GroupId>;
 }

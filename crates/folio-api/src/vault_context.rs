@@ -12,6 +12,7 @@ pub struct VaultSummary {
     pub role: VaultRole,
     pub created_at: DateTime<Utc>,
     /// Whether anyone besides the caller can reach the vault; absent where the server doesn't check.
+    /// A group grant counts as shared, even when the caller is the group's only member.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared: Option<bool>,
 }
