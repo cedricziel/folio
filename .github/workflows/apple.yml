@@ -84,7 +84,9 @@ jobs:
     runs-on: ${{ matrix.toolchain.runner }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_${{ matrix.toolchain.xcode }}.app/Contents/Developer
-    timeout-minutes: 60
+    # The build plus several navigation passes can pass 60 minutes on a loaded runner; the
+    # FolioKit watchdog still stops a hung `swift test` after 15.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: apple
