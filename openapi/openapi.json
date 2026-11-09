@@ -9044,6 +9044,13 @@
           "role": {
             "type": "string",
             "example": "owner"
+          },
+          "shared": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether anyone besides the caller can reach the vault; absent where the server doesn't check."
           }
         }
       },

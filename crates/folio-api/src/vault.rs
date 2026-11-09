@@ -238,6 +238,7 @@ async fn resolve(
             name: v.name,
             role,
             created_at: v.created_at,
+            shared: None,
         })
         .collect();
     Ok(VaultContext {
