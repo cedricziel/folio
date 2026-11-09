@@ -7,7 +7,7 @@ public protocol ServerConfigStore: Sendable {
 
 public struct UserDefaultsServerConfigStore: ServerConfigStore {
     /// Shared with the share extension through an App Group.
-    public static let appGroup = "group.com.cedricziel.folio"
+    public static var appGroup: String { AppConfiguration.appGroup }
 
     private nonisolated(unsafe) let defaults: UserDefaults
     private let key = "serverURL"

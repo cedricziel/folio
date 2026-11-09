@@ -21,6 +21,20 @@ public enum WorkspaceDestination: String, CaseIterable, Sendable {
     }
 }
 
+/// How a continued document asks to be shown once its detail appears.
+public struct DocumentContinuation: Equatable, Sendable {
+    public let documentID: Document.ID
+    public let pane: HandoffPane?
+    /// The sender's 1-based page; the preview clamps it to the loaded file.
+    public let page: Int?
+
+    public init(documentID: Document.ID, pane: HandoffPane?, page: Int? = nil) {
+        self.documentID = documentID
+        self.pane = pane
+        self.page = page
+    }
+}
+
 /// Browser state retained while another destination is visible.
 @MainActor @Observable
 public final class DocumentBrowserSession: Identifiable {
@@ -30,6 +44,8 @@ public final class DocumentBrowserSession: Identifiable {
     public var presentation = SavedView.Presentation.list
     public var selection: Document.ID?
     public var path: [Document.ID] = []
+    /// Set when Handoff opens a document with a pane or page; the detail view consumes it.
+    public var continuation: DocumentContinuation?
 
     init(service: any FolioService, destination: WorkspaceDestination) {
         list = DocumentListViewModel(service: service)
@@ -142,7 +158,7 @@ public final class WorkspaceViewModel {
     }
 
     /// Opens a document in the supplied vault or the server default used by document intents.
-    public func open(_ id: Document.ID, vaultID: UUID? = nil) {
+    public func open(_ id: Document.ID, vaultID: UUID? = nil, pane: HandoffPane? = nil, page: Int? = nil) {
         if let vaultID = vaultID ?? catalog.defaultVaultID {
             guard catalog.vaults.contains(where: { $0.id == vaultID }) else {
                 navigationError = "This vault is no longer available."
@@ -155,6 +171,39 @@ public final class WorkspaceViewModel {
         all.list.searchText = ""
         all.selection = id
         all.path = [id]
+        all.continuation =
+            pane == nil && page == nil ? nil : DocumentContinuation(documentID: id, pane: pane, page: page)
+    }
+
+    /// Opens a continued target. An unknown vault keeps the current one; a saved view that no longer
+    /// loads falls back to the vault's documents. Both report why.
+    public func open(_ route: HandoffRoute) async {
+        guard catalog.vaults.contains(where: { $0.id == route.vaultID }) else {
+            navigationError = "This vault is no longer available."
+            return
+        }
+        switch route.target {
+        case let .document(id, pane, page):
+            open(id, vaultID: route.vaultID, pane: pane, page: page)
+        case let .library(list):
+            selectVault(route.vaultID)
+            navigationError = nil
+            destination = list == .all ? .all : .inbox
+        case let .savedView(id):
+            selectVault(route.vaultID)
+            navigationError = nil
+            let generation = viewGeneration
+            let source = service
+            do {
+                let view = try await source.savedView(id: id)
+                guard generation == viewGeneration, !Task.isCancelled else { return }
+                selectSavedView(view)
+            } catch {
+                guard generation == viewGeneration, !Task.isCancelled else { return }
+                destination = .all
+                navigationError = "This saved view is no longer available."
+            }
+        }
     }
 
     public func loadSavedViews(more: Bool = false) async {

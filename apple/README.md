@@ -55,6 +55,28 @@ results, and the share extension keep their existing access. It does not encrypt
 cached files or change server permissions. App lock preferences stay outside the
 shared App Group and do not alter the shared sign-in.
 
+## Handoff and Universal Links
+
+Folio hands the screen you are on to your other Apple devices: an open document (with its discussion, and the page for PDFs), Inbox or All documents of a vault, or a saved view. Handoff needs both devices signed in to the same Apple Account, with Bluetooth and Wi-Fi on and Handoff enabled (iOS: Settings > General > AirPlay & Continuity; macOS: System Settings > General > AirDrop & Handoff). The receiving app opens the target only when it is signed in to the same server. Otherwise it offers the server's web page. A device without Folio gets the web page directly, so a Mac without the app opens the document in its browser.
+
+There are three directions:
+
+- **App → app** (Handoff): works in every build, including the App Store build.
+- **App → browser**: every activity carries the web page on the sender's server, so it works in every build.
+- **Browser → app** (Universal Links): only in builds you sign yourself. The domains a link may open are compiled into the app's signed entitlements, and every Folio server has its own domain, so the App Store build cannot list them.
+
+### Universal Links in a self-build
+
+All identifiers come from `Folio/Config/Folio.xcconfig`, which holds the official values and includes an optional, git-ignored `Folio/Config/Local.xcconfig`. To build under your own team:
+
+1. Copy the example and edit it: `cp apple/Folio/Config/Local.xcconfig.example apple/Folio/Config/Local.xcconfig`. Use plain values, not `$(...)` references. Set your Team ID, a bundle ID you own and an App Group. Set `FOLIO_ASSOCIATED_DOMAINS` to your server's host (several hosts separated by spaces). Keep `FOLIO_APP_ENTITLEMENTS = Resources/Folio-Local.entitlements`, or drop both lines if you only want Handoff.
+2. In the Apple Developer portal, register `FOLIO_BUNDLE_ID` and its `.share` and `.fileprovider` extensions, create the App Group, assign it to all three, and enable Associated Domains on the app's identifier.
+3. On the server, set `apple.app_ids` to `FOLIO_DEVELOPMENT_TEAM.FOLIO_BUNDLE_ID` (for example `ABCDE12345.com.example.folio`) in `config.toml`, `FOLIO_APPLE__APP_IDS` or the Apple app links section of `/settings`. The server then answers `/.well-known/apple-app-site-association`; see `docs/deployment.md`.
+4. Generate the project and the entitlements: `cd apple/Folio && xcodegen generate && ../scripts/associated-domains.sh`. `bundle exec fastlane test` does the same when a `Local.xcconfig` exists.
+5. Check the resolved identifiers: `apple/scripts/check-build-settings.sh --local`.
+
+Apple's CDN fetches the association file from your server, so the server must be reachable over public HTTPS, and a change can take a while to reach devices. For a server on a private network, use a development-signed build with `FOLIO_ASSOCIATED_DOMAINS = folio.lan?mode=developer` and turn on Associated Domains Development in the device's developer settings; the device then fetches the file directly. Handoff and the web fallback work without any of this.
+
 ## Tests
 
 ```sh
