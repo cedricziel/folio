@@ -32,11 +32,9 @@ final class WidgetSync {
             #if os(iOS)
                 // The refresh on going to the background picks up what changed in the app; without this, iOS can
                 // suspend the app before the snapshot is saved.
-                let assertion = BackgroundAssertion(name: "Folio widget refresh") { [weak self] in
-                    self?.refreshTask?.cancel()
-                }
+                let assertion = BackgroundAssertion(name: "Folio widget refresh")
             #endif
-            refreshTask = Task { [store] in
+            let task = Task { [store] in
                 #if os(iOS)
                     defer { assertion.end() }
                 #endif
@@ -46,6 +44,11 @@ final class WidgetSync {
                 store.save(snapshot)
                 WidgetCenter.shared.reloadAllTimelines()
             }
+            #if os(iOS)
+                // Only this refresh holds the assertion; a newer one has its own.
+                assertion.onExpiry = { task.cancel() }
+            #endif
+            refreshTask = task
         case .signedOut, .expired:
             store.save(.signedOut(at: Date()))
             WidgetCenter.shared.reloadAllTimelines()
@@ -68,10 +71,12 @@ final class WidgetSync {
     @MainActor
     private final class BackgroundAssertion {
         private var identifier = UIBackgroundTaskIdentifier.invalid
+        /// Runs when the system's time runs out, before the assertion ends.
+        var onExpiry: (() -> Void)?
 
-        init(name: String, onExpiry: @escaping @MainActor @Sendable () -> Void) {
+        init(name: String) {
             identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
-                onExpiry()
+                self?.onExpiry?()
                 self?.end()
             }
         }

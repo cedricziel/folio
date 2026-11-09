@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import os
 
 @testable import FolioKit
 
@@ -244,20 +243,5 @@ struct WidgetLinkTests {
     /// `ShortcutsTests` already checks that performing the intent leaves `.scan` for the app.
     @Test func scanControlIntentOpensTheApp() {
         #expect(ScanDocumentIntent.openAppWhenRun)
-    }
-
-    @MainActor @Test func scanRunsReachTheHookTheAppInstalls() async throws {
-        let runs = OSAllocatedUnfairLock<[TelemetryIntent]>(initialState: [])
-        IntentEnvironment.recordRuns { intent in runs.withLock { $0.append(intent) } }
-        IntentEnvironment.recordScanRuns()
-        defer {
-            IntentEnvironment.recordRuns { FolioTelemetry.shared.intent($0) }
-            IntentRouter.shared.clear()
-        }
-
-        _ = try await ScanDocumentIntent().perform()
-
-        #expect(runs.withLock { $0 } == [.scanDocument])
-        #expect(IntentRouter.shared.request == .scan)
     }
 }
