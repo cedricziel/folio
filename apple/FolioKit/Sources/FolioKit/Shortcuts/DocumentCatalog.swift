@@ -16,11 +16,14 @@ public struct DocumentSummary: Identifiable, Hashable, Sendable {
     public var hasRecognizedText: Bool
     /// The vault holding the document; nil is the server's default vault.
     public var vaultID: UUID?
+    /// Whether others can reach the document's vault.
+    public var vaultSharing: VaultSharing
 
     public init(
         id: Document.ID, title: String, correspondent: String? = nil, documentType: String? = nil,
         tags: [String] = [], date: Date, mimeType: String? = nil, pageCount: Int? = nil,
-        originalFilename: String? = nil, hasRecognizedText: Bool = false, vaultID: UUID? = nil
+        originalFilename: String? = nil, hasRecognizedText: Bool = false, vaultID: UUID? = nil,
+        vaultSharing: VaultSharing = .unknown
     ) {
         self.id = id
         self.title = title
@@ -33,16 +36,20 @@ public struct DocumentSummary: Identifiable, Hashable, Sendable {
         self.originalFilename = originalFilename
         self.hasRecognizedText = hasRecognizedText
         self.vaultID = vaultID
+        self.vaultSharing = vaultSharing
     }
 
-    public init(_ document: Document, correspondent: String?, documentType: String?, vaultID: UUID? = nil) {
+    public init(
+        _ document: Document, correspondent: String?, documentType: String?, vaultID: UUID? = nil,
+        vaultSharing: VaultSharing = .unknown
+    ) {
         self.init(
             id: document.id, title: document.title, correspondent: correspondent,
             documentType: documentType, tags: document.tags.map(\.name), date: document.createdAt,
             mimeType: document.mimeType, pageCount: document.pageCount,
             originalFilename: document.originalFilename,
             hasRecognizedText: !(document.content ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            vaultID: vaultID
+            vaultID: vaultID, vaultSharing: vaultSharing
         )
     }
 
@@ -88,6 +95,8 @@ public enum ShortcutFailure: Error, Equatable, Sendable {
     case documentNotFound
     case noRecognizedText
     case unreadableFile(String)
+    /// The items an intent was given live in different vaults.
+    case mixedVaults
 }
 
 /// A document's original file, downloaded for sharing.
@@ -99,7 +108,7 @@ public struct DocumentTransferFile: Sendable {
 /// Everything an intent does against the server, kept free of the AppIntents framework so
 /// it stays testable and reusable on platforms that get their own intents later.
 public struct DocumentCatalog: Sendable {
-    private let service: any FolioService
+    let service: any FolioService
     private let calendar: Calendar
     private let progress: any UploadProgressStoring
     private let uploads: UploadBatchRunner
@@ -130,6 +139,49 @@ public struct DocumentCatalog: Sendable {
         return DocumentCatalog(
             service: service.scoped(to: vaultID), calendar: calendar, progress: progress, uploadScope: uploadScope,
             vaultID: vaultID)
+    }
+
+    public func vaults() async throws -> VaultCatalog {
+        try await service.vaults()
+    }
+
+    /// The vault an intent works in: the one asked for, else the one its tags, correspondent or type come from.
+    /// Items without a vault fit any vault.
+    public static func vault(asked: UUID?, implied: [UUID?]) throws -> UUID? {
+        let vaults = Set(([asked] + implied).compactMap { $0 })
+        guard vaults.count <= 1 else { throw ShortcutFailure.mixedVaults }
+        return vaults.first
+    }
+
+    /// Runs `load` in every vault the account can reach. Without a vault list it runs here only.
+    public func acrossVaults<Value: Sendable>(
+        _ load: (DocumentCatalog) async throws -> [Value]
+    ) async throws -> [VaultScoped<Value>] {
+        let vaults = (try? await service.vaults().vaults) ?? []
+        guard !vaults.isEmpty else { return try await load(self).map { VaultScoped($0, vaultID: vaultID) } }
+        var found: [VaultScoped<Value>] = []
+        for vault in vaults {
+            let name = vaults.count > 1 ? vault.name : nil
+            found += try await load(scoped(to: vault.id)).map { VaultScoped($0, vaultID: vault.id, vaultName: name) }
+        }
+        return found
+    }
+
+    /// Looks items up in the vault each id names, keeping the order vaults first appear in.
+    public func lookup<Value: Sendable>(
+        _ ids: [VaultScopedID], _ load: (DocumentCatalog, [UUID]) async throws -> [Value]
+    ) async throws -> [VaultScoped<Value>] {
+        var order: [UUID?] = []
+        var byVault: [UUID?: [UUID]] = [:]
+        for id in ids {
+            if byVault[id.vaultID] == nil { order.append(id.vaultID) }
+            byVault[id.vaultID, default: []].append(id.id)
+        }
+        var found: [VaultScoped<Value>] = []
+        for vault in order {
+            found += try await load(scoped(to: vault), byVault[vault] ?? []).map { VaultScoped($0, vaultID: vault) }
+        }
+        return found
     }
 
     public func search(_ query: String, limit: Int = 25) async throws -> [DocumentSummary] {
@@ -321,13 +373,19 @@ public struct DocumentCatalog: Sendable {
         guard !documents.isEmpty else { return [] }
         async let people = try? service.correspondents()
         async let types = try? service.documentTypes()
-        let (loadedPeople, loadedTypes) = await (people, types)
+        async let vaults = try? service.vaults()
+        let (loadedPeople, loadedTypes, loadedVaults) = await (people, types, vaults)
+        let vault = loadedVaults.flatMap { catalog in
+            catalog.vaults.first { $0.id == (vaultID ?? catalog.defaultVaultID) }
+        }
+        let sharing = vault?.sharing ?? .unknown
         let peopleByID = Dictionary((loadedPeople ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         let typesByID = Dictionary((loadedTypes ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         return documents.map { document in
             DocumentSummary(
                 document, correspondent: document.correspondentID.flatMap { peopleByID[$0] },
-                documentType: document.documentTypeID.flatMap { typesByID[$0] }, vaultID: vaultID)
+                documentType: document.documentTypeID.flatMap { typesByID[$0] }, vaultID: vaultID,
+                vaultSharing: sharing)
         }
     }
 
