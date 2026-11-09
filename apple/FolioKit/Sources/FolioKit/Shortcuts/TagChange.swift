@@ -40,9 +40,11 @@ public struct TagChangeOutcome: Equatable, Sendable {
     public func summary(tagName: String) -> String {
         let count = applied.documents.count
         let documents = "\(count) document\(count == 1 ? "" : "s")"
-        var sentences = [
-            applied.kind == .add ? "Tagged \(documents) with \(tagName)." : "Removed \(tagName) from \(documents)."
-        ]
+        var sentences: [String] = []
+        if count > 0 || (unchanged.isEmpty && otherVault.isEmpty && failed.isEmpty) {
+            sentences.append(
+                applied.kind == .add ? "Tagged \(documents) with \(tagName)." : "Removed \(tagName) from \(documents).")
+        }
         if !unchanged.isEmpty {
             let verb = applied.kind == .add ? "already had it" : "didn't have it"
             sentences.append("\(unchanged.count) \(verb).")
@@ -58,8 +60,8 @@ public struct TagChangeOutcome: Equatable, Sendable {
 }
 
 extension DocumentCatalog {
-    /// Adds or removes the tag on each document that needs it, a few at a time. One request per vault finds which
-    /// documents already carry the tag, so the documents themselves are never fetched. Throws only when every
+    /// Adds or removes the tag on each document that needs it, a few at a time. One request per vault lists the IDs
+    /// of the documents already carrying the tag, so the documents themselves are never fetched. Throws only when every
     /// document failed.
     public func apply(_ change: TagChange, concurrency: Int = 4) async throws -> TagChangeOutcome {
         var applied = change
@@ -75,8 +77,10 @@ extension DocumentCatalog {
                 outcome.otherVault.append(id)
                 continue
             }
-            if byVault[id.vaultID] == nil { vaultOrder.append(id.vaultID) }
-            byVault[id.vaultID, default: []].append(id)
+            // An id without a vault is looked up where the tag lives, the only vault the change can succeed in.
+            let vault = id.vaultID ?? change.tagVaultID
+            if byVault[vault] == nil { vaultOrder.append(vault) }
+            byVault[vault, default: []].append(id)
         }
 
         var targets: [DocumentEntityID] = []
@@ -85,7 +89,7 @@ extension DocumentCatalog {
             let tagged: Set<Document.ID>
             do {
                 let filter = DocumentFilter(tagIDs: [change.tagID])
-                tagged = Set(try await scoped(to: vault).service.documents(filter: filter).map(\.id))
+                tagged = Set(try await scoped(to: vault).service.documentIDs(filter: filter))
             } catch {
                 firstError = firstError ?? error
                 outcome.failed += ids
@@ -106,7 +110,7 @@ extension DocumentCatalog {
             func start() {
                 guard next < targets.count else { return }
                 let position = next
-                let catalog = scoped(to: targets[position].vaultID)
+                let catalog = scoped(to: targets[position].vaultID ?? change.tagVaultID)
                 let documentID = targets[position].documentID
                 group.addTask {
                     do {
