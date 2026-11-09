@@ -270,6 +270,39 @@ async fn documents_carry_their_tags_and_names() {
 }
 
 #[tokio::test]
+async fn document_ids_take_the_list_filters_and_carry_only_ids() {
+    let app = test_app().await;
+    let (tax, home) = tax_and_home_documents(&app).await;
+    let (_, listed) = request(&app, "GET", &format!("/api/documents?tag_id={tax}")).await;
+    let mut expected: Vec<String> = listed["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|document| document["id"].as_str().unwrap().to_owned())
+        .collect();
+    expected.sort();
+
+    let (status, body) = request(&app, "GET", &format!("/api/documents/ids?tag_id={tax}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let mut ids: Vec<String> = body["ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, expected);
+    assert_eq!(body.as_object().unwrap().len(), 1, "only ids: {body}");
+
+    let uri = format!("/api/documents/ids?tag_id={tax}&tag_id={home}");
+    let (_, body) = request(&app, "GET", &uri).await;
+    assert_eq!(body["ids"].as_array().unwrap().len(), 1);
+
+    let (status, _) = request(&app, "GET", "/api/documents/ids?tag_id=not-a-uuid").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn list_filters_by_all_tags_and_by_creation_time() {
     let app = test_app().await;
     let (tax, home) = tax_and_home_documents(&app).await;

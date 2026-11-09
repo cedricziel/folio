@@ -345,7 +345,7 @@ struct TransferFileCacheTests {
         #expect(FileManager.default.fileExists(atPath: stored[2].path))
     }
 
-    @Test func downloadsLeftByAnEarlierLaunchAgeOutWhenTheSessionResumes() throws {
+    @Test func downloadsLeftByAnEarlierLaunchAgeOutWhenTheSessionResumes() async throws {
         let directory = scratch().appending(path: "cache", directoryHint: .isDirectory)
         let clock = TestClock()
         func leftover(_ name: String, age: TimeInterval) throws -> URL {
@@ -363,6 +363,7 @@ struct TransferFileCacheTests {
         let cache = TransferFileCache(directory: directory, maxAge: 600, maxFiles: 2, now: { clock.now })
 
         cache.sessionChanged(to: .signedIn(server))
+        await cache.leftoversSwept()
 
         #expect(!FileManager.default.fileExists(atPath: stale.path))
         #expect(!FileManager.default.fileExists(atPath: older.path))
@@ -370,22 +371,23 @@ struct TransferFileCacheTests {
         #expect(FileManager.default.fileExists(atPath: newest.path))
     }
 
-    @Test func theLeftoverSweepRunsOncePerLaunch() throws {
+    @Test func theLeftoverSweepRunsOncePerLaunch() async throws {
         let directory = scratch().appending(path: "cache", directoryHint: .isDirectory)
         let clock = TestClock()
         let cache = TransferFileCache(directory: directory, maxAge: 600, now: { clock.now })
         cache.sessionChanged(to: .signedIn(server))
-        let download = scratch().appending(path: "kept.pdf")
-        try Data("kept".utf8).write(to: download)
-        let stored = try cache.store(download, for: DocumentEntityID(documentID: UUID()))
+        await cache.leftoversSwept()
+        let late = directory.appending(path: "late", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: late, withIntermediateDirectories: true)
+        try Data("late".utf8).write(to: late.appending(path: "late.pdf"))
         try FileManager.default.setAttributes(
-            [.modificationDate: clock.now.addingTimeInterval(-601)],
-            ofItemAtPath: stored.deletingLastPathComponent().path)
+            [.modificationDate: clock.now.addingTimeInterval(-601)], ofItemAtPath: late.path)
 
         cache.sessionChanged(to: .interrupted(server))
         cache.sessionChanged(to: .signedIn(server))
+        await cache.leftoversSwept()
 
-        #expect(FileManager.default.fileExists(atPath: stored.path))
+        #expect(FileManager.default.fileExists(atPath: late.path))
     }
 
     @Test func signOutAnotherServerOrAnInteractiveSignInDeleteEveryDownload() throws {

@@ -55,6 +55,9 @@ pub mod keys {
     }
 }
 
+/// How many leading PDF pages get a preview; later pages are read from the original.
+pub const PREVIEW_PAGE_LIMIT: u32 = 50;
+
 /// An object being read: its size when known and a byte stream.
 pub struct StoredObject {
     pub size: Option<u64>,

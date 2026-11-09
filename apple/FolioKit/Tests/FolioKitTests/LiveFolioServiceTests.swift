@@ -112,6 +112,26 @@ private let documentJSON = """
         }
     }
 
+    @Test func documentIDsAskForIDsOnlyAndFallBackOnOlderServers() async throws {
+        let tag = UUID(uuidString: "99999999-8888-4777-8666-555555555555")!
+        let id = "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f"
+        StubURLProtocol.handler = { request, _ in
+            #expect(request.url?.path == "/api/documents/ids")
+            #expect(request.url?.query == "tag_id=\(tag.uuidString.lowercased())")
+            return .init(body: Data("{\"ids\":[\"\(id)\"]}".utf8))
+        }
+        #expect(try await makeService().documentIDs(filter: DocumentFilter(tagIDs: [tag])) == [UUID(uuidString: id)!])
+
+        for status in [400, 403, 404, 405] {
+            StubURLProtocol.handler = { request, _ in
+                guard request.url?.path == "/api/documents" else { return .init(status: status) }
+                return .init(body: Data("{\"documents\":[\(documentJSON)],\"count\":1}".utf8))
+            }
+            let ids = try await makeService().documentIDs(filter: DocumentFilter(tagIDs: [tag]))
+            #expect(ids == [UUID(uuidString: id)!], "status \(status)")
+        }
+    }
+
     @Test func clearingDocumentDateSendsExplicitNullInTheSelectedVault() async throws {
         let vault = UUID()
         let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!

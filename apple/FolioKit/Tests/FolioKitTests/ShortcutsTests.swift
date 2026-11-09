@@ -292,6 +292,18 @@ private actor FlushLog {
         router.clear()
     }
 
+    /// `ScanDocumentIntent` lives in FolioScanIntent, which cannot see telemetry; the app installs the hook.
+    @MainActor @Test func scanRunsAreRecordedOnceTheAppInstallsTheHook() async throws {
+        _ = await install()
+        IntentEnvironment.recordScanRuns()
+        defer { IntentRouter.shared.clear() }
+
+        _ = try await ScanDocumentIntent().perform()
+
+        #expect(runs.all == [.scanDocument])
+        #expect(IntentRouter.shared.request == .scan)
+    }
+
     @Test func entityQueriesUseTheService() async throws {
         let target = document("Gas bill", correspondent: stadtwerke, type: invoice)
         _ = await install([target])

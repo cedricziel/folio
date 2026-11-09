@@ -8,7 +8,7 @@ public final class IntentRouter {
         case scan
         case upload
         case inbox
-        case document(Document.ID, vaultID: UUID? = nil)
+        case document(UUID, vaultID: UUID? = nil)
     }
 
     public static let shared = IntentRouter()

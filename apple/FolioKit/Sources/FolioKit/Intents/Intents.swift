@@ -1,26 +1,10 @@
 import AppIntents
+@_exported import FolioScanIntent
 import Foundation
 import UniformTypeIdentifiers
 
 private func countText(_ count: Int, _ noun: String) -> String {
     "\(count) \(noun)\(count == 1 ? "" : "s")"
-}
-
-public struct ScanDocumentIntent: AppIntent {
-    public static let title: LocalizedStringResource = "Scan a document"
-    public static let description = IntentDescription(
-        "Opens Folio's scanner so you can photograph a paper document and file it."
-    )
-    public static let openAppWhenRun = true
-
-    public init() {}
-
-    @MainActor
-    public func perform() async throws -> some IntentResult {
-        IntentEnvironment.ran(.scanDocument)
-        IntentRouter.shared.route(.scan)
-        return .result()
-    }
 }
 
 /// Reports progress to the system, and from iOS and macOS 27 keeps running in the background for as long as it
@@ -422,4 +406,6 @@ extension UploadFile {
     }
 }
 
-public enum FolioIntentsPackage: AppIntentsPackage {}
+public enum FolioIntentsPackage: AppIntentsPackage {
+    public static var includedPackages: [any AppIntentsPackage.Type] { [FolioScanIntentPackage.self] }
+}

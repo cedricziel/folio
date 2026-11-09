@@ -178,12 +178,18 @@ pub(crate) async fn list_vaults(
     Query(query): Query<DiscoveryQuery>,
     State(state): State<AppState>,
 ) -> ApiResult<Json<VaultDiscovery>> {
-    let vaults: Vec<VaultSummary> = state
-        .vaults
-        .list(user.as_ref())
-        .await?
+    let listed = state.vaults.list(user.as_ref()).await?;
+    let shared = match &user {
+        Some(user) => {
+            let ids: Vec<_> = listed.iter().map(|(vault, _)| vault.id).collect();
+            Some(state.vaults.shared_beyond(user, &ids).await?)
+        }
+        None => None,
+    };
+    let vaults: Vec<VaultSummary> = listed
         .into_iter()
         .map(|(v, role)| VaultSummary {
+            shared: shared.as_ref().map(|shared| shared.contains(&v.id)),
             id: v.id,
             name: v.name,
             role,

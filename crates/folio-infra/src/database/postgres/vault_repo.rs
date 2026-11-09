@@ -512,6 +512,24 @@ impl MembershipRepository for PostgresVaultRepository {
         Ok(n as u64)
     }
 
+    async fn shared_beyond(
+        &self,
+        user: &UserId,
+        vaults: &[VaultId],
+    ) -> Result<std::collections::HashSet<VaultId>> {
+        let ids: Vec<Uuid> = vaults.iter().map(|vault| vault.0).collect();
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT vault_id FROM vault_members
+             WHERE vault_id = ANY($1) AND (user_id IS NULL OR user_id <> $2)",
+        )
+        .bind(ids)
+        .bind(&user.0)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?;
+        Ok(rows.into_iter().map(|(id,)| VaultId(id)).collect())
+    }
+
     async fn ensure_group(&self, source: &str, name: &str) -> Result<GroupId> {
         if !matches!(source, "local" | "external") {
             return Err(Error::Validation(format!(

@@ -1,4 +1,7 @@
 name: Folio
+include:
+  - path: widgets.yml
+    enable: ${FOLIO_WIDGETS}
 options:
   bundleIdPrefix: com.cedricziel
   deploymentTarget:
@@ -11,7 +14,7 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: 0.15.0
+    MARKETING_VERSION: 0.16.0
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: 'YES'
     DEVELOPMENT_TEAM: $(FOLIO_DEVELOPMENT_TEAM)

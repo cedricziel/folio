@@ -18,5 +18,7 @@ FOLIO_PROFILE_SHARE_IOS = match AppStore $(FOLIO_BUNDLE_ID).share
 FOLIO_PROFILE_SHARE_MACOS = match AppStore $(FOLIO_BUNDLE_ID).share macos
 FOLIO_PROFILE_FILEPROVIDER_IOS = match AppStore $(FOLIO_BUNDLE_ID).fileprovider
 FOLIO_PROFILE_FILEPROVIDER_MACOS = match AppStore $(FOLIO_BUNDLE_ID).fileprovider macos
+FOLIO_PROFILE_WIDGETS_IOS = match AppStore $(FOLIO_BUNDLE_ID).widgets
+FOLIO_PROFILE_WIDGETS_MACOS = match AppStore $(FOLIO_BUNDLE_ID).widgets macos
 
 #include? "Local.xcconfig"

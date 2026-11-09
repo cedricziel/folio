@@ -17,7 +17,7 @@ use folio_core::models::{
     UpdateDocument, UserId, VaultId,
 };
 use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
-use folio_core::ports::{keys, StoredObject, UploadReceiptKey};
+use folio_core::ports::{keys, StoredObject, UploadReceiptKey, PREVIEW_PAGE_LIMIT};
 use folio_core::services::NewUpload;
 use folio_core::services::UploadOutcome;
 use folio_infra::JobType;
@@ -308,6 +308,8 @@ struct DocumentViewTemplate {
     all_document_types: Vec<DocumentType>,
     all_tags: Vec<TagView>,
     show_page_nav: bool,
+    page_count: u32,
+    pages_without_preview: bool,
 }
 
 /// Document detail (full page view)
@@ -360,29 +362,14 @@ async fn document_detail(
         .map(TagView::from)
         .collect();
 
-    let show_page_nav = document.page_count.map(|c| c > 1).unwrap_or(false);
-    let pages: Vec<u32> = (1..=document.page_count.unwrap_or(1).max(1)).collect();
-
-    let mut facts = Vec::new();
-    // A file that could not be read has no trustworthy page count
-    let failed = document.ocr_status == folio_core::models::ProcessingStatus::Failed;
-    if let Some(count) = document.page_count.filter(|_| !failed) {
-        facts.push(format!(
-            "{count} {}",
-            if count == 1 { "page" } else { "pages" }
-        ));
-    }
-    if let Some(kind) = document.mime_type.as_deref().and_then(kind_label) {
-        facts.push(kind.to_string());
-    }
-    facts.push(format!("added {}", document.created_at.format("%Y-%m-%d")));
+    let live = DetailLive::of(&document);
 
     let template = DocumentViewTemplate {
         sidebar: Sidebar::load(&state, vault, Nav::None).await?,
-        facts: facts.join(" · "),
-        reading: view::reading_label(document.page_count),
-        failed,
-        pages,
+        facts: live.facts,
+        reading: live.reading,
+        failed: live.failed,
+        pages: live.pages,
         document,
         correspondent,
         document_type,
@@ -390,12 +377,81 @@ async fn document_detail(
         all_correspondents,
         all_document_types,
         all_tags,
-        show_page_nav,
+        show_page_nav: live.show_page_nav,
+        page_count: live.page_count,
+        pages_without_preview: live.pages_without_preview,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
         format!("Error rendering document view: {}", e)
     })))
+}
+
+/// The parts of the detail page that change while Folio processes the file
+struct DetailLive {
+    facts: String,
+    reading: String,
+    failed: bool,
+    pages: Vec<u32>,
+    show_page_nav: bool,
+    page_count: u32,
+    pages_without_preview: bool,
+}
+
+impl DetailLive {
+    fn of(document: &Document) -> Self {
+        let mut facts = Vec::new();
+        // A file that could not be read has no trustworthy page count
+        let failed = document.ocr_status == folio_core::models::ProcessingStatus::Failed;
+        if let Some(count) = document.page_count.filter(|_| !failed) {
+            facts.push(format!(
+                "{count} {}",
+                if count == 1 { "page" } else { "pages" }
+            ));
+        }
+        if let Some(kind) = document.mime_type.as_deref().and_then(kind_label) {
+            facts.push(kind.to_string());
+        }
+        facts.push(format!("added {}", document.created_at.format("%Y-%m-%d")));
+        let page_count = document.page_count.unwrap_or(1).max(1);
+        Self {
+            facts: facts.join(" · "),
+            reading: view::reading_label(document.page_count),
+            failed,
+            pages: (1..=page_count.min(PREVIEW_PAGE_LIMIT)).collect(),
+            show_page_nav: document.page_count.is_some_and(|c| c > 1),
+            page_count,
+            pages_without_preview: page_count > PREVIEW_PAGE_LIMIT,
+        }
+    }
+}
+
+/// Turbo Streams that refresh an open detail page, leaving its edit forms alone
+#[derive(Template)]
+#[template(path = "partials/document_detail_streams.html")]
+struct DetailStreams {
+    document: Document,
+    facts: String,
+    reading: String,
+    pages: Vec<u32>,
+    show_page_nav: bool,
+    page_count: u32,
+    pages_without_preview: bool,
+}
+
+impl DetailStreams {
+    fn of(document: Document) -> Self {
+        let live = DetailLive::of(&document);
+        Self {
+            document,
+            facts: live.facts,
+            reading: live.reading,
+            pages: live.pages,
+            show_page_nav: live.show_page_nav,
+            page_count: live.page_count,
+            pages_without_preview: live.pages_without_preview,
+        }
+    }
 }
 
 /// What people call the file: "PDF" or "Photo", not the MIME type
@@ -497,10 +553,13 @@ async fn document_page_thumbnail(
         return Err(ApiError::bad_request("Page number must be at least 1"));
     }
 
-    if let Some(page_count) = document.page_count {
-        if page > page_count {
-            return Err(ApiError::not_found("Page not found"));
-        }
+    if page
+        > document
+            .page_count
+            .unwrap_or(u32::MAX)
+            .min(PREVIEW_PAGE_LIMIT)
+    {
+        return Err(ApiError::not_found("Page not found"));
     }
 
     match state.store.get(&keys::page(id, page)).await {
@@ -518,6 +577,7 @@ async fn document_page_thumbnail(
 #[template(path = "partials/document_streams.html")]
 pub(super) struct DocumentStreams {
     row: Option<DocumentRow>,
+    detail: Option<String>,
     prepend: bool,
     removed: Option<Uuid>,
     counts: Counts,
@@ -528,6 +588,7 @@ impl DocumentStreams {
         let vault = document.vault_id;
         Ok(Self {
             row: Some(view::row(state, document).await?),
+            detail: None,
             prepend: true,
             removed: None,
             counts: Counts::load(state, vault).await?,
@@ -536,8 +597,12 @@ impl DocumentStreams {
 
     pub(super) async fn changed(state: &AppState, document: Document) -> ApiResult<Self> {
         let vault = document.vault_id;
+        let detail = DetailStreams::of(document.clone())
+            .render()
+            .map_err(|e| ApiError::internal(format!("Failed to render detail streams: {e}")))?;
         Ok(Self {
             row: Some(view::row(state, document).await?),
+            detail: Some(detail),
             prepend: false,
             removed: None,
             counts: Counts::load(state, vault).await?,
@@ -547,6 +612,7 @@ impl DocumentStreams {
     pub(super) async fn removed(state: &AppState, vault: VaultId, id: Uuid) -> ApiResult<Self> {
         Ok(Self {
             row: None,
+            detail: None,
             prepend: false,
             removed: Some(id),
             counts: Counts::load(state, vault).await?,

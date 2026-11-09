@@ -140,7 +140,9 @@ pub(crate) async fn sse_handler(
                 _ => return None,
             }
         }
+        let superseded = conn.superseded(&event);
         let frames = match &conn.context {
+            _ if superseded => Vec::new(),
             Some(context) => {
                 crate::vault::CURRENT_VAULT
                     .scope(context.clone(), frames_for(&conn.state, conn.vault, &event))
@@ -160,6 +162,9 @@ pub(crate) async fn sse_handler(
 
 /// The SSE messages for one event: the JSON event, then its Turbo Streams
 async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent) -> Vec<Event> {
+    if let Some(document_id) = processing_only(outbox_event, vault) {
+        return processing_frames(state, vault, outbox_event.id, document_id).await;
+    }
     if outbox_event.origin_vault() != Some(vault) {
         tracing::debug!(
             event_id = outbox_event.id,
@@ -204,6 +209,40 @@ async fn frames_for(state: &AppState, vault: VaultId, outbox_event: &OutboxEvent
     frames
 }
 
+/// The document of a processing transition that has no legacy document event, such as a failed stage
+fn processing_only(outbox_event: &OutboxEvent, vault: VaultId) -> Option<uuid::Uuid> {
+    if outbox_event.event.is_some() {
+        return None;
+    }
+    // `origin_vault` needs a legacy event to compare against. A domain-only row's envelope
+    // was captured from the document in the transaction that recorded the transition, so
+    // its vault is the origin vault and is checked directly.
+    let envelope = outbox_event.envelope.as_ref()?;
+    (envelope.vault_id() == vault
+        && envelope.audience() == &folio_core::EventAudience::Vault
+        && envelope.event_type().starts_with("document.processing."))
+    .then(|| envelope.document_id())
+    .flatten()
+}
+
+/// Turbo Streams alone for a processing transition: API clients follow the legacy events
+async fn processing_frames(
+    state: &AppState,
+    vault: VaultId,
+    id: i64,
+    document_id: uuid::Uuid,
+) -> Vec<Event> {
+    let event = DocumentEvent::Updated { document_id };
+    match turbo_streams_for(DefaultVault(vault), state, &event).await {
+        Ok(html) if !html.is_empty() => vec![Event::default().id(id.to_string()).data(html)],
+        Ok(_) => Vec::new(),
+        Err(e) => {
+            tracing::warn!("Failed to render turbo streams: {e:?}");
+            Vec::new()
+        }
+    }
+}
+
 /// One open SSE connection
 struct Connection {
     context: Option<crate::vault::VaultContext>,
@@ -246,6 +285,22 @@ impl Connection {
             }
             Err(e) => tracing::warn!("Failed to replay events: {e}"),
         }
+    }
+
+    /// Whether a queued transition of the same document will refresh it anyway
+    ///
+    /// Each refresh re-reads the document and the counters, so a bulk reprocess would
+    /// otherwise render every page once per stage transition.
+    fn superseded(&mut self, event: &OutboxEvent) -> bool {
+        let Some(document) = processing_only(event, self.vault) else {
+            return false;
+        };
+        while let Ok(next) = self.rx.try_recv() {
+            self.pending.push_back(next);
+        }
+        self.pending.iter().any(|later| {
+            later.id > event.id && processing_only(later, self.vault) == Some(document)
+        })
     }
 
     /// The next event to send, or `None` once the server shuts down

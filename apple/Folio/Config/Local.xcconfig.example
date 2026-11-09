@@ -16,6 +16,9 @@ FOLIO_PROFILE_SHARE_IOS =
 FOLIO_PROFILE_SHARE_MACOS =
 FOLIO_PROFILE_FILEPROVIDER_IOS =
 FOLIO_PROFILE_FILEPROVIDER_MACOS =
+// Only with FOLIO_WIDGETS=YES (docs/apple-widgets.md), for $(FOLIO_BUNDLE_ID).widgets.
+FOLIO_PROFILE_WIDGETS_IOS =
+FOLIO_PROFILE_WIDGETS_MACOS =
 
 // Universal Links: your Folio server's host (several separated by spaces). Leave both lines out
 // if you only want Handoff. apple/scripts/associated-domains.sh writes the entitlements file.

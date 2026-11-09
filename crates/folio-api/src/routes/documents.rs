@@ -31,6 +31,7 @@ use crate::vault::{DefaultVault, Uploader};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_documents).post(create_document))
+        .route("/ids", get(list_document_ids))
         .route("/trash", get(super::trash::list))
         .route("/{id}/restore", post(super::trash::restore))
         .route("/{id}/purge", axum::routing::delete(super::trash::purge))
@@ -250,6 +251,34 @@ pub(crate) async fn list_documents(
         count,
         supports_document_review_filters: true,
     }))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct DocumentIdsResponse {
+    ids: Vec<Uuid>,
+}
+
+/// IDs of the documents matching the same filters as the document list, without their content
+#[utoipa::path(
+    get,
+    path = "/api/documents/ids",
+    operation_id = "listDocumentIds",
+    tag = "documents",
+    params(ListDocumentsQuery),
+    responses(
+        (status = 200, description = "IDs of the matching documents", body = DocumentIdsResponse),
+        BadRequest,
+        InternalError,
+    )
+)]
+pub(crate) async fn list_document_ids(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    RawQuery(query): RawQuery,
+) -> ApiResult<Json<DocumentIdsResponse>> {
+    let filter = ListDocumentsQuery::filter(query.as_deref())?;
+    let ids = state.document_repo.list_ids(vault, filter).await?;
+    Ok(Json(DocumentIdsResponse { ids }))
 }
 
 /// Get a single document by ID

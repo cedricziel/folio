@@ -137,7 +137,26 @@ async fn refresh_rotation_never_outlives_a_revoke(store: Arc<dyn AuthStore>, how
                 .revoke_client_tokens("ada", &client.client_id)
                 .await
                 .unwrap(),
-            Revoke::Replay => assert!(rotate(&server, &client.client_id, &first).await.is_none()),
+            Revoke::Replay => {
+                let replay = server
+                    .token(
+                        BASE,
+                        TokenRequest {
+                            grant_type: Some("refresh_token".into()),
+                            refresh_token: Some(first.clone()),
+                            client_id: Some(client.client_id.clone()),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                // A store failure would leave the grant alive, so only a rejection counts.
+                let error = replay.err();
+                assert_eq!(
+                    error.as_ref().map(|e| e.error),
+                    Some("invalid_grant"),
+                    "round {round}: the replay was not rejected: {error:?}"
+                );
+            }
             Revoke::TokenRevocation => server.revoke(&first, &client.client_id).await.unwrap(),
         }
         revoked.store(true, Ordering::SeqCst);
@@ -218,6 +237,29 @@ async fn postgres_refresh_rotation_never_outlives_a_revoke() {
     };
     refresh_rotation_never_outlives_a_revoke(db.repositories().await.auth, Revoke::Disconnect)
         .await;
+}
+
+/// A loaded host stretches SQLite's lock waits; a short busy timeout makes a
+/// replay that waits behind a rotating client fail the same way, and a failed
+/// replay must not leave the grant alive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_replay_is_not_starved_by_a_rotating_client() {
+    use std::str::FromStr;
+    let (dir, _db) = common::sqlite_database().await;
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str(&format!(
+        "sqlite:{}",
+        dir.path().join("test.db").display()
+    ))
+    .unwrap()
+    .busy_timeout(Duration::from_millis(100));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let store: Arc<dyn AuthStore> =
+        Arc::new(folio_infra::database::sqlite::SqliteAuthStore::new(pool));
+    refresh_rotation_never_outlives_a_revoke(store, Revoke::Replay).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -317,4 +359,61 @@ async fn postgres_exchange_lock_leaves_new_codes_unblocked() {
         .await
         .expect("issuing a code waited for the exchange's lock");
     slow.join().unwrap();
+}
+
+/// Without WAL a commit waits for readers. A replay whose revoke cannot commit
+/// before the busy timeout must still revoke the grant, not leave it alive
+/// until the token is reused again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sqlite_replay_revokes_behind_a_long_reader() {
+    use sqlx::Connection;
+    use std::str::FromStr;
+    let (dir, _db) = common::sqlite_database().await;
+    let url = format!("sqlite:{}", dir.path().join("test.db").display());
+    let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+        .unwrap()
+        .busy_timeout(Duration::from_millis(100));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .unwrap();
+    let store: Arc<dyn AuthStore> =
+        Arc::new(folio_infra::database::sqlite::SqliteAuthStore::new(pool));
+    let client = seed(&store).await;
+    let server = OAuthServer::new(store.clone());
+    let code = issue_code(&server, &client).await;
+    let first = exchange(&server, &client.client_id, code).await.unwrap();
+    let second = rotate(&server, &client.client_id, &first).await.unwrap();
+
+    let mut reader = sqlx::SqliteConnection::connect(&url).await.unwrap();
+    sqlx::query("BEGIN").execute(&mut reader).await.unwrap();
+    sqlx::query("SELECT count(*) FROM oauth_clients")
+        .fetch_one(&mut reader)
+        .await
+        .unwrap();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        sqlx::query("COMMIT").execute(&mut reader).await.unwrap();
+    });
+
+    let replay = server
+        .token(
+            BASE,
+            TokenRequest {
+                grant_type: Some("refresh_token".into()),
+                refresh_token: Some(first),
+                client_id: Some(client.client_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await;
+    release.await.unwrap();
+    let error = replay.err();
+    assert_eq!(
+        error.as_ref().map(|e| e.error),
+        Some("invalid_grant"),
+        "the replay was not rejected: {error:?}"
+    );
+    assert!(rotate(&server, &client.client_id, &second).await.is_none());
 }

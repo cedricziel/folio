@@ -843,6 +843,50 @@ async fn discovery_lists_accessible_vaults_and_the_default() {
     assert!(!body.to_string().contains(&bob.vault.to_string()));
 }
 
+async fn discovered(h: &Harness, signed_in: &SignedIn) -> serde_json::Value {
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", "/api/vaults", signed_in, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    serde_json::from_str(&text(response).await).unwrap()
+}
+
+#[tokio::test]
+async fn discovery_reports_whether_anyone_else_can_reach_each_vault() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "shared-alice").await;
+    let bob = sign_in(&h, "shared-bob").await;
+    assert_eq!(discovered(&h, &alice).await["vaults"][0]["shared"], false);
+
+    h.members
+        .grant(
+            alice.vault,
+            &Principal::User(bob.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let alice_view = discovered(&h, &alice).await;
+    assert_eq!(alice_view["vaults"][0]["shared"], true);
+    let bob_view = discovered(&h, &bob).await;
+    let vaults = bob_view["vaults"].as_array().unwrap();
+    let shared_with_bob = vaults
+        .iter()
+        .find(|vault| vault["id"] == alice.vault.to_string())
+        .unwrap();
+    assert_eq!(shared_with_bob["shared"], true);
+    let own = vaults
+        .iter()
+        .find(|vault| vault["id"] == bob.vault.to_string())
+        .unwrap();
+    assert_eq!(own["shared"], false);
+}
+
 #[tokio::test]
 async fn explicit_vault_upload_uses_selected_scope_without_changing_default() {
     let h = harness_requiring_login().await;

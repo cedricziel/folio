@@ -61,6 +61,20 @@ struct TagChangeTests {
         #expect(await root.tagged.isEmpty)
     }
 
+    @Test func aDocumentWithoutAVaultIsChangedInTheTagsVault() async throws {
+        let tagVault = UUID()
+        let legacy = Document(title: "Before vaults")
+        let scoped = MockFolioService(documents: [legacy], tags: [receipts])
+        let root = MockFolioService(vaultServices: [tagVault: scoped])
+
+        let outcome = try await catalog(root).apply(
+            TagChange(.add, tagID: receipts.id, tagVaultID: tagVault, documents: ids([legacy])))
+
+        #expect(outcome.applied.documents == ids([legacy]))
+        #expect(await scoped.tagged == [TagAssignment(tag: receipts.id, document: legacy.id)])
+        #expect(await root.tagged.isEmpty)
+    }
+
     @Test func aFailedDocumentDoesNotStopTheOthers() async throws {
         let kept = Document(title: "Hotel"), gone = Document(title: "Deleted")
         let service = MockFolioService(documents: [kept, gone], tags: [receipts])
@@ -97,6 +111,11 @@ struct TagChangeTests {
         let two = one + [DocumentEntityID(documentID: UUID())]
         var outcome = TagChangeOutcome(applied: TagChange(.add, tagID: receipts.id, documents: two))
         #expect(outcome.summary(tagName: "Receipts") == "Tagged 2 documents with Receipts.")
+
+        outcome = TagChangeOutcome(applied: TagChange(.add, tagID: receipts.id, documents: []), unchanged: two)
+        #expect(outcome.summary(tagName: "Receipts") == "2 already had it.")
+        outcome = TagChangeOutcome(applied: TagChange(.add, tagID: receipts.id, documents: []))
+        #expect(outcome.summary(tagName: "Receipts") == "Tagged 0 documents with Receipts.")
 
         outcome = TagChangeOutcome(
             applied: TagChange(.remove, tagID: receipts.id, documents: one), unchanged: one, otherVault: two,
@@ -177,6 +196,26 @@ struct VaultScopeTests {
         }
         #expect(looked.map(\.value.name) == ["Travel"])
         #expect(looked.map(\.vaultID) == [work.id])
+    }
+
+    @Test func aVaultThatFailsIsLeftOutUnlessAllFail() async throws {
+        let home = Vault(id: UUID(), name: "Home", role: .owner)
+        let work = Vault(id: UUID(), name: "Work", role: .editor)
+        let homeService = MockFolioService(correspondents: [Correspondent(name: "Stadtwerke")])
+        let workService = MockFolioService()
+        await workService.setFailLookups(true)
+        let root = MockFolioService(
+            vaults: VaultCatalog(vaults: [home, work], defaultVaultID: home.id),
+            vaultServices: [home.id: homeService, work.id: workService])
+
+        let found = try await catalog(root).acrossVaults { try await $0.correspondents() }
+        #expect(found.map(\.value.name) == ["Stadtwerke"])
+        #expect(found.map(\.vaultID) == [home.id])
+
+        await homeService.setFailLookups(true)
+        await #expect(throws: FolioError.unreachable) {
+            try await catalog(root).acrossVaults { try await $0.correspondents() }
+        }
     }
 
     @Test func aSingleVaultNeedsNoLabel() async throws {

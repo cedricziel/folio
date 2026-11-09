@@ -542,6 +542,50 @@ async fn lifecycle_contract(db: Database) {
     );
 }
 
+/// One query answers which of a user's vaults anyone else can reach; a group grant counts.
+async fn sharing_contract(db: &Database) {
+    let r = db.repositories().await;
+    let alice = user(&r, "sharing-alice", false).await;
+    let bob = user(&r, "sharing-bob", false).await;
+    let solo = r.vaults.create("Solo", Some(&alice)).await.unwrap();
+    let with_bob = r.vaults.create("With Bob", Some(&alice)).await.unwrap();
+    let with_group = r.vaults.create("With a group", Some(&alice)).await.unwrap();
+    r.members
+        .grant(
+            with_bob.id,
+            &Principal::User(bob.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    let group = r.members.ensure_group("local", "family").await.unwrap();
+    r.members
+        .grant(
+            with_group.id,
+            &Principal::Group(group),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let shared = r
+        .members
+        .shared_beyond(&alice, &[solo.id, with_bob.id, with_group.id])
+        .await
+        .unwrap();
+    assert_eq!(shared, [with_bob.id, with_group.id].into_iter().collect());
+    let from_bob = r.members.shared_beyond(&bob, &[with_bob.id]).await.unwrap();
+    assert_eq!(from_bob, [with_bob.id].into_iter().collect());
+    assert!(r
+        .members
+        .shared_beyond(&alice, &[])
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 #[tokio::test]
 async fn sqlite_retains_vaults_enforces_owners_and_publishes_transactional_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
@@ -553,6 +597,7 @@ async fn sqlite_retains_vaults_enforces_owners_and_publishes_transactional_lifec
     .unwrap();
     lifecycle_contract(db.clone()).await;
     processing_contract(&db).await;
+    sharing_contract(&db).await;
 }
 
 #[tokio::test]
@@ -572,6 +617,7 @@ async fn postgres_retains_vaults_enforces_owners_and_publishes_transactional_lif
     .unwrap();
     lifecycle_contract(db.clone()).await;
     processing_contract(&db).await;
+    sharing_contract(&db).await;
     let Database::Postgres(pool) = &db else {
         unreachable!()
     };
