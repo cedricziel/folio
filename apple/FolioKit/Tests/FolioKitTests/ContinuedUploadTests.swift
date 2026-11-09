@@ -80,6 +80,44 @@ import Testing
         #expect(model.state == .finished(count: 2))
     }
 
+    @Test func aRetryWhoseEarlierDocumentWasDeletedUploadsTheFileAgainOnce() async {
+        let service = MockFolioService()
+        await service.setLoseUploadResponses(true)
+        let model = UploadViewModel(service: service) {}
+        let files = [file("a.pdf")]
+        await model.upload(files)
+        await service.setLoseUploadResponses(false)
+        let lost = await service.documentList[0].id
+        await service.markDeleted(lost)
+
+        await model.upload(files)
+
+        #expect(model.state == .finished(count: 1))
+        let keys = await service.uploadKeys
+        #expect(keys.count == 3, "first attempt, the retry answered 410, then a fresh key")
+        #expect(keys[1] == keys[0])
+        #expect(keys[2] != keys[0])
+        #expect(await service.uploads.map(\.filename) == ["a.pdf", "a.pdf"])
+    }
+
+    @Test func cancellingTheCallerStopsTheBatch() async {
+        let service = MockFolioService()
+        let scheduler = RecordingScheduler()
+        let model = UploadViewModel(service: service, continuedWork: scheduler) {}
+        await service.suspendUploads()
+        let caller = Task { await model.upload([file("a.pdf"), file("b.pdf")]) }
+        await service.waitForUploadRequest()
+        await service.setUploadDelay(.seconds(30))
+
+        caller.cancel()
+        await service.releaseUploads()
+        await caller.value
+
+        #expect(model.state == .failed(message: "Upload stopped.", uploaded: 0))
+        #expect(scheduler.work?.result == false)
+        #expect(await service.uploads.isEmpty)
+    }
+
     private func file(_ name: String) -> UploadFile {
         UploadFile(data: Data(name.utf8), filename: name, mimeType: "application/pdf")
     }
