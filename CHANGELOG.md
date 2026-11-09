@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.15.0](https://github.com/cedricziel/folio/compare/v0.14.0...v0.15.0) (2026-11-09)
+
+
+### Features
+
+* **apple:** continue in-app upload batches with system progress on iOS 26 ([#426](https://github.com/cedricziel/folio/issues/426)) ([4b61505](https://github.com/cedricziel/folio/commit/4b61505e230e0e99d61f17f2c1664d53b5d3593d))
+* **apple:** Handoff across devices with web fallback ([#399](https://github.com/cedricziel/folio/issues/399)) ([96d6e81](https://github.com/cedricziel/folio/commit/96d6e819f459e8da0e661c6dcd5524d8df6a9d13))
+* **apple:** vault-aware, undoable and bulk tag intents ([#436](https://github.com/cedricziel/folio/issues/436)) ([8ea7f21](https://github.com/cedricziel/folio/commit/8ea7f218fe56e7261d351278ab5a5742c12b36ce))
+
+
+### Bug Fixes
+
+* **apple:** prune claims on the store's clock; bound held task answers ([#439](https://github.com/cedricziel/folio/issues/439)) ([cb0fa69](https://github.com/cedricziel/folio/commit/cb0fa69fef7b2507397757e931870550c219195e))
+* **apple:** sweep transfer downloads left by an earlier launch ([#433](https://github.com/cedricziel/folio/issues/433)) ([ea491b0](https://github.com/cedricziel/folio/commit/ea491b0ef7e14c93b445a5a9f4b6c818ac73b3e7))
+* **ci:** kill a test process that ignores TERM after its parent exits ([88d2c26](https://github.com/cedricziel/folio/commit/88d2c26f1486898f21832b012db16e5d12aba6c0)), closes [#412](https://github.com/cedricziel/folio/issues/412)
+* **ci:** stop the whole test process tree when the watchdog fires ([96fa0af](https://github.com/cedricziel/folio/commit/96fa0af83e2d821be86641ed9a5bb38d5b1bcb36)), closes [#412](https://github.com/cedricziel/folio/issues/412)
+* **deps:** bump crossbeam-epoch 0.9.18 to 0.9.20 (RUSTSEC-2026-0204) ([#440](https://github.com/cedricziel/folio/issues/440)) ([b25739a](https://github.com/cedricziel/folio/commit/b25739abfe1e1c3f83aba805d47ca3b756a018d3))
+* **deps:** bump rand 0.9.2 to 0.9.3 (RUSTSEC-2026-0097) ([c1f9b1f](https://github.com/cedricziel/folio/commit/c1f9b1fb1c6c77a47f7096da84bf5e40394e7cf1))
+* **deps:** bump rand 0.9.2 to 0.9.3 (RUSTSEC-2026-0097) ([#441](https://github.com/cedricziel/folio/issues/441)) ([b6457cc](https://github.com/cedricziel/folio/commit/b6457cc2b1d05ca4778d9636cad87f4858beb88f))
+
 ## [0.14.0](https://github.com/cedricziel/folio/compare/v0.13.0...v0.14.0) (2026-11-08)
 
 
