@@ -30,11 +30,14 @@ public enum UploadBatchError: Error, Equatable, LocalizedError {
     case alreadyRunning
     /// A tag chosen for the upload was deleted; the documents are uploaded, the tag cannot be attached.
     case tagNoLongerExists
+    /// This run stopped renewing its lock in time and another run took the files over.
+    case lockLost
 
     public var errorDescription: String? {
         switch self {
         case .alreadyRunning: "These files are already being uploaded. Try again in a moment."
         case .tagNoLongerExists: "A tag chosen for this upload no longer exists. Choose the tags again."
+        case .lockLost: "Another upload of these files took over. Try again in a moment."
         }
     }
 }
@@ -45,13 +48,14 @@ public protocol UploadProgressStoring: Sendable {
     func remove(_ key: String)
     /// Reserves `key` for one run across processes. Returns false while another run holds it.
     func lock(_ key: String) -> Bool
-    /// Keeps a held lock from being taken over as abandoned while its run goes on.
-    func renew(_ key: String)
+    /// Keeps a held lock from being taken over as abandoned while its run goes on. False when another run has
+    /// taken it over.
+    func renew(_ key: String) -> Bool
     func unlock(_ key: String)
 }
 
 public extension UploadProgressStoring {
-    func renew(_: String) {}
+    func renew(_: String) -> Bool { true }
 }
 
 public final class InMemoryUploadProgressStore: UploadProgressStoring, @unchecked Sendable {
@@ -81,7 +85,7 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
     private let directory: URL
     private let maxAge: TimeInterval
     private let mutex = NSLock()
-    private var held: [String: UUID] = [:]
+    private var held: [String: Int] = [:]
 
     /// - Parameter maxAge: Progress older than this is forgotten; the same files shared later are a new batch.
     public init(directory: URL, maxAge: TimeInterval = 24 * 60 * 60) {
@@ -125,9 +129,9 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
         return true
     }
 
-    public func renew(_ key: String) {
-        guard let token = mutex.withLock({ held[key] }) else { return }
-        lease(for: key).renew(token)
+    public func renew(_ key: String) -> Bool {
+        guard let token = mutex.withLock({ held[key] }) else { return false }
+        return lease(for: key).renew(token)
     }
 
     /// Ends this store's run, leaving a lock another run has taken over since in place.
@@ -165,25 +169,35 @@ public final class FileUploadProgressStore: UploadProgressStoring, @unchecked Se
 /// the same batch again skips uploads and tags that already succeeded.
 ///
 /// Every upload carries its step's `Idempotency-Key`, so an attempt whose answer was lost is answered with the
-/// document the server already created; a 409 means the first attempt is still storing it, so the key is kept for
-/// the next run. Tag assignment is idempotent on the server, so a tag whose answer was lost is simply sent again. A
-/// document deleted before its tags were attached (404 while tagging, 410 for its key) is uploaded again under a new
-/// key. A deleted tag stops the batch with its progress kept; nothing is uploaded again for it.
+/// document the server already created; a 409 means the first attempt is still storing it, so the run waits as long
+/// as the server asks (at most `maxConflictWait`) and tries once more, then keeps the key for the next run. A key the
+/// server knows for a different file is replaced by a new one. Tag assignment is idempotent on the server, so a tag
+/// whose answer was lost is simply sent again. A document deleted before its tags were attached (404 while tagging,
+/// 410 for its key) is uploaded again under a new key. A deleted tag stops the batch with its progress kept; nothing
+/// is uploaded again for it. A run that loses its lock to another run stops before its next request.
 public struct UploadBatchRunner: Sendable {
     private let service: any FolioService
     private let store: any UploadProgressStoring
     private let now: @Sendable () -> Date
     private let lockRenewal: Duration
+    private let sleep: @Sendable (Duration) async throws -> Void
+
+    /// The longest a run waits for an earlier attempt that is still storing a file.
+    public static let maxConflictWait: Duration = .seconds(30)
+    /// How long to wait for an earlier attempt when the server does not say.
+    static let defaultConflictWait: Duration = .seconds(5)
 
     /// - Parameter lockRenewal: How often a run renews its lock, well within `FileUploadProgressStore.lockTimeout`.
     public init(
         service: any FolioService, store: any UploadProgressStoring, now: @escaping @Sendable () -> Date = { .now },
-        lockRenewal: Duration = .seconds(60)
+        lockRenewal: Duration = .seconds(60),
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.service = service
         self.store = store
         self.now = now
         self.lockRenewal = lockRenewal
+        self.sleep = sleep
     }
 
     /// Identifies a batch by its server and vault (`scope`), the files' names, titles, types and contents, and
@@ -214,9 +228,13 @@ public struct UploadBatchRunner: Sendable {
     public func run(_ files: [UploadFile], tagIDs: [Tag.ID], scope: String) async throws -> [Document] {
         let key = Self.key(files: files, tagIDs: tagIDs, scope: scope)
         guard store.lock(key) else { throw UploadBatchError.alreadyRunning }
+        let lease = LeaseState()
         let renewal = Task { [store, lockRenewal] in
             while (try? await Task.sleep(for: lockRenewal)) != nil {
-                store.renew(key)
+                if !store.renew(key) {
+                    lease.markLost()
+                    return
+                }
             }
         }
         defer {
@@ -240,9 +258,21 @@ public struct UploadBatchRunner: Sendable {
             record()
         }
 
+        /// Confirms this run still holds its lock before a request. The renewal task only notices a takeover on
+        /// its next tick, and a run suspended past the timeout must not write over the new holder's progress.
+        func ensureLease() throws {
+            try lease.check()
+            guard store.renew(key) else {
+                lease.markLost()
+                throw UploadBatchError.lockLost
+            }
+        }
+
         for index in files.indices {
             var restarted = false
+            var waited = false
             while true {
+                try ensureLease()
                 if progress.steps[index].documentID == nil {
                     do {
                         let document = try await service.upload(
@@ -255,6 +285,15 @@ public struct UploadBatchRunner: Sendable {
                         restarted = true
                         restart(index)
                         continue
+                    } catch KeyedUploadConflict.keyReused where !restarted {
+                        restarted = true
+                        restart(index)
+                        continue
+                    } catch KeyedUploadConflict.inProgress(let retryAfter) where !waited {
+                        waited = true
+                        record()
+                        try await self.sleep(min(retryAfter ?? Self.defaultConflictWait, Self.maxConflictWait))
+                        continue
                     } catch {
                         record()
                         throw error
@@ -263,6 +302,7 @@ public struct UploadBatchRunner: Sendable {
                 guard let documentID = progress.steps[index].documentID else { break }
                 do {
                     while let tagID = progress.steps[index].remainingTags.first {
+                        try ensureLease()
                         try await service.addTag(tagID, to: documentID)
                         progress.steps[index].remainingTags.removeFirst()
                         record()
@@ -276,6 +316,8 @@ public struct UploadBatchRunner: Sendable {
                     guard !restarted else { throw FolioError.server(status: 404, message: message) }
                     restarted = true
                     restart(index)
+                } catch UploadBatchError.lockLost {
+                    throw UploadBatchError.lockLost
                 } catch {
                     record()
                     throw error
@@ -311,5 +353,21 @@ public struct UploadBatchRunner: Sendable {
         }
         return Document(
             id: id, title: file.title ?? file.filename, originalFilename: file.filename, mimeType: file.mimeType)
+    }
+}
+
+/// Whether a run still holds its lock, as its renewal last found.
+private final class LeaseState: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var lost = false
+
+    func markLost() {
+        mutex.withLock { lost = true }
+    }
+
+    func check() throws {
+        if mutex.withLock({ lost }) {
+            throw UploadBatchError.lockLost
+        }
     }
 }

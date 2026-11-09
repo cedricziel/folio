@@ -15,6 +15,7 @@ pub mod config;
 pub mod database;
 pub mod import;
 pub mod ingest;
+pub mod push;
 pub mod queue;
 pub mod storage;
 pub mod telemetry;

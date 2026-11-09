@@ -191,6 +191,9 @@ pub struct AuthContext {
     pub client_id: String,
     pub scopes: Vec<String>,
     pub audience: String,
+    /// The OAuth grant the access token belongs to; empty for personal tokens
+    /// and tokens issued before grants existed
+    pub grant_id: String,
 }
 
 impl AuthContext {
