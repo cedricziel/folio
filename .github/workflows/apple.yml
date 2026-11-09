@@ -44,6 +44,7 @@ jobs:
       thumbnails: ${{ steps.filter.outputs.thumbnails }}
     steps:
       # The PR merge commit's first parent is the base tip, so HEAD^1..HEAD is exactly the PR's change.
+      # --no-renames lists both paths of a moved file, so moving one out of a watched path still counts.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
@@ -64,7 +65,7 @@ jobs:
               apple/FolioKit/Tests/FolioKitTests/MockFolioService.swift)
                 thumbnails=true ;;
             esac
-          done < <(git diff --name-only HEAD^1 HEAD)
+          done < <(git diff --no-renames --name-only HEAD^1 HEAD)
           printf 'classifications=%s\nthumbnails=%s\n' "$classifications" "$thumbnails" | tee -a "$GITHUB_OUTPUT"
 
   test:
