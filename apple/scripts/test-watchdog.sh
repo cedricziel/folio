@@ -14,8 +14,19 @@ limit=${TEST_WATCHDOG_LIMIT:-900}
 out=${TEST_WATCHDOG_DIR:-$PWD/build/test-hang}
 pattern=${TEST_WATCHDOG_PATTERN:-swiftpm-testing-helper|xctest|PackageTests}
 
+# Signals a process and everything below it: the test runner is a grandchild of the command (xcrun, swift test).
+kill_tree() {
+    local signal=$1 parent=$2 child
+    for child in $(pgrep -P "$parent"); do
+        kill_tree "$signal" "$child"
+    done
+    kill "-$signal" "$parent" 2>/dev/null
+}
+
 "$@" &
 pid=$!
+# A cancelled job stops the whole run too, so no test process outlives the step.
+trap 'kill_tree TERM "$pid"; exit 143' INT TERM
 deadline=$((SECONDS + limit))
 
 while kill -0 "$pid" 2>/dev/null; do
@@ -34,11 +45,9 @@ while kill -0 "$pid" 2>/dev/null; do
                     echo "could not spindump $target" >>"$out/errors.txt"
             fi
         done
-        pkill -TERM -P "$pid" 2>/dev/null
-        kill -TERM "$pid" 2>/dev/null
+        kill_tree TERM "$pid"
         sleep 5
-        pkill -KILL -P "$pid" 2>/dev/null
-        kill -KILL "$pid" 2>/dev/null
+        kill_tree KILL "$pid"
         exit 124
     fi
     sleep 5
