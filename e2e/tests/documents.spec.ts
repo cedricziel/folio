@@ -163,3 +163,41 @@ test("review can retry a failed write and keeps the selected document", async ({
     await request.delete(`/api/documents/${original.id}`);
   }
 });
+
+// A PDF of blank pages; poppler rebuilds the missing cross-reference table
+function blankPdf(pages: number): Buffer {
+  const kids = Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(" ");
+  let pdf = `%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [${kids}] /Count ${pages} >> endobj\n`;
+  for (let i = 0; i < pages; i++) {
+    pdf += `${i + 3} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n`;
+  }
+  return Buffer.from(`${pdf}trailer << /Root 1 0 R >>\n%%EOF\n`, "latin1");
+}
+
+test("a long PDF offers the previewed pages and the original for the rest", async ({ page, request }) => {
+  const title = uniqueTitle("long-pdf");
+  const upload = await request.post("/api/documents/upload", {
+    multipart: { title, file: { name: "long.pdf", mimeType: "application/pdf", buffer: blankPdf(51) } },
+  });
+  expect(upload.ok()).toBeTruthy();
+  const { id } = await upload.json();
+  try {
+    await expect
+      .poll(async () => (await (await request.get(`/api/documents/${id}`)).json()).page_count, { timeout: 30_000 })
+      .toBe(51);
+
+    await page.goto(`/documents/${id}`);
+    const pages = page.getByRole("region", { name: "Pages" });
+    await expect(pages.getByText("Page 1 of 50")).toBeVisible();
+    await expect(pages.getByRole("button", { name: "Page 50", exact: true })).toHaveCount(1);
+    await expect(pages.getByRole("button", { name: "Page 51", exact: true })).toHaveCount(0);
+    await expect(pages.getByText("Previews show the first 50 of 51 pages.")).toBeVisible();
+    await expect(pages.getByRole("link", { name: "Download the original" })).toHaveAttribute(
+      "href",
+      new RegExp(`/api/documents/${id}/download$`),
+    );
+    expect((await request.get(`/documents/${id}/page/51/thumbnail`)).status()).toBe(404);
+  } finally {
+    await request.delete(`/api/documents/${id}`);
+  }
+});

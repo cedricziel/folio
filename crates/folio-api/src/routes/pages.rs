@@ -17,7 +17,7 @@ use folio_core::models::{
     UpdateDocument, UserId, VaultId,
 };
 use folio_core::mutation::{current_actor, current_lineage, with_actor, with_lineage};
-use folio_core::ports::{keys, StoredObject, UploadReceiptKey};
+use folio_core::ports::{keys, StoredObject, UploadReceiptKey, PREVIEW_PAGE_LIMIT};
 use folio_core::services::NewUpload;
 use folio_core::services::UploadOutcome;
 use folio_infra::JobType;
@@ -308,6 +308,8 @@ struct DocumentViewTemplate {
     all_document_types: Vec<DocumentType>,
     all_tags: Vec<TagView>,
     show_page_nav: bool,
+    page_count: u32,
+    pages_without_preview: bool,
 }
 
 /// Document detail (full page view)
@@ -361,7 +363,9 @@ async fn document_detail(
         .collect();
 
     let show_page_nav = document.page_count.map(|c| c > 1).unwrap_or(false);
-    let pages: Vec<u32> = (1..=document.page_count.unwrap_or(1).max(1)).collect();
+    let page_count = document.page_count.unwrap_or(1).max(1);
+    let pages: Vec<u32> = (1..=page_count.min(PREVIEW_PAGE_LIMIT)).collect();
+    let pages_without_preview = page_count > PREVIEW_PAGE_LIMIT;
 
     let mut facts = Vec::new();
     // A file that could not be read has no trustworthy page count
@@ -391,6 +395,8 @@ async fn document_detail(
         all_document_types,
         all_tags,
         show_page_nav,
+        page_count,
+        pages_without_preview,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -497,10 +503,13 @@ async fn document_page_thumbnail(
         return Err(ApiError::bad_request("Page number must be at least 1"));
     }
 
-    if let Some(page_count) = document.page_count {
-        if page > page_count {
-            return Err(ApiError::not_found("Page not found"));
-        }
+    if page
+        > document
+            .page_count
+            .unwrap_or(u32::MAX)
+            .min(PREVIEW_PAGE_LIMIT)
+    {
+        return Err(ApiError::not_found("Page not found"));
     }
 
     match state.store.get(&keys::page(id, page)).await {
