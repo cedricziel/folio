@@ -661,3 +661,64 @@ mod handoff_urls {
         assert_eq!(response.headers()[header::LOCATION], expected.as_str());
     }
 }
+
+#[tokio::test]
+async fn long_pdfs_offer_only_the_pages_that_have_previews() {
+    use folio_core::ports::{keys, PREVIEW_PAGE_LIMIT};
+    let h = harness().await;
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Long report".into(),
+                mime_type: Some("application/pdf".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let pages = PREVIEW_PAGE_LIMIT + 1;
+    h.state
+        .document_repo
+        .set_page_count(h.vault, doc.id, pages)
+        .await
+        .unwrap();
+
+    let page = text(
+        h.app
+            .clone()
+            .oneshot(get(&format!("/documents/{}", doc.id)))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.contains(&format!("{pages} pages")));
+    assert!(page.contains(&format!("of {PREVIEW_PAGE_LIMIT}<")));
+    assert!(page.contains(&format!(r#"data-page="{PREVIEW_PAGE_LIMIT}""#)));
+    assert!(!page.contains(&format!(r#"data-page="{pages}""#)));
+    assert!(page.contains(&format!(
+        "Previews show the first {PREVIEW_PAGE_LIMIT} of {pages} pages"
+    )));
+
+    h.state
+        .store
+        .put(
+            &keys::page(doc.id, PREVIEW_PAGE_LIMIT),
+            axum::body::Bytes::from_static(b"jpeg"),
+        )
+        .await
+        .unwrap();
+    let thumbnail = |n: u32| get(&format!("/documents/{}/page/{n}/thumbnail", doc.id));
+    let last = h
+        .app
+        .clone()
+        .oneshot(thumbnail(PREVIEW_PAGE_LIMIT))
+        .await
+        .unwrap();
+    assert_eq!(last.status(), StatusCode::OK);
+    assert_eq!(last.headers()[header::CONTENT_TYPE], "image/jpeg");
+    let beyond = h.app.clone().oneshot(thumbnail(pages)).await.unwrap();
+    assert_eq!(beyond.status(), StatusCode::NOT_FOUND);
+}

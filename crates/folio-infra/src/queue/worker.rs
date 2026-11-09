@@ -1021,8 +1021,7 @@ impl Worker {
                 debug!("Failed to set page count: {}", e);
             }
 
-            // Generate thumbnails for all pages (limit to first 50 for performance)
-            let max_pages = count.min(50);
+            let max_pages = count.min(folio_core::ports::PREVIEW_PAGE_LIMIT);
             let mut success = false;
 
             for page in 1..=max_pages {
@@ -1464,6 +1463,67 @@ mod tests {
             .fetch_all(&f.pool)
             .await
             .unwrap()
+    }
+
+    /// A PDF of `pages` blank pages; poppler rebuilds the missing cross-reference table
+    fn blank_pdf(pages: u32) -> Vec<u8> {
+        let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 3)).collect();
+        let mut pdf = format!(
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [{}] /Count {pages} >> endobj\n",
+            kids.join(" ")
+        );
+        for i in 0..pages {
+            pdf.push_str(&format!(
+                "{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >> endobj\n",
+                i + 3
+            ));
+        }
+        pdf.push_str("trailer << /Root 1 0 R >>\n%%EOF\n");
+        pdf.into_bytes()
+    }
+
+    #[tokio::test]
+    async fn long_pdfs_get_previews_for_the_leading_pages_only() {
+        use folio_core::ports::{keys, PREVIEW_PAGE_LIMIT};
+        let f = fixture("text").await;
+        let vault = crate::database::test_vault();
+        let pages = PREVIEW_PAGE_LIMIT + 1;
+        let doc = f
+            .repo
+            .create(
+                vault,
+                CreateDocument {
+                    title: "long".into(),
+                    mime_type: Some("application/pdf".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let path = keys::original(doc.id);
+        f.storage.put(&path, blank_pdf(pages).into()).await.unwrap();
+        f.repo.set_file_path(vault, doc.id, &path).await.unwrap();
+
+        for force in [false, true] {
+            f.queue
+                .enqueue(JobType::ProcessDocument {
+                    document_id: doc.id,
+                    force,
+                })
+                .await
+                .unwrap();
+            drain_claimed(&f).await;
+
+            let stored = f.repo.find_by_id(vault, doc.id).await.unwrap().unwrap();
+            assert_eq!(stored.page_count, Some(pages));
+            assert!(f
+                .storage
+                .exists(&keys::page(doc.id, PREVIEW_PAGE_LIMIT))
+                .await
+                .unwrap());
+            assert!(!f.storage.exists(&keys::page(doc.id, pages)).await.unwrap());
+        }
     }
 
     #[tokio::test]
