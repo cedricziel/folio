@@ -105,15 +105,21 @@ plistbuddy="${PLISTBUDDY:-/usr/libexec/PlistBuddy}"
 plist_value() {
     "$plistbuddy" -c "Print :$1" "$2" 2>/dev/null || true
 }
-for name in Folio FolioShare FolioFileProvider; do
+# FOLIO_WIDGETS=YES builds the widget extension in (docs/apple-widgets.md); check its identifiers too.
+plist_targets=(Folio FolioShare FolioFileProvider)
+[ "${FOLIO_WIDGETS:-}" = YES ] && plist_targets+=(FolioWidgets)
+for name in "${plist_targets[@]}"; do
     info="$folio_dir/Resources/$name-Info.plist"
     entitlements="$folio_dir/Resources/$name.entitlements"
-    expect "$name-Info.plist FolioKeychainGroup" "$(plist_value FolioKeychainGroup "$info")" \
-        '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
     expect "$name-Info.plist FolioAppGroup" "$(plist_value FolioAppGroup "$info")" '$(FOLIO_APP_GROUP)'
     expect "$name-Info.plist FolioCallbackScheme" "$(plist_value FolioCallbackScheme "$info")" '$(FOLIO_BUNDLE_ID)'
-    expect "$name.entitlements keychain-access-groups" "$(plist_value keychain-access-groups:0 "$entitlements")" \
-        '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
+    # Widgets read the App Group snapshot only, so the extension gets no keychain group.
+    if [ "$name" != FolioWidgets ]; then
+        expect "$name-Info.plist FolioKeychainGroup" "$(plist_value FolioKeychainGroup "$info")" \
+            '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
+        expect "$name.entitlements keychain-access-groups" \
+            "$(plist_value keychain-access-groups:0 "$entitlements")" '$(AppIdentifierPrefix)$(FOLIO_BUNDLE_ID)'
+    fi
     expect "$name.entitlements application-groups" \
         "$(plist_value com.apple.security.application-groups:0 "$entitlements")" '$(FOLIO_APP_GROUP)'
 done
@@ -139,6 +145,7 @@ targets=(
     "FolioShare|.share|Resources/FolioShare.entitlements|SHARE"
     "FolioFileProvider|.fileprovider|Resources/FolioFileProvider.entitlements|FILEPROVIDER"
 )
+[ "${FOLIO_WIDGETS:-}" = YES ] && targets+=("FolioWidgets|.widgets|Resources/FolioWidgets.entitlements|WIDGETS")
 
 for entry in "${targets[@]}"; do
     IFS='|' read -r target suffix entitlements profile_key <<<"$entry"

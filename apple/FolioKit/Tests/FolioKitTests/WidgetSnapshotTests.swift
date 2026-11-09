@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import os
 
 @testable import FolioKit
 
@@ -222,6 +223,13 @@ struct WidgetLinkTests {
         #expect(WidgetLink.document(documentID, vaultID: vaultID).request == .document(documentID, vaultID: vaultID))
     }
 
+    @Test func schemeMatchesWhateverCaseTheSystemHandsBack() {
+        let upper = URL(string: WidgetLink.inbox.url.absoluteString.replacingOccurrences(
+            of: WidgetLink.scheme, with: WidgetLink.scheme.uppercased()))!
+
+        #expect(WidgetLink(url: upper) == .inbox)
+    }
+
     @Test(arguments: [
         "https://folio.example/inbox",
         "com.cedricziel.folio.widgets://unknown",
@@ -236,5 +244,20 @@ struct WidgetLinkTests {
     /// `ShortcutsTests` already checks that performing the intent leaves `.scan` for the app.
     @Test func scanControlIntentOpensTheApp() {
         #expect(ScanDocumentIntent.openAppWhenRun)
+    }
+
+    @MainActor @Test func scanRunsReachTheHookTheAppInstalls() async throws {
+        let runs = OSAllocatedUnfairLock<[TelemetryIntent]>(initialState: [])
+        IntentEnvironment.recordRuns { intent in runs.withLock { $0.append(intent) } }
+        IntentEnvironment.recordScanRuns()
+        defer {
+            IntentEnvironment.recordRuns { FolioTelemetry.shared.intent($0) }
+            IntentRouter.shared.clear()
+        }
+
+        _ = try await ScanDocumentIntent().perform()
+
+        #expect(runs.withLock { $0 } == [.scanDocument])
+        #expect(IntentRouter.shared.request == .scan)
     }
 }

@@ -2,6 +2,10 @@ import FolioKit
 import Foundation
 import WidgetKit
 
+#if os(iOS)
+    import UIKit
+#endif
+
 /// Keeps the snapshot the widgets read in step with the session and App lock. Does nothing unless the widget
 /// extension is built in (`FOLIO_WIDGETS=YES`), so no document data reaches the App Group without a reader.
 @MainActor
@@ -25,7 +29,17 @@ final class WidgetSync {
         switch session {
         case let .signedIn(url):
             let service = SharedConfiguration.makeService(for: url)
+            #if os(iOS)
+                // The refresh on going to the background picks up what changed in the app; without this, iOS can
+                // suspend the app before the snapshot is saved.
+                let assertion = BackgroundAssertion(name: "Folio widget refresh") { [weak self] in
+                    self?.refreshTask?.cancel()
+                }
+            #endif
             refreshTask = Task { [store] in
+                #if os(iOS)
+                    defer { assertion.end() }
+                #endif
                 guard let snapshot = try? await WidgetSnapshotBuilder.make(from: service, revealsTitles: revealsTitles),
                     !Task.isCancelled
                 else { return }
@@ -48,3 +62,24 @@ final class WidgetSync {
         WidgetCenter.shared.reloadAllTimelines()
     }
 }
+
+#if os(iOS)
+    /// Keeps the app running in the background until `end()`, or until the system's time runs out.
+    @MainActor
+    private final class BackgroundAssertion {
+        private var identifier = UIBackgroundTaskIdentifier.invalid
+
+        init(name: String, onExpiry: @escaping @MainActor @Sendable () -> Void) {
+            identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+                onExpiry()
+                self?.end()
+            }
+        }
+
+        func end() {
+            guard identifier != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(identifier)
+            identifier = .invalid
+        }
+    }
+#endif
