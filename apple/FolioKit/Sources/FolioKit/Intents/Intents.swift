@@ -7,7 +7,9 @@ private func countText(_ count: Int, _ noun: String) -> String {
     "\(count) \(noun)\(count == 1 ? "" : "s")"
 }
 
-public struct UploadFileIntent: AppIntent {
+/// Reports progress to the system, and from iOS and macOS 27 keeps running in the background for as long as it
+/// keeps reporting. Cancelling stops before the next file; running it again resumes instead of uploading twice.
+public struct UploadFileIntent: AppIntent, ProgressReportingIntent {
     public static let title: LocalizedStringResource = "Upload to Folio"
     public static let description = IntentDescription(
         "Files PDFs and images in Folio. Folio reads the text for you.",
@@ -48,15 +50,60 @@ public struct UploadFileIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         IntentEnvironment.ran(.uploadFile)
-        let summaries = try await IntentEnvironment.run {
-            let scope = try DocumentCatalog.vault(asked: vault?.id, implied: tags.map(\.id.vaultID))
-            return try await $0.scoped(to: scope).upload(
-                files.map { try UploadFile(intentFile: $0) }, title: title, tagIDs: tags.map(\.tagID))
-        }
+        guard !files.isEmpty else { throw ShortcutError("Choose at least one file to upload.") }
+        #if compiler(>=6.4)
+            let summaries: [DocumentSummary]
+            if #available(iOS 27, macOS 27, *) {
+                summaries = try await performBackgroundTask { try await upload() }
+            } else {
+                summaries = try await upload()
+            }
+        #else
+            let summaries = try await upload()
+        #endif
         return .result(
             value: summaries.map(DocumentEntity.init),
             dialog: "Filed \(countText(summaries.count, "document")) in Folio."
         )
+    }
+
+    private func upload() async throws -> [DocumentSummary] {
+        let reporter = UploadProgressReporter(progress, total: files.count)
+        return try await IntentEnvironment.run {
+            let scope = try DocumentCatalog.vault(asked: vault?.id, implied: tags.map(\.id.vaultID))
+            return try await $0.scoped(to: scope).upload(
+                files.map { try UploadFile(intentFile: $0) }, title: title, tagIDs: tags.map(\.tagID),
+                finished: { reporter.finished($0) })
+        }
+    }
+}
+
+#if compiler(>=6.4)
+    @available(iOS 27, macOS 27, *)
+    extension UploadFileIntent: LongRunningIntent {}
+#endif
+
+/// Shows how many of an upload's files are done, the way the in-app upload reports it.
+struct UploadProgressReporter: Sendable {
+    private let progress: Progress
+    private let total: Int
+
+    init(_ progress: Progress, total: Int) {
+        self.progress = progress
+        self.total = total
+        progress.totalUnitCount = Int64(total)
+        progress.completedUnitCount = 0
+        progress.localizedDescription = "Uploading to Folio"
+        progress.localizedAdditionalDescription = Self.detail(0, of: total)
+    }
+
+    func finished(_ count: Int) {
+        progress.completedUnitCount = Int64(count)
+        progress.localizedAdditionalDescription = Self.detail(count, of: total)
+    }
+
+    private static func detail(_ count: Int, of total: Int) -> String {
+        "\(count) of \(total) documents"
     }
 }
 

@@ -373,13 +373,14 @@ public struct DocumentCatalog: Sendable {
     /// When a run stops part-way, running it again with the same files and tags finishes only the remaining
     /// uploads and tags instead of creating the earlier documents again.
     public func upload(
-        _ files: [UploadFile], title: String? = nil, tagIDs: [Tag.ID] = []
+        _ files: [UploadFile], title: String? = nil, tagIDs: [Tag.ID] = [],
+        finished: @Sendable (Int) -> Void = { _ in }
     ) async throws -> [DocumentSummary] {
         var titled = files
         if files.count == 1, let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
             titled[0].title = title
         }
-        let uploaded = try await uploads.run(titled, tagIDs: tagIDs, scope: uploadScope)
+        let uploaded = try await uploads.run(titled, tagIDs: tagIDs, scope: uploadScope, finished: finished)
         return try await summaries(uploaded)
     }
 

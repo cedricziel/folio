@@ -229,9 +229,12 @@ public struct UploadBatchRunner: Sendable {
         store.load(Self.key(files: files, tagIDs: tagIDs, scope: scope))
     }
 
-    /// Runs the unfinished steps of the batch and returns its documents in file order. On failure the progress
-    /// so far is kept and the error is rethrown.
-    public func run(_ files: [UploadFile], tagIDs: [Tag.ID], scope: String) async throws -> [Document] {
+    /// Runs the unfinished steps of the batch and returns its documents in file order. On failure or cancellation
+    /// the progress so far is kept and the error is rethrown; cancellation takes effect before the next request.
+    /// - Parameter finished: Called with the number of files done, uploaded and tagged, after each one.
+    public func run(
+        _ files: [UploadFile], tagIDs: [Tag.ID], scope: String, finished: @Sendable (Int) -> Void = { _ in }
+    ) async throws -> [Document] {
         let key = Self.key(files: files, tagIDs: tagIDs, scope: scope)
         guard store.lock(key) else { throw UploadBatchError.alreadyRunning }
         let lease = LeaseState()
@@ -267,6 +270,7 @@ public struct UploadBatchRunner: Sendable {
         /// Confirms this run still holds its lock before a request. The renewal task only notices a takeover on
         /// its next tick, and a run suspended past the timeout must not write over the new holder's progress.
         func ensureLease() throws {
+            try Task.checkCancellation()
             try lease.check()
             guard store.renew(key) else {
                 lease.markLost()
@@ -329,6 +333,7 @@ public struct UploadBatchRunner: Sendable {
                     throw error
                 }
             }
+            finished(index + 1)
         }
         store.remove(key)
 
