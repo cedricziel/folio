@@ -17,7 +17,6 @@ public final class UploadViewModel {
     private var batchService: (any FolioService)?
     private var completed = 0
     private var running: Task<Void, Never>?
-    private var stopRequested = false
 
     public var hasStarted: Bool { batchService != nil }
 
@@ -60,7 +59,6 @@ public final class UploadViewModel {
         guard let service = batchService else { return }
         let previouslyCompleted = completed
         let keys = batchKeys
-        stopRequested = false
         state = .uploading(done: completed, total: files.count)
         let work = continuedWork.begin(title: "Uploading to Folio", total: files.count) { [weak self] in
             self?.stop()
@@ -71,14 +69,21 @@ public final class UploadViewModel {
                 for index in completed..<files.count {
                     try Task.checkCancellation()
                     state = .uploading(done: completed, total: files.count)
-                    _ = try await service.upload(files[index], idempotencyKey: keys[index])
+                    do {
+                        _ = try await service.upload(files[index], idempotencyKey: keys[index])
+                    } catch FolioError.server(status: 410, message: _) {
+                        // The document an earlier attempt stored has been deleted since: upload the file again once.
+                        let fresh = UUID()
+                        batchKeys[index] = fresh
+                        _ = try await service.upload(files[index], idempotencyKey: fresh)
+                    }
                     completed += 1
                     work?.update(completed: completed)
                 }
                 state = .finished(count: completed)
                 work?.finish(success: true)
             } catch {
-                let message = stopRequested ? "Upload stopped." : error.localizedDescription
+                let message = Task.isCancelled ? "Upload stopped." : error.localizedDescription
                 state = .failed(message: message, uploaded: completed)
                 work?.finish(success: false)
             }
@@ -95,11 +100,10 @@ public final class UploadViewModel {
         }
     }
 
-    /// Stops the running batch after the current request; a retry resumes with the same keys.
+    /// Cancels the running batch, including its request in flight. A retry resumes with the same keys, so a file
+    /// the server stored before the cancellation isn't stored twice.
     public func stop() {
-        guard let running else { return }
-        stopRequested = true
-        running.cancel()
+        running?.cancel()
     }
 
     private var isUploading: Bool {

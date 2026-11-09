@@ -39,10 +39,18 @@ struct SystemContinuedWork: ContinuedWorkScheduling {
             guard let bundleID = Bundle.main.bundleIdentifier, permitsContinuedTasks(bundleID) else { return nil }
             let identifier = "\(bundleID).continued.\(UUID().uuidString)"
             let work = ContinuedProcessingWork(title: title, total: total)
-            let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
+            // Handlers can't be unregistered, so this one holds the batch weakly: once the batch ends, only the
+            // closure and its identifier stay registered.
+            let registered = BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) {
+                [weak work] task in
                 MainActor.assumeIsolated {
                     guard let task = task as? BGContinuedProcessingTask else {
                         task.setTaskCompleted(success: false)
+                        return
+                    }
+                    guard let work else {
+                        // The batch ended before the system started the task, and its own UI showed the outcome.
+                        task.setTaskCompleted(success: true)
                         return
                     }
                     work.attach(task, onCancel: onCancel)
