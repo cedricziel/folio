@@ -22,6 +22,7 @@ targets:
       - "../Folio/Sources/TaxonomyView.swift"
       - "../Folio/Sources/DocumentThumbnailView.swift"
       - "../Folio/Sources/InboxView.swift"
+      - "../Folio/Sources/SystemContinuedWork.swift"
       - "../Folio/Sources/DocumentDetailView.swift"
       - "../Folio/Sources/DocumentClassificationView.swift"
       - "../Folio/Sources/DocumentActivity.swift"

@@ -47,6 +47,8 @@ targets:
         FolioKeychainGroup: $(AppIdentifierPrefix)com.cedricziel.folio
         FolioPushEnabled: $(FOLIO_PUSH)
         UILaunchScreen: {}
+        BGTaskSchedulerPermittedIdentifiers:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).continued.*
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

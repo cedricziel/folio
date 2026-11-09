@@ -66,7 +66,7 @@ struct InboxView: View {
         let list = session.list
         _trashHistory = State(initialValue: DocumentTrashHistory(list: list))
         _uploads = State(
-            initialValue: UploadViewModel(service: service) {
+            initialValue: UploadViewModel(service: service, continuedWork: SystemContinuedWork()) {
                 Task { await list.load(afterUpload: true) }
                 NotificationCenter.default.post(name: .folioUploadFinished, object: nil)
             }
@@ -638,7 +638,9 @@ struct InboxView: View {
     private func reviewUploads(_ files: [UploadFile]) {
         guard !files.isEmpty else { return }
         let list = session.list
-        uploads = UploadViewModel(service: service, destination: makeUploadDestination()) {
+        uploads = UploadViewModel(
+            service: service, destination: makeUploadDestination(), continuedWork: SystemContinuedWork()
+        ) {
             Task { await list.load(afterUpload: true) }
             NotificationCenter.default.post(name: .folioUploadFinished, object: nil)
         }
