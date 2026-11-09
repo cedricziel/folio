@@ -88,7 +88,7 @@ A self-hosted server can't push to the App Store build on its own: only the Appl
   - New HTML (Turbo) routes: `POST /settings/push` and `POST /settings/push/test`.
   - `openapi/openapi.json` and its Apple copy are regenerated.
 - **Settings.** New `push.*` keys in `config.toml` (with `FOLIO_PUSH__*` and `_FILE` for the key) and in the settings table. Database rows win, except `push.apns.base_url`, which is configuration only.
-- **Database.** New migration `20261108160000_push_devices.sql` in both `migrations/sqlite/` and `migrations/postgres/`. It creates `push_devices`, `push_document_outcomes`, `push_pending` and `push_device_state`, and changes no existing rows.
+- **Database.** New migration `20261108160000_push_devices.sql` in both `migrations/sqlite/` and `migrations/postgres/`. It creates `push_devices` (which also holds each device's delivery bookkeeping), `push_document_outcomes` and `push_pending`, and changes no existing rows.
 - **Dependencies.** `p256` becomes a direct folio-infra dependency; it is already in the lockfile. No new service.
 - **Apple.**
   - The `aps-environment` entitlement.

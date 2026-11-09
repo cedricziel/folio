@@ -35,6 +35,8 @@ pub fn router(auth: AuthState) -> Router<AppState> {
         .route("/settings/processing/reembed", post(reembed_all))
         .route("/settings/mcp", post(save_mcp_settings))
         .route("/settings/apple", post(save_apple_settings))
+        .route("/settings/push", post(save_push_settings))
+        .route("/settings/push/test", post(test_push_settings))
         .route_layer(middleware::from_fn_with_state(auth, require_admin))
 }
 
@@ -90,6 +92,9 @@ struct SettingsTemplate {
     notice: String,
     mcp_enabled: bool,
     apple: AppleLinks,
+    push_status: Option<folio_infra::push::PushStatus>,
+    push_devices: u64,
+    push_notice: String,
 }
 
 /// The "Apple app links" section
@@ -110,6 +115,7 @@ const MCP_ENABLED: &str = "mcp.enabled";
 struct SettingsQuery {
     reembedded: Option<usize>,
     saved: Option<String>,
+    push: Option<String>,
 }
 
 /// Settings page
@@ -125,7 +131,21 @@ async fn settings_page(
         (None, Some(_)) => "Processing settings saved.".to_string(),
         _ => String::new(),
     };
-    render_settings(&state, vault, notice, None).await.map(Html)
+    let push_notice = match query.push.as_deref() {
+        Some("saved") => "Push settings saved.",
+        Some("bad_key") => "Not saved: the key is not a PKCS#8 P-256 key (.p8).",
+        Some("key_refused") => {
+            "Not saved: set FOLIO_AUTH__SECRET_KEY before storing a key here, or give the key as FOLIO_PUSH__APNS__PRIVATE_KEY_FILE."
+        }
+        Some("bad_transport") => "Not saved: unknown transport.",
+        Some("test_sent") => "Test notification sent to your registered devices.",
+        Some("test_none") => "No test sent: none of your devices can receive one right now.",
+        _ => "",
+    }
+    .to_string();
+    render_settings(&state, vault, notice, push_notice, None)
+        .await
+        .map(Html)
 }
 
 /// A rejected Apple app links submission: what was typed and why it failed
@@ -138,6 +158,7 @@ async fn render_settings(
     state: &AppState,
     vault: folio_core::models::VaultId,
     notice: String,
+    push_notice: String,
     apple_draft: Option<AppleDraft>,
 ) -> ApiResult<String> {
     let settings = state.settings_repo.list().await?;
@@ -183,6 +204,14 @@ async fn render_settings(
         error,
     };
 
+    let (push_status, push_devices) = match &state.push {
+        Some(push) => (
+            Some(push.settings.status().await),
+            push.devices.count_devices().await?,
+        ),
+        None => (None, 0),
+    };
+
     let template = SettingsTemplate {
         sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
@@ -196,6 +225,9 @@ async fn render_settings(
         notice,
         mcp_enabled,
         apple,
+        push_status,
+        push_devices,
+        push_notice,
     };
 
     Ok(template
@@ -466,6 +498,7 @@ async fn save_apple_settings(
                 &state,
                 vault,
                 String::new(),
+                String::new(),
                 Some(AppleDraft {
                     text: form.app_ids,
                     error: error.to_string(),
@@ -484,4 +517,90 @@ async fn save_apple_settings(
 
     info!(count = ids.len(), "Apple app links saved");
     Ok(Redirect::to("/settings?saved=apple").into_response())
+}
+
+/// Push section form data
+#[derive(Debug, Deserialize)]
+pub struct PushForm {
+    transport: String,
+    #[serde(default)]
+    team_id: String,
+    #[serde(default)]
+    key_id: String,
+    #[serde(default)]
+    topic: String,
+    #[serde(default)]
+    private_key: String,
+    clear_private_key: Option<String>,
+    quiet_window_seconds: Option<u32>,
+    max_alerts_per_hour: Option<u32>,
+}
+
+/// Save push settings; they apply at once, without a restart
+async fn save_push_settings(
+    State(state): State<AppState>,
+    Form(form): Form<PushForm>,
+) -> ApiResult<Response> {
+    use folio_infra::push;
+    let Some(push_state) = &state.push else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let configured = &push_state.settings;
+    if !matches!(form.transport.as_str(), "none" | "apns") {
+        return Ok(Redirect::to("/settings?push=bad_transport").into_response());
+    }
+    let key = form.private_key.trim();
+    let mut rows = vec![
+        (push::TRANSPORT.to_string(), form.transport.clone()),
+        (push::TEAM_ID.to_string(), form.team_id.trim().to_string()),
+        (push::KEY_ID.to_string(), form.key_id.trim().to_string()),
+        (push::TOPIC.to_string(), form.topic.trim().to_string()),
+    ];
+    if let Some(seconds) = form.quiet_window_seconds {
+        rows.push((
+            push::QUIET_WINDOW.to_string(),
+            seconds.min(3600).to_string(),
+        ));
+    }
+    if let Some(cap) = form.max_alerts_per_hour {
+        rows.push((push::MAX_ALERTS.to_string(), cap.clamp(1, 3600).to_string()));
+    }
+    if !key.is_empty() {
+        let (true, Some(secret_box)) = (configured.can_store_key(), configured.secret_box()) else {
+            return Ok(Redirect::to("/settings?push=key_refused").into_response());
+        };
+        if push::apns::parse_key(key).is_err() {
+            return Ok(Redirect::to("/settings?push=bad_key").into_response());
+        }
+        rows.push((
+            push::PRIVATE_KEY.to_string(),
+            push::seal_key(secret_box, key),
+        ));
+    } else if form.clear_private_key.is_some() {
+        rows.push((push::PRIVATE_KEY.to_string(), String::new()));
+    }
+    state.settings_repo.set_many(&rows).await?;
+    configured.invalidate().await;
+    info!(transport = %form.transport, "Push settings saved");
+    Ok(Redirect::to("/settings?push=saved").into_response())
+}
+
+/// Send a test notification to the signed-in admin's devices
+async fn test_push_settings(
+    State(state): State<AppState>,
+    crate::vault::Uploader(user): crate::vault::Uploader,
+) -> ApiResult<Response> {
+    let (Some(push), Some(user)) = (&state.push, user) else {
+        return Ok(Redirect::to("/settings?push=test_none").into_response());
+    };
+    let mut sent = false;
+    for device in push.devices.list_for_user(&user).await? {
+        sent |= push
+            .sender
+            .send_test(&user, &device.installation_id, chrono::Utc::now())
+            .await
+            .is_ok();
+    }
+    let outcome = if sent { "test_sent" } else { "test_none" };
+    Ok(Redirect::to(&format!("/settings?push={outcome}")).into_response())
 }

@@ -8,6 +8,8 @@ typealias Document = FolioKit.Document
 struct FolioApp: App {
     #if os(iOS)
         @UIApplicationDelegateAdaptor(FolioAppDelegate.self) private var appDelegate
+    #else
+        @NSApplicationDelegateAdaptor(FolioAppDelegate.self) private var appDelegate
     #endif
     @State private var model = AppModel()
     @State private var security = AppLockLifecycle()
@@ -23,6 +25,9 @@ struct FolioApp: App {
                         on: DispatchQueue.main)
                 ) { _ in
                     model.restore()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .folioUploadFinished)) { _ in
+                    PushNotifications.afterUpload()
                 }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
@@ -46,7 +51,12 @@ struct FolioApp: App {
                     if security.lock.isLocked {
                         AppLockView(lock: security.lock)
                     } else {
-                        AppLockSettingsView(lock: security.lock)
+                        TabView {
+                            AppLockSettingsView(lock: security.lock)
+                                .tabItem { Label("Privacy", systemImage: "lock.shield") }
+                            NotificationSettingsView()
+                                .tabItem { Label("Notifications", systemImage: "bell") }
+                        }
                     }
                 }
                 .navigationTitle("Folio Settings")
@@ -78,8 +88,14 @@ struct FolioApp: App {
 @MainActor @Observable
 final class AppModel {
     private(set) var session: SessionRestoration = .restoring {
-        didSet { SpotlightIndex.shared.sessionChanged(to: session) }
+        didSet {
+            SpotlightIndex.shared.sessionChanged(to: session)
+            TransferFileCache.shared.sessionChanged(to: session)
+            if case let .signedIn(url) = session { PushNotifications.signedIn(to: url) }
+        }
     }
+    /// Counts sign-ins through the browser, which may be another account even on the same server.
+    private(set) var interactiveSignIns = 0
     private(set) var isWorking = false
     var operationError: String?
     private var restorationTask: Task<Void, Never>?
@@ -132,6 +148,8 @@ final class AppModel {
         restorationTask?.cancel()
         restorationGeneration += 1
         SpotlightIndex.shared.signedIn(to: url)
+        TransferFileCache.shared.signedIn(to: url)
+        interactiveSignIns += 1
         session = .signedIn(url)
         FolioTelemetry.shared.signedIn()
         FileProviderDomain.register()
@@ -168,6 +186,8 @@ final class AppModel {
         Task {
             defer { isWorking = false }
             do {
+                // The server forgets this device while the credentials still work; revocation removes it too.
+                await PushNotifications.signingOut()
                 // Sent while the token still works; best effort, sign-out never waits more than briefly.
                 FolioTelemetry.shared.action(.signOut)
                 await FolioTelemetry.shared.endSession(.signOut)
@@ -188,12 +208,20 @@ final class AppModel {
 struct RootView: View {
     let model: AppModel
     let lock: AppLock
+    /// This window's open document, as the system sees it.
+    @State private var activity = DocumentActivityTracker()
     #if os(iOS)
         @State private var showLockSettings = false
+        @State private var showNotificationSettings = false
     #endif
 
     var body: some View {
         content
+            .environment(activity)
+            .onChange(of: model.session, initial: true) { _, session in activity.sessionChanged(to: session) }
+            .onChange(of: model.interactiveSignIns) {
+                if case let .signedIn(url) = model.session { activity.signedIn(to: url) }
+            }
             .alert(
                 "Couldn't complete sign-in change",
                 isPresented: Binding(
@@ -218,6 +246,7 @@ struct RootView: View {
                         ToolbarItem {
                             Menu {
                                 Button("App lock settings…") { showLockSettings = true }
+                                Button("Notification settings…") { showNotificationSettings = true }
                                 if lock.isEnabled {
                                     Button("Lock now", systemImage: "lock") { lock.lockNow() }
                                 }
@@ -227,7 +256,13 @@ struct RootView: View {
                         }
                     }
                     .sheet(isPresented: $showLockSettings) { AppLockSettingsView(lock: lock) }
-                    .onDisappear { showLockSettings = false }
+                    .sheet(isPresented: $showNotificationSettings) {
+                        NavigationStack { NotificationSettingsView() }
+                    }
+                    .onDisappear {
+                        showLockSettings = false
+                        showNotificationSettings = false
+                    }
                 #endif
         } else {
             switch model.session {

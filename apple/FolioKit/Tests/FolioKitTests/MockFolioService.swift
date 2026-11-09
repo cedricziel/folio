@@ -120,6 +120,7 @@ actor MockFolioService: FolioService {
     private(set) var uploadKeys: [UUID] = []
     var failLookups = false
     var uploadDelay: Duration?
+    private var uploadConflicts: [KeyedUploadConflict] = []
     var tagList: [Tag] = []
     private(set) var tagged: [TagAssignment] = []
     private(set) var untagged: [TagAssignment] = []
@@ -129,6 +130,8 @@ actor MockFolioService: FolioService {
     private var trashedDocuments: [Document.ID: Document] = [:]
     private(set) var pings = 0
     private(set) var downloads = 0
+    /// When set, downloads write a real file into a fresh `folio-` folder here, as the live service does.
+    private var downloadRoot: URL?
     private var documentGate: CheckedContinuation<[Document], Never>?
     private var documentStarted: CheckedContinuation<Void, Never>?
     private var suspendDocumentRequests = false
@@ -239,6 +242,10 @@ actor MockFolioService: FolioService {
         uploadGate = nil
     }
 
+    private var failingDocumentIDs: Set<Document.ID> = []
+
+    func setFailingDocuments(_ ids: Set<Document.ID>) { failingDocumentIDs = ids }
+
     func setDocuments(_ documents: [Document]) {
         documentList = documents
     }
@@ -273,6 +280,11 @@ actor MockFolioService: FolioService {
 
     func setTags(_ tags: [Tag]) {
         tagList = tags
+    }
+
+    /// Answers the next keyed uploads with these conflicts, in order.
+    func setUploadConflicts(_ conflicts: [KeyedUploadConflict]) {
+        uploadConflicts = conflicts
     }
 
     func setUploadDelay(_ delay: Duration?) {
@@ -346,6 +358,7 @@ actor MockFolioService: FolioService {
         documentReads += 1
         if let failure { throw failure }
         if let failDocumentReads { throw failDocumentReads }
+        if failingDocumentIDs.contains(id) { throw FolioError.server(status: 500, message: nil) }
         guard let document = documentList.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: nil)
         }
@@ -456,7 +469,17 @@ actor MockFolioService: FolioService {
         if let failure {
             throw failure
         }
-        return URL(filePath: "/tmp/\(document.originalFilename ?? "file")")
+        let name = document.originalFilename ?? "file"
+        guard let downloadRoot else { return URL(filePath: "/tmp/\(name)") }
+        let folder = downloadRoot.appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: name)
+        try Data(document.title.utf8).write(to: file)
+        return file
+    }
+
+    func writeDownloads(into root: URL) {
+        downloadRoot = root
     }
 
     func upload(_ file: UploadFile) async throws -> Document {
@@ -466,6 +489,9 @@ actor MockFolioService: FolioService {
     /// Like the server: a key seen before returns its document, or 410 once that document was deleted.
     func upload(_ file: UploadFile, idempotencyKey: UUID) async throws -> Document {
         uploadKeys.append(idempotencyKey)
+        if !uploadConflicts.isEmpty {
+            throw uploadConflicts.removeFirst()
+        }
         if let earlier = keyedUploads[idempotencyKey] {
             if deletedDocumentIDs.contains(earlier.id) {
                 throw FolioError.server(status: 410, message: nil)

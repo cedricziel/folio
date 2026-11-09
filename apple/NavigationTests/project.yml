@@ -25,6 +25,7 @@ targets:
       - "../Folio/Sources/SystemContinuedWork.swift"
       - "../Folio/Sources/DocumentDetailView.swift"
       - "../Folio/Sources/DocumentClassificationView.swift"
+      - "../Folio/Sources/DocumentActivity.swift"
       - "../Folio/Sources/DocumentProcessingView.swift"
       - "../Folio/Sources/DocumentDiscussionView.swift"
       - "../Folio/Sources/DocumentRowView.swift"

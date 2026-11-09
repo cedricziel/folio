@@ -12,6 +12,7 @@ mod import_runs;
 mod ingest;
 mod metadata;
 mod outbox;
+mod push;
 mod repository;
 mod saved_view;
 mod storage;
@@ -41,6 +42,10 @@ pub use ingest::{
 };
 pub use metadata::{MetadataFieldRepository, MetadataOptionRepository, MetadataValueRepository};
 pub use outbox::OutboxStore;
+pub use push::{
+    DocumentLookup, GrantLiveness, PushDeviceRepository, PushLimits, PushLimitsSource, PushMessage,
+    PushOutcome, PushTransport, PushType, RepositoryDocuments,
+};
 pub use repository::{
     AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,
     MembershipRepository, SettingsRepository, TagRepository, VaultRepository,

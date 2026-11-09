@@ -9,6 +9,7 @@ pub mod import;
 mod importer;
 mod ingest;
 mod library;
+pub mod notifications;
 mod outbox_dispatcher;
 mod paperless_sources;
 mod vaults;

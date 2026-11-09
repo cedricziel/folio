@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.14.0](https://github.com/cedricziel/folio/compare/v0.13.0...v0.14.0) (2026-11-08)
+
+
+### Features
+
+* **apple:** index listed documents and link Spotlight results to entities ([#396](https://github.com/cedricziel/folio/issues/396)) ([9e6bb94](https://github.com/cedricziel/folio/commit/9e6bb943674df10cbb360ddad7126fa65057b60f))
+* **apple:** push notifications for processing and review ([#417](https://github.com/cedricziel/folio/issues/417)) ([76161b0](https://github.com/cedricziel/folio/commit/76161b0fd9e5c681aae4c1226a8f38e36814203c))
+
+
+### Bug Fixes
+
+* **apple:** confirm the batch lock before every request ([46d83c4](https://github.com/cedricziel/folio/commit/46d83c4dd6dccd2c37159f19037031a27943f98d)), closes [#412](https://github.com/cedricziel/folio/issues/412)
+* **apple:** generation leases, wait on in-progress uploads, permanent key reuse ([72858b6](https://github.com/cedricziel/folio/commit/72858b6f35fbe4e1be801f7629c4ed7394f89d08)), closes [#412](https://github.com/cedricziel/folio/issues/412)
+* **apple:** generation leases, wait on in-progress uploads, permanent key reuse ([#429](https://github.com/cedricziel/folio/issues/429)) ([fd2845d](https://github.com/cedricziel/folio/commit/fd2845d039ac4aca45e6e0c7ff138f5b661c368c))
+* **apple:** keep the server message for unknown 409 codes; unnest a test require ([e2b1f51](https://github.com/cedricziel/folio/commit/e2b1f51a1a3aeeb71f7a2916aa3fc64994a6f806)), closes [#412](https://github.com/cedricziel/folio/issues/412)
+* **apple:** record extension telemetry from the first request and flush intents ([#400](https://github.com/cedricziel/folio/issues/400)) ([6ac21da](https://github.com/cedricziel/folio/commit/6ac21da6def91020e24a1db45de5e4794e308a13))
+* harden keyed uploads and background share retries ([#425](https://github.com/cedricziel/folio/issues/425)) ([a5fcb47](https://github.com/cedricziel/folio/commit/a5fcb47d21035043ec70f97623e9975cefbaac97))
+* **push:** address review on registration, sending and startup ([8f48b8c](https://github.com/cedricziel/folio/commit/8f48b8c6867bcf1b7a2a16e96ff14e596cbf6a55))
+* **push:** hold leases per flush, keep collapse ids, record import outcomes ([7d14002](https://github.com/cedricziel/folio/commit/7d1400253bcb80a73318212ecc59794c58ee69df)), closes [#420](https://github.com/cedricziel/folio/issues/420)
+* **push:** hold leases per flush, keep collapse ids, record import outcomes ([#437](https://github.com/cedricziel/folio/issues/437)) ([b5ef7c1](https://github.com/cedricziel/folio/commit/b5ef7c1e3141f4154981ee2a1e8d7fbe348f6c98))
+* **push:** log releases lost to another sender, document holder semantics ([d164832](https://github.com/cedricziel/folio/commit/d16483261a8ba5f3f508778c0960671c61319318))
+
 ## [0.13.0](https://github.com/cedricziel/folio/compare/v0.12.0...v0.13.0) (2026-11-08)
 
 

@@ -10,7 +10,7 @@ private func file(_ name: String) -> UploadFile {
 private let first = Tag(name: "Insurance")
 private let second = Tag(name: "Taxes")
 
-struct UploadBatchRunnerTests {
+@Suite(.timeLimit(.minutes(1))) struct UploadBatchRunnerTests {
     @Test func uploadSucceedsTaggingFailsThenRetryAttachesOnlyTheRemainingTag() async throws {
         let service = MockFolioService()
         let store = InMemoryUploadProgressStore()
@@ -216,18 +216,103 @@ struct UploadBatchRunnerTests {
         #expect(store.load("current") == progress)
     }
 
-    @Test func aLongRunRenewsItsLock() async throws {
+    @Test func aLongRunRenewsItsLockUntilItEnds() async throws {
         let service = MockFolioService()
-        await service.setUploadDelay(.milliseconds(400))
-        let store = RenewalCountingStore()
-        let runner = UploadBatchRunner(service: service, store: store, lockRenewal: .milliseconds(50))
+        await service.suspendUploads()
+        let timer = ManualTimer()
+        let store = RenewalCountingStore(onRenew: { timer.recheck() })
+        let runner = UploadBatchRunner(
+            service: service, store: store, renewalSleep: { try await timer.sleep($0) })
+        // Waits on the timer give up once the run ends, so a run that fails early fails the test instead of hanging.
+        let run = Task {
+            defer { timer.finish() }
+            return try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        }
+
+        // The run renews once before its upload, which then stays open while the timer fires once.
+        await timer.waitUntil { $0.sleeping == 1 && store.renewals == 1 }
+        timer.fire()
+        await timer.waitUntil { $0.started == 2 }
+        #expect(store.renewals == 2, "the timer renewed the lock while the upload ran")
+
+        await service.releaseUploads()
+        _ = try await run.value
+
+        let state = timer.state
+        #expect(state.cancelled == 1, "the run cancelled its renewal timer before it returned")
+        #expect(state.sleeping == 0)
+        #expect(state.started == 2, "and no renewal started after it")
+    }
+
+    @Test func aRunThatLosesItsLockStopsBeforeItsNextRequest() async throws {
+        let service = MockFolioService()
+        // Held for the upload and the tag of the first file; taken over before the second file.
+        let store = RenewalCountingStore(heldRenewals: 2)
+        let runner = UploadBatchRunner(service: service, store: store)
+        let files = [file("a.pdf"), file("b.pdf")]
+
+        await #expect(throws: UploadBatchError.lockLost) {
+            _ = try await runner.run(files, tagIDs: [first.id], scope: "s")
+        }
+
+        #expect(await service.uploads.map(\.filename) == ["a.pdf"])
+        #expect(await service.tagged.count == 1)
+    }
+
+    @Test func aRunSuspendedPastATakeoverSendsNothingMore() async throws {
+        let service = MockFolioService()
+        let store = RenewalCountingStore(heldRenewals: 0)
+        let runner = UploadBatchRunner(service: service, store: store)
+
+        await #expect(throws: UploadBatchError.lockLost) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        }
+
+        #expect(await service.uploads.isEmpty)
+        #expect(runner.progress(files: [file("a.pdf")], tagIDs: [], scope: "s") == nil, "nothing recorded")
+    }
+
+    @Test func anUploadStillBeingStoredIsTriedAgainAfterTheServersWait() async throws {
+        let service = MockFolioService()
+        await service.setUploadConflicts([.inProgress(retryAfter: .seconds(7))])
+        let waits = Waits()
+        let runner = UploadBatchRunner(
+            service: service, store: InMemoryUploadProgressStore(), sleep: { waits.add($0) })
+
+        let documents = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+
+        #expect(documents.count == 1)
+        #expect(waits.all == [.seconds(7)])
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2 && keys[0] == keys[1], "the retry keeps the key")
+    }
+
+    @Test func theWaitIsCappedAndTriedOnlyOnce() async throws {
+        let service = MockFolioService()
+        await service.setUploadConflicts([.inProgress(retryAfter: .seconds(600)), .inProgress(retryAfter: nil)])
+        let waits = Waits()
+        let store = InMemoryUploadProgressStore()
+        let runner = UploadBatchRunner(service: service, store: store, sleep: { waits.add($0) })
+
+        await #expect(throws: KeyedUploadConflict.inProgress(retryAfter: nil)) {
+            _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
+        }
+
+        #expect(waits.all == [UploadBatchRunner.maxConflictWait])
+        let kept = try #require(runner.progress(files: [file("a.pdf")], tagIDs: [], scope: "s"))
+        #expect(kept.steps.first?.idempotencyKey == (await service.uploadKeys).first, "the next run keeps the key")
+    }
+
+    @Test func aKeyUsedForAnotherFileIsReplaced() async throws {
+        let service = MockFolioService()
+        await service.setUploadConflicts([.keyReused])
+        let runner = UploadBatchRunner(service: service, store: InMemoryUploadProgressStore())
 
         _ = try await runner.run([file("a.pdf")], tagIDs: [], scope: "s")
-        let renewals = store.renewals
 
-        #expect(renewals > 0)
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(store.renewals == renewals, "renewal stops with the run")
+        let keys = await service.uploadKeys
+        #expect(keys.count == 2 && keys[0] != keys[1])
+        #expect(await service.uploads.count == 1)
     }
 
     @Test func fileStoreRenewalKeepsARunningBatchFromBeingTakenOver() throws {
@@ -238,15 +323,16 @@ struct UploadBatchRunnerTests {
         let later = Date.now.addingTimeInterval(FileUploadProgressStore.lockTimeout + 60)
         #expect(running.lock("batch"))
 
-        let lock = directory.appending(path: "upload-progress/batch.lock")
+        let lock = directory.appending(path: "upload-progress/batch.lock.1")
         try FileManager.default.setAttributes(
             [.modificationDate: Date.now.addingTimeInterval(-FileUploadProgressStore.lockTimeout - 60)],
             ofItemAtPath: lock.path)
-        running.renew("batch")
+        #expect(running.renew("batch"))
         #expect(!FileUploadProgressStore(directory: directory).lock("batch", now: .now))
 
         let other = FileUploadProgressStore(directory: directory)
         #expect(other.lock("batch", now: later), "a lock nobody renews is taken over")
+        #expect(!running.renew("batch"), "the run that lost its lock learns it at its next renewal")
         running.unlock("batch")
         #expect(!FileUploadProgressStore(directory: directory).lock("batch", now: .now))
         other.unlock("batch")
@@ -353,11 +439,18 @@ struct ShortcutUploadRetryTests {
     }
 }
 
-/// Counts lock renewals of an in-memory store.
+/// Counts lock renewals of an in-memory store; renewals after the first `heldRenewals` report the lock lost.
 private final class RenewalCountingStore: UploadProgressStoring, @unchecked Sendable {
     private let base = InMemoryUploadProgressStore()
+    private let heldRenewals: Int
+    private let onRenew: (@Sendable () -> Void)?
     private let mutex = NSLock()
     private var count = 0
+
+    init(heldRenewals: Int = .max, onRenew: (@Sendable () -> Void)? = nil) {
+        self.heldRenewals = heldRenewals
+        self.onRenew = onRenew
+    }
 
     var renewals: Int { mutex.withLock { count } }
 
@@ -365,6 +458,118 @@ private final class RenewalCountingStore: UploadProgressStoring, @unchecked Send
     func save(_ progress: UploadBatchProgress, for key: String) { base.save(progress, for: key) }
     func remove(_ key: String) { base.remove(key) }
     func lock(_ key: String) -> Bool { base.lock(key) }
-    func renew(_: String) { mutex.withLock { count += 1 } }
+    func renew(_: String) -> Bool {
+        let held = mutex.withLock { () -> Bool in
+            count += 1
+            return count <= heldRenewals
+        }
+        onRenew?()
+        return held
+    }
     func unlock(_ key: String) { base.unlock(key) }
+}
+
+/// Records the waits a runner asked for instead of sleeping.
+private final class Waits: @unchecked Sendable {
+    private let mutex = NSLock()
+    private var waits: [Duration] = []
+
+    var all: [Duration] { mutex.withLock { waits } }
+
+    func add(_ wait: Duration) {
+        mutex.withLock { waits.append(wait) }
+    }
+}
+
+/// Stands in for the runner's renewal timer: each sleep lasts until the test fires the timer or the sleeping task
+/// is cancelled, so nothing in the test depends on the wall clock.
+private final class ManualTimer: @unchecked Sendable {
+    struct State {
+        /// Sleeps begun so far.
+        var started = 0
+        var sleeping = 0
+        var cancelled = 0
+    }
+
+    private let mutex = NSLock()
+    private var current = State()
+    private var sleepers: [UUID: CheckedContinuation<Void, any Error>] = [:]
+    private var observers: [(condition: @Sendable (State) -> Bool, continuation: CheckedContinuation<Void, Never>)] = []
+    private var finished = false
+
+    var state: State { mutex.withLock { current } }
+
+    func sleep(_: Duration) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                let cancelled = update { (state: inout State) -> Bool in
+                    if Task.isCancelled { return true }
+                    sleepers[id] = continuation
+                    state.started += 1
+                    state.sleeping += 1
+                    return false
+                }
+                if cancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let sleeper = update { (state: inout State) -> CheckedContinuation<Void, any Error>? in
+                guard let sleeper = sleepers.removeValue(forKey: id) else { return nil }
+                state.sleeping -= 1
+                state.cancelled += 1
+                return sleeper
+            }
+            sleeper?.resume(throwing: CancellationError())
+        }
+    }
+
+    /// Ends every current sleep.
+    func fire() {
+        let woken = update { (state: inout State) -> [CheckedContinuation<Void, any Error>] in
+            defer { sleepers = [:] }
+            state.sleeping -= sleepers.count
+            return Array(sleepers.values)
+        }
+        woken.forEach { $0.resume() }
+    }
+
+    /// Returns once `condition` holds, or once `finish()` was called.
+    func waitUntil(_ condition: @escaping @Sendable (State) -> Bool) async {
+        await withCheckedContinuation { continuation in
+            let ready = mutex.withLock { () -> Bool in
+                if finished || condition(current) { return true }
+                observers.append((condition, continuation))
+                return false
+            }
+            if ready { continuation.resume() }
+        }
+    }
+
+    /// Releases every waiter; later waits return at once.
+    func finish() {
+        let waiting = mutex.withLock { () -> [CheckedContinuation<Void, Never>] in
+            finished = true
+            defer { observers = [] }
+            return observers.map { $0.continuation }
+        }
+        waiting.forEach { $0.resume() }
+    }
+
+    /// Re-evaluates waits whose condition reads state outside the timer.
+    func recheck() {
+        update { (_: inout State) in }
+    }
+
+    /// Applies `change` and wakes the observers whose condition now holds.
+    private func update<T>(_ change: (inout State) -> T) -> T {
+        let (result, ready) = mutex.withLock { () -> (T, [CheckedContinuation<Void, Never>]) in
+            let result = change(&current)
+            let state = current
+            let ready = observers.filter { $0.condition(state) }.map { $0.continuation }
+            observers.removeAll { $0.condition(state) }
+            return (result, ready)
+        }
+        ready.forEach { $0.resume() }
+        return result
+    }
 }
