@@ -228,9 +228,9 @@ public final class ShareUploadStore: @unchecked Sendable {
         removeLegacyBodies(before: now.addingTimeInterval(-Self.uploadedRetention))
     }
 
-    @discardableResult
     /// Claims with the store's own clock: `prune`'s `now` only decides what has expired, and a date ahead of it
     /// must never count a live claim as abandoned.
+    @discardableResult
     private func removeIfUnclaimed(_ id: UUID, where unchanged: (ShareUploadRecord) -> Bool) -> Bool {
         guard claim(id) else { return false }
         let removed = lock.withLock {

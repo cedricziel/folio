@@ -77,12 +77,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     private var session: URLSession!
     private var changeHandler: (@Sendable (ShareUploadRecord) -> Void)?
     private var eventsFinishedHandler: (@Sendable () -> Void)?
-    /// The start of each running task's answer, enough to read the error code of a refusal.
-    private var answers: [Int: Data] = [:]
-    private static let answerLimit = 4096
-    /// Answers kept at once. A task whose completion never arrives can't grow this past the limit; one beyond it
-    /// is classified by its status alone.
-    static let answeredTaskLimit = 64
+    private var answers = RefusalAnswers()
 
     /// - Parameters:
     ///   - serverURL: Where new shares go; nil for an uploader that only collects the outcome of earlier ones.
@@ -224,7 +219,7 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func urlSession(_: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
-        let answer = lock.withLock { answers.removeValue(forKey: task.taskIdentifier) }
+        let answer = lock.withLock { answers.take(task.taskIdentifier) }
         guard let description = task.taskDescription else { return }
         guard let shareTask = ShareTask(description) else {
             // Tasks enqueued by earlier versions carry the path of their body instead of a record.
@@ -238,13 +233,8 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        lock.withLock {
-            let received = answers[dataTask.taskIdentifier]
-            guard received != nil || answers.count < Self.answeredTaskLimit else { return }
-            let start = received ?? Data()
-            guard start.count < Self.answerLimit else { return }
-            answers[dataTask.taskIdentifier] = start + data.prefix(Self.answerLimit - start.count)
-        }
+        let status = (dataTask.response as? HTTPURLResponse)?.statusCode
+        lock.withLock { answers.append(data, task: dataTask.taskIdentifier, status: status) }
     }
 
     public func urlSession(_: URLSession, didBecomeInvalidWithError _: (any Error)?) {
@@ -285,5 +275,35 @@ struct ShareTask: Equatable, LosslessStringConvertible {
 
     var description: String {
         attempt.map { "\(id.uuidString) \($0)" } ?? id.uuidString
+    }
+}
+
+/// The start of each refused upload's answer, kept until its task completes so the refusal can be classified.
+///
+/// Only a 409's body is ever read, so other answers (an accepted upload's document) are not kept, and the limit on
+/// tasks only matters for refusals whose completion never arrives.
+struct RefusalAnswers {
+    static let byteLimit = 4096
+    static let taskLimit = 1024
+
+    private var answers: [Int: Data] = [:]
+
+    var count: Int { answers.count }
+
+    mutating func append(_ data: Data, task: Int, status: Int?) {
+        guard status == 409 else { return }
+        let received = answers[task]
+        guard received != nil || answers.count < Self.taskLimit else { return }
+        let start = received ?? Data()
+        guard start.count < Self.byteLimit else { return }
+        answers[task] = start + data.prefix(Self.byteLimit - start.count)
+    }
+
+    mutating func take(_ task: Int) -> Data? {
+        answers.removeValue(forKey: task)
+    }
+
+    mutating func removeAll() {
+        answers.removeAll()
     }
 }
