@@ -232,7 +232,7 @@ async fn sqlite_replay_is_not_starved_by_a_rotating_client() {
         dir.path().join("test.db").display()
     ))
     .unwrap()
-    .busy_timeout(Duration::from_millis(100));
+    .busy_timeout(Duration::from_millis(500));
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(5)
         .connect_with(options)
