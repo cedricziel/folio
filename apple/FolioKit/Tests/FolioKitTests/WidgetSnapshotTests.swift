@@ -222,6 +222,13 @@ struct WidgetLinkTests {
         #expect(WidgetLink.document(documentID, vaultID: vaultID).request == .document(documentID, vaultID: vaultID))
     }
 
+    @Test func schemeMatchesWhateverCaseTheSystemHandsBack() {
+        let upper = URL(string: WidgetLink.inbox.url.absoluteString.replacingOccurrences(
+            of: WidgetLink.scheme, with: WidgetLink.scheme.uppercased()))!
+
+        #expect(WidgetLink(url: upper) == .inbox)
+    }
+
     @Test(arguments: [
         "https://folio.example/inbox",
         "com.cedricziel.folio.widgets://unknown",

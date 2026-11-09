@@ -118,6 +118,10 @@ jobs:
       # Releases build without the widget extension until its App ID and profiles exist (docs/apple-widgets.md).
       - name: Check the default project leaves the widget extension out
         run: "! grep -q FolioWidgets Folio/Folio.xcodeproj/project.pbxproj"
+      - name: Check the widget extension's identifiers
+        env:
+          FOLIO_WIDGETS: "YES"
+        run: scripts/check-build-settings.sh
       - name: Build with the widget extension
         working-directory: apple/Folio
         env:

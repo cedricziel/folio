@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { APIRequestContext, Page } from "@playwright/test";
 import { expect, test, uniqueTitle, uploadViaUi, samplePdf } from "./fixtures";
 
 test("inbox loads", async ({ page }) => {
@@ -200,4 +201,84 @@ test("a long PDF offers the previewed pages and the original for the rest", asyn
   } finally {
     await request.delete(`/api/documents/${id}`);
   }
+});
+
+test.describe("an open detail page follows processing", () => {
+  const sections = ["facts", "pages", "processing", "text"];
+
+  async function upload(request: APIRequestContext, buffer: Buffer): Promise<string> {
+    const response = await request.post("/api/documents/upload", {
+      multipart: { title: uniqueTitle("live"), file: { name: "live.pdf", mimeType: "application/pdf", buffer } },
+    });
+    expect(response.ok()).toBeTruthy();
+    const { id } = await response.json();
+    await settled(request, id);
+    return id;
+  }
+
+  async function settled(request: APIRequestContext, id: string) {
+    await expect
+      .poll(async () => (await (await request.get(`/api/documents/${id}`)).json()).ocr_status, { timeout: 30_000 })
+      .toMatch(/^(done|failed|skipped)$/);
+  }
+
+  // Tag the rendered sections, so a live replacement is told apart from the first render
+  async function markStale(page: Page, id: string) {
+    await page.evaluate(
+      ({ id, sections }) => {
+        for (const section of sections) {
+          document.getElementById(`document-${id}-${section}`)!.dataset.stale = "true";
+        }
+      },
+      { id, sections },
+    );
+  }
+
+  async function expectRefreshed(page: Page, id: string) {
+    for (const section of sections) {
+      await expect(page.locator(`#document-${id}-${section}:not([data-stale])`)).toHaveCount(1, { timeout: 30_000 });
+    }
+  }
+
+  test("reprocessing refreshes the sections and keeps the page and the edits", async ({ page, request }) => {
+    const id = await upload(request, blankPdf(2));
+    try {
+      await page.goto(`/documents/${id}`);
+      const pages = page.getByRole("region", { name: "Pages" });
+      await pages.getByRole("button", { name: "Page 2", exact: true }).click();
+      await expect(pages.getByText("Page 2 of 2")).toBeVisible();
+      const date = page.getByLabel("Document date");
+      await date.fill("2024-05-06");
+      await markStale(page, id);
+      const navigations: string[] = [];
+      page.on("framenavigated", (frame) => frame === page.mainFrame() && navigations.push(frame.url()));
+
+      expect((await page.request.post(`/documents/${id}/reprocess`, { maxRedirects: 0 })).status()).toBe(303);
+      await expectRefreshed(page, id);
+      await settled(request, id);
+
+      await expect(pages.getByText("Page 2 of 2")).toBeVisible();
+      await expect(pages.getByRole("button", { name: "Page 2", exact: true })).toHaveAttribute("aria-current", "true");
+      await expect(page.getByRole("region", { name: "Processing", exact: true })).toBeVisible();
+      await expect(date).toHaveValue("2024-05-06");
+      expect(navigations).toEqual([]);
+    } finally {
+      await request.delete(`/api/documents/${id}`);
+    }
+  });
+
+  test("a failed read shows its notice without a reload", async ({ page, request }) => {
+    const id = await upload(request, Buffer.from("not a pdf\n"));
+    try {
+      await page.goto(`/documents/${id}`);
+      await markStale(page, id);
+
+      expect((await page.request.post(`/documents/${id}/reprocess`, { maxRedirects: 0 })).status()).toBe(303);
+      await expectRefreshed(page, id);
+      await settled(request, id);
+      await expect(page.getByText("Text extraction did not finish")).toBeVisible({ timeout: 30_000 });
+    } finally {
+      await request.delete(`/api/documents/${id}`);
+    }
+  });
 });

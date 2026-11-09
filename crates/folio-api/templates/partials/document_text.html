@@ -1,0 +1,16 @@
+<section class="panel" id="document-{{ document.id }}-text">
+    <h2 class="heading">Text Folio read</h2>
+    {% match document.content %}
+    {% when Some with (content) %}
+    <pre class="ocr">{{ content }}</pre>
+    {% when None %}
+    {% if document.ocr_status.as_str() == "failed" %}
+    <div class="f-notice f-notice-danger" role="status">
+        <p>Text extraction did not finish. The original file is unchanged. Read it again, or move it to Trash.</p>
+    </div>
+    {% else %}
+    <p><span class="f-status f-status-pending">{{ reading }}</span></p>
+    <p class="hint">The text appears here once Folio has read the file.</p>
+    {% endif %}
+    {% endmatch %}
+</section>

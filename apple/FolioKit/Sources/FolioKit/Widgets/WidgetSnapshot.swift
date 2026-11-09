@@ -83,7 +83,7 @@ public struct WidgetSnapshotStore: Sendable {
 
 public enum WidgetSnapshotBuilder {
     static let pageLimit: Int32 = 100
-    /// Bounds the work on every app activation; beyond this the count reads "300+".
+    /// Bounds the work on every app activation; past it the count is what was found, followed by "+".
     static let maxPages = 3
 
     /// Counts what the Inbox shows (documents not yet filed) in the server's default vault.
