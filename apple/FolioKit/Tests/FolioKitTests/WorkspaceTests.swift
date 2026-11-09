@@ -23,6 +23,92 @@ import Testing
         #expect(try await workspace.thumbnails?.data(for: document) == Data([2]))
     }
 
+    @Test func continuingADiscussionAsksTheDetailToPresentIt() async {
+        let document = Document(title: "Discussed letter")
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: MockFolioService(), shared.id: MockFolioService(documents: [document])]
+        )
+        let workspace = WorkspaceViewModel(service: source)
+        await workspace.loadVaults()
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .document(document.id, pane: .discussion)))
+
+        #expect(workspace.selectedVaultID == shared.id)
+        #expect(workspace.session.path == [document.id])
+        #expect(workspace.session.continuation == DocumentContinuation(documentID: document.id, pane: .discussion))
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .document(document.id, page: 7)))
+        #expect(workspace.session.continuation == DocumentContinuation(documentID: document.id, pane: nil, page: 7))
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .document(document.id)))
+        #expect(workspace.session.continuation == nil)
+    }
+
+    @Test func continuingIntoAnUnknownVaultKeepsTheCurrentOne() async {
+        let source = MockFolioService(vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id))
+        let workspace = WorkspaceViewModel(service: source)
+        await workspace.loadVaults()
+
+        for target in [HandoffTarget.document(UUID()), .library(.all), .savedView(UUID())] {
+            await workspace.open(HandoffRoute(vaultID: UUID(), target: target))
+
+            #expect(workspace.selectedVaultID == personal.id)
+            #expect(workspace.destination == .inbox)
+            #expect(workspace.navigationError == "This vault is no longer available.")
+        }
+    }
+
+    @Test func continuingALibraryOpensItInItsVault() async {
+        let source = MockFolioService(vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id))
+        let workspace = WorkspaceViewModel(service: source)
+        await workspace.loadVaults()
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .library(.all)))
+        #expect(workspace.selectedVaultID == shared.id)
+        #expect(workspace.destination == .all)
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .library(.inbox)))
+        #expect(workspace.destination == .inbox)
+        #expect(workspace.navigationError == nil)
+    }
+
+    @Test func continuingASavedViewOpensIt() async {
+        let vaultService = MockFolioService()
+        let view = SavedView(
+            id: UUID(), vaultID: shared.id, ownerID: "alice", name: "Invoices", query: .init(text: "paid"),
+            createdAt: .distantPast, updatedAt: .distantPast, createdBy: "alice", updatedBy: "alice")
+        await vaultService.setSavedViews([view])
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: MockFolioService(), shared.id: vaultService]
+        )
+        let workspace = WorkspaceViewModel(service: source)
+        await workspace.loadVaults()
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .savedView(view.id)))
+
+        #expect(workspace.selectedVaultID == shared.id)
+        #expect(workspace.selectedSavedViewID == view.id)
+        #expect(workspace.session.list.searchText == "paid")
+    }
+
+    @Test func aMissingSavedViewFallsBackToTheVaultLibrary() async {
+        let source = MockFolioService(
+            vaults: VaultCatalog(vaults: [personal, shared], defaultVaultID: personal.id),
+            vaultServices: [personal.id: MockFolioService(), shared.id: MockFolioService()]
+        )
+        let workspace = WorkspaceViewModel(service: source)
+        await workspace.loadVaults()
+
+        await workspace.open(HandoffRoute(vaultID: shared.id, target: .savedView(UUID())))
+
+        #expect(workspace.selectedVaultID == shared.id)
+        #expect(workspace.selectedSavedViewID == nil)
+        #expect(workspace.destination == .all)
+        #expect(workspace.navigationError == "This saved view is no longer available.")
+    }
+
     @Test func scopedExternalLinkOpensItsVaultAndDocument() async {
         let document = Document(title: "Shared letter")
         let source = MockFolioService(
