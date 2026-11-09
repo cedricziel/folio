@@ -48,8 +48,19 @@ def load_app_store_connect_api_key
   )
 end
 
+LOCAL_XCCONFIG = File.join(APPLE_DIR, "Folio", "Config", "Local.xcconfig")
+
 def generate_project
   sh("cd '#{APPLE_DIR}/Folio' && xcodegen generate")
+  # Only self-builds have a Local.xcconfig, so CI and the official lanes never depend on one.
+  sh("'#{APPLE_DIR}/scripts/associated-domains.sh'") if File.exist?(LOCAL_XCCONFIG)
+end
+
+# The signing and upload lanes use the official team, bundle ids and match profiles.
+def ensure_official_identifiers
+  return unless File.exist?(LOCAL_XCCONFIG)
+
+  UI.user_error!("#{LOCAL_XCCONFIG} overrides the official identifiers; move it away before signing or uploading.")
 end
 
 def changelog_since_last_tag
@@ -181,7 +192,9 @@ end
 
 desc "Run FolioKit tests and build the app for iOS Simulator and macOS"
 lane :test do
-  sh("cd '#{APPLE_DIR}/FolioKit' && xcrun swift test")
+  # A hung run records its test processes' stacks (TEST_WATCHDOG_DIR) before the watchdog stops it. Runs went
+  # on stalling with dozens of @MainActor tests started at once, so the tests run one at a time.
+  sh("cd '#{APPLE_DIR}/FolioKit' && '#{APPLE_DIR}/scripts/test-watchdog.sh' xcrun swift test --no-parallel")
   generate_project
   ["generic/platform=iOS Simulator", "platform=macOS"].each do |destination|
     sh("cd '#{APPLE_DIR}/Folio' && xcrun xcodebuild build -project Folio.xcodeproj -scheme Folio " \
@@ -194,6 +207,7 @@ end
 desc "One-time local setup: register bundle ids with App Groups, then create signing assets with match"
 desc "  force:true regenerates the profiles; widgets:true also registers #{WIDGETS_IDENTIFIER} and its profiles"
 lane :bootstrap do |options|
+  ensure_official_identifiers
   ENV["FOLIO_WIDGETS"] = "YES" if options[:widgets].to_s == "true"
   register_bundle_ids
   force = options[:force].to_s == "true"
@@ -203,12 +217,14 @@ end
 
 desc "Sign with match, build for iOS and upload to TestFlight"
 lane :beta do
+  ensure_official_identifiers
   generate_project
   beta_build(platform: "ios", destination: "generic/platform=iOS")
 end
 
 desc "Sign with match, build for macOS and upload to TestFlight"
 lane :beta_mac do
+  ensure_official_identifiers
   generate_project
   beta_build(platform: "macos", destination: "generic/platform=macOS")
 end

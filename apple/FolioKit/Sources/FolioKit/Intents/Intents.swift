@@ -42,25 +42,32 @@ public struct UploadFileIntent: AppIntent {
     @Parameter(title: "Tags")
     public var tags: [TagEntity]
 
+    @Parameter(title: "Vault", description: "Where to file them; your default vault when empty")
+    public var vault: VaultEntity?
+
     public static var parameterSummary: some ParameterSummary {
         Summary("Upload \(\.$files) to Folio") {
             \.$title
             \.$tags
+            \.$vault
         }
     }
 
     public init() {}
 
-    public init(files: [IntentFile], title: String? = nil, tags: [TagEntity] = []) {
+    public init(files: [IntentFile], title: String? = nil, tags: [TagEntity] = [], vault: VaultEntity? = nil) {
         self.files = files
         self.title = title
         self.tags = tags
+        self.vault = vault
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         IntentEnvironment.ran(.uploadFile)
         let summaries = try await IntentEnvironment.run {
-            try await $0.upload(files.map { try UploadFile(intentFile: $0) }, title: title, tagIDs: tags.map(\.id))
+            let scope = try DocumentCatalog.vault(asked: vault?.id, implied: tags.map(\.id.vaultID))
+            return try await $0.scoped(to: scope).upload(
+                files.map { try UploadFile(intentFile: $0) }, title: title, tagIDs: tags.map(\.tagID))
         }
         return .result(
             value: summaries.map(DocumentEntity.init),
@@ -79,19 +86,25 @@ public struct SearchDocumentsIntent: AppIntent {
     @Parameter(title: "Search for", requestValueDialog: "What should I search for?")
     public var query: String
 
+    @Parameter(title: "Vault", description: "Where to search; your default vault when empty")
+    public var vault: VaultEntity?
+
     public static var parameterSummary: some ParameterSummary {
-        Summary("Search Folio for \(\.$query)")
+        Summary("Search Folio for \(\.$query)") {
+            \.$vault
+        }
     }
 
     public init() {}
 
-    public init(query: String) {
+    public init(query: String, vault: VaultEntity? = nil) {
         self.query = query
+        self.vault = vault
     }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         IntentEnvironment.ran(.searchDocuments)
-        let summaries = try await IntentEnvironment.run { try await $0.search(query) }
+        let summaries = try await IntentEnvironment.run { try await $0.scoped(to: vault?.id).search(query) }
         let dialog: LocalizedStringResource =
             summaries.isEmpty
             ? "Nothing in Folio matches \(query)."
@@ -122,6 +135,9 @@ public struct FindDocumentsIntent: AppIntent {
     @Parameter(title: "Through", description: "Last day to include")
     public var through: Date?
 
+    @Parameter(title: "Vault", description: "Where to look; the vault of the tag, correspondent or type when empty")
+    public var vault: VaultEntity?
+
     public static var parameterSummary: some ParameterSummary {
         Summary("Find documents in Folio") {
             \.$tag
@@ -129,6 +145,7 @@ public struct FindDocumentsIntent: AppIntent {
             \.$documentType
             \.$from
             \.$through
+            \.$vault
         }
     }
 
@@ -137,10 +154,13 @@ public struct FindDocumentsIntent: AppIntent {
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         IntentEnvironment.ran(.findDocuments)
         let criteria = DocumentCriteria(
-            tagID: tag?.id, correspondentID: correspondent?.id, documentTypeID: documentType?.id,
-            from: from, through: through
+            tagID: tag?.tagID, correspondentID: correspondent?.correspondentID,
+            documentTypeID: documentType?.documentTypeID, from: from, through: through
         )
-        let summaries = try await IntentEnvironment.run { try await $0.find(criteria) }
+        let implied = [tag?.id.vaultID, correspondent?.id.vaultID, documentType?.id.vaultID]
+        let summaries = try await IntentEnvironment.run {
+            try await $0.scoped(to: DocumentCatalog.vault(asked: vault?.id, implied: implied)).find(criteria)
+        }
         return .result(
             value: summaries.map(DocumentEntity.init),
             dialog: summaries.isEmpty
@@ -157,11 +177,24 @@ public struct GetLatestDocumentIntent: AppIntent {
         resultValueName: "Document"
     )
 
+    @Parameter(title: "Vault", description: "Where to look; your default vault when empty")
+    public var vault: VaultEntity?
+
+    public static var parameterSummary: some ParameterSummary {
+        Summary("Get the latest document") {
+            \.$vault
+        }
+    }
+
     public init() {}
+
+    public init(vault: VaultEntity?) {
+        self.vault = vault
+    }
 
     public func perform() async throws -> some IntentResult & ReturnsValue<DocumentEntity> & ProvidesDialog {
         IntentEnvironment.ran(.getLatestDocument)
-        let latest = try await IntentEnvironment.run { try await $0.latest() }
+        let latest = try await IntentEnvironment.run { try await $0.scoped(to: vault?.id).latest() }
         return .result(value: DocumentEntity(latest), dialog: "Your latest document is \(latest.title).")
     }
 }
@@ -226,10 +259,14 @@ public struct AddTagIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
         IntentEnvironment.ran(.addTag)
-        try await IntentEnvironment.run {
-            try await $0.scoped(to: document.id.vaultID).addTag(tag.id, to: document.documentID)
+        let outcome = try await IntentEnvironment.run {
+            try await $0.apply(TagChange(.add, tag: tag, document: document))
         }
-        return .result(dialog: "Tagged \(document.title) with \(tag.name).")
+        await registerUndo(of: outcome.applied)
+        guard outcome.applied.documents.isEmpty else {
+            return .result(dialog: "Tagged \(document.title) with \(tag.name).")
+        }
+        return .result(dialog: "\(document.title) already has \(tag.name).")
     }
 }
 
@@ -258,10 +295,44 @@ public struct RemoveTagIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ProvidesDialog {
         IntentEnvironment.ran(.removeTag)
-        try await IntentEnvironment.run {
-            try await $0.scoped(to: document.id.vaultID).removeTag(tag.id, from: document.documentID)
+        let outcome = try await IntentEnvironment.run {
+            try await $0.apply(TagChange(.remove, tag: tag, document: document))
         }
-        return .result(dialog: "Removed \(tag.name) from \(document.title).")
+        await registerUndo(of: outcome.applied)
+        guard outcome.applied.documents.isEmpty else {
+            return .result(dialog: "Removed \(tag.name) from \(document.title).")
+        }
+        return .result(dialog: "\(document.title) doesn't have \(tag.name).")
+    }
+}
+
+@available(iOS 26, macOS 26, *)
+extension AddTagIntent: UndoableIntent {}
+
+extension AddTagIntent {
+    @MainActor private func registerUndo(of change: TagChange) {
+        if #available(iOS 26, macOS 26, *) {
+            TagUndo.register(change, with: undoManager, revert: TagUndo.revert)
+        }
+    }
+}
+
+@available(iOS 26, macOS 26, *)
+extension RemoveTagIntent: UndoableIntent {}
+
+extension RemoveTagIntent {
+    @MainActor private func registerUndo(of change: TagChange) {
+        if #available(iOS 26, macOS 26, *) {
+            TagUndo.register(change, with: undoManager, revert: TagUndo.revert)
+        }
+    }
+}
+
+extension TagChange {
+    /// One document and a tag that must come from the same vault.
+    init(_ kind: Kind, tag: TagEntity, document: DocumentEntity) throws {
+        _ = try DocumentCatalog.vault(asked: document.id.vaultID, implied: [tag.id.vaultID])
+        self.init(kind, tagID: tag.tagID, tagVaultID: tag.id.vaultID, documents: [document.id])
     }
 }
 
