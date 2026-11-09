@@ -1,75 +1,75 @@
 import Foundation
 
-/// A lock the app and its extensions share through one file in the App Group container. The file holds the
-/// holder's token, and a holder that stops renewing it for `timeout` (its process died) can be taken over.
+/// A lock the app and its extensions share through files in the App Group container.
+///
+/// Each holder owns one generation file, `<name>.<generation>`, and the highest generation holds the lease while
+/// it is renewed within `timeout`. Taking over a released or abandoned lease means creating the next generation,
+/// which only one process can do, and nobody ever moves or deletes the file of the generation in charge: releasing
+/// only ages the holder's own file. So a slow holder, a late release and two processes taking over at once never
+/// leave two holders.
 struct FileLease: Sendable {
     let file: URL
     let timeout: TimeInterval
 
-    /// Creates the lease file, or takes over one not renewed within `timeout`. Returns nil while another holder
-    /// keeps it.
-    func acquire(now: Date = .now) -> UUID? {
-        let token = UUID()
-        for _ in 0..<2 {
-            if create(token) {
-                return token
-            }
-            guard breakIfStale(now: now) else { return nil }
+    /// Takes the lease when it is free, released or not renewed within `timeout`. Returns the generation that holds
+    /// it, or nil while another holder keeps it.
+    func acquire(now: Date = .now) -> Int? {
+        let generations = existing()
+        let current = generations.max()
+        if let current, let modified = Self.modified(path(current)), modified >= now.addingTimeInterval(-timeout) {
+            return nil
         }
-        return nil
-    }
-
-    /// Marks the lease held by `token` as alive. False when it was taken over or released.
-    @discardableResult
-    func renew(_ token: UUID, now: Date = .now) -> Bool {
-        guard holder() == token else { return false }
-        return (try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: file.path)) != nil
-    }
-
-    /// Removes the lease, unless another holder has taken it over since.
-    func release(_ token: UUID) {
-        guard holder() == token else { return }
-        try? FileManager.default.removeItem(at: file)
-    }
-
-    private func create(_ token: UUID) -> Bool {
+        let next = (current ?? 0) + 1
         do {
             try FileManager.default.createDirectory(
                 at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(token.uuidString.utf8).write(to: file, options: .withoutOverwriting)
-            return true
+            try Data().write(to: path(next), options: .withoutOverwriting)
         } catch {
-            return false
+            return nil
+        }
+        // A process that listed before an older generation was cleaned up can recreate it; only the highest holds.
+        guard existing().allSatisfy({ $0 <= next }) else {
+            try? FileManager.default.removeItem(at: path(next))
+            return nil
+        }
+        for older in generations where older < next {
+            try? FileManager.default.removeItem(at: path(older))
+        }
+        return next
+    }
+
+    /// Marks the lease held by `generation` as alive. False when a later generation has taken it over.
+    @discardableResult
+    func renew(_ generation: Int, now: Date = .now) -> Bool {
+        guard existing().allSatisfy({ $0 <= generation }) else { return false }
+        return (try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: path(generation).path))
+            != nil
+    }
+
+    /// Frees the lease by aging the holder's own file, so the next caller takes over with a new generation.
+    func release(_ generation: Int) {
+        try? FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 0)], ofItemAtPath: path(generation).path)
+    }
+
+    /// Deletes every generation, for a record that is gone, and the single lock file earlier builds used.
+    func removeAll() {
+        try? FileManager.default.removeItem(at: file)
+        for generation in existing() {
+            try? FileManager.default.removeItem(at: path(generation))
         }
     }
 
-    private func holder() -> UUID? {
-        (try? String(contentsOf: file, encoding: .utf8)).flatMap(UUID.init(uuidString:))
+    private func path(_ generation: Int) -> URL {
+        file.deletingLastPathComponent().appending(path: "\(file.lastPathComponent).\(generation)")
     }
 
-    /// Moves a stale lease file aside. A rename succeeds for only one process, so two processes that both found
-    /// the lease stale never both remove it and then both create it. (A third process creating the file while a
-    /// fresh one is being put back could still slip in; the app and one share sheet never get there.) True when the
-    /// caller may try to create the lease again.
-    private func breakIfStale(now: Date) -> Bool {
-        let cutoff = now.addingTimeInterval(-timeout)
-        guard let modified = Self.modified(file) else { return true }
-        guard modified < cutoff else { return false }
-        let aside = file.deletingLastPathComponent()
-            .appending(path: "\(file.lastPathComponent).\(UUID().uuidString).stale")
-        do {
-            try FileManager.default.moveItem(at: file, to: aside)
-        } catch {
-            // Another process moved it first; whoever creates the file next holds the lease.
-            return true
+    private func existing() -> [Int] {
+        let prefix = file.lastPathComponent + "."
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)) ?? []
+        return names.compactMap { name in
+            name.hasPrefix(prefix) ? Int(name.dropFirst(prefix.count)) : nil
         }
-        defer { try? FileManager.default.removeItem(at: aside) }
-        if let moved = Self.modified(aside), moved >= cutoff {
-            // Another process took the lease over between the check and the move: put its file back.
-            try? FileManager.default.linkItem(at: aside, to: file)
-            return false
-        }
-        return true
     }
 
     private static func modified(_ file: URL) -> Date? {

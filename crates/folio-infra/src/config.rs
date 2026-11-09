@@ -46,6 +46,7 @@ pub struct Config {
     pub auth: AuthConfig,
     pub mcp: McpConfig,
     pub import: ImportConfig,
+    pub push: PushConfig,
     pub apple: AppleConfig,
 }
 
@@ -496,6 +497,68 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
 }
 
+/// Push notifications to the Apple app
+///
+/// Database settings on `/settings` override these, except `apns.base_url`,
+/// which is configuration only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PushConfig {
+    /// `none` or `apns`
+    pub transport: String,
+    pub apns: ApnsConfig,
+    pub quiet_window_seconds: u64,
+    pub max_alerts_per_hour: u64,
+}
+
+impl Default for PushConfig {
+    fn default() -> Self {
+        Self {
+            transport: "none".into(),
+            apns: ApnsConfig::default(),
+            quiet_window_seconds: 30,
+            max_alerts_per_hour: 12,
+        }
+    }
+}
+
+/// Token-based APNs credentials
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApnsConfig {
+    pub team_id: Option<String>,
+    pub key_id: Option<String>,
+    pub topic: String,
+    /// The `.p8` key in PEM form
+    pub private_key: Option<String>,
+    /// Replaces Apple's hosts, for tests against a local HTTP/2 stub
+    pub base_url: Option<String>,
+}
+
+impl Default for ApnsConfig {
+    fn default() -> Self {
+        Self {
+            team_id: None,
+            key_id: None,
+            topic: "com.cedricziel.folio".into(),
+            private_key: None,
+            base_url: None,
+        }
+    }
+}
+
+impl fmt::Debug for ApnsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApnsConfig")
+            .field("team_id", &self.team_id)
+            .field("key_id", &self.key_id)
+            .field("topic", &self.topic)
+            .field("private_key", &Redacted(&self.private_key))
+            .field("base_url", &self.base_url)
+            .finish()
+    }
+}
+
 /// Apple app IDs whose apps may open this server's web links (Universal Links)
 ///
 /// The `apple.app_ids` DB setting replaces this list when it is non-empty.
@@ -845,6 +908,46 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::List,
     },
     Setting {
+        key: "push.transport",
+        env: "FOLIO_PUSH__TRANSPORT",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.team_id",
+        env: "FOLIO_PUSH__APNS__TEAM_ID",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.key_id",
+        env: "FOLIO_PUSH__APNS__KEY_ID",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.topic",
+        env: "FOLIO_PUSH__APNS__TOPIC",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.private_key",
+        env: "FOLIO_PUSH__APNS__PRIVATE_KEY",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.apns.base_url",
+        env: "FOLIO_PUSH__APNS__BASE_URL",
+        kind: ValueKind::Str,
+    },
+    Setting {
+        key: "push.quiet_window_seconds",
+        env: "FOLIO_PUSH__QUIET_WINDOW_SECONDS",
+        kind: ValueKind::Int,
+    },
+    Setting {
+        key: "push.max_alerts_per_hour",
+        env: "FOLIO_PUSH__MAX_ALERTS_PER_HOUR",
+        kind: ValueKind::Int,
+    },
+    Setting {
         key: "import.allowed_roots",
         env: "FOLIO_IMPORT__ALLOWED_ROOTS",
         kind: ValueKind::List,
@@ -865,6 +968,12 @@ impl Config {
     /// Rejects combinations that are unsafe to run. Called once at startup.
     pub fn validate(&self) -> Result<(), String> {
         self.apple.parsed()?;
+        if !matches!(self.push.transport.as_str(), "none" | "apns") {
+            return Err(format!(
+                "push.transport (FOLIO_PUSH__TRANSPORT) must be \"none\" or \"apns\", got {:?}",
+                self.push.transport
+            ));
+        }
         if let Some(url) = self.server.public_url.as_deref().filter(|u| !u.is_empty()) {
             url::Url::parse(url).map_err(|e| {
                 format!("server.public_url (FOLIO_SERVER__PUBLIC_URL) is not a valid URL ({e}): {url:?}")
@@ -1411,6 +1520,19 @@ vault = "{VAULT}"
         let err = config.validate().unwrap_err();
         assert!(err.contains("apple.app_ids"), "{err}");
         assert!(err.contains("com.example.folio"), "{err}");
+    }
+
+    #[test]
+    fn unknown_push_transport_fails_startup_naming_the_setting() {
+        let err = load(&[("FOLIO_PUSH__TRANSPORT", "apn")])
+            .validate()
+            .unwrap_err();
+        assert!(err.contains("push.transport"), "{err}");
+        for transport in ["none", "apns"] {
+            assert!(load(&[("FOLIO_PUSH__TRANSPORT", transport)])
+                .validate()
+                .is_ok());
+        }
     }
 
     #[test]
