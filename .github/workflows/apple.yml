@@ -33,7 +33,7 @@ env:
 
 jobs:
   # The UI lanes compete for the few macos-26 runners, so a PR runs each only when it touches what
-  # that lane builds: its fixture project, the app files it compiles and the FolioKit code they use.
+  # that lane builds: its fixture project, the app view it compiles, or FolioKit.
   changes:
     name: Changed Apple areas
     if: github.event_name == 'pull_request'
@@ -53,19 +53,13 @@ jobs:
           thumbnails=false
           while IFS= read -r file; do
             case "$file" in
-              .github/workflows/apple.yml | design/tokens.json | \
-              apple/FolioKit/Package.swift | apple/FolioKit/Package.resolved | \
-              apple/FolioKit/Sources/FolioKit/Models/* | apple/FolioKit/Sources/FolioKit/Theme/* | \
-              apple/FolioKit/Sources/FolioKit/Resources/* | apple/FolioKit/Sources/FolioKit/Telemetry/* | \
-              apple/FolioKit/Sources/FolioKit/Networking/FolioService.swift | \
-              apple/FolioKit/Sources/FolioKit/Storage/ServerConfig.swift)
+              # The fixtures load FolioKit's view models, which reach across the whole package.
+              .github/workflows/apple.yml | design/tokens.json | apple/FolioKit/Package.* | \
+              apple/FolioKit/Sources/*)
                 classifications=true; thumbnails=true ;;
-              apple/ClassificationTests/* | apple/Folio/Sources/TaxonomyView.swift | \
-              apple/FolioKit/Sources/FolioKit/ViewModels/TaxonomyViewModel.swift)
+              apple/ClassificationTests/* | apple/Folio/Sources/TaxonomyView.swift)
                 classifications=true ;;
               apple/ThumbnailTests/* | apple/Folio/Sources/DocumentRowView.swift | \
-              apple/FolioKit/Sources/FolioKit/ViewModels/DocumentListViewModel.swift | \
-              apple/FolioKit/Sources/FolioKit/ViewModels/ThumbnailCache.swift | \
               apple/FolioKit/Tests/FolioKitTests/MockFolioService.swift)
                 thumbnails=true ;;
             esac
