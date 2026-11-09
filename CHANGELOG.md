@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/cedricziel/folio/compare/v0.16.0...v0.17.0) (2026-11-09)
+
+
+### Features
+
+* **apple:** report Upload intent progress and run it long on OS 27 ([#452](https://github.com/cedricziel/folio/issues/452)) ([757f726](https://github.com/cedricziel/folio/commit/757f7261355412143abcddc3ab69a1907f12dc89))
+
+
+### Performance Improvements
+
+* **api:** find shared vaults in one query and list document IDs without rows ([#456](https://github.com/cedricziel/folio/issues/456)) ([1396f3b](https://github.com/cedricziel/folio/commit/1396f3b53e96476d025150af04c0c16a3ff5e7a3))
+
 ## [0.16.0](https://github.com/cedricziel/folio/compare/v0.15.0...v0.16.0) (2026-11-09)
 
 
