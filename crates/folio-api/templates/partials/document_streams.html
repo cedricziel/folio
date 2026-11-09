@@ -9,6 +9,7 @@
 {% endif %}
 {% when None %}
 {% endmatch %}
+{% match detail %}{% when Some with (detail) %}{{ detail|safe }}{% when None %}{% endmatch %}
 {% match removed %}
 {% when Some with (id) %}
 <turbo-stream action="remove" target="document-{{ id }}"></turbo-stream>

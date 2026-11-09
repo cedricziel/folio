@@ -1,0 +1,26 @@
+<section class="pages" aria-label="Pages" id="document-{{ document.id }}-pages"
+         data-controller="page-viewer"
+         data-page-viewer-document-id-value="{{ document.id }}"
+         data-page-viewer-page-count-value="{{ pages.len() }}">
+    <div class="f-sheet page-sheet">
+        <img src="{{ "/documents"|vault_url }}/{{ document.id }}/page/1/thumbnail" alt="Page 1 of {{ document.title }}" data-page-viewer-target="image">
+    </div>
+    {% if show_page_nav %}
+    <div class="page-nav">
+        <button type="button" class="f-btn f-btn-quiet" data-action="click->page-viewer#prevPage" data-page-viewer-target="prevBtn" disabled>Previous</button>
+        <span class="f-meta">Page <span data-page-viewer-target="currentPage">1</span> of {{ pages.len() }}</span>
+        <button type="button" class="f-btn f-btn-quiet" data-action="click->page-viewer#nextPage" data-page-viewer-target="nextBtn">Next</button>
+    </div>
+    <div class="page-thumbs">
+        {% for p in pages %}
+        <button type="button" class="f-thumb page-thumb" aria-label="Page {{ p }}" aria-current="{% if loop.first %}true{% else %}false{% endif %}"
+                data-page="{{ p }}" data-page-viewer-target="thumb" data-action="click->page-viewer#select">
+            <img src="{{ "/documents"|vault_url }}/{{ document.id }}/page/{{ p }}/thumbnail" alt="" loading="lazy">
+        </button>
+        {% endfor %}
+    </div>
+    {% if pages_without_preview %}
+    <p class="f-meta page-limit">Previews show the first {{ pages.len() }} of {{ page_count }} pages.{% if document.file_path.is_some() %} <a href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" download>Download the original</a> to read the rest.{% endif %}</p>
+    {% endif %}
+    {% endif %}
+</section>

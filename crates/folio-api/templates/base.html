@@ -1286,6 +1286,8 @@ Stimulus.register(
 );
 
 // Page Viewer Controller (multi-page document navigation)
+// A live update replaces the viewer; the page shown survives that swap
+const replacedViewerPages = new Map();
 Stimulus.register(
   "page-viewer",
   class extends Controller {
@@ -1297,7 +1299,20 @@ Stimulus.register(
 
     connect() {
       this.currentPage = 1;
+      const page = replacedViewerPages.get(this.documentIdValue);
+      replacedViewerPages.delete(this.documentIdValue);
+      if (page > 1 && page <= this.pageCountValue && this.thumbTargets.length > 0) {
+        this.goTo(page);
+      }
       this.updateButtons();
+    }
+
+    disconnect() {
+      if (this.currentPage > 1) {
+        const id = this.documentIdValue;
+        replacedViewerPages.set(id, this.currentPage);
+        setTimeout(() => replacedViewerPages.delete(id));
+      }
     }
 
     prevPage() {

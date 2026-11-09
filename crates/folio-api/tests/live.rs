@@ -51,6 +51,76 @@ async fn event_stream_turns_a_new_document_into_turbo_streams() {
     assert!(html.contains(&format!(r#"action="remove" target="document-{}""#, doc.id)));
 }
 
+#[tokio::test]
+async fn processing_updates_refresh_the_open_detail_page() {
+    use folio_core::models::{ProcessingStage, ProcessingStatus};
+    let h = harness().await;
+    let doc = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            folio_core::models::CreateDocument {
+                title: "Scan".into(),
+                mime_type: Some("application/pdf".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .set_page_count(h.vault, doc.id, 3)
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .update(
+            h.vault,
+            doc.id,
+            folio_core::models::UpdateDocument {
+                content: Some("Invoice total 42".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .document_repo
+        .set_stage_status(
+            h.vault,
+            doc.id,
+            ProcessingStage::Ocr,
+            ProcessingStatus::Done,
+        )
+        .await
+        .unwrap();
+
+    let html = folio_api::routes::turbo_streams_for(
+        folio_api::vault::DefaultVault(h.vault),
+        &h.state,
+        &folio_api::DocumentEvent::Processed {
+            document_id: doc.id,
+        },
+    )
+    .await
+    .unwrap();
+    for section in ["facts", "pages", "processing", "text"] {
+        assert!(
+            html.contains(&format!(
+                r#"action="replace" target="document-{}-{section}""#,
+                doc.id
+            )),
+            "{section} is refreshed"
+        );
+    }
+    assert!(html.contains("3 pages"));
+    assert!(html.contains(r#"data-page="3""#));
+    assert!(html.contains("Invoice total 42"));
+    // Edit forms stay as the person left them
+    assert!(!html.contains("correspondent_id"));
+}
+
 mod resume {
     use std::sync::Arc;
     use std::time::Duration;
@@ -188,5 +258,81 @@ mod resume {
             .unwrap()
             .id;
         assert_eq!(ids, [newest]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_stage_refreshes_the_open_detail_page() {
+        use folio_core::events::{EventOrigin, OutboxEvent};
+        use folio_core::models::{ProcessingStage, ProcessingStatus};
+        use folio_core::{DomainEventEnvelope, DomainEventSubject, EventAudience};
+
+        let h = harness().await;
+        let doc = h
+            .state
+            .document_repo
+            .create(
+                h.vault,
+                CreateDocument {
+                    title: "Broken".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let response = h
+            .app
+            .clone()
+            .oneshot(Request::get("/events").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let mut body = response.into_body();
+
+        h.state
+            .document_repo
+            .set_stage_status(
+                h.vault,
+                doc.id,
+                ProcessingStage::Ocr,
+                ProcessingStatus::Failed,
+            )
+            .await
+            .unwrap();
+        // Stage failures are recorded as domain events without a legacy document event
+        let envelope = DomainEventEnvelope::new(
+            "document.processing.ocr.failed",
+            h.vault,
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: doc.id,
+            },
+            Some(doc.id),
+            EventAudience::Vault,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        h.state.event_broadcaster.send(OutboxEvent {
+            id: 1_000_000,
+            event: None,
+            envelope: Some(envelope),
+            origin: EventOrigin::User,
+            context: None,
+            created_at: chrono::Utc::now(),
+            attempts: 0,
+        });
+
+        let mut text = String::new();
+        while !text.contains("Text extraction did not finish") {
+            let frame = tokio::time::timeout(Duration::from_secs(5), body.frame())
+                .await
+                .expect("the stream refreshes the detail page in time")
+                .expect("the stream stays open")
+                .unwrap();
+            if let Some(data) = frame.data_ref() {
+                text.push_str(&String::from_utf8_lossy(data));
+            }
+        }
+        assert!(text.contains(&format!(r#"target="document-{}-processing""#, doc.id)));
+        assert!(text.contains("id: 1000000"));
+        assert!(!text.lines().any(|line| line.starts_with("event:")));
     }
 }
