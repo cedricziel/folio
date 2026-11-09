@@ -32,6 +32,46 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
 jobs:
+  # The UI lanes compete for the few macos-26 runners, so a PR runs each only when it touches what
+  # that lane builds: its fixture project, the app files it compiles and the FolioKit code they use.
+  changes:
+    name: Changed Apple areas
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      classifications: ${{ steps.filter.outputs.classifications }}
+      thumbnails: ${{ steps.filter.outputs.thumbnails }}
+    steps:
+      # The PR merge commit's first parent is the base tip, so HEAD^1..HEAD is exactly the PR's change.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: filter
+        run: |
+          classifications=false
+          thumbnails=false
+          while IFS= read -r file; do
+            case "$file" in
+              .github/workflows/apple.yml | design/tokens.json | \
+              apple/FolioKit/Package.swift | apple/FolioKit/Package.resolved | \
+              apple/FolioKit/Sources/FolioKit/Models/* | apple/FolioKit/Sources/FolioKit/Theme/* | \
+              apple/FolioKit/Sources/FolioKit/Resources/* | \
+              apple/FolioKit/Sources/FolioKit/Networking/FolioService.swift | \
+              apple/FolioKit/Sources/FolioKit/Storage/ServerConfig.swift)
+                classifications=true; thumbnails=true ;;
+              apple/ClassificationTests/* | apple/Folio/Sources/TaxonomyView.swift | \
+              apple/FolioKit/Sources/FolioKit/ViewModels/TaxonomyViewModel.swift)
+                classifications=true ;;
+              apple/ThumbnailTests/* | apple/Folio/Sources/DocumentRowView.swift | \
+              apple/FolioKit/Sources/FolioKit/ViewModels/DocumentListViewModel.swift | \
+              apple/FolioKit/Sources/FolioKit/ViewModels/ThumbnailCache.swift | \
+              apple/FolioKit/Tests/FolioKitTests/MockFolioService.swift)
+                thumbnails=true ;;
+            esac
+          done < <(git diff --name-only HEAD^1 HEAD)
+          printf 'classifications=%s\nthumbnails=%s\n' "$classifications" "$thumbnails" | tee -a "$GITHUB_OUTPUT"
+
   test:
     name: ${{ matrix.toolchain.xcode == '26.6' && 'test' || 'test (Xcode 27.1)' }}
     if: github.event_name == 'pull_request'
@@ -173,7 +213,8 @@ jobs:
 
   thumbnails:
     name: Thumbnail UI
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.thumbnails == 'true'
     concurrency:
       group: apple-thumbnails-${{ github.ref }}
       cancel-in-progress: true
@@ -215,7 +256,8 @@ jobs:
 
   classifications:
     name: Classification UI
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.classifications == 'true'
     concurrency:
       group: apple-classifications-${{ github.ref }}
       cancel-in-progress: true
