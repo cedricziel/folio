@@ -1,3 +1,4 @@
+import AppIntents
 import FolioKit
 import SwiftUI
 
@@ -42,6 +43,24 @@ extension View {
     /// Lets a row be dragged out as its document.
     func draggableDocument(_ document: Document, vaultID: UUID) -> some View {
         draggable(DocumentEntity(DocumentSummary(document, correspondent: nil, documentType: nil, vaultID: vaultID)))
+    }
+
+    /// Tells Siri and Apple Intelligence which document each list row shows. Only the Xcode 27 SDK (Swift 6.4)
+    /// exposes this modifier to the app target, so builds with an older SDK leave rows without it.
+    @ViewBuilder
+    func documentEntityIdentifiers(vaultID: UUID) -> some View {
+        #if compiler(>=6.4)
+            if #available(iOS 18.4, macOS 15.4, *) {
+                appEntityIdentifier(forSelectionType: Document.ID.self) { id in
+                    EntityIdentifier(
+                        for: DocumentEntity.self, identifier: DocumentEntityID(documentID: id, vaultID: vaultID))
+                }
+            } else {
+                self
+            }
+        #else
+            self
+        #endif
     }
 }
 

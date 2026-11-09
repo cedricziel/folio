@@ -302,6 +302,8 @@ pub struct PushDeviceState {
     pub widgets_dirty_at: Option<DateTime<Utc>>,
     pub widgets_sent_at: Option<DateTime<Utc>>,
     pub test_sent_at: Option<DateTime<Utc>>,
+    /// Collapse id of the alert being attempted, kept until it is delivered or dropped
+    pub batch_id: Option<Uuid>,
 }
 
 /// Validate an APNs token as the app reports it: hexadecimal, of a plausible length

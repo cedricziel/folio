@@ -11,7 +11,7 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: '6.0'
-    MARKETING_VERSION: 0.13.0
+    MARKETING_VERSION: 0.14.0
     CURRENT_PROJECT_VERSION: '1'
     ENABLE_USER_SCRIPT_SANDBOXING: 'YES'
     DEVELOPMENT_TEAM: $(FOLIO_DEVELOPMENT_TEAM)
@@ -75,8 +75,6 @@ targets:
         ENABLE_USER_SELECTED_FILES: readwrite
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         APS_ENVIRONMENT: development
-        # Push notifications (#359) stay off until the App ID has the Push Notifications capability
-        # and the match profiles carry it; then set FOLIO_PUSH to YES (see docs/push-notifications.md).
         FOLIO_PUSH: 'NO'
         FOLIO_ENTITLEMENTS_NO: $(FOLIO_APP_ENTITLEMENTS)
         FOLIO_ENTITLEMENTS_YES: Push/FolioPush.entitlements
