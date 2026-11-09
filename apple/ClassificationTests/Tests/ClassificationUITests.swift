@@ -71,15 +71,26 @@ import XCTest
         XCTAssertTrue(remove.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(remove.isHittable, app.debugDescription)
         capture(app, name: "Classification layout with accessibility text")
-        #if os(macOS)
-            app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -500)
-        #else
-            app.swipeUp()
-        #endif
         let restore = app.buttons["Restore"].firstMatch
-        XCTAssertTrue(restore.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(restore.isHittable, app.debugDescription)
+        XCTAssertTrue(
+            scroll(app, untilHittable: restore),
+            "Restore was not reachable after scrolling.\n\(app.debugDescription)")
         capture(app, name: "Trash actions with accessibility text")
+    }
+
+    /// How far one swipe scrolls depends on the device and text size, so scroll a step at a time until reachable.
+    private func scroll(_ app: XCUIApplication, untilHittable element: XCUIElement, attempts: Int = 6) -> Bool {
+        for _ in 0..<attempts {
+            if element.exists && element.isHittable {
+                return true
+            }
+            #if os(macOS)
+                app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -500)
+            #else
+                app.swipeUp()
+            #endif
+        }
+        return element.exists && element.isHittable
     }
 
     private func launch(arguments: [String] = []) -> XCUIApplication {

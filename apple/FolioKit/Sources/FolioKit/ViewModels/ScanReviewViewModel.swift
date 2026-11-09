@@ -37,13 +37,13 @@ public final class ScanReviewViewModel {
     private let service: any FolioService
     private let defaultTitle: String
     public let destination: VaultDestinationViewModel?
-    private let renderPDF: @Sendable ([CGImage]) throws -> Data
+    private let renderPDF: @Sendable ([CGImage]) async throws -> Data
     private(set) var filing: Task<Void, Never>?
 
     public init(
         pages: [CGImage], service: any FolioService, now: Date = Date(),
         destination: VaultDestinationViewModel? = nil,
-        renderPDF: @escaping @Sendable ([CGImage]) throws -> Data = PDFBuilder.makePDF(from:)
+        renderPDF: @escaping @Sendable ([CGImage]) async throws -> Data = PDFBuilder.makePDF(from:)
     ) {
         self.pages = pages
         self.service = service

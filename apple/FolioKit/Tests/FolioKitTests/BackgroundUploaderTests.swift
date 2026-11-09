@@ -346,6 +346,19 @@ struct ShareUploadStoreTests {
         #expect(leftovers.isEmpty, "removing a record also forgets its claim")
     }
 
+    @Test func pruningAheadOfTimeNeverTakesOverALiveClaim() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ShareUploadStore(directory: directory)
+        let retrying = try saved(store, .failed(.rejected(status: 503)))
+        let other = ShareUploadStore(directory: directory)
+        #expect(other.claim(retrying.id))
+
+        store.prune(now: .now.addingTimeInterval(30 * 24 * 60 * 60))
+
+        #expect(store.record(retrying.id) != nil, "expired by that date, but another process holds it right now")
+        other.unclaim(retrying.id)
+    }
+
     @Test func pruningLeavesAShareThatChangedSinceItWasListed() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = ShareUploadStore(directory: directory)
@@ -561,6 +574,19 @@ struct ShareUploadStoreTests {
         #expect(failed.status == .failed(.keyReused))
         #expect(!failed.canRetry)
         #expect(!harness.bodyExists(failed))
+        #expect(harness.uploader.heldAnswers == 0, "a finished task's answer is dropped")
+    }
+
+    @Test func refusalsHeldWhenTheSessionEndsAreDropped() {
+        let harness = ShareUploadHarness([])
+        defer { harness.tearDown() }
+        harness.uploader.hold(Data("{}".utf8), task: 1, status: 409)
+        harness.uploader.hold(Data("{}".utf8), task: 2, status: 409)
+        #expect(harness.uploader.heldAnswers == 2)
+
+        harness.uploader.urlSession(URLSession.shared, didBecomeInvalidWithError: nil)
+
+        #expect(harness.uploader.heldAnswers == 0)
     }
 
     @Test func aRetryHeldByAnotherProcessIsRefused() async throws {
@@ -713,5 +739,56 @@ struct ShareUploadStoreTests {
 
         #expect(model.retryError == ShareRetryError.unavailable.localizedDescription)
         #expect(model.retained.first?.status == .failed(.rejected(status: 415)))
+    }
+}
+
+struct RefusalAnswersTests {
+    private let reused = Data(#"{"error":"used","code":"idempotency_key_mismatch"}"#.utf8)
+
+    @Test func onlyARefusalsAnswerIsKept() {
+        var answers = RefusalAnswers()
+
+        answers.append(Data(#"{"id":"document"}"#.utf8), task: 1, status: 201)
+        answers.append(reused, task: 2, status: 409)
+        answers.append(reused, task: 3, status: nil)
+
+        #expect(answers.count == 1)
+        let accepted = answers.take(1)
+        let refused = answers.take(2)
+        #expect(accepted == nil)
+        #expect(refused == reused)
+        #expect(answers.count == 0, "a taken answer is gone")
+    }
+
+    @Test func manyRefusalsHeldTogetherAllKeepTheirCode() throws {
+        var answers = RefusalAnswers()
+        let tasks = 0..<300
+
+        for task in tasks {
+            answers.append(reused, task: task, status: 409)
+        }
+
+        let url = try #require(URL(string: "https://folio.example.com"))
+        let response = try #require(HTTPURLResponse(url: url, statusCode: 409, httpVersion: nil, headerFields: nil))
+        for task in tasks {
+            let body = answers.take(task)
+            let failure = ShareUploadFailure.classify(response: response, error: nil, body: body)
+            #expect(failure == .keyReused, "task \(task)")
+        }
+    }
+
+    @Test func refusalsWhoseTasksNeverFinishAreBounded() {
+        var answers = RefusalAnswers()
+
+        for task in 0..<(RefusalAnswers.taskLimit + 10) {
+            answers.append(reused, task: task, status: 409)
+        }
+        answers.append(Data(count: 2 * RefusalAnswers.byteLimit), task: 0, status: 409)
+
+        #expect(answers.count == RefusalAnswers.taskLimit)
+        let first = answers.take(0)
+        #expect(first?.count == RefusalAnswers.byteLimit)
+        answers.removeAll()
+        #expect(answers.count == 0)
     }
 }

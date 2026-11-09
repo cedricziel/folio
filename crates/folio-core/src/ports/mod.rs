@@ -51,7 +51,9 @@ pub use repository::{
     MembershipRepository, SettingsRepository, TagRepository, VaultRepository,
 };
 pub use saved_view::{SavedViewAccess, SavedViewRepository};
-pub use storage::{keys, purge_document, DocumentStore, LocalCopy, StoredObject};
+pub use storage::{
+    keys, purge_document, DocumentStore, LocalCopy, StoredObject, PREVIEW_PAGE_LIMIT,
+};
 pub use storage::{ProcessingQueue, ProcessingStatus};
 pub use upload_receipts::{
     upload_fingerprint, ExpiredReservation, UploadClaim, UploadReceiptKey, UploadReceiptRepository,

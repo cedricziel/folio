@@ -213,7 +213,7 @@ public final class ShareUploadStore: @unchecked Sendable {
         var failed: [ShareUploadRecord] = []
         for record in all() {
             if expired(record) {
-                removeIfUnclaimed(record.id, now: now, where: expired)
+                removeIfUnclaimed(record.id, where: expired)
             } else if case .failed = record.status {
                 failed.append(record)
             }
@@ -221,16 +221,18 @@ public final class ShareUploadStore: @unchecked Sendable {
         var retained = failed.reduce(0) { $0 + bodySize($1.id) }
         for record in failed.dropFirst().reversed() where retained > bodyLimit {
             let size = bodySize(record.id)
-            if removeIfUnclaimed(record.id, now: now, where: { $0 == record }) {
+            if removeIfUnclaimed(record.id, where: { $0 == record }) {
                 retained -= size
             }
         }
         removeLegacyBodies(before: now.addingTimeInterval(-Self.uploadedRetention))
     }
 
+    /// Claims with the store's own clock: `prune`'s `now` only decides what has expired, and a date ahead of it
+    /// must never count a live claim as abandoned.
     @discardableResult
-    private func removeIfUnclaimed(_ id: UUID, now: Date, where unchanged: (ShareUploadRecord) -> Bool) -> Bool {
-        guard claim(id, now: now) else { return false }
+    private func removeIfUnclaimed(_ id: UUID, where unchanged: (ShareUploadRecord) -> Bool) -> Bool {
+        guard claim(id) else { return false }
         let removed = lock.withLock {
             guard let record = read(recordFile(for: id)), unchanged(record) else { return false }
             unlockedRemove(id)

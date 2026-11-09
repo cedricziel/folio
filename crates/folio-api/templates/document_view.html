@@ -56,6 +56,9 @@
                 </button>
                 {% endfor %}
             </div>
+            {% if pages_without_preview %}
+            <p class="f-meta page-limit">Previews show the first {{ pages.len() }} of {{ page_count }} pages.{% if document.file_path.is_some() %} <a href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" download>Download the original</a> to read the rest.{% endif %}</p>
+            {% endif %}
             {% endif %}
         </section>
 
