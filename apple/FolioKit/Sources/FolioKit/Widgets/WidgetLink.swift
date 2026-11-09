@@ -19,7 +19,8 @@ public enum WidgetLink: Equatable, Sendable {
     }
 
     public init?(url: URL) {
-        guard url.scheme == Self.scheme else { return nil }
+        // Schemes are case-insensitive, and a self-build bundle id may contain capitals.
+        guard url.scheme?.lowercased() == Self.scheme.lowercased() else { return nil }
         let path = url.pathComponents.filter { $0 != "/" }
         switch (url.host(), path.count) {
         case ("inbox", 0): self = .inbox

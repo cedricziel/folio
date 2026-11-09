@@ -25,10 +25,12 @@ let package = Package(
                 .plugin(name: "OpenAPIGenerator", package: "swift-openapi-generator")
             ]
         ),
+        .target(name: "FolioScanIntent"),
         .target(
             name: "FolioKit",
             dependencies: [
                 "FolioAPI",
+                "FolioScanIntent",
                 .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetryConcurrency", package: "opentelemetry-swift-core"),

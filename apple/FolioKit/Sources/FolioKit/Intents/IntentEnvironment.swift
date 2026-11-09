@@ -44,6 +44,12 @@ public enum IntentEnvironment {
         recorder.withLock { $0 }(intent)
     }
 
+    /// Records Scan runs too; `ScanDocumentIntent` lives in FolioScanIntent, which cannot see telemetry.
+    /// The app calls this at launch, before any intent runs.
+    public static func recordScanRuns() {
+        ScanIntentEvents.whenRun { ran(.scanDocument) }
+    }
+
     public typealias IntentFlush = @Sendable () async -> Void
 
     private static let flusher = OSAllocatedUnfairLock<IntentFlush>(
