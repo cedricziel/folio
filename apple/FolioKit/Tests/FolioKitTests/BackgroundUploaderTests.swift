@@ -577,6 +577,18 @@ struct ShareUploadStoreTests {
         #expect(harness.uploader.heldAnswers == 0, "a finished task's answer is dropped")
     }
 
+    @Test func refusalsHeldWhenTheSessionEndsAreDropped() {
+        let harness = ShareUploadHarness([])
+        defer { harness.tearDown() }
+        harness.uploader.hold(Data("{}".utf8), task: 1, status: 409)
+        harness.uploader.hold(Data("{}".utf8), task: 2, status: 409)
+        #expect(harness.uploader.heldAnswers == 2)
+
+        harness.uploader.urlSession(URLSession.shared, didBecomeInvalidWithError: nil)
+
+        #expect(harness.uploader.heldAnswers == 0)
+    }
+
     @Test func aRetryHeldByAnotherProcessIsRefused() async throws {
         let harness = ShareUploadHarness([.status(503), .status(201)])
         defer { harness.tearDown() }
@@ -748,7 +760,7 @@ struct RefusalAnswersTests {
         #expect(answers.count == 0, "a taken answer is gone")
     }
 
-    @Test func manyRefusalsAtOnceAllKeepTheirCode() throws {
+    @Test func manyRefusalsHeldTogetherAllKeepTheirCode() throws {
         var answers = RefusalAnswers()
         let tasks = 0..<300
 

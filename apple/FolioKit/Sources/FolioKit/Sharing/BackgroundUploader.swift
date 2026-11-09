@@ -233,8 +233,11 @@ public final class BackgroundUploader: NSObject, BackgroundUploading, URLSession
     }
 
     public func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let status = (dataTask.response as? HTTPURLResponse)?.statusCode
-        lock.withLock { answers.append(data, task: dataTask.taskIdentifier, status: status) }
+        hold(data, task: dataTask.taskIdentifier, status: (dataTask.response as? HTTPURLResponse)?.statusCode)
+    }
+
+    func hold(_ data: Data, task: Int, status: Int?) {
+        lock.withLock { answers.append(data, task: task, status: status) }
     }
 
     public func urlSession(_: URLSession, didBecomeInvalidWithError _: (any Error)?) {
