@@ -257,6 +257,21 @@ private actor FlushLog {
         #expect(await service.tagged.count == 1)
     }
 
+    @Test func uploadRejectsAnEmptySelection() async {
+        let service = await install()
+        await #expect(throws: ShortcutError("Choose at least one file to upload.")) {
+            try await UploadFileIntent(files: []).perform()
+        }
+        #expect(await service.uploads.isEmpty)
+    }
+
+    @Test func intentsPassCancellationThroughInsteadOfShowingAnError() async {
+        _ = await install()
+        await #expect(throws: CancellationError.self) {
+            _ = try await IntentEnvironment.run { _ -> Int in throw CancellationError() }
+        }
+    }
+
     @Test func uploadRejectsAnEmptyFile() async {
         _ = await install()
         let empty = IntentFile(data: Data(), filename: "empty.pdf", type: .pdf)

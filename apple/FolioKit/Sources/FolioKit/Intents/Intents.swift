@@ -66,6 +66,7 @@ public struct UploadFileIntent: AppIntent, ProgressReportingIntent {
 
     public func perform() async throws -> some IntentResult & ReturnsValue<[DocumentEntity]> & ProvidesDialog {
         IntentEnvironment.ran(.uploadFile)
+        guard !files.isEmpty else { throw ShortcutError("Choose at least one file to upload.") }
         #if compiler(>=6.4)
             let summaries: [DocumentSummary]
             if #available(iOS 27, macOS 27, *) {

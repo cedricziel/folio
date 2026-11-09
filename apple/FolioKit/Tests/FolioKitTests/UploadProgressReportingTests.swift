@@ -74,14 +74,6 @@ private let tag = Tag(name: "Insurance")
         #expect(progress.completedUnitCount == 2)
         #expect(progress.localizedAdditionalDescription == "2 of 3 documents")
     }
-
-    @Test func intentsPassCancellationThroughInsteadOfShowingAnError() async {
-        IntentEnvironment.use { MockFolioService() }
-        IntentEnvironment.flushRuns {}
-        await #expect(throws: CancellationError.self) {
-            try await IntentEnvironment.run { _ in throw CancellationError() }
-        }
-    }
 }
 
 private final class Counts: @unchecked Sendable {
