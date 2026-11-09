@@ -12,7 +12,7 @@ The extension is off by default. Embedding it needs its own App ID and App Store
 
 Widgets never call the server. Each time the app becomes active or goes to the background, it reads up to 300 of the newest documents in the server's default vault. It writes a small snapshot to the `group.com.cedricziel.folio` App Group and reloads the widget timelines. The snapshot holds:
 
-- the number of documents not yet filed, shown as "300+" when there are more pages,
+- the number of documents not yet filed among those 300. When more documents exist, the widget adds "+", for example "20+".
 - the newest document's ID, vault, date and title,
 - whether the user is signed in.
 
@@ -39,7 +39,7 @@ A widget whose snapshot is more than six hours old shows when it was last update
 4. Run `bundle exec fastlane bootstrap widgets:true force:true`, so match regenerates the iOS and macOS App Store profiles with the group.
 5. Set `FOLIO_WIDGETS: "YES"` in the `env` of the `beta` and `beta-mac` jobs in `.github/workflows/apple.yml`. Fastlane then generates the project with the extension and fetches its profiles.
 
-For local builds, generate the project with the flag:
+For local builds, generate the project with the flag. A self-build (`Config/Local.xcconfig`) uses `$(FOLIO_BUNDLE_ID).widgets` and `$(FOLIO_APP_GROUP)`, and with Manual signing needs `FOLIO_PROFILE_WIDGETS_IOS` and `FOLIO_PROFILE_WIDGETS_MACOS`.
 
 ```sh
 cd apple/Folio
@@ -48,7 +48,7 @@ FOLIO_WIDGETS=YES xcodegen generate
 
 ## How the flag works
 
-`project.yml` includes `widgets.yml` only when `FOLIO_WIDGETS` is `YES` while XcodeGen runs. That file adds the extension target and embeds it in the app. It also sets `FolioWidgetsEnabled` in the app's Info.plist and registers the `com.cedricziel.folio.widgets` URL scheme that widget taps use. Without the flag, the app writes no snapshot.
+`project.yml` includes `widgets.yml` only when `FOLIO_WIDGETS` is `YES` while XcodeGen runs. That file adds the extension target and embeds it in the app. It also sets `FolioWidgetsEnabled` in the app's Info.plist and registers the `$(FOLIO_BUNDLE_ID).widgets` URL scheme that widget taps use. Without the flag, the app writes no snapshot.
 
 Pull request CI builds the app both ways. It checks that the default project leaves the extension out, then builds it with `FOLIO_WIDGETS=YES CODE_SIGNING_ALLOWED=NO` for the iOS Simulator and macOS.
 

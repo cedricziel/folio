@@ -1,12 +1,13 @@
 import Foundation
 
-/// Where a tap on a widget takes the app. The app registers ``scheme`` only when widgets are built in.
+/// Where a tap on a widget takes the app. The app registers ``scheme`` only when widgets are built in; it
+/// follows the build's bundle identifier, so a self-build's links never open the official app.
 public enum WidgetLink: Equatable, Sendable {
     case inbox
     case scan
     case document(Document.ID, vaultID: UUID)
 
-    public static let scheme = "com.cedricziel.folio.widgets"
+    public static var scheme: String { "\(AppConfiguration.callbackScheme).widgets" }
 
     public var url: URL {
         switch self {
