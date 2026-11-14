@@ -2133,3 +2133,119 @@ async fn unscoped_pages_keep_the_vault_last_browsed() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(!text(response).await.contains(&bob.vault.to_string()));
 }
+
+fn with_vault_cookie(mut req: Request<Body>, signed_in: &SignedIn, vault: &str) -> Request<Body> {
+    req.headers_mut().insert(
+        header::COOKIE,
+        format!("{}; folio_vault={vault}", signed_in.cookie)
+            .parse()
+            .unwrap(),
+    );
+    req
+}
+
+async fn shared_with_alice(h: &Harness, name: &str) -> (SignedIn, SignedIn) {
+    let alice = sign_in(h, &format!("{name}-alice")).await;
+    let bob = sign_in(h, &format!("{name}-bob")).await;
+    h.members
+        .grant(
+            bob.vault,
+            &Principal::User(alice.user.clone()),
+            VaultRole::Viewer,
+            None,
+        )
+        .await
+        .unwrap();
+    (alice, bob)
+}
+
+#[tokio::test]
+async fn explicit_vault_url_beats_the_cookie_and_updates_it() {
+    let h = harness_requiring_login().await;
+    let (alice, bob) = shared_with_alice(&h, "cookie-wins").await;
+    let req = with_vault_cookie(
+        request(
+            "GET",
+            &format!("/vaults/{}/", alice.vault),
+            &alice,
+            Body::empty(),
+        ),
+        &alice,
+        &bob.vault.to_string(),
+    );
+    let response = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::SET_COOKIE]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next(),
+        Some(format!("folio_vault={}", alice.vault).as_str())
+    );
+    assert!(selected_option(&text(response).await, alice.vault));
+}
+
+#[tokio::test]
+async fn malformed_or_foreign_vault_cookie_falls_back_to_the_default() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "cookie-bad-alice").await;
+    let stranger = sign_in(&h, "cookie-bad-stranger").await;
+    for value in ["not-a-vault".to_string(), stranger.vault.to_string()] {
+        let req = with_vault_cookie(
+            request("GET", "/settings/vaults", &alice, Body::empty()),
+            &alice,
+            &value,
+        );
+        let response = h.app.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{value}");
+        let html = text(response).await;
+        assert!(!html.contains(&stranger.vault.to_string()), "{value}");
+    }
+}
+
+#[tokio::test]
+async fn background_requests_and_api_calls_do_not_touch_the_vault_cookie() {
+    let h = harness_requiring_login().await;
+    let (alice, bob) = shared_with_alice(&h, "cookie-bg").await;
+    let document = h
+        .state
+        .document_repo
+        .create(
+            bob.vault,
+            CreateDocument {
+                title: "Only in bob".into(),
+                content: Some("x".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    for (path, turbo_frame) in [
+        (format!("/vaults/{}/api/documents", bob.vault), false),
+        (format!("/vaults/{}/events", bob.vault), false),
+        (format!("/vaults/{}/", bob.vault), true),
+    ] {
+        let mut req = with_vault_cookie(
+            request("GET", &path, &alice, Body::empty()),
+            &alice,
+            &alice.vault.to_string(),
+        );
+        if turbo_frame {
+            req.headers_mut()
+                .insert("turbo-frame", "x".parse().unwrap());
+        }
+        let response = h.app.clone().oneshot(req).await.unwrap();
+        assert!(
+            !response.headers().contains_key(header::SET_COOKIE),
+            "{path} rewrote the cookie"
+        );
+    }
+    let req = with_vault_cookie(
+        request("GET", "/api/documents", &alice, Body::empty()),
+        &alice,
+        &bob.vault.to_string(),
+    );
+    let listing = text(h.app.clone().oneshot(req).await.unwrap()).await;
+    assert!(!listing.contains(&document.id.to_string()));
+}

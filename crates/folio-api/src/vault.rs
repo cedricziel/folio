@@ -12,7 +12,7 @@ use folio_core::models::{UserId, VaultAction, VaultId, VaultRole};
 use tower::ServiceBuilder;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::auth::{cookie, is_exempt, with_cookies, AuthState};
+use crate::routes::auth::{cookie, is_exempt, set_cookie, with_cookies, AuthState};
 use crate::state::AppState;
 use crate::vault_context::is_scoped_path;
 pub use crate::vault_context::{filters, url, VaultContext, VaultSummary, CURRENT_VAULT};
@@ -33,9 +33,6 @@ pub struct VaultResolver {
 
 #[derive(Clone, Copy)]
 struct RequestedVault(VaultId);
-
-/// Remembers the vault a browser last browsed, so pages outside `/vaults/{id}` keep it.
-const VAULT_COOKIE: &str = "folio_vault";
 
 /// Strip the HTML vault prefix before route matching, retaining the selected ID.
 /// This keeps existing handler path extractors independent of the vault prefix.
@@ -125,15 +122,38 @@ pub async fn resolve_default_vault(
             return axum::response::Redirect::to("/settings/vaults").into_response();
         }
     }
-    let context = match resolve(&resolver.state, &mut request, who.as_ref(), default).await {
+    let context = match resolve(
+        &resolver.state,
+        resolver.auth.vault_cookie_name(),
+        &mut request,
+        who.as_ref(),
+        default,
+    )
+    .await
+    {
         Ok(context) => context,
         Err(error) => return error.into_response(),
     };
-    let remember = (request.method() == Method::GET)
-        .then(|| request.extensions().get::<RequestedVault>().map(|v| v.0))
-        .flatten()
-        .filter(|id| *id == context.id)
-        .filter(|id| cookie(request.headers(), VAULT_COOKIE) != Some(id.to_string()));
+    // Only page navigations remember the vault; background fetches from another tab must not.
+    let cookie_name = resolver.auth.vault_cookie_name();
+    let navigation = request.method() == Method::GET
+        && !request.uri().path().starts_with("/api")
+        && request.uri().path() != "/events"
+        && !request.headers().contains_key("turbo-frame");
+    let remember = Some(context.id)
+        .filter(|id| {
+            navigation
+                && request.extensions().get::<RequestedVault>().map(|v| v.0) == Some(*id)
+                && cookie(request.headers(), cookie_name) != Some(id.to_string())
+        })
+        .map(|id| {
+            set_cookie(
+                cookie_name,
+                &id.to_string(),
+                31_536_000,
+                resolver.auth.secure(),
+            )
+        });
     request.extensions_mut().insert(DefaultVault(context.id));
     request
         .extensions_mut()
@@ -158,13 +178,15 @@ pub async fn resolve_default_vault(
                     response.headers_mut().insert(header::LOCATION, value);
                 }
             }
+            let html = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("text/html"));
             match remember {
-                Some(id) if response.status().is_success() => with_cookies(
-                    response,
-                    [format!(
-                        "{VAULT_COOKIE}={id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
-                    )],
-                ),
+                Some(value) if html && response.status().is_success() => {
+                    with_cookies(response, [value])
+                }
                 _ => response,
             }
         })
@@ -173,6 +195,7 @@ pub async fn resolve_default_vault(
 
 async fn resolve(
     state: &AppState,
+    vault_cookie: &str,
     request: &mut Request,
     user: Option<&UserId>,
     default: Option<VaultId>,
@@ -208,15 +231,29 @@ async fn resolve(
     if matches!((path, header), (Some(a), Some(b)) if a != b) {
         return Err(ApiError::bad_request("Conflicting vault selections"));
     }
-    let remembered = match (path.or(header), user) {
-        (None, Some(user)) if !request.uri().path().starts_with("/api") => {
-            remembered_vault(state, &request.headers().clone(), user).await?
+    // The cookie is a hint: it counts only while the user can still read that vault.
+    let mut remembered = None;
+    if let (None, Some(user), false) = (
+        path.or(header),
+        user,
+        request.uri().path().starts_with("/api")
+            || request.headers().contains_key(header::AUTHORIZATION),
+    ) {
+        if let Some(id) = cookie(request.headers(), vault_cookie).and_then(|v| v.parse().ok()) {
+            remembered = state
+                .access
+                .effective_role(user, id)
+                .await?
+                .map(|role| (id, role));
         }
-        _ => None,
-    };
-    let id = path.or(header).or(remembered).or(default).ok_or_else(|| {
-        ApiError::not_found("No active vault; restore or create one in vault settings")
-    })?;
+    }
+    let id = path
+        .or(header)
+        .or(remembered.map(|(id, _)| id))
+        .or(default)
+        .ok_or_else(|| {
+            ApiError::not_found("No active vault; restore or create one in vault settings")
+        })?;
     let retained_management = request
         .uri()
         .path()
@@ -227,7 +264,9 @@ async fn resolve(
                 || (request.method() == Method::POST && tail == "restore")
                 || (request.method() == Method::DELETE && tail.is_empty())
         });
+    let known_role = remembered.filter(|(known, _)| *known == id).map(|(_, r)| r);
     let role = match user {
+        Some(_) if known_role.is_some() => known_role,
         Some(user) => match state.access.effective_role(user, id).await? {
             Some(role) => Some(role),
             None if retained_management
@@ -273,21 +312,6 @@ async fn resolve(
             .get::<AuthContext>()
             .map(|ctx| ctx.scopes.clone()),
     })
-}
-
-/// The vault from the browser's cookie, only while the user can still read it.
-async fn remembered_vault(
-    state: &AppState,
-    headers: &header::HeaderMap,
-    user: &UserId,
-) -> ApiResult<Option<VaultId>> {
-    if headers.contains_key(header::AUTHORIZATION) {
-        return Ok(None);
-    }
-    let Some(id) = cookie(headers, VAULT_COOKIE).and_then(|v| v.parse::<VaultId>().ok()) else {
-        return Ok(None);
-    };
-    Ok(state.access.effective_role(user, id).await?.map(|_| id))
 }
 
 async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiResult<VaultAction> {
