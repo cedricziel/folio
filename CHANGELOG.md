@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.17.1](https://github.com/cedricziel/folio/compare/v0.17.0...v0.17.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **mcp:** adopt rmcp 3.10 typed skills API (supersedes [#469](https://github.com/cedricziel/folio/issues/469)) ([#471](https://github.com/cedricziel/folio/issues/471)) ([c0c5fe6](https://github.com/cedricziel/folio/commit/c0c5fe6902988bf51371a368eafeda74fd1b7e98))
+* **mcp:** serve bundled skills through the typed rmcp 3.10 skills API ([4fdbb6f](https://github.com/cedricziel/folio/commit/4fdbb6fb20842ea2633613277e93bfc8371db39d))
+
 ## [0.17.0](https://github.com/cedricziel/folio/compare/v0.16.0...v0.17.0) (2026-11-09)
 
 
