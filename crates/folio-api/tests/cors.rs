@@ -67,3 +67,43 @@ async fn same_origin_request_still_succeeds() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_no_cors(&response);
 }
+
+fn settings_post(headers: &[(&str, &str)]) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(Method::POST)
+        .uri("/settings/mcp")
+        .header(header::HOST, "192.168.1.5:3000")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    builder.body(Body::from("mcp_enabled=on")).unwrap()
+}
+
+async fn post_changes_setting(headers: &[(&str, &str)]) -> bool {
+    let h = harness().await;
+    let response = h.app.clone().oneshot(settings_post(headers)).await.unwrap();
+    let stored = h.state.settings_repo.get("mcp.enabled").await.unwrap();
+    let changed = stored.is_some_and(|s| s.value == "true");
+    if !changed {
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    changed
+}
+
+#[tokio::test]
+async fn cross_site_form_post_is_rejected_when_auth_is_off() {
+    assert!(!post_changes_setting(&[("sec-fetch-site", "cross-site")]).await);
+}
+
+#[tokio::test]
+async fn post_from_another_origin_is_rejected_without_fetch_metadata() {
+    assert!(!post_changes_setting(&[(header::ORIGIN.as_str(), EVIL)]).await);
+}
+
+#[tokio::test]
+async fn same_origin_and_header_less_posts_still_work_when_auth_is_off() {
+    assert!(post_changes_setting(&[("sec-fetch-site", "same-origin")]).await);
+    assert!(post_changes_setting(&[(header::ORIGIN.as_str(), "http://192.168.1.5:3000")]).await);
+    assert!(post_changes_setting(&[]).await);
+}
