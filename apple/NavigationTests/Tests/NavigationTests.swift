@@ -58,6 +58,53 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Second fixture"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    func testCompactSidebarOpensEveryDestinationAfterReturning() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
+        for destination in ["All documents", "Inbox", "Inbox", "All documents", "All documents", "Inbox"] {
+            navigateBack(in: app)
+            XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+            let row = app.buttons[destination].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            row.tap()
+            XCTAssertTrue(
+                app.navigationBars[destination].waitForExistence(timeout: 5),
+                "Tapping \(destination) in the sidebar must open it.\n\(app.debugDescription)"
+            )
+        }
+    }
+
+    func testCompactSidebarOpensASavedViewAfterReturning() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--saved-views"]
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        let saveCurrent = app.buttons["Save current view"]
+        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
+        saveCurrent.tap()
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        name.tap()
+        name.typeText("Saved fixture")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        for destination in ["Inbox", "Saved fixture", "All documents", "Saved fixture", "Saved fixture"] {
+            navigateBack(in: app)
+            XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+            let row = app.buttons[destination].firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            row.tap()
+            XCTAssertTrue(
+                app.navigationBars[destination].waitForExistence(timeout: 5),
+                "Tapping \(destination) in the sidebar must open it.\n\(app.debugDescription)"
+            )
+        }
+    }
+
     func testOpenDocumentOffersSharing() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
