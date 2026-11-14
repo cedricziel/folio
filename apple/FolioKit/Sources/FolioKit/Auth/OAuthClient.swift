@@ -3,23 +3,10 @@ import Foundation
 enum OAuthFailure: Error, Equatable {
     /// The server refused the refresh token or code for good (revoked, rotated away, expired).
     case invalidGrant
-    /// The server answered, but not with a verdict on the token (an error page, throttling, a bad request).
-    case rejected(status: Int, message: String?)
-    /// The server answered with a 5xx, timeout or throttle status. Says nothing about the token.
-    case unavailable(status: Int)
-    case unreachable
-}
-
-extension OAuthFailure {
-    /// What a caller of a failed refresh sees. None of these means the session is gone.
-    var folioError: FolioError {
-        switch self {
-        case .unreachable: .unreachable
-        case let .unavailable(status): .server(status: status, message: nil)
-        case let .rejected(status, message): .server(status: status, message: message)
-        case .invalidGrant: .signInRequired
-        }
-    }
+    /// The server refused the request itself (unknown client, unsupported grant). Retrying cannot succeed.
+    case refused(String)
+    /// Says nothing about the token: the server or network failed, or something other than the server answered.
+    case transient(FolioError)
 }
 
 /// Talks to the authorization server. Discovery follows RFC 8414 and RFC 9728, with no hardcoded paths
@@ -62,22 +49,28 @@ struct OAuthClient: Sendable {
         return id
     }
 
+    /// RFC 6749 errors where sending the same request again cannot succeed.
+    private static let definitiveErrors: Set<String> = [
+        "invalid_client", "unauthorized_client", "invalid_request", "unsupported_grant_type", "invalid_scope",
+    ]
+
     func tokens(for request: URLRequest, keeping previousRefresh: String? = nil) async throws -> OAuthTokens {
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
-        } catch let error as URLError where error.code != .cancelled {
-            throw OAuthFailure.unreachable
+        } catch is URLError {
+            throw OAuthFailure.transient(.unreachable)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         guard status == 200, let access = object?["access_token"] as? String else {
-            if (object?["error"] as? String) == "invalid_grant" {
-                throw OAuthFailure.invalidGrant
-            }
-            if status >= 500 || status == 408 || status == 429 { throw OAuthFailure.unavailable(status: status) }
-            throw OAuthFailure.rejected(status: status, message: object?["error_description"] as? String)
+            let code = object?["error"] as? String
+            if code == "invalid_grant" { throw OAuthFailure.invalidGrant }
+            if let code, Self.definitiveErrors.contains(code) { throw OAuthFailure.refused(code) }
+            // A 4xx or an odd 200 may come from a proxy, so it must not read as an answer from the API.
+            let transient = status >= 500 || status == 408 || status == 429
+            throw OAuthFailure.transient(transient ? .server(status: status, message: nil) : .unreadableResponse)
         }
         let expiresIn = (object?["expires_in"] as? Double) ?? 3600
         return OAuthTokens(

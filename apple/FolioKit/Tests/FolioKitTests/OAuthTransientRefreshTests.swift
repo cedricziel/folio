@@ -77,7 +77,9 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
         try await expectRecovers(oauth, store)
     }
 
-    @Test(arguments: [URLError.Code.timedOut, .networkConnectionLost, .notConnectedToInternet, .secureConnectionFailed])
+    @Test(arguments: [
+        URLError.Code.timedOut, .networkConnectionLost, .notConnectedToInternet, .secureConnectionFailed, .cancelled,
+    ])
     func aTimeoutOrDroppedConnectionKeepsTheUserSignedIn(code: URLError.Code) async throws {
         TokenEndpointURLProtocol.reset(.failure(code))
         let store = InMemoryCredentialStore(credentials())
@@ -104,6 +106,27 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
         #expect(store.load()?.isSignedIn == false)
     }
 
+    @Test(arguments: [(401, "invalid_client"), (400, "unauthorized_client"), (400, "unsupported_grant_type")])
+    func anyDefinitiveOAuthRefusalSignsTheUserOut(status: Int, error: String) async throws {
+        TokenEndpointURLProtocol.reset(.reply(status: status, body: "{\"error\":\"\(error)\"}"))
+        let store = InMemoryCredentialStore(credentials())
+        let oauth = oauth(store)
+        #expect(try await oauth.token() == nil)
+        #expect(store.load()?.isSignedIn == false)
+        #expect(store.load()?.refreshPending != true)
+    }
+
+    @Test(arguments: [
+        (404, "<html>not found</html>"), (403, ""), (405, "nope"), (410, ""), (200, "<html>portal</html>"),
+    ])
+    func aProxyAnswerOnTheTokenEndpointNeverLooksLikeAnAPIStatus(status: Int, body: String) async throws {
+        TokenEndpointURLProtocol.reset(.reply(status: status, body: body))
+        let store = InMemoryCredentialStore(credentials())
+        let oauth = oauth(store)
+        await #expect(throws: FolioError.unreadableResponse) { _ = try await oauth.token() }
+        try await expectRecovers(oauth, store)
+    }
+
     @Test func concurrentCallersShareOneTransientOutcome() async throws {
         TokenEndpointURLProtocol.reset(.reply(status: 503, body: ""))
         let store = InMemoryCredentialStore(credentials())
@@ -111,12 +134,15 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
         let outcomes = await withTaskGroup(of: Bool.self) { group in
             for _ in 0..<4 {
                 group.addTask {
-                    do { _ = try await oauth.token(); return false } catch { return error as? FolioError == .server(status: 503, message: nil) }
+                    do { _ = try await oauth.token(); return false } catch {
+                        return error as? FolioError == .server(status: 503, message: nil)
+                    }
                 }
             }
             return await group.reduce(into: []) { $0.append($1) }
         }
         #expect(outcomes.allSatisfy { $0 })
+        #expect(TokenEndpointURLProtocol.requests == 1)
         #expect(store.load()?.tokens.refreshToken == "r1")
         #expect(store.load()?.refreshPending != true)
     }
