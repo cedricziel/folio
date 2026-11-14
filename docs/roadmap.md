@@ -193,7 +193,7 @@ These run alongside the phases and make the feature work cheaper.
 ## Housekeeping
 
 - Close or archive stale OpenSpec work. `integration-access` is complete and not archived. Five specs still carry a placeholder purpose.
-- Merge the two `verify` skills in `.claude` and `.agents` into one.
+- Merge the two `verify` skills in `.claude` and `.agents` into one. Done 2026-11-14 in #476.
 - Update `docs/deployment.md`, which pins image `0.1.0`, and `docs/database.md`, which names a table the code no longer uses.
 - Stop duplicate changelog lines for a commit and its PR.
 
