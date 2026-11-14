@@ -8,11 +8,11 @@ in SQLite, so you need nothing else to start.
 
 The image is `ghcr.io/cedricziel/folio`. Pick a tag:
 
-| Tag                        | Contents                                     |
-| -------------------------- | -------------------------------------------- |
-| `edge`                     | The latest commit on `main`                  |
-| `0.1.0` and other versions | One release                                  |
-| `latest`                   | The newest release that is not a pre-release |
+| Tag                         | Contents                                     |
+| --------------------------- | -------------------------------------------- |
+| `edge`                      | The latest commit on `main`                  |
+| `0.17.0` and other versions | One release                                  |
+| `latest`                    | The newest release that is not a pre-release |
 
 The container listens on port 3000, runs as uid 10001 and keeps everything in
 `/data`: the SQLite database (`/data/folio.db`) and the documents
@@ -23,7 +23,7 @@ docker run -d --name folio \
   -p 3000:3000 \
   -v folio-data:/data \
   -e FOLIO_SERVER__PUBLIC_URL=https://folio.example.com \
-  ghcr.io/cedricziel/folio:0.1.0
+  ghcr.io/cedricziel/folio:0.17.0
 ```
 
 Set `FOLIO_SERVER__PUBLIC_URL` to the address people type into their browser.
@@ -38,7 +38,7 @@ The same setup with Docker Compose:
 ```yaml
 services:
   folio:
-    image: ghcr.io/cedricziel/folio:0.1.0
+    image: ghcr.io/cedricziel/folio:0.17.0
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -84,8 +84,8 @@ for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` and
 `folio-app`, a `config.toml` and the license.
 
 ```sh
-tar -xzf folio-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-cd folio-v0.1.0-x86_64-unknown-linux-gnu
+tar -xzf folio-v0.17.0-x86_64-unknown-linux-gnu.tar.gz
+cd folio-v0.17.0-x86_64-unknown-linux-gnu
 ./folio-app
 ```
 
