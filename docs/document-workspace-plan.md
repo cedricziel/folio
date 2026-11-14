@@ -165,7 +165,7 @@ Roll back the client or hide a capability without dropping stored review decisio
 
 Write behavior tests before implementation where practical. Extend the shared repository contract suite for SQLite and PostgreSQL; require container-backed tests in CI with `FOLIO_REQUIRE_DOCKER=1` so unavailable infrastructure cannot count as coverage. Exercise route authorization and API errors in `crates/folio-api/tests`, and update OpenAPI snapshot checks for every contract change.
 
-Use the project `.agents/skills/verify/SKILL.md` for Apple package, macOS, and File Provider checks. Add isolated UI fixtures before the first visual PR so screenshots and keyboard checks never open the user's signed-in archive. Include iOS Simulator builds for shared SwiftUI changes. Update the verify skill with the new test commands when they exist.
+Use the project `.claude/skills/verify/references/apple-checks.md` for Apple package, macOS, and File Provider checks. Add isolated UI fixtures before the first visual PR so screenshots and keyboard checks never open the user's signed-in archive. Include iOS Simulator builds for shared SwiftUI changes. Update the verify skill with the new test commands when they exist.
 
 For scale, seed an isolated library with at least 10,000 documents and 1,000 taxonomy entries, repeated dates, missing assignments, failed processing, and long names. Check bounded page sizes and thumbnail concurrency, query plans for indexes, cancellation, and memory as pages accumulate. Record timing and memory on a named fixture and machine; choose numeric budgets from that baseline rather than inventing latency promises now.
 
