@@ -2069,3 +2069,67 @@ async fn source_outcomes_require_owner_permission_even_for_editors() {
         .unwrap();
     assert_eq!(allowed.status(), StatusCode::OK);
 }
+
+fn selected_option(html: &str, vault: VaultId) -> bool {
+    html.lines()
+        .any(|line| line.contains(&format!("value=\"{vault}\"")) && line.contains("selected"))
+}
+
+#[tokio::test]
+async fn unscoped_pages_keep_the_vault_last_browsed() {
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "remember-alice").await;
+    let bob = sign_in(&h, "remember-bob").await;
+    let principal = Principal::User(alice.user.clone());
+    h.members
+        .grant(bob.vault, &principal, VaultRole::Viewer, None)
+        .await
+        .unwrap();
+
+    let browse = h
+        .app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/vaults/{}/", bob.vault),
+            &alice,
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(browse.status(), StatusCode::OK);
+    let remembered = browse
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .unwrap()
+        .to_owned();
+    assert_eq!(remembered, format!("folio_vault={}", bob.vault));
+
+    let mut settings = request("GET", "/settings/vaults", &alice, Body::empty());
+    settings.headers_mut().insert(
+        header::COOKIE,
+        format!("{}; {remembered}", alice.cookie).parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(settings).await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{:?}",
+        response.headers()
+    );
+    let html = text(response).await;
+    assert!(selected_option(&html, bob.vault));
+    assert!(!selected_option(&html, alice.vault));
+
+    h.members.revoke(bob.vault, &principal).await.unwrap();
+    let mut settings = request("GET", "/settings/vaults", &alice, Body::empty());
+    settings.headers_mut().insert(
+        header::COOKIE,
+        format!("{}; {remembered}", alice.cookie).parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(settings).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!text(response).await.contains(&bob.vault.to_string()));
+}

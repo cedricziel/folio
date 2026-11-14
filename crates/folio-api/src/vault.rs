@@ -12,7 +12,7 @@ use folio_core::models::{UserId, VaultAction, VaultId, VaultRole};
 use tower::ServiceBuilder;
 
 use crate::error::{ApiError, ApiResult};
-use crate::routes::auth::{is_exempt, AuthState};
+use crate::routes::auth::{cookie, is_exempt, with_cookies, AuthState};
 use crate::state::AppState;
 use crate::vault_context::is_scoped_path;
 pub use crate::vault_context::{filters, url, VaultContext, VaultSummary, CURRENT_VAULT};
@@ -33,6 +33,9 @@ pub struct VaultResolver {
 
 #[derive(Clone, Copy)]
 struct RequestedVault(VaultId);
+
+/// Remembers the vault a browser last browsed, so pages outside `/vaults/{id}` keep it.
+const VAULT_COOKIE: &str = "folio_vault";
 
 /// Strip the HTML vault prefix before route matching, retaining the selected ID.
 /// This keeps existing handler path extractors independent of the vault prefix.
@@ -126,6 +129,11 @@ pub async fn resolve_default_vault(
         Ok(context) => context,
         Err(error) => return error.into_response(),
     };
+    let remember = (request.method() == Method::GET)
+        .then(|| request.extensions().get::<RequestedVault>().map(|v| v.0))
+        .flatten()
+        .filter(|id| *id == context.id)
+        .filter(|id| cookie(request.headers(), VAULT_COOKIE) != Some(id.to_string()));
     request.extensions_mut().insert(DefaultVault(context.id));
     request
         .extensions_mut()
@@ -150,7 +158,15 @@ pub async fn resolve_default_vault(
                     response.headers_mut().insert(header::LOCATION, value);
                 }
             }
-            response
+            match remember {
+                Some(id) if response.status().is_success() => with_cookies(
+                    response,
+                    [format!(
+                        "{VAULT_COOKIE}={id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000"
+                    )],
+                ),
+                _ => response,
+            }
         })
         .await
 }
@@ -192,7 +208,13 @@ async fn resolve(
     if matches!((path, header), (Some(a), Some(b)) if a != b) {
         return Err(ApiError::bad_request("Conflicting vault selections"));
     }
-    let id = path.or(header).or(default).ok_or_else(|| {
+    let remembered = match (path.or(header), user) {
+        (None, Some(user)) if !request.uri().path().starts_with("/api") => {
+            remembered_vault(state, &request.headers().clone(), user).await?
+        }
+        _ => None,
+    };
+    let id = path.or(header).or(remembered).or(default).ok_or_else(|| {
         ApiError::not_found("No active vault; restore or create one in vault settings")
     })?;
     let retained_management = request
@@ -251,6 +273,21 @@ async fn resolve(
             .get::<AuthContext>()
             .map(|ctx| ctx.scopes.clone()),
     })
+}
+
+/// The vault from the browser's cookie, only while the user can still read it.
+async fn remembered_vault(
+    state: &AppState,
+    headers: &header::HeaderMap,
+    user: &UserId,
+) -> ApiResult<Option<VaultId>> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        return Ok(None);
+    }
+    let Some(id) = cookie(headers, VAULT_COOKIE).and_then(|v| v.parse::<VaultId>().ok()) else {
+        return Ok(None);
+    };
+    Ok(state.access.effective_role(user, id).await?.map(|_| id))
 }
 
 async fn action(state: &AppState, request: &mut Request, vault: VaultId) -> ApiResult<VaultAction> {
