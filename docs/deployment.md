@@ -179,5 +179,16 @@ What to back up depends on where Folio keeps its data:
 - **PostgreSQL and S3:** a database dump and the bucket.
 
 Back up the database and the documents together, so a restore does not point
-at files that are missing. Stop Folio while copying an SQLite file, or copy it
-with `sqlite3 folio.db ".backup backup.db"`.
+at files that are missing.
+
+SQLite runs in WAL mode, so the database has `folio.db-wal` and `folio.db-shm`
+next to `folio.db`. After a clean stop, the `-wal` file can still hold
+committed data. Back up in one of these ways:
+
+- Copy `folio.db`, `folio.db-wal` and `folio.db-shm` together. Copying
+  `folio.db` alone can lose recent writes.
+- Run `sqlite3 folio.db ".backup backup.db"`. This works while Folio runs.
+- Take a snapshot of the whole volume.
+
+Keep the database on a local disk. Do not put it on NFS or SMB: WAL needs
+shared memory that network file systems do not provide.
