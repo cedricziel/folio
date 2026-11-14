@@ -24,8 +24,10 @@ migrations/postgres/   001_initial.sql  002_jobs.sql  ...
 
 `001` to `004` keep their sequence numbers. New migrations use a timestamp
 prefix, `YYYYMMDDHHMMSS_name.sql`, so parallel branches do not collide on the
-next number. A schema change adds the same file name to both directories. PostgreSQL uses native types (`uuid`, `timestamptz`, `jsonb`,
-`text`); SQLite keeps text columns.
+next number. A schema change adds the same file name to both directories.
+
+PostgreSQL uses native types (`uuid`, `timestamptz`, `jsonb`, `text`); SQLite
+keeps text columns.
 
 Queries are plain `sqlx::query_as` calls with `FromRow` structs, not `query!`
 macros. Building therefore needs no database and no offline query cache for
@@ -38,12 +40,12 @@ run `CREATE EXTENSION vector` if you want pgvector ranking (see below).
 
 ### Semantic search
 
-Embeddings are always stored in `document_embeddings.embedding` (`real[]`).
+Chunk embeddings are always stored in `document_chunks.embedding` (`real[]`).
 
 - With the [pgvector](https://github.com/pgvector/pgvector) extension available,
   Folio runs `CREATE EXTENSION IF NOT EXISTS vector` at startup, adds an
-  `embedding_vec vector` column, backfills it, and ranks by cosine distance in
-  the database. Use an image such as `pgvector/pgvector:pg17`.
+  `embedding_vec vector` column to `document_chunks`, backfills it, and ranks by
+  cosine distance in the database. Use an image such as `pgvector/pgvector:pg17`.
 - Without it, Folio loads the vectors and ranks by cosine similarity in Rust,
   as the SQLite backend does. This is fine for personal-scale collections.
 
@@ -74,8 +76,10 @@ do not renew leases or check claim IDs.
 
 ## Docker Compose
 
-`docker-compose.example.yml` runs Folio next to PostgreSQL with secrets read
-from files.
+`docker-compose.example.yml` runs Folio with PostgreSQL and MinIO. The database
+password is written into `FOLIO_DATABASE__URL`, so change it there as well as
+in `secrets/db_password`. The MinIO and OpenAI secrets come from files through
+`_FILE` variables.
 
 ## Tests
 
