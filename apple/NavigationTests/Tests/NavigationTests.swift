@@ -105,6 +105,53 @@ import XCTest
         }
     }
 
+    func testDocumentsOpenInInboxAndAllDocumentsWhileSwitchingBetweenThem() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
+        for (destination, title) in [
+            ("Inbox", "First fixture"), ("All documents", "Second fixture"), ("Inbox", "First fixture"),
+        ] {
+            if !app.navigationBars[destination].exists {
+                navigateBack(in: app)
+                XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+                app.buttons[destination].firstMatch.tap()
+                XCTAssertTrue(app.navigationBars[destination].waitForExistence(timeout: 5), app.debugDescription)
+            }
+            let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+            XCTAssertTrue(
+                row.waitForExistence(timeout: 5), "\(destination) must list \(title).\n\(app.debugDescription)")
+            row.tap()
+            XCTAssertTrue(
+                app.navigationBars[title].waitForExistence(timeout: 5),
+                "Opening \(title) from \(destination) must show it.\n\(app.debugDescription)")
+            navigateBack(in: app)
+        }
+    }
+
+    func testCompactSidebarShowsADocumentOpenedByHandoffWhileAllDocumentsIsCurrent() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--handoff"]
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
+        navigateBack(in: app)
+        let all = app.buttons["All documents"].firstMatch
+        XCTAssertTrue(all.waitForExistence(timeout: 5), app.debugDescription)
+        all.tap()
+        XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 5), app.debugDescription)
+        navigateBack(in: app)
+        XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Simulate handoff"].tap()
+        XCTAssertTrue(
+            app.navigationBars["First fixture"].waitForExistence(timeout: 5),
+            "A continued document must open over the sidebar.\n\(app.debugDescription)"
+        )
+    }
+
     func testOpenDocumentOffersSharing() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

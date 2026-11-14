@@ -9,6 +9,7 @@ typealias Document = FolioKit.Document
         Document(title: "First fixture", originalFilename: "first.pdf"),
         Document(title: "Second fixture", originalFilename: "second.pdf"),
     ]
+    static let firstDocumentID = documents[0].id
     let service = FixtureApp.makeService(arguments: ProcessInfo.processInfo.arguments)
 
     var body: some Scene {
@@ -19,6 +20,8 @@ typealias Document = FolioKit.Document
                 OnboardingLayoutFixture()
             } else if ProcessInfo.processInfo.arguments.contains("--share-layout") {
                 ShareLayoutFixture()
+            } else if ProcessInfo.processInfo.arguments.contains("--handoff") {
+                HandoffFixture(service: service, documentID: Self.firstDocumentID)
             } else if ProcessInfo.processInfo.arguments.contains("--saved-views") {
                 SavedViewsFixture(service: service)
             } else {
@@ -88,6 +91,33 @@ private struct ScanReviewFixture: View {
                     onFinished: { _ in presented = false }
                 )
             }
+    }
+}
+
+/// Delivers a Handoff continuation to the first document on demand, as another device would.
+private struct HandoffFixture: View {
+    let service: any FolioService
+    let documentID: Document.ID
+    private static let server = URL(string: "https://unused.invalid")!
+    @State private var inbox = ContinuationInbox()
+    private let scene = UUID()
+
+    var body: some View {
+        WorkspaceView(
+            serverURL: Self.server, service: service, onSignOut: {}, pendingContinuation: inbox.pending,
+            takeContinuation: {
+                inbox.take(scene: scene, isLocked: false, session: .signedIn(Self.server))?.route
+            }
+        )
+        .overlay(alignment: .bottomTrailing) {
+            Button("Simulate handoff") {
+                let payload = HandoffPayload(
+                    server: Self.server, vaultID: MockFolioService.defaultVault.id, target: .document(documentID))
+                inbox.receive(.payload(payload), scene: scene)
+            }
+            .buttonStyle(.borderedProminent)
+            .padding()
+        }
     }
 }
 
