@@ -181,15 +181,16 @@ public actor OAuthSession: BearerTokenProvider {
         let baseline = updated
         do {
             updated.tokens = try await client.tokens(for: request, keeping: refreshToken)
-        } catch OAuthFailure.unreachable {
-            try persist(credentials, replacing: baseline)
-            throw FolioError.unreachable
         } catch OAuthFailure.invalidGrant {
             updated.tokens = .signedOut
             updated.refreshPending = nil
             try persist(updated, replacing: baseline)
             changed()
             return nil
+        } catch let failure as OAuthFailure {
+            // Nothing said the token is dead, so keep the credentials and let the next call refresh again.
+            try persist(credentials, replacing: baseline)
+            throw failure.folioError
         }
         updated.refreshPending = nil
         if case let .superseded(current) = try persist(updated, replacing: baseline) { return usableToken(current) }

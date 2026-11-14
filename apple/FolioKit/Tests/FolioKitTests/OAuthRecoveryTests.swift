@@ -185,18 +185,19 @@ private final class FailingRotationStore: CredentialStore, @unchecked Sendable {
         #expect(RecoveryURLProtocol.requests == 1)
     }
 
-    @Test func lostRefreshResponsePreservesIntentAndNeverReplaysConsumedToken() async throws {
+    @Test func lostRefreshResponseKeepsTheUserSignedInAndRefreshesAgain() async throws {
         RecoveryURLProtocol.reset(failure: .networkConnectionLost)
-        let store = InMemoryCredentialStore(credentials())
+        let original = credentials()
+        let store = InMemoryCredentialStore(original)
         let transport = session()
         defer { transport.invalidateAndCancel() }
         let first = OAuthSession(store: store, session: transport, now: { clock })
         let restarted = OAuthSession(store: store, session: transport, now: { clock })
 
         await #expect(throws: FolioError.unreachable) { try await first.token() }
-        #expect(store.load()?.refreshPending == true)
-        #expect(store.load()?.tokens.refreshToken == "r1")
-        await #expect(throws: FolioError.signInRequired) { try await restarted.token() }
+        #expect(store.load() == original)
+        RecoveryURLProtocol.reset()
+        #expect(try await restarted.token() == "new")
         #expect(RecoveryURLProtocol.requests == 1)
     }
 }
