@@ -81,8 +81,11 @@ fn settings_post(headers: &[(&str, &str)]) -> Request<Body> {
 }
 
 async fn post_changes_setting(headers: &[(&str, &str)]) -> bool {
-    let h = harness().await;
-    let response = h.app.clone().oneshot(settings_post(headers)).await.unwrap();
+    changes_setting(&harness().await, settings_post(headers)).await
+}
+
+async fn changes_setting(h: &Harness, request: Request<Body>) -> bool {
+    let response = h.app.clone().oneshot(request).await.unwrap();
     let stored = h.state.settings_repo.get("mcp.enabled").await.unwrap();
     let changed = stored.is_some_and(|s| s.value == "true");
     if !changed {
@@ -106,4 +109,67 @@ async fn same_origin_and_header_less_posts_still_work_when_auth_is_off() {
     assert!(post_changes_setting(&[("sec-fetch-site", "same-origin")]).await);
     assert!(post_changes_setting(&[(header::ORIGIN.as_str(), "http://192.168.1.5:3000")]).await);
     assert!(post_changes_setting(&[]).await);
+}
+
+#[tokio::test]
+async fn opaque_and_same_site_posts_are_rejected_when_auth_is_off() {
+    assert!(!post_changes_setting(&[(header::ORIGIN.as_str(), "null")]).await);
+    assert!(!post_changes_setting(&[("sec-fetch-site", "same-site")]).await);
+}
+
+#[tokio::test]
+async fn forwarded_host_proxy_posts_are_accepted_when_auth_is_off() {
+    let headers = [
+        (header::ORIGIN.as_str(), "http://folio.example"),
+        ("x-forwarded-host", "folio.example"),
+    ];
+    assert!(post_changes_setting(&headers).await);
+}
+
+async fn with_public_url() -> Harness {
+    common::harness_with(Vec::new(), |store| {
+        folio_api::AuthState::new(store, Some("http://folio.example:8443".into()))
+            .with_required(false)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn configured_public_url_origin_is_accepted_when_auth_is_off() {
+    let own = settings_post(&[(header::ORIGIN.as_str(), "http://folio.example:8443")]);
+    assert!(changes_setting(&with_public_url().await, own).await);
+    let other = settings_post(&[(header::ORIGIN.as_str(), EVIL)]);
+    assert!(!changes_setting(&with_public_url().await, other).await);
+}
+
+fn upload(headers: &[(&str, &str)], uri: &str) -> Request<Body> {
+    let mut request = common::multipart(&[("title", None, "Doc"), ("file", Some("a.png"), "x")]);
+    *request.uri_mut() = uri.parse().unwrap();
+    for (name, value) in headers {
+        request.headers_mut().insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    request
+}
+
+#[tokio::test]
+async fn http2_post_without_host_header_survives_the_vault_path_rewrite() {
+    let h = harness().await;
+    let uri = format!(
+        "http://192.168.1.5:3000/vaults/{}/documents/upload",
+        h.vault
+    );
+    let request = upload(&[("origin", "http://192.168.1.5:3000")], &uri);
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn cross_site_multipart_upload_is_rejected_when_auth_is_off() {
+    let h = harness().await;
+    let request = upload(&[("sec-fetch-site", "cross-site")], "/documents/upload");
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
