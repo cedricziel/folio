@@ -54,7 +54,10 @@ document again.
 
 Other settings: `processing.auto_ocr`, `processing.auto_embed`,
 `ai.openai_api_key`, `ai.anthropic_api_key` (empty values fall back to
-`config.toml`). Set pipeline defaults through `config.toml` or environment variables,
+`config.toml`) and `ai.request_timeout_secs` (default 300). A provider request
+that takes longer than that fails the job with an error naming the provider;
+the job then follows the normal retry policy. Raise it for slow CPU-only
+vision models. Set pipeline defaults through `config.toml` or environment variables,
 for example `FOLIO_OCR__PROVIDER=none` and `FOLIO_PROCESSING__AUTO_EMBED=false`.
 Saved database values edited on `/settings` override startup configuration.
 

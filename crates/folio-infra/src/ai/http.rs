@@ -46,14 +46,13 @@ pub async fn ensure_success(
 /// has to catch a host that does not answer at all
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Whole request, including reading the body. Generous because slow local
-/// models can take a minute or more to read a page image or embed a batch.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-
 /// HTTP client for AI providers, bounded so a hung provider fails one job
 /// instead of stalling the serial queue worker
-pub fn client() -> reqwest::Client {
-    client_with(CONNECT_TIMEOUT, REQUEST_TIMEOUT)
+///
+/// `request_timeout` covers the whole request, body included. The caller
+/// takes it from the `ai.request_timeout_secs` setting.
+pub fn client(request_timeout: Duration) -> reqwest::Client {
+    client_with(CONNECT_TIMEOUT, request_timeout)
 }
 
 pub fn client_with(connect: Duration, request: Duration) -> reqwest::Client {
