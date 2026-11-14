@@ -1,7 +1,7 @@
 # workflow-conditions Specification
 
 ## Purpose
-TBD - created by archiving change workflow-condition-groups. Update Purpose after archive.
+Decides which documents and ingestion candidates a workflow applies to. Conditions combine the flat legacy fields with nested all, any, and none groups, capped at eight levels and 64 condition objects. Workflow authors and the HTML workflow editor rely on grouped conditions surviving create and edit unchanged.
 ## Requirements
 ### Requirement: Bounded grouped workflow conditions
 The system SHALL evaluate legacy condition fields conjunctively with nested all, any, and none groups against document, historical event, and ingestion-candidate metadata.

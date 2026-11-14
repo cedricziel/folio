@@ -1,7 +1,7 @@
 # personal-access-tokens Specification
 
 ## Purpose
-TBD - created by archiving change integration-access. Update Purpose after archive.
+Issues, lists, and revokes per-user personal access tokens for the API and the MCP server. Each token has an explicit audience, explicit scopes, and a finite expiry, and it is checked against the owner's current vault permissions. Scripts and MCP clients that cannot run an OAuth flow rely on it.
 ## Requirements
 ### Requirement: Session-owned token lifecycle
 

@@ -1,7 +1,7 @@
 # integration-shortcuts Specification
 
 ## Purpose
-TBD - created by archiving change integration-access. Update Purpose after archive.
+Gives signed-in users the navigation to the API docs and the MCP connection details, and a page at `/settings/integrations` to create and revoke their own personal access tokens. The MCP URL is shown with a copy action, and a new secret is displayed only once. Signed-in users and anyone wiring an API or MCP client rely on this page.
 ## Requirements
 ### Requirement: Integration navigation
 
