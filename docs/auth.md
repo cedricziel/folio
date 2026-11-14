@@ -18,8 +18,10 @@ must come from the same origin (`Sec-Fetch-Site`, or `Origin` on older browsers)
 ## First run
 
 While no user exists, anyone who can reach the server could claim the owner
-account, so `/setup` needs a one-time token. Folio prints the full link in its
-log at startup:
+account, so `/setup` needs a one-time token. Folio prints the full link once to
+standard error at startup, so it shows in a terminal and in `docker logs`. It is
+not written to the structured log, so it never reaches OTLP log export or a log
+aggregator:
 
 ```
 No owner account exists yet. Open this link to create it:
@@ -28,7 +30,7 @@ No owner account exists yet. Open this link to create it:
 ```
 
 Open it and create the owner account (username and a password of 12 to 1024
-characters). Without the token `/setup` only says to look in the server log.
+characters). Without the token `/setup` only says to look in the server output.
 Set `FOLIO_AUTH__SETUP_TOKEN` (or `FOLIO_AUTH__SETUP_TOKEN_FILE`) to choose the
 token yourself, for example in provisioning scripts; otherwise a new random one
 is generated on every start. The token stops mattering once a user exists, and

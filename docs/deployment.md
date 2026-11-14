@@ -57,7 +57,7 @@ set later on the `/settings` page.
 
 ## Sign in for the first time
 
-On a fresh install Folio prints a one-time setup link to its log:
+On a fresh install Folio prints a one-time setup link to standard error (not through the log pipeline, so it is not exported):
 
 ```sh
 docker logs folio
