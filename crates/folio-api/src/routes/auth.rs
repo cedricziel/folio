@@ -290,6 +290,14 @@ impl AuthState {
         }
     }
 
+    pub(crate) fn vault_cookie_name(&self) -> &'static str {
+        if self.secure() {
+            "__Host-folio_vault"
+        } else {
+            "folio_vault"
+        }
+    }
+
     pub(crate) fn csrf_cookie_name(&self) -> &'static str {
         if self.secure() {
             "__Host-folio_csrf"
@@ -1060,9 +1068,12 @@ async fn logout(
                 .await;
         }
     }
-    let clear = set_cookie(auth.session_cookie_name(), "", 0, auth.secure());
+    let clear = [
+        set_cookie(auth.session_cookie_name(), "", 0, auth.secure()),
+        set_cookie(auth.vault_cookie_name(), "", 0, auth.secure()),
+    ];
     let target = provider_logout.map_or_else(|| "/login".to_string(), |u| u.to_string());
-    with_cookies(Redirect::to(&target).into_response(), [clear])
+    with_cookies(Redirect::to(&target).into_response(), clear)
 }
 
 // ---- metadata and registration ----------------------------------------------

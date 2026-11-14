@@ -210,6 +210,22 @@ for (const viewport of [
   });
 }
 
+test("the selected vault survives a visit to Settings and a reload", async ({
+  page,
+}) => {
+  await page.goto(`/vaults/${personal.id}/`);
+  const selector = await openLibrary(page, false);
+  await selector.selectOption(household.id);
+  await expect(page.locator("body")).toHaveAttribute("data-vault-id", household.id);
+  await page.goto("/settings/vaults");
+  await expect(page.locator("#library-vault")).toHaveValue(household.id);
+  await page.reload();
+  await expect(page.locator("#library-vault")).toHaveValue(household.id);
+  await page.getByRole("link", { name: "All documents" }).click();
+  await expect(page.locator("#documents-rows")).toContainText(householdDocument.title);
+  await expect(page.locator("#documents-rows")).not.toContainText(personalDocument.title);
+});
+
 test("upload destination changes without switching the browsed vault", async ({
   page,
 }, testInfo) => {
