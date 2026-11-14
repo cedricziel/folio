@@ -25,7 +25,9 @@ mod workflow_repo;
 
 use std::str::FromStr;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::time::Duration;
+
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{ConnectOptions, Connection, SqlitePool};
 
 pub use auth_repo::SqliteAuthStore;
@@ -52,6 +54,8 @@ pub use upload_receipts::SqliteUploadReceiptRepository;
 pub use vault_repo::SqliteVaultRepository;
 pub use workflow_repo::SqliteWorkflowRepository;
 
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Create a new SQLite connection pool
 pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::from_str(database_url)?
@@ -65,15 +69,25 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
         .to_url_lossy()
         .query_pairs()
         .any(|(key, value)| key == "mode" && value == "memory");
-    let pool_options = if memory {
-        SqlitePoolOptions::new()
+    if memory {
+        return SqlitePoolOptions::new()
             .max_connections(1)
             .idle_timeout(None)
             .max_lifetime(None)
-    } else {
-        SqlitePoolOptions::new().max_connections(5)
-    };
-    pool_options.connect_with(options).await
+            .connect_with(options)
+            .await;
+    }
+    // WAL lets readers and the single writer proceed together. NORMAL is safe
+    // in WAL: a crash cannot corrupt the file, only the last commits can be
+    // lost on power failure. Writers queue for up to the busy timeout.
+    let options = options
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(BUSY_TIMEOUT);
+    SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
 }
 
 /// Run SQLite database migrations
@@ -115,3 +129,73 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::Migr
 
 mod saved_view_repo;
 pub use saved_view_repo::SqliteSavedViewRepository;
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    async fn file_pool() -> (SqlitePool, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("pool.db").display());
+        (create_pool(&url).await.unwrap(), dir)
+    }
+
+    #[tokio::test]
+    async fn file_database_uses_wal_with_busy_timeout() {
+        let (pool, _dir) = file_pool().await;
+        let mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let sync: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(mode, "wal");
+        assert_eq!(timeout, 5000);
+        assert_eq!(sync, 1, "NORMAL");
+    }
+
+    #[tokio::test]
+    async fn second_writer_waits_for_the_first() {
+        let (pool, _dir) = file_pool().await;
+        sqlx::query("CREATE TABLE t (v INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO t VALUES (1)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let other = pool.clone();
+        let waiting = tokio::spawn(async move {
+            sqlx::query("INSERT INTO t VALUES (2)")
+                .execute(&other)
+                .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(!waiting.is_finished(), "second write must wait, not fail");
+        tx.commit().await.unwrap();
+        waiting.await.unwrap().unwrap();
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM t")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
+    #[tokio::test]
+    async fn memory_database_still_works() {
+        let pool = create_pool("sqlite::memory:").await.unwrap();
+        let one: i64 = sqlx::query_scalar("SELECT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(one, 1);
+    }
+}
