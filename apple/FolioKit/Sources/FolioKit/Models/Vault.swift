@@ -1,15 +1,44 @@
 import Foundation
 
 public struct Vault: Identifiable, Codable, Equatable, Sendable {
-    public enum Role: String, Codable, Sendable {
+    /// A role this app version doesn't know decodes as `.unknown` and gets read-only access.
+    public enum Role: Codable, Equatable, Sendable {
         case viewer, contributor, editor, owner
+        case unknown(String)
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Self.known[raw] ?? .unknown(raw)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.singleValueContainer()
+            try container.encode(rawValue)
+        }
+
+        private static let known: [String: Role] = [
+            "viewer": .viewer, "contributor": .contributor, "editor": .editor, "owner": .owner,
+        ]
+
+        private var rawValue: String {
+            switch self {
+            case .viewer: "viewer"
+            case .contributor: "contributor"
+            case .editor: "editor"
+            case .owner: "owner"
+            case .unknown(let raw): raw
+            }
+        }
 
         public var title: String {
-            rawValue.capitalized
+            switch self {
+            case .unknown: "Read only"
+            default: rawValue.capitalized
+            }
         }
 
         public var canUpload: Bool {
-            self != .viewer
+            self == .contributor || canEdit
         }
 
         public var canEdit: Bool {
