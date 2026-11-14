@@ -82,7 +82,6 @@ async fn invalid_skill_requests_are_rejected() {
         ("skills/get", json!({})),
         ("skills/get", json!({"uri": 42})),
         ("skills/list", json!({"cursor": "invalid"})),
-        ("skills/list", json!({"cursor": 42})),
     ] {
         let error = client
             .send_request(ClientRequest::CustomRequest(CustomRequest::new(

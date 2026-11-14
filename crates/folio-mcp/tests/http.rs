@@ -260,14 +260,6 @@ async fn bundled_skills_do_not_grant_document_access() {
     assert_eq!(skill.contents.len(), 1);
     let documents = client.list_resources(None).await;
     assert!(documents.is_err());
-    let result = client
-        .send_request(rmcp::model::ClientRequest::CustomRequest(
-            rmcp::model::CustomRequest::new("skills/list", Some(json!({}))),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(
-        serde_json::to_value(result).unwrap()["skills"][0]["frontmatter"]["name"],
-        "folio-archive"
-    );
+    let result = client.list_skills(None).await.unwrap();
+    assert_eq!(result.skills[0].frontmatter.name, "folio-archive");
 }
