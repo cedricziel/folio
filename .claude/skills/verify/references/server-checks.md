@@ -98,7 +98,7 @@ missing UIDVALIDITY, and compatibility with existing message ledger keys.
 Deadline tests stall connection setup, commands, partial response streams, and
 logout on loopback sockets. They verify socket release, retained ledger state,
 and a successful subsequent poll without contacting a real mailbox.
-Run the repository contract above with `FOLIO_REQUIRE_DOCKER=1` to verify atomic
+Run the repository contract in [Verify document repository changes](#verify-document-repository-changes) below with `FOLIO_REQUIRE_DOCKER=1` to verify atomic
 claim replacement on both SQLite and PostgreSQL. A skipped container test does
 not verify PostgreSQL behavior.
 
