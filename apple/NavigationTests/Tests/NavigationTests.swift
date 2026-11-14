@@ -62,11 +62,10 @@ import XCTest
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
-        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        try skipUnlessSidebarCollapses(app)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
         for destination in ["All documents", "Inbox", "Inbox", "All documents", "All documents", "Inbox"] {
-            navigateBack(in: app)
-            XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+            returnToSidebar(in: app)
             let row = app.buttons[destination].firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
             row.tap()
@@ -82,7 +81,7 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["--saved-views"]
         app.launch()
-        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        try skipUnlessSidebarCollapses(app)
         let saveCurrent = app.buttons["Save current view"]
         XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
         saveCurrent.tap()
@@ -93,8 +92,7 @@ import XCTest
         app.buttons["Save"].tap()
         XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
         for destination in ["Inbox", "Saved fixture", "All documents", "Saved fixture", "Saved fixture"] {
-            navigateBack(in: app)
-            XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+            returnToSidebar(in: app)
             let row = app.buttons[destination].firstMatch
             XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
             row.tap()
@@ -109,14 +107,13 @@ import XCTest
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
-        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        try skipUnlessSidebarCollapses(app)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
         for (destination, title) in [
             ("Inbox", "First fixture"), ("All documents", "Second fixture"), ("Inbox", "First fixture"),
         ] {
             if !app.navigationBars[destination].exists {
-                navigateBack(in: app)
-                XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+                returnToSidebar(in: app)
                 app.buttons[destination].firstMatch.tap()
                 XCTAssertTrue(app.navigationBars[destination].waitForExistence(timeout: 5), app.debugDescription)
             }
@@ -136,15 +133,14 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["--handoff"]
         app.launch()
-        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        try skipUnlessSidebarCollapses(app)
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
         navigateBack(in: app)
         let all = app.buttons["All documents"].firstMatch
         XCTAssertTrue(all.waitForExistence(timeout: 5), app.debugDescription)
         all.tap()
         XCTAssertTrue(app.navigationBars["All documents"].waitForExistence(timeout: 5), app.debugDescription)
-        navigateBack(in: app)
-        XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+        returnToSidebar(in: app)
         app.buttons["Simulate handoff"].tap()
         XCTAssertTrue(
             app.navigationBars["First fixture"].waitForExistence(timeout: 5),
@@ -296,6 +292,20 @@ import XCTest
 
     /// The iOS 27.1 runtime reports the bar's back button as `Other` to type queries and gives it no identifier,
     /// so when no bar button is found this swipes back from the leading edge, like a person would.
+    /// Goes back to the sidebar, repeating once when the first tap lands during the push animation.
+    private func returnToSidebar(in app: XCUIApplication) {
+        navigateBack(in: app)
+        if !app.navigationBars["Folio"].waitForExistence(timeout: 3) { navigateBack(in: app) }
+        XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
+    }
+
+    private func skipUnlessSidebarCollapses(_ app: XCUIApplication) throws {
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        try XCTSkipUnless(
+            app.buttons["BackButton"].waitForExistence(timeout: 10),
+            "Needs a collapsed sidebar reached by a back button; iPhone Duo's window has none.")
+    }
+
     private func navigateBack(in app: XCUIApplication) {
         let back = app.navigationBars.buttons.element(boundBy: 0)
         if back.waitForExistence(timeout: 2) {
