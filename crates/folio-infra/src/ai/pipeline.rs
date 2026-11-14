@@ -54,7 +54,7 @@ impl PipelineContext {
                     anthropic_api_key: config.ai.anthropic_api_key.clone().unwrap_or_default(),
                 },
             },
-            http: reqwest::Client::new(),
+            http: super::http::client(),
             ocr_registry: ocr::builtin(),
             embedding_registry: embeddings::builtin(),
             cache: RwLock::new(None),

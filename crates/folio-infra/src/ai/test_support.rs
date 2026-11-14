@@ -44,6 +44,22 @@ impl MockServer {
         Self { addr, requests }
     }
 
+    /// Accepts connections and never answers, like a hung provider
+    pub async fn hanging() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        Self {
+            addr,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
     }
