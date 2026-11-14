@@ -311,6 +311,11 @@ async fn resolve(
             .extensions()
             .get::<AuthContext>()
             .map(|ctx| ctx.scopes.clone()),
+        page: request
+            .uri()
+            .path_and_query()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
     })
 }
 
