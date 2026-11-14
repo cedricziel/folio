@@ -90,20 +90,41 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> 
         .await
 }
 
+/// Serialize concurrent migrations on a file-backed database.
+///
+/// WAL mode cannot take SQLite's exclusive connection lock while other pooled
+/// connections are open, so an advisory `flock` on the database's directory
+/// stands in for it. SQLite never locks the directory, and the lock is released
+/// on drop.
+async fn migration_lock(
+    connection: &mut sqlx::SqliteConnection,
+) -> Result<Option<std::fs::File>, sqlx::migrate::MigrateError> {
+    let path: String =
+        sqlx::query_scalar("SELECT file FROM pragma_database_list WHERE name = 'main'")
+            .fetch_one(&mut *connection)
+            .await?;
+    if path.is_empty() {
+        return Ok(None);
+    }
+    let lock = tokio::task::spawn_blocking(move || {
+        let dir = std::path::Path::new(&path)
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let file = std::fs::File::open(dir)?;
+        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)?;
+        Ok::<_, std::io::Error>(file)
+    })
+    .await
+    .map_err(|error| sqlx::Error::Io(std::io::Error::other(error)))?
+    .map_err(sqlx::Error::Io)?;
+    Ok(Some(lock))
+}
+
 /// Run SQLite database migrations
 pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::MigrateError> {
     let mut connection = pool.acquire().await?;
-    let file_backed: bool =
-        sqlx::query_scalar("SELECT file != '' FROM pragma_database_list WHERE name = 'main'")
-            .fetch_one(&mut *connection)
-            .await?;
-    if file_backed {
-        // A connection lock permits the vault migration's explicit transactions.
-        connection.close_on_drop();
-        sqlx::raw_sql("BEGIN EXCLUSIVE; PRAGMA locking_mode = EXCLUSIVE; COMMIT;")
-            .execute(&mut *connection)
-            .await?;
-    }
+    let _lock = migration_lock(&mut connection).await?;
     sqlx::migrate!("../../migrations/sqlite")
         .run_direct(None, &mut *connection, false)
         .await?;
@@ -120,9 +141,6 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::migrate::Migr
             .execute(&mut *transaction)
             .await?;
         transaction.commit().await?;
-    }
-    if file_backed {
-        connection.close().await?;
     }
     Ok(())
 }
@@ -161,32 +179,55 @@ mod pool_tests {
     }
 
     #[tokio::test]
-    async fn second_writer_waits_for_the_first() {
+    async fn writer_commits_while_a_reader_holds_a_snapshot() {
         let (pool, _dir) = file_pool().await;
         sqlx::query("CREATE TABLE t (v INTEGER)")
             .execute(&pool)
             .await
             .unwrap();
-        let mut tx = pool.begin().await.unwrap();
+        let mut reader = pool.begin().await.unwrap();
+        let _: i64 = sqlx::query_scalar("SELECT count(*) FROM t")
+            .fetch_one(&mut *reader)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
         sqlx::query("INSERT INTO t VALUES (1)")
-            .execute(&mut *tx)
+            .execute(&pool)
             .await
             .unwrap();
-        let other = pool.clone();
-        let waiting = tokio::spawn(async move {
-            sqlx::query("INSERT INTO t VALUES (2)")
-                .execute(&other)
-                .await
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert!(!waiting.is_finished(), "second write must wait, not fail");
-        tx.commit().await.unwrap();
-        waiting.await.unwrap().unwrap();
-        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM t")
-            .fetch_one(&pool)
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM t")
+            .fetch_one(&mut *reader)
             .await
             .unwrap();
-        assert_eq!(rows, 2);
+        assert_eq!(seen, 0, "the reader keeps its snapshot");
+    }
+
+    #[tokio::test]
+    async fn migrating_an_up_to_date_database_with_another_connection_open() {
+        let (pool, dir) = file_pool().await;
+        run_migrations(&pool).await.unwrap();
+        let url = format!("sqlite:{}", dir.path().join("pool.db").display());
+        let other = create_pool(&url).await.unwrap();
+        let _held = other.acquire().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_migrations_apply_each_migration_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("pool.db").display());
+        let first = create_pool(&url).await.unwrap();
+        let second = create_pool(&url).await.unwrap();
+        let (a, b) = tokio::join!(run_migrations(&first), run_migrations(&second));
+        a.unwrap();
+        b.unwrap();
+        let applied: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+            .fetch_one(&first)
+            .await
+            .unwrap();
+        let expected = sqlx::migrate!("../../migrations/sqlite").iter().count() as i64;
+        assert_eq!(applied, expected);
     }
 
     #[tokio::test]
