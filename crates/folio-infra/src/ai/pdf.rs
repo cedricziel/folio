@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use std::time::Duration;
+
 use tokio::process::Command;
 
 use crate::ai::process;
@@ -66,6 +68,34 @@ fn tool_error(tool: &str, err: std::io::Error) -> Error {
     }
 }
 
+const BASE_LIMIT: Duration = Duration::from_secs(60);
+const PER_PAGE_LIMIT: Duration = Duration::from_secs(6);
+const PAGE_COUNT_LIMIT: Duration = Duration::from_secs(30);
+/// Assumed size when `pdfinfo` cannot tell, so a big scan is not cut short
+const UNKNOWN_PAGE_COUNT: u32 = 200;
+
+/// Time a poppler run over a whole PDF may take: 60 s plus 6 s per page
+///
+/// A slow NAS renders a page in 1 to 2 s, so this leaves a few times the
+/// expected time while still ending a stuck run.
+fn limit_for_pages(pages: u32) -> Duration {
+    BASE_LIMIT + PER_PAGE_LIMIT * pages
+}
+
+async fn limit_for(pdf: &Path) -> Duration {
+    let pages = process::output_within(Command::new("pdfinfo").arg(pdf), PAGE_COUNT_LIMIT)
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .find_map(|l| l.strip_prefix("Pages:")?.trim().parse::<u32>().ok())
+        })
+        .unwrap_or(UNKNOWN_PAGE_COUNT);
+    limit_for_pages(pages)
+}
+
 /// Extract the embedded text layer, one string per page
 ///
 /// Returns an empty vector when the PDF has no pages with text.
@@ -76,12 +106,13 @@ pub async fn text_layer(data: &[u8]) -> Result<Vec<String>> {
         .await
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
-    let output = process::output(
+    let limit = limit_for(&pdf).await;
+    let output = process::output_within(
         Command::new("pdftotext")
-            .kill_on_drop(true)
             .args(["-enc", "UTF-8"])
             .arg(&pdf)
             .arg("-"),
+        limit,
     )
     .await
     .map_err(|e| tool_error("pdftotext", e))?;
@@ -110,12 +141,13 @@ pub async fn render_pages(data: &[u8], dpi: u32, format: PageFormat) -> Result<V
         .await
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
-    let output = process::output(
+    let limit = limit_for(&pdf).await;
+    let output = process::output_within(
         Command::new("pdftoppm")
-            .kill_on_drop(true)
             .args([format.flag(), "-r", &dpi.to_string()])
             .arg(&pdf)
             .arg(dir.path().join("page")),
+        limit,
     )
     .await
     .map_err(|e| tool_error("pdftoppm", e))?;
@@ -167,6 +199,13 @@ fn page_files(dir: &Path, extension: &str) -> Result<Vec<(u32, std::path::PathBu
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn limit_grows_with_page_count() {
+        assert_eq!(limit_for_pages(1), Duration::from_secs(66));
+        // 250 pages at 1.5 s each take 375 s; the limit must leave room
+        assert!(limit_for_pages(250) > Duration::from_secs(375 * 2));
+    }
 
     pub fn tool_available(tool: &str) -> bool {
         std::process::Command::new(tool).arg("-v").output().is_ok()
