@@ -1,157 +1,4 @@
----
-name: verify
-description: Verify Folio server and Apple changes with isolated authentication, authorization, queue, database, protocol, and native regression tests.
----
-
-# Verify Apple changes
-
-From the repository root, run `make apple-project`.
-Create `verify_dir` with `mktemp -d /private/tmp/folio-verify.XXXXXX`.
-Remove that directory after verification, including on failure.
-On a host with limited disk space, run suites sequentially and remove each
-completed suite's scratch build before starting the next. Keep logs until all
-checks finish.
-
-Run the package suite for document status mapping, view models, and API adapters:
-
-```sh
-CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
-  --package-path apple/FolioKit --scratch-path "$verify_dir/package" \
-  --cache-path "$verify_dir/cache" --config-path "$verify_dir/config" \
-  --security-path "$verify_dir/security" --disable-keychain --disable-netrc
-```
-
-The API adapter tests use an ephemeral URLSession with a local protocol stub.
-`ProcessingSummaryTests` checks distinct text-extraction and search-indexing states,
-empty OCR completion, skipped work, and last-attempt failure labels. The API
-`routes` suite checks the corresponding rendered detail, and the document lifecycle
-E2E test checks both stage labels in the Processing section.
-`DocumentImportTests` covers mixed PDF and image imports, unsupported files, directories, missing files, and remote URL rejection using temporary files. File-type resolution requires access to macOS type services. For a manual drop check, use an isolated account or simulator and a throwaway server, then drop multiple PDFs and images into the document list, including when it is empty. Check the hover indicator, upload progress, and refreshed list.
-`e2e/tests/documents.spec.ts` covers dropping two files onto the web page, the hover indicator, and completion of both uploads. Run it only against the disposable instance started by the E2E setup.
-`WorkspaceTests` covers first-run Inbox selection, independent destination queries and navigation paths, and external document links opening the unfiltered library. It uses a mock service and does not read account configuration.
-`PagingTests` covers continuation deduplication, selection retention, Inbox lookahead,
-cancellation, stale queries, retry, vault consistency, and direct document lookup.
-`LiveFolioServiceTests` verifies scoped browse queries and direct document requests.
-`DocumentDetailViewModelTests` covers opening the next document from a cancelled
-navigation task, retaining a downloaded preview on reappearance, and retrying a
-failed download without restarting the app. For device confirmation, open one
-file, return to the list, open a different file, and reopen the first.
-
-Build the app and run the macOS authentication and File Provider tests:
-
-```sh
-xcrun xcodebuild test -project apple/Folio/Folio.xcodeproj -scheme Folio \
-  -destination 'platform=macOS' -derivedDataPath "$verify_dir/xcode" \
-  -clonedSourcePackagesDirPath "$verify_dir/xcode-packages" \
-  -packageCachePath "$verify_dir/xcode-cache" \
-  -skipPackagePluginValidation -skipMacroValidation \
-  -only-testing:FolioAuthTests -only-testing:FolioProviderTests CODE_SIGNING_ALLOWED=NO
-```
-
-The tests exercise authentication completion from a background queue without
-launching the app, opening a browser, or accessing credentials.
-Do not launch the app against existing App Group or keychain state.
-
-## Apple session recovery
-
-The package suite covers Keychain read, write, and delete failures through injected
-operations; it does not access the user’s Keychain. `SessionRestorationTests`
-checks temporary failures, retained server addresses, expiry, and interrupted
-refreshes. `OAuthRecoveryTests` checks concurrent sessions, failed token persistence,
-stale writes after sign-out or another sign-in, offline retry, and lost responses.
-`OAuthRefreshLockTests` uses temporary files to verify exclusion, cancellation,
-and lock release after failure.
-
-On an isolated macOS test account, check startup with unavailable credentials,
-retry after access recovers, and reauthentication after expiry. Confirm that
-activation retries restoration without returning to the server selector. Package
-tests do not establish the visual behavior of these recovery screens.
-
-## Apple App lock
-
-`FolioAuthTests/AppLockTests` uses unique temporary UserDefaults suites, fake
-authentication, and an injected clock. It covers persisted launch locking,
-setting authentication, timeout boundaries, inactive privacy state, and stale
-authentication results after backgrounding or device lock. It never invokes
-LocalAuthentication or accesses the user's app preferences.
-
-Before release, use an isolated simulator or test account to check the Privacy
-menu, Lock now, every timeout, multiple windows, and inactive snapshots with a
-preview or sheet open. Check Face ID or Touch ID and credential fallback on a
-test device. Cancel a prompt, lock the device during a prompt, and return after
-both short and long absences. macOS screen lock also uses the distributed
-`com.apple.screenIsLocked` notification, so verify it on each supported macOS
-release. These device and visual checks are not covered by the hostless tests.
-
-## Apple inbox navigation
-
-Allow three minutes per test for cold simulator launch and automation setup.
-Keep the per-element waits bounded independently.
-
-`apple/NavigationTests/project.yml` builds the production workspace, inbox, and
-detail views with a fake service. Its UI test taps a document, returns to the
-list, and opens another document. Model tests alone do not verify row taps.
-
-Generate the fixture outside the checkout with
-`xcodegen generate --spec apple/NavigationTests/project.yml --project "$verify_dir"`.
-Create a fresh iPhone simulator with an installed iOS runtime and save its ID as
-`verify_device`. Run:
-
-```sh
-xcrun xcodebuild test -project "$verify_dir/InboxNavigation.xcodeproj" -scheme Fixture \
-  -destination "platform=iOS Simulator,id=$verify_device" \
-  -derivedDataPath "$verify_dir/build" -clonedSourcePackagesDirPath "$verify_dir/packages" \
-  -packageCachePath "$verify_dir/cache" -skipPackagePluginValidation -skipMacroValidation \
-  -parallel-testing-enabled NO -test-timeouts-enabled YES \
-  -default-test-execution-time-allowance 180 -maximum-test-execution-time-allowance 180 \
-  CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES
-```
-
-Bound runner startup separately; XCTest's execution timeout does not cover it.
-On every exit, shut down and delete only `verify_device`, then remove `verify_dir`.
-An accessibility initialization failure before the test taps a row is an
-infrastructure failure, not a navigation regression or a passing check.
-
-## Apple review and recovery
-
-The package suite includes `UploadViewModelTests` for partial-batch retries,
-original-vault retention, and independent batches. `DocumentTrashHistoryTests`
-checks native Undo/Redo, failed deletion and restoration, and ordered asynchronous
-operations. `TokenGeneratorTests`, `TokenContrastTests`, and `TokenDriftTests`
-check high-contrast asset generation, foreground/background contrast, and generated
-asset drift.
-
-The isolated navigation fixture also covers scan dismissal confirmation and
-retaining the list beside a preview in a wide iPad window. Run the compact
-navigation test on an iPhone and the wide-window test on an iPad. A test-runner
-launch failure before a test starts does not verify these behaviors.
-
-For layout investigation, launch the fixture with `--onboarding-layout` or
-`--share-layout`. These modes use a short viewport, the largest Dynamic Type size,
-and mock data. Confirm that all controls are reachable before changing production
-layout. The fixture does not establish keyboard avoidance or actual share-extension
-hosting behavior; check those separately in an isolated simulator.
-
-## Apple File Provider
-
-Run `xcrun swift test --package-path apple/FolioKit --scratch-path /tmp/folio-provider-build`.
-`LiveFolioServiceTests` covers retained download contents and concurrent downloads into a supplied staging directory. Use a task-specific scratch path when another worker is testing.
-
-Generate the project with `xcodegen generate --spec apple/Folio/project.yml`. Build the extension through the app scheme:
-
-```sh
-xcrun xcodebuild build -project apple/Folio/Folio.xcodeproj -scheme Folio \
-  -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/folio-provider-xcode \
-  -clonedSourcePackagesDirPath /tmp/folio-provider-xcode-packages \
-  -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO
-```
-
-Lint changed Swift files with `xcrun swift-format lint --strict`. A package test or unsigned build does not prove system materialization. For Files or Finder checks, use a new simulator or isolated test account, a separate test domain, and a throwaway server. Verify download bytes and reopening, then remove the domain, simulator, and server. Never register a test domain in the user's signed-in environment.
-`FolioProviderTests` exercises upload completion using a fake service and temporary files. It does not register a File Provider domain or access shared credentials. `FolioCatalogTests` checks that Inbox retains documents while processing is pending.
-
-`EnumerationTests` checks folder deletions, working-set aliases after restart, classification changes, taxonomy renames, unchanged snapshots, expired anchors, and a consistent initial snapshot. It stores fingerprints under a fresh temporary directory and removes it after each test. Production retains at most 32 snapshots per domain/container cache directory.
-
-`DownloadTests` passes the fixture PDF through `fetchContents`, opens it with PDFKit, reopens it, and verifies that missing server contents produce `noSuchItem`. `ProviderErrorTests` covers supported error domains. For device-only failures, filter Console for subsystem `com.cedricziel.folio.fileprovider` and category `transfer`; reproduce one open and inspect the phase, HTTP status, and mapped error code. These diagnostics exclude filenames, credentials, and response bodies. Callback tests do not establish that a reported device failure is fixed.
+# Server regression checks
 
 ## Verify vault selection
 
@@ -170,7 +17,7 @@ Verify that vault discovery 404 remains an error, unloaded catalogs grant no
 write capabilities, and UUID-only Spotlight and unscoped provider identifiers
 are rejected. Keep current default-vault document Intent coverage separate from
 external identifier parsing.
-Run both the package suite and native provider tests above after these changes.
+Run both the package suite and native provider tests in [apple-checks.md](apple-checks.md) after these changes.
 These tests do not establish system integration in Files or Finder.
 
 ## Verify forward authentication
@@ -251,7 +98,7 @@ missing UIDVALIDITY, and compatibility with existing message ledger keys.
 Deadline tests stall connection setup, commands, partial response streams, and
 logout on loopback sockets. They verify socket release, retained ledger state,
 and a successful subsequent poll without contacting a real mailbox.
-Run the repository contract above with `FOLIO_REQUIRE_DOCKER=1` to verify atomic
+Run the repository contract in [Verify document repository changes](#verify-document-repository-changes) below with `FOLIO_REQUIRE_DOCKER=1` to verify atomic
 claim replacement on both SQLite and PostgreSQL. A skipped container test does
 not verify PostgreSQL behavior.
 
@@ -309,16 +156,16 @@ thumbnails, authentication errors, and JPEG byte/pixel limits. Native
 `FolioProviderTests/ThumbnailTests` covers independent per-item results, folder
 and invalid-identifier handling, empty batches, and cancellation that stops the
 network transfer and completes the batch once. Run the isolated package and
-macOS provider commands above; these tests do not register a provider domain.
+macOS provider commands in [apple-checks.md](apple-checks.md); these tests do not register a provider domain.
 
 `ThumbnailCacheTests` covers revision invalidation, workspace isolation, retry,
 cancellation, and eviction. `WorkspaceTests` verifies cache replacement on vault
-selection. Run them with the isolated package command above.
+selection. Run them with the isolated package command in [apple-checks.md](apple-checks.md).
 
 `apple/ThumbnailTests/project.yml` builds the production document row with a mock
 service. Generate its project outside the checkout and run the `Fixture` scheme
 on macOS and a fresh iPhone simulator, using the isolation and 180-second test
-timeouts described under Apple inbox navigation. The test captures placeholder
+timeouts described under Apple inbox navigation in [apple-checks.md](apple-checks.md). The test captures placeholder
 and preview screenshots, then opens rows with PDF/image previews, missing
 thumbnails, and authentication failures. Inspect the retained screenshots for
 preview visibility and uncropped content. It uses no account, keychain, server,
@@ -374,7 +221,7 @@ between pages. Search coverage verifies title/content matches outside the first
 unfiltered page, AND semantics for tags, and rejection of cursors after text
 changes. The shared route harness owns a temporary SQLite directory and
 removes it when dropped. Regenerate OpenAPI with `make openapi`; the Apple schema
-input is a symlink to that file, so run the isolated Swift package suite above
+input is a symlink to that file, so run the isolated Swift package suite in [apple-checks.md](apple-checks.md)
 after schema changes.
 
 When temporary build storage is constrained, run Rust and Apple verification
@@ -518,8 +365,7 @@ claim fencing, active-name reuse, restore conflicts, no-op suppression, and atom
 source/outbox rollback. Configured sources remain outside managed lifecycle storage.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test sources --test vaults` for the
 existing management page, deleted-source listing, restore controls, masked credentials,
-and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite
-above when changing source response fields. Never poll an existing folder or mailbox
+and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
 
 ## Verify classification lifecycle
@@ -529,7 +375,7 @@ for SQLite/PostgreSQL soft deletion, stable identity, retained document referenc
 name reuse, restore conflicts, actor metadata, and transactional lifecycle events.
 Run `cargo test -p folio-api --test routes --test web --test openapi` for scoped
 JSON and management routes, then regenerate OpenAPI and run the isolated Apple
-package suite above. Native tests cover scoped taxonomy requests and restore
+package suite in [apple-checks.md](apple-checks.md). Native tests cover scoped taxonomy requests and restore
 conflicts that preserve the displayed trash entry.
 
 Build `folio-app`, then run `npx playwright test classification-lifecycle.spec.ts`
@@ -549,12 +395,12 @@ Build the disposable E2E fixture and run `npx playwright test vault_lifecycle.sp
 
 ## Verify document notes and comments
 
-Run the [document entry checks](references/document-entries.md).
+Run the [document entry checks](document-entries.md).
 
 ## Verify document metadata transitions
 
 For date edits, metadata events, moves, and their API/MCP entry points, run the
-[document metadata checks](references/document-metadata.md).
+[document metadata checks](document-metadata.md).
 
 ## Verify saved-view web controls
 
@@ -600,14 +446,3 @@ and system-actor completion. The document transition suite checks distinct purge
 request/completion snapshots, repeat suppression, legacy job payloads, and both
 databases' persisted request lineage. Regenerate OpenAPI after projection changes.
 
-## Verify Apple saved views
-
-Run the isolated Swift package suite above for saved-view query mapping, ownership
-fields, unchanged-query omission on rename, unsupported versions, paging resets,
-cross-vault rejection, and late responses after switching vaults. Run the macOS
-build/authentication/provider checks for the production views.
-The navigation fixture's `testSavedViewCanBeSavedEditedAndDeleted` saves the
-current view, reopens its editor, persists a rename, and deletes it. It retains a
-saved-view screenshot for inspection. Use a fresh simulator and the bounded
-procedure above; compilation or an accessibility timeout before the first tap
-does not verify the controls.
