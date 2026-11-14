@@ -2,7 +2,7 @@ import Foundation
 
 public struct Vault: Identifiable, Codable, Equatable, Sendable {
     /// A role this app version doesn't know decodes as `.unknown` and gets read-only access.
-    public enum Role: Codable, Equatable, Sendable {
+    public enum Role: Codable, Hashable, Sendable {
         case viewer, contributor, editor, owner
         case unknown(String)
 
@@ -26,7 +26,7 @@ public struct Vault: Identifiable, Codable, Equatable, Sendable {
             case .contributor: "contributor"
             case .editor: "editor"
             case .owner: "owner"
-            case .unknown(let raw): raw
+            case let .unknown(raw): raw
             }
         }
 

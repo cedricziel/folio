@@ -1,7 +1,6 @@
+@testable import FolioKit
 import Foundation
 import Testing
-
-@testable import FolioKit
 
 @Suite("Vault role decoding")
 struct VaultRoleTests {
@@ -15,7 +14,8 @@ struct VaultRoleTests {
               {"id":"\(known)","name":"Home","role":"owner"},
               {"id":"\(novel)","name":"Archive","role":"something_new"}
             ],"default_vault_id":"\(known)"}
-            """.utf8)
+            """.utf8
+        )
     }
 
     @Test func unknownRoleDoesNotFailTheList() throws {
@@ -45,7 +45,8 @@ struct VaultRoleTests {
             ("viewer", false, false), ("contributor", true, false), ("editor", true, true), ("owner", true, true),
         ] {
             let role = try JSONDecoder().decode(Vault.Role.self, from: Data("\"\(raw)\"".utf8))
-            #expect(role.canUpload == upload && role.canEdit == edit)
+            #expect(role.canUpload == upload)
+            #expect(role.canEdit == edit)
         }
     }
 
