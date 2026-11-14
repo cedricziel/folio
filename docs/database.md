@@ -22,12 +22,12 @@ migrations/sqlite/     001_initial.sql  002_jobs.sql  ...
 migrations/postgres/   001_initial.sql  002_jobs.sql  ...
 ```
 
-`001` to `004` keep their sequence numbers. New migrations use a timestamp
+`000` to `004` keep their sequence numbers. New migrations use a timestamp
 prefix, `YYYYMMDDHHMMSS_name.sql`, so parallel branches do not collide on the
 next number. A schema change adds the same file name to both directories.
 
 PostgreSQL uses native types (`uuid`, `timestamptz`, `jsonb`, `text`); SQLite
-keeps text columns.
+keeps text columns and stores embeddings as `BLOB`.
 
 Queries are plain `sqlx::query_as` calls with `FromRow` structs, not `query!`
 macros. Building therefore needs no database and no offline query cache for
@@ -78,8 +78,10 @@ do not renew leases or check claim IDs.
 
 `docker-compose.example.yml` runs Folio with PostgreSQL and MinIO. The database
 password is written into `FOLIO_DATABASE__URL`, so change it there as well as
-in `secrets/db_password`. The MinIO and OpenAI secrets come from files through
-`_FILE` variables.
+in `secrets/db_password`. PostgreSQL reads `POSTGRES_PASSWORD_FILE` only when it
+first creates its data directory, so changing the file later does not change
+the password. The MinIO and OpenAI secrets come from files through `_FILE`
+variables.
 
 ## Tests
 
