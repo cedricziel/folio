@@ -17,9 +17,9 @@ use folio_core::Error;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CustomRequest, CustomResult, Implementation, ListResourceTemplatesResult, ListResourcesResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    Resource, ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
+    Implementation, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig,
 };
 use rmcp::schemars::{self, JsonSchema};
 use rmcp::service::RequestContext;
@@ -829,21 +829,47 @@ impl ServerHandler for FolioMcp {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
-                .enable_extensions_with(
-                    [(crate::skills::EXTENSION.to_string(), serde_json::Map::new())].into(),
-                )
+                .enable_skills()
                 .build(),
         )
         .with_server_info(Implementation::new("folio", env!("CARGO_PKG_VERSION")))
         .with_instructions(INSTRUCTIONS)
     }
 
+    /// Skill requests whose parameters do not parse as the typed requests end
+    /// up here; they are invalid params, not unknown methods.
     async fn on_custom_request(
         &self,
-        request: CustomRequest,
+        request: rmcp::model::CustomRequest,
         _ctx: RequestContext<RoleServer>,
-    ) -> Result<CustomResult, ErrorData> {
-        crate::skills::request(request)
+    ) -> Result<rmcp::model::CustomResult, ErrorData> {
+        match request.method.as_str() {
+            "skills/list" | "skills/get" => Err(ErrorData::invalid_params(
+                format!("invalid {} parameters", request.method),
+                None,
+            )),
+            _ => Err(ErrorData::new(
+                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+                request.method,
+                None,
+            )),
+        }
+    }
+
+    async fn list_skills(
+        &self,
+        request: Option<rmcp::model::PaginatedRequestParams>,
+        _ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListSkillsResult, ErrorData> {
+        crate::skills::list(request.and_then(|r| r.cursor).as_deref())
+    }
+
+    async fn get_skill(
+        &self,
+        request: rmcp::model::GetSkillRequestParams,
+        _ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::GetSkillResult, ErrorData> {
+        crate::skills::get(&request.uri)
     }
 
     async fn list_resources(

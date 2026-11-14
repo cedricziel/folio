@@ -1,10 +1,10 @@
-use rmcp::model::{CacheScope, CustomRequest, CustomResult, ReadResourceResult, ResourceContents};
+use rmcp::model::{
+    CacheScope, GetSkillResult, ListSkillsResult, ReadResourceResult, ResourceContents, Skill,
+};
 use rmcp::ErrorData;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-pub(crate) const EXTENSION: &str = "io.modelcontextprotocol/skills";
 const SKILL_URI: &str = "skill://folio-archive/SKILL.md";
 const TTL_MS: u64 = 300_000;
 const FILES: &[(&str, &str)] = &[
@@ -15,50 +15,25 @@ const FILES: &[(&str, &str)] = &[
     ),
 ];
 
-#[derive(Deserialize)]
-struct ListParams {
-    cursor: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct GetParams {
-    uri: String,
-}
-
-pub(crate) fn request(request: CustomRequest) -> Result<CustomResult, ErrorData> {
-    let params = request.params.unwrap_or_else(|| json!({}));
-    let mut result = json!({
-        "resultType": "complete", "ttlMs": TTL_MS, "cacheScope": "public"
-    });
-    match request.method.as_str() {
-        "skills/list" => {
-            let params: ListParams = serde_json::from_value(params)
-                .map_err(|_| ErrorData::invalid_params("expected skills/list parameters", None))?;
-            if params.cursor.is_some() {
-                return Err(ErrorData::invalid_params("unknown skills cursor", None));
-            }
-            result["skills"] = json!([entry()?]);
-        }
-        "skills/get" => {
-            let params: GetParams = serde_json::from_value(params)
-                .map_err(|_| ErrorData::invalid_params("expected a skill uri", None))?;
-            if params.uri != SKILL_URI {
-                return Err(ErrorData::invalid_params("unknown skill uri", None));
-            }
-            result["skill"] = entry()?;
-        }
-        _ => {
-            return Err(ErrorData::new(
-                rmcp::model::ErrorCode::METHOD_NOT_FOUND,
-                request.method,
-                None,
-            ))
-        }
+pub(crate) fn list(cursor: Option<&str>) -> Result<ListSkillsResult, ErrorData> {
+    if cursor.is_some() {
+        return Err(ErrorData::invalid_params("unknown skills cursor", None));
     }
-    Ok(CustomResult::new(result))
+    Ok(ListSkillsResult::with_all_items(vec![entry()?])
+        .with_ttl_ms(TTL_MS)
+        .with_cache_scope(CacheScope::Public))
 }
 
-fn entry() -> Result<Value, ErrorData> {
+pub(crate) fn get(uri: &str) -> Result<GetSkillResult, ErrorData> {
+    if uri != SKILL_URI {
+        return Err(ErrorData::invalid_params("unknown skill uri", None));
+    }
+    Ok(GetSkillResult::new(entry()?)
+        .with_ttl_ms(TTL_MS)
+        .with_cache_scope(CacheScope::Public))
+}
+
+fn entry() -> Result<Skill, ErrorData> {
     let frontmatter = FILES[0]
         .1
         .strip_prefix("---\n")
@@ -78,7 +53,10 @@ fn entry() -> Result<Value, ErrorData> {
             })
         })
         .collect();
-    Ok(json!({"uri": SKILL_URI, "frontmatter": frontmatter, "resources": resources}))
+    serde_json::from_value(
+        json!({"uri": SKILL_URI, "frontmatter": frontmatter, "resources": resources}),
+    )
+    .map_err(|_| ErrorData::internal_error("invalid bundled skill manifest", None))
 }
 
 pub(crate) fn read(uri: &str) -> Result<ReadResourceResult, ErrorData> {
