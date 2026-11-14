@@ -7,6 +7,8 @@ use async_trait::async_trait;
 use image::ImageFormat;
 use tokio::process::Command;
 
+use crate::ai::process;
+
 use folio_core::error::{Error, Result};
 use folio_core::ports::OcrService;
 
@@ -53,14 +55,15 @@ impl PageEngine for Tesseract {
             .await
             .map_err(|e| Error::Storage(format!("Failed to write temp image: {e}")))?;
 
-        let output = Command::new("tesseract")
-            .kill_on_drop(true)
-            .arg(&path)
-            .arg("stdout")
-            .args(["-l", &self.languages, "tsv"])
-            .output()
-            .await
-            .map_err(tool_error)?;
+        let output = process::output(
+            Command::new("tesseract")
+                .kill_on_drop(true)
+                .arg(&path)
+                .arg("stdout")
+                .args(["-l", &self.languages, "tsv"]),
+        )
+        .await
+        .map_err(tool_error)?;
 
         if !output.status.success() {
             return Err(Error::AiService(format!(
@@ -73,12 +76,13 @@ impl PageEngine for Tesseract {
     }
 
     async fn health(&self) -> Result<()> {
-        let output = Command::new("tesseract")
-            .kill_on_drop(true)
-            .arg("--list-langs")
-            .output()
-            .await
-            .map_err(tool_error)?;
+        let output = process::output(
+            Command::new("tesseract")
+                .kill_on_drop(true)
+                .arg("--list-langs"),
+        )
+        .await
+        .map_err(tool_error)?;
         if !output.status.success() {
             return Err(Error::AiService(
                 "tesseract --list-langs failed".to_string(),

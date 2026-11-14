@@ -4,6 +4,8 @@ use std::path::Path;
 
 use tokio::process::Command;
 
+use crate::ai::process;
+
 use folio_core::error::{Error, Result};
 
 /// A page needs at least this many letters or digits to count as having text
@@ -74,14 +76,15 @@ pub async fn text_layer(data: &[u8]) -> Result<Vec<String>> {
         .await
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
-    let output = Command::new("pdftotext")
-        .kill_on_drop(true)
-        .args(["-enc", "UTF-8"])
-        .arg(&pdf)
-        .arg("-")
-        .output()
-        .await
-        .map_err(|e| tool_error("pdftotext", e))?;
+    let output = process::output(
+        Command::new("pdftotext")
+            .kill_on_drop(true)
+            .args(["-enc", "UTF-8"])
+            .arg(&pdf)
+            .arg("-"),
+    )
+    .await
+    .map_err(|e| tool_error("pdftotext", e))?;
 
     if !output.status.success() {
         return Err(Error::AiService(format!(
@@ -107,14 +110,15 @@ pub async fn render_pages(data: &[u8], dpi: u32, format: PageFormat) -> Result<V
         .await
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
-    let output = Command::new("pdftoppm")
-        .kill_on_drop(true)
-        .args([format.flag(), "-r", &dpi.to_string()])
-        .arg(&pdf)
-        .arg(dir.path().join("page"))
-        .output()
-        .await
-        .map_err(|e| tool_error("pdftoppm", e))?;
+    let output = process::output(
+        Command::new("pdftoppm")
+            .kill_on_drop(true)
+            .args([format.flag(), "-r", &dpi.to_string()])
+            .arg(&pdf)
+            .arg(dir.path().join("page")),
+    )
+    .await
+    .map_err(|e| tool_error("pdftoppm", e))?;
 
     if !output.status.success() {
         return Err(Error::AiService(format!(
