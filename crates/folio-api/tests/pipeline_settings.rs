@@ -95,6 +95,7 @@ async fn seed_keys(h: &common::Harness) {
             &AiSettings {
                 openai_api_key: "stored-openai-secret".into(),
                 anthropic_api_key: "stored-anthropic-secret".into(),
+                ..Default::default()
             }
             .to_settings(),
         )
