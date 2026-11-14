@@ -1,6 +1,6 @@
 ---
 name: verify
-description: Verify a Folio change in the running app by launching an ephemeral instance (own port, temp DB and storage, no user config), exercising it through the API, SSE and a browser (including a screenshot and axe tour of every screen), then tearing it down. Use after changing routes, templates, the worker, config or storage, and before claiming a feature works. For Apple share attachments, use the isolated provider regression checks below. Never touch a real or deployed Folio.
+description: Verify a Folio change in the running app by launching an ephemeral instance (own port, temp DB and storage, no user config), exercising it through the API, SSE and a browser (including a screenshot and axe tour of every screen), then tearing it down. Use after changing routes, templates, the worker, config or storage, and before claiming a feature works. For Apple share attachments, use the isolated provider regression checks below. Also indexes isolated server (cargo, Postgres, SQLite) and Apple (package, xcodebuild, File Provider) regression suites in `references/`. Never touch a real or deployed Folio.
 ---
 
 # Verify Folio end to end
