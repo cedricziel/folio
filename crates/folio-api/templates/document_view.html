@@ -7,7 +7,7 @@
 {% block content %}
 <article data-can-edit="{{ document|can_edit_document }}" class="doc-view" data-hotkey-document="{{ document.id }}" data-hotkey-title="{{ document.title }}">
     <header class="doc-head">
-        <a href="{{ "/"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Inbox</a>
+        <a href="{{ back_href }}" class="back-link"{% if back_restores %} data-back-restores{% endif %}>{{ icons::arrow_left() }} {{ back_label }}</a>
         <div class="doc-head-row">
             <div class="doc-head-text">
                 <h1 class="title">{{ document.title }}</h1>
@@ -171,4 +171,11 @@
         </aside>
     </div>
 </article>
+<script>
+document.querySelector("[data-back-restores]")?.addEventListener("click", (event) => {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button) return;
+  event.preventDefault();
+  history.back();
+});
+</script>
 {% endblock %}

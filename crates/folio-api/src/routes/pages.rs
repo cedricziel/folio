@@ -314,6 +314,30 @@ struct DocumentViewTemplate {
     show_page_nav: bool,
     page_count: u32,
     pages_without_preview: bool,
+    back_href: String,
+    back_label: &'static str,
+    back_restores: bool,
+}
+
+/// Whether the browser came from `href`, so going back can restore that page as it was
+fn referrer_is(headers: &axum::http::HeaderMap, href: &str) -> bool {
+    headers
+        .get(axum::http::header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| url::Url::parse(value).ok())
+        .is_some_and(|referrer| {
+            let mut target = referrer.path().to_owned();
+            if let Some(query) = referrer.query() {
+                target.push('?');
+                target.push_str(query);
+            }
+            target == href
+        })
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct DocumentQuery {
+    return_to: Option<String>,
 }
 
 /// Document detail (full page view)
@@ -321,7 +345,11 @@ async fn document_detail(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<DocumentQuery>,
 ) -> ApiResult<Html<String>> {
+    let back = crate::back_link::resolve(query.return_to.as_deref())
+        .unwrap_or_else(crate::back_link::inbox);
     let document = state
         .document_repo
         .find_by_id(vault, id)
@@ -384,6 +412,9 @@ async fn document_detail(
         show_page_nav: live.show_page_nav,
         page_count: live.page_count,
         pages_without_preview: live.pages_without_preview,
+        back_restores: referrer_is(&headers, &back.href),
+        back_href: back.href,
+        back_label: back.label,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
