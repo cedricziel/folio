@@ -8,11 +8,11 @@ in SQLite, so you need nothing else to start.
 
 The image is `ghcr.io/cedricziel/folio`. Pick a tag:
 
-| Tag                         | Contents                                     |
-| --------------------------- | -------------------------------------------- |
-| `edge`                      | The latest commit on `main`                  |
-| `0.17.0` and other versions | One release                                  |
-| `latest`                    | The newest release that is not a pre-release |
+| Tag                         | Contents                                                         |
+| --------------------------- | ---------------------------------------------------------------- |
+| `edge`                      | The latest commit on `main`                                      |
+| `0.17.0` and other versions | One release                                                      |
+| `latest`                    | The newest release without a pre-release suffix such as `-alpha` |
 
 The container listens on port 3000, runs as uid 10001 and keeps everything in
 `/data`: the SQLite database (`/data/folio.db`) and the documents
