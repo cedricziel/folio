@@ -448,11 +448,10 @@ async fn main() -> Result<()> {
         auth = auth.with_oidc(provider);
     }
     if config.auth.required && auth_store.count_users().await.unwrap_or(1) == 0 {
-        let base = config.server.base_url();
-        tracing::warn!(
-            "\n\n  No owner account exists yet. Open this link to create it:\n\n    {}/setup?token={}\n\n  The link works until the first account is created.\n",
-            base.trim_end_matches('/'),
-            auth.setup_token()
+        announce_setup(
+            &config.server.base_url(),
+            auth.setup_token(),
+            &mut std::io::stderr(),
         );
     }
 
@@ -585,9 +584,76 @@ fn redact_url(url: &str) -> String {
     }
 }
 
+/// Prints the owner setup link to `console`, outside `tracing`, so the token
+/// never reaches OTLP export, log files or span attributes. Stderr is used
+/// because stdout carries the protocol in stdio mode.
+fn announce_setup(base_url: &str, token: &str, console: &mut impl std::io::Write) {
+    tracing::warn!(
+        "No owner account exists yet; the setup link is printed once on standard error at startup"
+    );
+    let _ = writeln!(
+        console,
+        "\n\n  No owner account exists yet. Open this link to create it:\n\n    {}/setup?token={}\n\n  The link works until the first account is created.\n",
+        base_url.trim_end_matches('/'),
+        token
+    );
+}
+
 #[cfg(test)]
 mod tests {
-    use super::redact_url;
+    use super::{announce_setup, redact_url};
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Capture {
+        type Writer = Capture;
+        fn make_writer(&'a self) -> Capture {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn setup_token_stays_out_of_tracing() {
+        let events = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(events.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        let mut console = Vec::new();
+        tracing::subscriber::with_default(subscriber, || {
+            let _span = tracing::info_span!("startup").entered();
+            announce_setup("https://folio.example.com/", "s3cr3t-token", &mut console);
+        });
+
+        let traced = String::from_utf8(events.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            !traced.contains("s3cr3t-token"),
+            "token reached tracing: {traced}"
+        );
+        assert!(
+            !traced.contains("/setup"),
+            "setup URL reached tracing: {traced}"
+        );
+        assert!(!traced.is_empty(), "setup should still be announced");
+
+        let console = String::from_utf8(console).unwrap();
+        assert!(console.contains("https://folio.example.com/setup?token=s3cr3t-token"));
+        assert!(console.contains("until the first account is created"));
+    }
 
     #[test]
     fn redacts_credentials() {
