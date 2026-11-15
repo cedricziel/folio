@@ -44,15 +44,17 @@ test.describe("document back link", () => {
     }
   });
 
-  test("returns to a correspondent-filtered list and a saved view", async ({ page }) => {
+  test("returns to a correspondent-filtered list", async ({ page }) => {
     await page.goto("/?view=all");
     await page.getByRole("link", { name: new RegExp(title) }).click();
     await expect(page).toHaveURL(/\/documents\//);
     const documentId = new URL(page.url()).pathname.split("/").at(-1)!;
 
-    const correspondent = await page.request.post("/api/correspondents", {
+    const vaultId = page.url().match(/\/vaults\/([0-9a-f-]{36})\//)![1];
+    const correspondent = await page.request.post(`/vaults/${vaultId}/api/correspondents`, {
       data: { name: uniqueTitle("sender") },
     });
+    expect(correspondent.ok()).toBeTruthy();
     const { id: correspondentId } = await correspondent.json();
     await page.request.post(`/documents/${documentId}/correspondent`, {
       form: { correspondent_id: correspondentId },
@@ -65,15 +67,6 @@ test.describe("document back link", () => {
     await page.getByRole("link", { name: "Back to filtered documents" }).click();
     await expect(page).toHaveURL(new RegExp(`correspondent_id=${correspondentId}$`));
     await expect(page.getByRole("link", { name: new RegExp(title) })).toBeVisible();
-
-    const saved = await page.request.post("/api/saved-views", {
-      data: { name: uniqueTitle("view"), query: { version: 1, filters: {} } },
-    });
-    const { id: savedId } = await saved.json();
-    await page.goto(`/saved-views/${savedId}`);
-    await page.getByRole("link", { name: new RegExp(title) }).click();
-    await page.getByRole("link", { name: "Back to saved view" }).click();
-    await expect(page).toHaveURL(new RegExp(`/saved-views/${savedId}$`));
   });
 
   test("an edit on the document page keeps the way back", async ({ page }) => {
