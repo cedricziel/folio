@@ -56,7 +56,12 @@ actor MockFolioService: FolioService {
         return values
     }
 
+    private var savedViewDelay: Duration?
+
+    func delaySavedViewResponses(by delay: Duration) { savedViewDelay = delay }
+
     func savedView(id: UUID) async throws -> SavedView {
+        if let savedViewDelay { try? await Task.sleep(for: savedViewDelay) }
         guard let view = savedViewValues.first(where: { $0.id == id }) else {
             throw FolioError.server(status: 404, message: "Saved view not found")
         }

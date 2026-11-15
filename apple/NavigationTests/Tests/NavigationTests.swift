@@ -148,6 +148,35 @@ import XCTest
         )
     }
 
+    func testALateSavedViewResponseDoesNotOverrideALaterChoice() throws {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--saved-views", "--slow-saved-view"]
+        app.launch()
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
+        let saveCurrent = app.buttons["Save current view"]
+        XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
+        saveCurrent.tap()
+        let name = app.textFields["Name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        name.tap()
+        name.typeText("Saved fixture")
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.navigationBars["Saved fixture"].waitForExistence(timeout: 5), app.debugDescription)
+        returnToSidebar(in: app)
+        app.buttons["Inbox"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
+        returnToSidebar(in: app)
+        app.buttons["Saved fixture"].firstMatch.tap()
+        returnToSidebar(in: app)
+        app.buttons["Inbox"].firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(
+            app.navigationBars["Saved fixture"].waitForExistence(timeout: 14),
+            "The slow saved view must not replace the screen chosen after it.\n\(app.debugDescription)")
+        XCTAssertTrue(app.navigationBars["Inbox"].exists, app.debugDescription)
+    }
+
     func testOpenDocumentOffersSharing() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
@@ -290,8 +319,6 @@ import XCTest
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
     }
 
-    /// The iOS 27.1 runtime reports the bar's back button as `Other` to type queries and gives it no identifier,
-    /// so when no bar button is found this swipes back from the leading edge, like a person would.
     /// Goes back to the sidebar, repeating once when the first tap lands during the push animation.
     private func returnToSidebar(in app: XCUIApplication) {
         navigateBack(in: app)
@@ -299,6 +326,8 @@ import XCTest
         XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
     }
 
+    /// The iOS 27.1 runtime reports the bar's back button as `Other` to type queries and gives it no identifier,
+    /// so when no bar button is found this swipes back from the leading edge, like a person would.
     private func navigateBack(in app: XCUIApplication) {
         let back =
             app.buttons["BackButton"].exists

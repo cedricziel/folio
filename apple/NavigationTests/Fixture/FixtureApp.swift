@@ -135,6 +135,10 @@ private struct SavedViewsFixture: View {
             serverURL: URL(string: "https://unused.invalid")!, service: service, onSignOut: {}, workspace: workspace
         )
         .task {
+            if ProcessInfo.processInfo.arguments.contains("--slow-saved-view"), let mock = service as? MockFolioService
+            {
+                await mock.delaySavedViewResponses(by: .seconds(12))
+            }
             await workspace.loadVaults()
             workspace.destination = .all
         }
