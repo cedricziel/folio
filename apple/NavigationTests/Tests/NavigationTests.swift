@@ -307,7 +307,9 @@ import XCTest
     }
 
     private func navigateBack(in app: XCUIApplication) {
-        let back = app.navigationBars.buttons.element(boundBy: 0)
+        let back =
+            app.buttons["BackButton"].exists
+            ? app.buttons["BackButton"] : app.navigationBars.buttons.element(boundBy: 0)
         if back.waitForExistence(timeout: 2) {
             back.tap()
             return
