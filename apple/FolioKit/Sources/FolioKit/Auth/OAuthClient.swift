@@ -4,7 +4,7 @@ enum OAuthFailure: Error, Equatable {
     /// The server refused the refresh token or code for good (revoked, rotated away, expired).
     case invalidGrant
     /// The server refused the request itself (unknown client, unsupported grant). Retrying cannot succeed.
-    case refused(String)
+    case refused(code: String, description: String?)
     /// Says nothing about the token: the server or network failed, or something other than the server answered.
     case transient(FolioError)
 }
@@ -67,7 +67,9 @@ struct OAuthClient: Sendable {
         guard status == 200, let access = object?["access_token"] as? String else {
             let code = object?["error"] as? String
             if code == "invalid_grant" { throw OAuthFailure.invalidGrant }
-            if let code, Self.definitiveErrors.contains(code) { throw OAuthFailure.refused(code) }
+            if let code, Self.definitiveErrors.contains(code) {
+                throw OAuthFailure.refused(code: code, description: object?["error_description"] as? String)
+            }
             // A 4xx or an odd 200 may come from a proxy, so it must not read as an answer from the API.
             let transient = status >= 500 || status == 408 || status == 429
             throw OAuthFailure.transient(transient ? .server(status: status, message: nil) : .unreadableResponse)
