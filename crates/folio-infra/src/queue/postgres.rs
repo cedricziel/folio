@@ -6,7 +6,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgConnection, PgPool};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
@@ -183,7 +183,21 @@ impl PostgresJobQueue {
         Ok(id)
     }
 
+    /// Claim the next job; a row that cannot be read is marked failed and skipped
     pub async fn dequeue(&self, class: Option<JobClass>) -> Result<Option<Job>> {
+        loop {
+            let Some(row) = self.claim_next(class).await? else {
+                return Ok(None);
+            };
+            let id = row.id;
+            match Job::try_from(row) {
+                Ok(job) => return Ok(Some(job)),
+                Err(error) => self.quarantine(id, &error).await?,
+            }
+        }
+    }
+
+    async fn claim_next(&self, class: Option<JobClass>) -> Result<Option<JobRow>> {
         let now = Utc::now();
         let class_filter = class.map_or("TRUE", JobClass::condition);
 
@@ -207,8 +221,22 @@ impl PostgresJobQueue {
         .fetch_optional(&self.pool)
         .await
         .map_err(repo_err("Failed to dequeue job"))?;
+        Ok(row)
+    }
 
-        row.map(TryInto::try_into).transpose()
+    /// Take an unreadable row out of circulation, keeping it for an operator to inspect
+    async fn quarantine(&self, id: Uuid, error: &Error) -> Result<()> {
+        warn!(job_id = %id, field = "payload", "Skipping job row with an unreadable field");
+        let message = format!("Job row is damaged: its payload could not be read ({error})");
+        sqlx::query(
+            "UPDATE jobs SET status = 'failed', error = $1, updated_at = now(), completed_at = now(), claim_id = NULL, lease_expires_at = NULL WHERE id = $2",
+        )
+        .bind(message)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err("Failed to quarantine job"))?;
+        Ok(())
     }
 
     pub async fn complete(&self, job: &Job) -> Result<bool> {
