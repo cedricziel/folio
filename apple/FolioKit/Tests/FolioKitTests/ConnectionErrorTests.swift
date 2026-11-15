@@ -32,14 +32,76 @@ struct ConnectionErrorTests {
 
     @Test(arguments: [
         URLError.Code.serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot,
-        .serverCertificateNotYetValid, .secureConnectionFailed, .clientCertificateRejected,
+        .serverCertificateNotYetValid,
     ])
     func certificateProblemsNameTheHost(code: URLError.Code) {
         let mapped = FolioError(transport: error(code))
         #expect(mapped == .untrustedCertificate(host: "folio.example.com"))
         #expect(
             mapped.localizedDescription
-                == "folio.example.com doesn't have a certificate this device trusts, so Folio won't connect.")
+                == "folio.example.com doesn't have a certificate this device trusts, so Folio won't connect. "
+                + "Check the address, or ask whoever runs the server to fix its certificate.")
+    }
+
+    @Test func failedSecureConnectionPointsAtAddressAndPort() {
+        let mapped = FolioError(transport: error(.secureConnectionFailed))
+        #expect(mapped == .secureConnectionFailed(host: "folio.example.com"))
+        #expect(
+            mapped.localizedDescription
+                == "Couldn't make a secure connection to folio.example.com. Check that the address and port are "
+                + "right and the server uses HTTPS.")
+    }
+
+    @Test(arguments: [URLError.Code.clientCertificateRejected, .clientCertificateRequired])
+    func clientCertificateProblemsBlameThisDevice(code: URLError.Code) {
+        let mapped = FolioError(transport: error(code))
+        #expect(mapped == .clientCertificate(host: "folio.example.com"))
+        #expect(
+            mapped.localizedDescription
+                == "folio.example.com wants a certificate from this device, and it has none the server accepts. "
+                + "Install the certificate your administrator gave you.")
+    }
+
+    @Test(arguments: [URLError.Code.internationalRoamingOff, .callIsActive])
+    func roamingAndCallsCountAsOffline(code: URLError.Code) {
+        #expect(FolioError(transport: error(code)) == .offline)
+    }
+
+    @Test(arguments: [URLError.Code.badURL, .unsupportedURL])
+    func badAddressesAreInvalidServerURLs(code: URLError.Code) {
+        #expect(FolioError(transport: error(code)) == .invalidServerURL)
+    }
+
+    @Test(arguments: [URLError.Code.badServerResponse, .cannotParseResponse])
+    func garbledAnswersAreUnreadable(code: URLError.Code) {
+        #expect(FolioError(transport: error(code)) == .unreadableResponse)
+    }
+
+    @Test(arguments: [URLError.Code.httpTooManyRedirects, .redirectToNonExistentLocation])
+    func redirectProblemsHaveTheirOwnMessage(code: URLError.Code) {
+        let mapped = FolioError(transport: error(code))
+        #expect(mapped == .redirectLoop(host: "folio.example.com"))
+        #expect(
+            mapped.localizedDescription
+                == "folio.example.com keeps redirecting somewhere that doesn't work. Check the address.")
+    }
+
+    @Test func proxySignInHasItsOwnMessage() {
+        let mapped = FolioError(transport: error(.userAuthenticationRequired))
+        #expect(mapped == .networkSignInRequired)
+        #expect(mapped.localizedDescription == "This network asks you to sign in first. Sign in there, then try again.")
+    }
+
+    @Test func nonDefaultPortsAreShown() {
+        let url = URL(string: "https://nas.local:8443/api?token=secret")!
+        let withPort = URLError(.cannotConnectToHost, userInfo: [NSURLErrorFailingURLErrorKey: url])
+        #expect(FolioError(transport: withPort) == .hostUnreachable(host: "nas.local:8443"))
+        let standard = URLError(
+            .cannotConnectToHost, userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "https://nas.local:443/")!])
+        #expect(FolioError(transport: standard) == .hostUnreachable(host: "nas.local"))
+        let http = URLError(
+            .cannotConnectToHost, userInfo: [NSURLErrorFailingURLErrorKey: URL(string: "http://nas.local:80/")!])
+        #expect(FolioError(transport: http) == .hostUnreachable(host: "nas.local"))
     }
 
     @Test func blockedHTTPAddressSaysUseHTTPS() {
@@ -59,7 +121,8 @@ struct ConnectionErrorTests {
     }
 
     @Test func otherURLErrorsStayGenericallyUnreachable() {
-        #expect(FolioError(transport: error(.badServerResponse)) == .unreachable)
+        #expect(FolioError(transport: error(.dnsLookupFailed)) != .unreachable)
+        #expect(FolioError(transport: error(.cannotCreateFile)) == .unreachable)
         #expect(FolioError(transport: error(.cancelled)) == .unreachable)
     }
 
@@ -82,10 +145,18 @@ struct ConnectionErrorTests {
         ]
         for error in retryable { #expect(error.isRetryable, "\(error)") }
         let permanent: [FolioError] = [
-            .untrustedCertificate(host: "h"), .insecureAddress, .signInRequired,
+            .untrustedCertificate(host: "h"), .secureConnectionFailed(host: "h"), .clientCertificate(host: "h"),
+            .redirectLoop(host: "h"), .networkSignInRequired, .insecureAddress, .unreadableResponse, .signInRequired,
             .server(status: 404, message: nil), .invalidServerURL,
         ]
         for error in permanent { #expect(!error.isRetryable, "\(error)") }
+    }
+
+    @Test func connectionFailuresArePartitionedByRetryability() {
+        #expect(FolioError.offline.isConnectionFailure)
+        #expect(FolioError.insecureAddress.isConnectionFailure)
+        #expect(!FolioError.signInRequired.isConnectionFailure)
+        #expect(!FolioError.server(status: 503, message: nil).isConnectionFailure)
     }
 
     @Test func liveServiceMapsTransportFailures() async throws {
@@ -98,12 +169,13 @@ struct ConnectionErrorTests {
     }
 }
 
-final class FailingURLProtocol: URLProtocol, @unchecked Sendable {
+private final class FailingURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var code = URLError.Code.unknown
     override class func canInit(with _: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        client?.urlProtocol(self, didFailWithError: URLError(Self.code, userInfo: [NSURLErrorFailingURLErrorKey: request.url as Any]))
+        let info = [NSURLErrorFailingURLErrorKey: request.url as Any]
+        client?.urlProtocol(self, didFailWithError: URLError(Self.code, userInfo: info))
     }
     override func stopLoading() {}
 }
