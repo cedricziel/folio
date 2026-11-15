@@ -17,6 +17,8 @@ struct WorkspaceView: View {
     @State private var activityVault: Vault?
     /// The saved view being opened, held until the model has loaded it so the row stays selected meanwhile.
     @State private var openingSavedView: SavedView.ID?
+    /// The load behind `openingSavedView`, cancelled by any later choice so a late response cannot override it.
+    @State private var savedViewOpen: Task<Void, Never>?
 
     private enum SidebarItem: Hashable {
         case destination(WorkspaceDestination)
@@ -227,19 +229,24 @@ struct WorkspaceView: View {
     }
 
     private var sidebarSelection: SidebarItem {
-        if let id = openingSavedView ?? workspace.selectedSavedViewID { return .savedView(id) }
+        if let id = openingSavedView { return .savedView(id) }
+        if let id = workspace.selectedSavedViewID, workspace.savedViews.contains(where: { $0.id == id }) {
+            return .savedView(id)
+        }
         return .destination(workspace.destination)
     }
 
     private func select(_ item: SidebarItem) {
+        savedViewOpen?.cancel()
         switch item {
         case .destination(let destination):
+            savedViewOpen = nil
             openingSavedView = nil
             navigate(to: destination)
         case .savedView(let id):
             FolioTelemetry.shared.action(.savedViewOpen)
             openingSavedView = id
-            Task {
+            savedViewOpen = Task {
                 await workspace.openSavedView(id)
                 if openingSavedView == id { openingSavedView = nil }
             }
