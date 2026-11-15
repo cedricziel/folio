@@ -151,7 +151,8 @@ public actor OAuthSession: BearerTokenProvider {
             switch try persist(pendingSave, replacing: pendingBaseline) {
             case .saved:
                 changed()
-                return pendingSave.isSignedIn ? pendingSave.tokens.accessToken : nil
+                guard pendingSave.isSignedIn else { return nil }
+                if let token = usableToken(pendingSave) { return token }
             case let .superseded(current):
                 if let token = usableToken(current) { return token }
             }

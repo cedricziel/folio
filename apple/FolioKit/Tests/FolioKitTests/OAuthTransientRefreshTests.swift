@@ -42,6 +42,24 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
     override func stopLoading() {}
 }
 
+private final class RestoreFailingStore: CredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var credentials: OAuthCredentials?
+    private var saves = 0
+
+    init(_ credentials: OAuthCredentials) { self.credentials = credentials }
+    func load() -> OAuthCredentials? { lock.withLock { credentials } }
+    func save(_ credentials: OAuthCredentials) throws {
+        try lock.withLock {
+            saves += 1
+            // The first save marks the refresh pending; the second tries to restore after the failure.
+            if saves == 2 { throw CocoaError(.fileWriteNoPermission) }
+            self.credentials = credentials
+        }
+    }
+    func clear() { lock.withLock { credentials = nil } }
+}
+
 @Suite(.serialized, .timeLimit(.minutes(1))) struct OAuthTransientRefreshTests {
     private let clock = Date(timeIntervalSince1970: 1_800_000_000)
     private let success = #"{"access_token":"new","refresh_token":"r2","expires_in":3600}"#
@@ -53,7 +71,7 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
             tokens: OAuthTokens(accessToken: "old", refreshToken: "r1", expiresAt: clock.addingTimeInterval(-1)))
     }
 
-    private func oauth(_ store: InMemoryCredentialStore) -> OAuthSession {
+    private func oauth(_ store: any CredentialStore) -> OAuthSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [TokenEndpointURLProtocol.self]
         return OAuthSession(store: store, session: URLSession(configuration: configuration), now: { clock })
@@ -125,6 +143,16 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
         let oauth = oauth(store)
         await #expect(throws: FolioError.unreadableResponse) { _ = try await oauth.token() }
         try await expectRecovers(oauth, store)
+    }
+
+    @Test func aFailedRestoreWriteStillRefreshesOnTheNextCall() async throws {
+        TokenEndpointURLProtocol.reset(.reply(status: 503, body: ""))
+        let store = RestoreFailingStore(credentials())
+        let oauth = oauth(store)
+        await #expect(throws: CocoaError.self) { _ = try await oauth.token() }
+        TokenEndpointURLProtocol.reset(.reply(status: 200, body: success))
+        #expect(try await oauth.token() == "new")
+        #expect(TokenEndpointURLProtocol.requests == 1)
     }
 
     @Test func concurrentCallersShareOneTransientOutcome() async throws {
