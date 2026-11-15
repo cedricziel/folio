@@ -57,7 +57,7 @@ set later on the `/settings` page.
 
 ## Sign in for the first time
 
-On a fresh install Folio prints a one-time setup link to its log:
+On a fresh install Folio prints a one-time setup link to standard error. It does not go through tracing or OTLP export, but anything that collects standard error (container log drivers, journald, Promtail, Fluent Bit) still sees it; set `FOLIO_AUTH__SETUP_TOKEN_FILE` if that matters:
 
 ```sh
 docker logs folio

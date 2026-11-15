@@ -458,7 +458,9 @@ async fn setup_requires_the_one_time_token() {
     for uri in ["/setup", "/setup?token=wrong", "/setup?token="] {
         let page = send(&app, Request::get(uri).body(Body::empty()).unwrap()).await;
         assert_eq!(page.status, StatusCode::FORBIDDEN, "{uri}");
-        assert!(page.body.contains("Find the setup link in the server log"));
+        assert!(page
+            .body
+            .contains("Find the setup link in the server output"));
         assert!(!page.body.contains("name=\"password\""));
     }
 
