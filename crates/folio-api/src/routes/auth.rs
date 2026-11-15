@@ -221,7 +221,7 @@ impl AuthState {
     }
 
     /// Whether the username and password form works.
-    pub(crate) fn local_login_allowed(&self) -> bool {
+    pub fn local_login_allowed(&self) -> bool {
         self.oidc.as_ref().is_none_or(|o| o.allow_local_login())
     }
 

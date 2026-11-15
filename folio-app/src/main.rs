@@ -447,7 +447,8 @@ async fn main() -> Result<()> {
         }
         auth = auth.with_oidc(provider);
     }
-    if config.auth.required && auth_store.count_users().await.unwrap_or(1) == 0 {
+    let user_count = auth_store.count_users().await.unwrap_or(1);
+    if setup_link_usable(config.auth.required, user_count, auth.local_login_allowed()) {
         announce_setup(
             &config.server.base_url(),
             auth.setup_token(),
@@ -584,6 +585,11 @@ fn redact_url(url: &str) -> String {
     }
 }
 
+/// The setup link only works while auth is on, no user exists and the password form is allowed.
+fn setup_link_usable(auth_required: bool, user_count: i64, local_login_allowed: bool) -> bool {
+    auth_required && user_count == 0 && local_login_allowed
+}
+
 /// Prints the owner setup link to `console`, outside `tracing`, so the token
 /// never reaches OTLP export, log files or span attributes. Stderr is used
 /// because stdout carries the protocol in stdio mode.
@@ -601,7 +607,7 @@ fn announce_setup(base_url: &str, token: &str, console: &mut impl std::io::Write
 
 #[cfg(test)]
 mod tests {
-    use super::{announce_setup, redact_url};
+    use super::{announce_setup, redact_url, setup_link_usable};
     use std::io::Write;
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::fmt::MakeWriter;
@@ -624,6 +630,14 @@ mod tests {
         fn make_writer(&'a self) -> Capture {
             self.clone()
         }
+    }
+
+    #[test]
+    fn no_setup_link_when_local_login_is_off() {
+        assert!(setup_link_usable(true, 0, true));
+        assert!(!setup_link_usable(true, 0, false));
+        assert!(!setup_link_usable(true, 1, true));
+        assert!(!setup_link_usable(false, 0, true));
     }
 
     #[test]
