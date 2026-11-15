@@ -717,6 +717,7 @@ async fn contract(db: &Database) {
     terminal_stage_is_untouched_by_late_failure(db).await;
     nonstage_and_prelease_jobs_still_recover(db).await;
     unreadable_payload_is_failed_and_skipped(db).await;
+    listing_skips_unreadable_rows(db).await;
 }
 
 #[tokio::test]

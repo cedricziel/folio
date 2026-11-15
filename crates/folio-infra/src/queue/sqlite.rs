@@ -7,7 +7,10 @@ use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
+use super::{
+    damaged_row_message, payload_problem, FailOutcome, Job, JobClass, JobStatus, JobType,
+    DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, MAX_UNREADABLE_PER_DEQUEUE,
+};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
 pub(crate) async fn insert_job(
@@ -84,13 +87,13 @@ type ClaimedRow = (
 /// A stored value that cannot be turned into a job field
 struct MalformedField {
     field: &'static str,
-    detail: String,
+    detail: &'static str,
 }
 
 fn parse_uuid(value: &str, field: &'static str) -> std::result::Result<Uuid, MalformedField> {
-    Uuid::parse_str(value).map_err(|e| MalformedField {
+    Uuid::parse_str(value).map_err(|_| MalformedField {
         field,
-        detail: e.to_string(),
+        detail: "not a valid id",
     })
 }
 
@@ -100,9 +103,9 @@ fn parse_timestamp(
 ) -> std::result::Result<DateTime<Utc>, MalformedField> {
     DateTime::parse_from_rfc3339(value)
         .map(Into::into)
-        .map_err(|e| MalformedField {
+        .map_err(|_| MalformedField {
             field,
-            detail: e.to_string(),
+            detail: "not a valid timestamp",
         })
 }
 
@@ -126,7 +129,7 @@ fn job_from_claimed(row: ClaimedRow) -> std::result::Result<Job, MalformedField>
     ) = row;
     let job_type: JobType = serde_json::from_str(&payload).map_err(|e| MalformedField {
         field: "payload",
-        detail: e.to_string(),
+        detail: payload_problem(&e),
     })?;
     Ok(Job {
         id: parse_uuid(&id, "id")?,
@@ -277,16 +280,19 @@ impl SqliteJobQueue {
     /// A row that cannot be read is marked failed and skipped, so one bad row never blocks the
     /// jobs behind it.
     pub async fn dequeue(&self, class: Option<JobClass>) -> Result<Option<Job>> {
-        loop {
+        for _ in 0..MAX_UNREADABLE_PER_DEQUEUE {
             let Some(row) = self.claim_next(class).await? else {
                 return Ok(None);
             };
             let id = row.0.clone();
+            let claim_id = row.11.clone();
             match job_from_claimed(row) {
                 Ok(job) => return Ok(Some(job)),
-                Err(bad) => self.quarantine(&id, &bad).await?,
+                Err(bad) => self.quarantine(&id, claim_id.as_deref(), &bad).await?,
             }
         }
+        warn!("Set aside {MAX_UNREADABLE_PER_DEQUEUE} unreadable job rows in one call, pausing");
+        Ok(None)
     }
 
     async fn claim_next(&self, class: Option<JobClass>) -> Result<Option<ClaimedRow>> {
@@ -324,20 +330,23 @@ impl SqliteJobQueue {
     }
 
     /// Take an unreadable row out of circulation, keeping it for an operator to inspect
-    async fn quarantine(&self, id: &str, bad: &MalformedField) -> Result<()> {
+    async fn quarantine(
+        &self,
+        id: &str,
+        claim_id: Option<&str>,
+        bad: &MalformedField,
+    ) -> Result<()> {
         warn!(job_id = %id, field = bad.field, "Skipping job row with an unreadable field");
-        let message = format!(
-            "Job row is damaged: its {} could not be read ({})",
-            bad.field, bad.detail
-        );
+        let message = damaged_row_message(bad.field, bad.detail);
         let now = Utc::now().to_rfc3339();
         sqlx::query(
-            "UPDATE jobs SET status = 'failed', error = ?, updated_at = ?, completed_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ?",
+            "UPDATE jobs SET status = 'failed', error = ?, updated_at = ?, completed_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND claim_id = ?",
         )
         .bind(message)
         .bind(&now)
         .bind(&now)
         .bind(id)
+        .bind(claim_id)
         .execute(&self.pool)
         .await
         .map_err(|e| Error::Repository(format!("Failed to quarantine job: {e}")))?;
@@ -573,6 +582,109 @@ mod tests {
         assert_eq!(status, "failed");
         let error = error.unwrap();
         assert!(error.contains(field), "{error}");
+        assert!(!error.contains("serde") && error.len() < 120, "{error}");
+    }
+
+    #[tokio::test]
+    async fn stored_error_never_quotes_the_payload() {
+        let (queue, pool) = queue().await;
+        let id = Uuid::new_v4().to_string();
+        insert_row(
+            &pool,
+            &id,
+            r#"{"type":"from_the_future","data":{"secret":"hunter2"}}"#,
+            EARLY,
+            EARLY,
+        )
+        .await;
+        assert!(queue.dequeue().await.unwrap().is_none());
+        let (error,): (String,) = sqlx::query_as("SELECT error FROM jobs WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            error,
+            "Job row is damaged: its payload could not be read (unknown job type)"
+        );
+    }
+
+    #[tokio::test]
+    async fn bad_updated_at_is_replaced_when_the_job_is_claimed() {
+        let (queue, pool) = queue().await;
+        let id = Uuid::new_v4().to_string();
+        insert_row(&pool, &id, &good_payload(), EARLY, EARLY).await;
+        sqlx::query("UPDATE jobs SET updated_at = 'garbage' WHERE id = ?")
+            .bind(&id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let job = queue.dequeue().await.unwrap().unwrap();
+        assert_eq!(job.id.to_string(), id);
+    }
+
+    #[tokio::test]
+    async fn one_dequeue_sets_aside_a_bounded_number_of_unreadable_rows() {
+        let (queue, pool) = queue().await;
+        for _ in 0..=MAX_UNREADABLE_PER_DEQUEUE {
+            insert_row(
+                &pool,
+                &Uuid::new_v4().to_string(),
+                "{not json",
+                EARLY,
+                EARLY,
+            )
+            .await;
+        }
+        let good = queue
+            .enqueue(JobType::extract_text(Uuid::new_v4()))
+            .await
+            .unwrap();
+        assert!(queue.dequeue().await.unwrap().is_none());
+        assert_eq!(queue.dequeue().await.unwrap().unwrap().id, good);
+    }
+
+    #[tokio::test]
+    async fn expired_claim_with_an_unreadable_id_is_failed_by_recovery() {
+        let (queue, pool) = queue().await;
+        insert_row(&pool, "not-a-uuid", &good_payload(), EARLY, EARLY).await;
+        sqlx::query("UPDATE jobs SET status = 'processing', lease_expires_at = 0")
+            .execute(&pool)
+            .await
+            .unwrap();
+        queue.reset_stuck().await.unwrap();
+        let (status, error): (String, Option<String>) =
+            sqlx::query_as("SELECT status, error FROM jobs WHERE id = 'not-a-uuid'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "failed");
+        assert!(error.unwrap().contains("id"));
+    }
+
+    #[tokio::test]
+    async fn quarantine_leaves_a_row_claimed_by_someone_else() {
+        let (queue, pool) = queue().await;
+        let id = Uuid::new_v4().to_string();
+        insert_row(&pool, &id, "{not json", EARLY, EARLY).await;
+        sqlx::query("UPDATE jobs SET status = 'processing', claim_id = 'other'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let JobQueue::Sqlite(queue) = &queue else {
+            unreachable!()
+        };
+        let bad = MalformedField {
+            field: "payload",
+            detail: "not valid JSON",
+        };
+        queue.quarantine(&id, Some("mine"), &bad).await.unwrap();
+        let (status,): (String,) = sqlx::query_as("SELECT status FROM jobs WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "processing");
     }
 
     #[tokio::test]
