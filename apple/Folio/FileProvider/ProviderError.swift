@@ -13,7 +13,7 @@ extension Error {
         switch self as? FolioError {
         case .signInRequired, .server(status: 401, message: _):
             return NSFileProviderError(.notAuthenticated)
-        case .unreachable:
+        case .unreachable, .offline, .timedOut, .hostUnreachable, .untrustedCertificate, .insecureAddress:
             return NSFileProviderError(.serverUnreachable)
         case .server(status: 404, message: _):
             return NSFileProviderError(.noSuchItem)

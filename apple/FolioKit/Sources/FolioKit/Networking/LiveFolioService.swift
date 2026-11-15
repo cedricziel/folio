@@ -722,13 +722,13 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             return try await work()
         } catch let error as FolioError {
             throw error
-        } catch is URLError {
-            throw FolioError.unreachable
+        } catch let error as URLError {
+            throw FolioError(transport: error)
         } catch let error as ClientError {
             switch error.underlyingError {
             case let folio as FolioError: throw folio
             case let credentials as CredentialStoreError: throw credentials
-            case is URLError: throw FolioError.unreachable
+            case let url as URLError: throw FolioError(transport: url)
             default: throw FolioError.unreadableResponse
             }
         }
