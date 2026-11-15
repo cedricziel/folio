@@ -12,13 +12,41 @@ pub struct Setting {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Credentials for hosted AI providers
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Default time one AI provider request may take, in seconds
+pub const DEFAULT_AI_REQUEST_TIMEOUT_SECS: u64 = 300;
+
+/// Credentials for hosted AI providers and the request time limit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AiSettings {
     /// OpenAI API key
     pub openai_api_key: String,
     /// Anthropic API key
     pub anthropic_api_key: String,
+    /// Seconds one provider request may take before the job fails
+    pub request_timeout_secs: u64,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            openai_api_key: String::new(),
+            anthropic_api_key: String::new(),
+            request_timeout_secs: DEFAULT_AI_REQUEST_TIMEOUT_SECS,
+        }
+    }
+}
+
+/// Accepted values for `ai.request_timeout_secs`
+pub const AI_REQUEST_TIMEOUT_RANGE: std::ops::RangeInclusive<u64> = 1..=3600;
+
+/// A whole number of seconds within `AI_REQUEST_TIMEOUT_RANGE`; anything else is ignored
+fn parse_timeout_secs(value: &str) -> Option<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| AI_REQUEST_TIMEOUT_RANGE.contains(secs))
 }
 
 impl AiSettings {
@@ -29,6 +57,11 @@ impl AiSettings {
             match setting.key.as_str() {
                 "ai.openai_api_key" => ai.openai_api_key = setting.value.clone(),
                 "ai.anthropic_api_key" => ai.anthropic_api_key = setting.value.clone(),
+                "ai.request_timeout_secs" => {
+                    if let Some(secs) = parse_timeout_secs(&setting.value) {
+                        ai.request_timeout_secs = secs;
+                    }
+                }
                 _ => {}
             }
         }
@@ -165,6 +198,11 @@ impl PipelineSettings {
                 "processing.auto_embed" => self.processing.auto_embed = value == "true",
                 "ai.openai_api_key" => self.ai.openai_api_key = setting.value.clone(),
                 "ai.anthropic_api_key" => self.ai.anthropic_api_key = setting.value.clone(),
+                "ai.request_timeout_secs" => {
+                    if let Some(secs) = parse_timeout_secs(&value) {
+                        self.ai.request_timeout_secs = secs;
+                    }
+                }
                 _ => {}
             }
         }
@@ -193,6 +231,26 @@ mod tests {
         assert_eq!(s.ocr.languages, "eng");
         assert_eq!(s.embeddings.provider, "none");
         assert!(s.processing.auto_ocr && s.processing.auto_embed);
+    }
+
+    #[test]
+    fn request_timeout_defaults_to_five_minutes_and_is_overridable() {
+        assert_eq!(
+            PipelineSettings::from_settings(&[]).ai.request_timeout_secs,
+            300
+        );
+        let s = PipelineSettings::from_settings(&[setting("ai.request_timeout_secs", " 600 ")]);
+        assert_eq!(s.ai.request_timeout_secs, 600);
+        for bad in ["0", "", "abc", "-5", "3601"] {
+            let s = PipelineSettings::from_settings(&[setting("ai.request_timeout_secs", bad)]);
+            assert_eq!(s.ai.request_timeout_secs, 300, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn request_timeout_accepts_the_upper_bound() {
+        let s = PipelineSettings::from_settings(&[setting("ai.request_timeout_secs", "3600")]);
+        assert_eq!(s.ai.request_timeout_secs, 3600);
     }
 
     #[test]

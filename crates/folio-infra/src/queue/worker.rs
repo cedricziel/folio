@@ -1252,6 +1252,7 @@ mod tests {
                 provider: "local".into(),
                 openai_api_key: None,
                 anthropic_api_key: None,
+                ..Default::default()
             },
         );
         let storage: Arc<dyn DocumentStore> =

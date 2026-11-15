@@ -8,6 +8,7 @@ pub(crate) mod http;
 pub mod ocr;
 pub mod pdf;
 pub mod pipeline;
+pub(crate) mod process;
 pub mod registry;
 
 #[cfg(test)]
