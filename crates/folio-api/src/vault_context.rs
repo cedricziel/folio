@@ -141,11 +141,8 @@ pub mod filters {
             .try_with(|ctx| ctx.page.clone())
             .unwrap_or_default();
         Ok(match crate::back_link::resolve(Some(&page)) {
-            Some(back) if back.label != crate::back_link::INBOX => format!(
-                "{href}?return_to={}",
-                url::form_urlencoded::byte_serialize(back.href.as_bytes()).collect::<String>()
-            ),
-            _ => href,
+            Some(back) => back.carried_by(href),
+            None => href,
         })
     }
 
