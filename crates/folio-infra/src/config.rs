@@ -983,6 +983,12 @@ impl Config {
                 self.push.transport
             ));
         }
+        if !folio_core::models::AI_REQUEST_TIMEOUT_RANGE.contains(&self.ai.request_timeout_secs) {
+            return Err(format!(
+                "ai.request_timeout_secs (FOLIO_AI__REQUEST_TIMEOUT_SECS) must be between 1 and 3600 seconds, got {}",
+                self.ai.request_timeout_secs
+            ));
+        }
         if let Some(url) = self.server.public_url.as_deref().filter(|u| !u.is_empty()) {
             url::Url::parse(url).map_err(|e| {
                 format!("server.public_url (FOLIO_SERVER__PUBLIC_URL) is not a valid URL ({e}): {url:?}")
@@ -1627,6 +1633,22 @@ vault = "{VAULT}"
         std::fs::write(&path, "[ai]\nrequest_timeout_secs = 900\n").unwrap();
         let config = Config::load_with(path.to_str().unwrap(), env(&[])).unwrap();
         assert_eq!(config.ai.request_timeout_secs, 900);
+    }
+
+    #[test]
+    fn ai_request_timeout_outside_one_to_3600_is_rejected() {
+        for bad in ["0", "3601"] {
+            let err = load(&[("FOLIO_AI__REQUEST_TIMEOUT_SECS", bad)])
+                .validate()
+                .unwrap_err();
+            assert!(err.contains("ai.request_timeout_secs"), "{err}");
+            assert!(err.contains("FOLIO_AI__REQUEST_TIMEOUT_SECS"), "{err}");
+        }
+        for good in ["1", "3600"] {
+            load(&[("FOLIO_AI__REQUEST_TIMEOUT_SECS", good)])
+                .validate()
+                .unwrap();
+        }
     }
 
     #[test]

@@ -37,9 +37,16 @@ impl Default for AiSettings {
     }
 }
 
-/// A whole number of seconds of at least one; anything else is ignored
+/// Accepted values for `ai.request_timeout_secs`
+pub const AI_REQUEST_TIMEOUT_RANGE: std::ops::RangeInclusive<u64> = 1..=3600;
+
+/// A whole number of seconds within `AI_REQUEST_TIMEOUT_RANGE`; anything else is ignored
 fn parse_timeout_secs(value: &str) -> Option<u64> {
-    value.trim().parse::<u64>().ok().filter(|secs| *secs > 0)
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|secs| AI_REQUEST_TIMEOUT_RANGE.contains(secs))
 }
 
 impl AiSettings {
@@ -234,10 +241,16 @@ mod tests {
         );
         let s = PipelineSettings::from_settings(&[setting("ai.request_timeout_secs", " 600 ")]);
         assert_eq!(s.ai.request_timeout_secs, 600);
-        for bad in ["0", "", "abc", "-5"] {
+        for bad in ["0", "", "abc", "-5", "3601"] {
             let s = PipelineSettings::from_settings(&[setting("ai.request_timeout_secs", bad)]);
             assert_eq!(s.ai.request_timeout_secs, 300, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn request_timeout_accepts_the_upper_bound() {
+        let s = PipelineSettings::from_settings(&[setting("ai.request_timeout_secs", "3600")]);
+        assert_eq!(s.ai.request_timeout_secs, 3600);
     }
 
     #[test]
