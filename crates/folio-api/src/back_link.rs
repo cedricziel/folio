@@ -78,13 +78,13 @@ pub(crate) fn resolve(target: Option<&str>) -> Option<BackLink> {
     let label = match path {
         "/" if params
             .iter()
-            .any(|&(ref key, ref value)| FILTERS.contains(&key.as_str()) && !value.is_empty()) =>
+            .any(|(key, value)| FILTERS.contains(&key.as_str()) && !value.is_empty()) =>
         {
             "Back to filtered documents"
         }
         "/" if params
             .iter()
-            .any(|&(ref key, ref value)| key == "view" && value == "all") =>
+            .any(|(key, value)| key == "view" && value == "all") =>
         {
             "Back to All documents"
         }
