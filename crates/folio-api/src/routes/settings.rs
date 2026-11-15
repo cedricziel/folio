@@ -15,10 +15,11 @@ use tracing::{error, info};
 
 use folio_core::models::{
     AiSettings, AppleAppId, EmbeddingSettings, OcrSettings, PipelineSettings,
+    AI_REQUEST_TIMEOUT_RANGE,
 };
 use folio_infra::JobType;
 
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::vault::DefaultVault;
 
@@ -53,6 +54,7 @@ async fn require_admin(State(auth): State<AuthState>, request: Request, next: Ne
 struct CredentialPresence {
     openai_configured: bool,
     anthropic_configured: bool,
+    request_timeout_secs: u64,
 }
 
 impl From<&AiSettings> for CredentialPresence {
@@ -60,6 +62,7 @@ impl From<&AiSettings> for CredentialPresence {
         Self {
             openai_configured: !settings.openai_api_key.is_empty(),
             anthropic_configured: !settings.anthropic_api_key.is_empty(),
+            request_timeout_secs: settings.request_timeout_secs,
         }
     }
 }
@@ -163,6 +166,7 @@ async fn render_settings(
 ) -> ApiResult<String> {
     let settings = state.settings_repo.list().await?;
     let mut processing = (*state.pipeline.settings().await).clone();
+    let request_timeout_secs = processing.ai.request_timeout_secs;
     processing.ai = AiSettings::default();
     let mcp_enabled = settings
         .iter()
@@ -215,7 +219,10 @@ async fn render_settings(
     let template = SettingsTemplate {
         sidebar: Sidebar::load(state, vault, Nav::Settings).await?,
         title: "Settings - Folio".to_string(),
-        credentials: CredentialPresence::from(&AiSettings::from_settings(&settings)),
+        credentials: CredentialPresence {
+            request_timeout_secs,
+            ..CredentialPresence::from(&AiSettings::from_settings(&settings))
+        },
         ocr_providers: options(state.pipeline.ocr_providers(), &processing.ocr.provider),
         embedding_providers: options(
             state.pipeline.embedding_providers(),
@@ -242,6 +249,9 @@ pub struct AiSettingsForm {
     anthropic_api_key: String,
     clear_openai_api_key: Option<String>,
     clear_anthropic_api_key: Option<String>,
+    /// Blank keeps the current value
+    #[serde(default)]
+    request_timeout_secs: String,
 }
 
 /// Settings saved template (Turbo Stream response)
@@ -257,6 +267,19 @@ async fn save_ai_settings(
     Form(form): Form<AiSettingsForm>,
 ) -> ApiResult<Response> {
     let mut updates = Vec::new();
+    let timeout = form.request_timeout_secs.trim();
+    if !timeout.is_empty() {
+        let secs = timeout
+            .parse::<u64>()
+            .ok()
+            .filter(|secs| AI_REQUEST_TIMEOUT_RANGE.contains(secs))
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "AI request timeout must be a whole number of seconds from 1 to 3600",
+                )
+            })?;
+        updates.push(("ai.request_timeout_secs".to_string(), secs.to_string()));
+    }
     for (key, value, clear) in [
         (
             "ai.openai_api_key",
@@ -282,7 +305,10 @@ async fn save_ai_settings(
 
     let settings = state.settings_repo.list().await?;
     let html = SettingsSavedTemplate {
-        credentials: CredentialPresence::from(&AiSettings::from_settings(&settings)),
+        credentials: CredentialPresence {
+            request_timeout_secs: state.pipeline.settings().await.ai.request_timeout_secs,
+            ..CredentialPresence::from(&AiSettings::from_settings(&settings))
+        },
     }
     .render()
     .unwrap_or_else(|e| format!("Error rendering settings saved: {}", e));
