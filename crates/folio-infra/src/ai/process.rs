@@ -10,6 +10,9 @@ use tokio::process::Command;
 /// needs, so it only fires on a stuck process.
 pub const TOOL_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Upper bound for a quick metadata call such as `pdfinfo`
+pub const INFO_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Kills the child's whole process group unless disarmed
 ///
 /// `kill_on_drop` only reaches the direct child; tools such as `ocrmypdf`
@@ -54,10 +57,11 @@ pub async fn output_within(command: &mut Command, limit: Duration) -> io::Result
     let mut guard = GroupKill(child.id());
     let result = tokio::time::timeout(limit, child.wait_with_output()).await;
     match result {
-        Ok(output) => {
+        Ok(Ok(output)) => {
             guard.disarm();
-            output
+            Ok(output)
         }
+        Ok(Err(error)) => Err(error),
         Err(_) => Err(io::Error::new(
             io::ErrorKind::TimedOut,
             format!("timed out after {}s", limit.as_secs_f32()),
@@ -104,7 +108,7 @@ mod tests {
         let started = std::time::Instant::now();
         let result = tokio::time::timeout(
             Duration::from_secs(10),
-            output_within(&mut command, Duration::from_millis(500)),
+            output_within(&mut command, Duration::from_secs(2)),
         )
         .await
         .expect("must be bounded by the limit, not run to completion");

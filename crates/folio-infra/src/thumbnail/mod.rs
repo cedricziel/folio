@@ -225,7 +225,8 @@ impl ThumbnailService {
 
     /// Get the number of pages in a PDF on local disk
     pub async fn get_pdf_page_count(&self, pdf: &Path) -> Result<u32> {
-        match process::output(Command::new("pdfinfo").arg(pdf)).await {
+        match process::output_within(Command::new("pdfinfo").arg(pdf), process::INFO_TIMEOUT).await
+        {
             Ok(output) if output.status.success() => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let pages = stdout

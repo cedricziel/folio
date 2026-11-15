@@ -70,7 +70,9 @@ fn tool_error(tool: &str, err: std::io::Error) -> Error {
 
 const BASE_LIMIT: Duration = Duration::from_secs(60);
 const PER_PAGE_LIMIT: Duration = Duration::from_secs(6);
-const PAGE_COUNT_LIMIT: Duration = Duration::from_secs(30);
+/// Page counts above this are treated as this many, so a hostile or corrupt
+/// PDF cannot earn an unbounded limit
+const MAX_PAGES: u32 = 2000;
 /// Assumed size when `pdfinfo` cannot tell, so a big scan is not cut short
 const UNKNOWN_PAGE_COUNT: u32 = 200;
 
@@ -79,11 +81,11 @@ const UNKNOWN_PAGE_COUNT: u32 = 200;
 /// A slow NAS renders a page in 1 to 2 s, so this leaves a few times the
 /// expected time while still ending a stuck run.
 fn limit_for_pages(pages: u32) -> Duration {
-    BASE_LIMIT + PER_PAGE_LIMIT * pages
+    BASE_LIMIT + PER_PAGE_LIMIT * pages.min(MAX_PAGES)
 }
 
 async fn limit_for(pdf: &Path) -> Duration {
-    let pages = process::output_within(Command::new("pdfinfo").arg(pdf), PAGE_COUNT_LIMIT)
+    let pages = process::output_within(Command::new("pdfinfo").arg(pdf), process::INFO_TIMEOUT)
         .await
         .ok()
         .filter(|o| o.status.success())
@@ -205,6 +207,12 @@ pub(crate) mod tests {
         assert_eq!(limit_for_pages(1), Duration::from_secs(66));
         // 250 pages at 1.5 s each take 375 s; the limit must leave room
         assert!(limit_for_pages(250) > Duration::from_secs(375 * 2));
+    }
+
+    #[test]
+    fn limit_has_a_ceiling_for_absurd_page_counts() {
+        assert!(limit_for_pages(u32::MAX) <= Duration::from_secs(60 * 60 * 6));
+        assert_eq!(limit_for_pages(MAX_PAGES + 1), limit_for_pages(MAX_PAGES));
     }
 
     pub fn tool_available(tool: &str) -> bool {
