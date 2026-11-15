@@ -19,9 +19,12 @@ must come from the same origin (`Sec-Fetch-Site`, or `Origin` on older browsers)
 
 While no user exists, anyone who can reach the server could claim the owner
 account, so `/setup` needs a one-time token. Folio prints the full link once to
-standard error at startup, so it shows in a terminal and in `docker logs`. It is
-not written to the structured log, so it never reaches OTLP log export or a log
-aggregator:
+standard error at startup, so it shows in a terminal and in `docker logs`. The
+link does not go through tracing or OTLP export, but anything that collects the
+process's standard error (container log drivers, journald, Promtail, Fluent
+Bit) still sees it. If that matters, set `FOLIO_AUTH__SETUP_TOKEN_FILE` to a
+token you provide instead. The first `GET /setup?token=...` also stays in
+browser history and reverse-proxy access logs:
 
 ```
 No owner account exists yet. Open this link to create it:
