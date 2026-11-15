@@ -15,6 +15,14 @@ scope gets `403` with `error="insufficient_scope"`. Client telemetry POSTs under
 `/api/telemetry/` require `documents:read` because they do not modify documents. Cookie-authenticated writes
 must come from the same origin (`Sec-Fetch-Site`, or `Origin` on older browsers).
 
+With `auth.required = false` Folio sends no CORS headers, so a page on another
+origin cannot read the archive from a browser. State-changing requests (anything
+but `GET`, `HEAD` and `OPTIONS`) that a browser marks as cross-site get `403`.
+Requests without an `Origin` header, such as the CLI and the native apps, are
+unaffected. Behind a reverse proxy that rewrites `Host`, set
+`server.public_url` or forward the original host in `X-Forwarded-Host`;
+otherwise same-origin form posts over plain HTTP are refused.
+
 ## First run
 
 While no user exists, anyone who can reach the server could claim the owner
