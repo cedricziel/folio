@@ -35,8 +35,6 @@ public struct ShortcutError: Error, Equatable, CustomLocalizedStringResourceConv
             self.init("Couldn't reach your Folio server. Check the connection and try again.")
         case let FolioError.server(_, message?):
             self.init(message)
-        case let FolioError.server(status, nil):
-            self.init("The server answered with status \(status).")
         case FolioError.unreadableResponse:
             self.init("Couldn't read the server's answer.")
         case FolioError.invalidServerURL:
