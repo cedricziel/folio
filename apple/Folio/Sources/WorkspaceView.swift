@@ -227,7 +227,7 @@ struct WorkspaceView: View {
     }
 
     private var sidebarSelection: SidebarItem {
-        if let id = workspace.selectedSavedViewID ?? openingSavedView { return .savedView(id) }
+        if let id = openingSavedView ?? workspace.selectedSavedViewID { return .savedView(id) }
         return .destination(workspace.destination)
     }
 

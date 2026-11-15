@@ -62,7 +62,7 @@ import XCTest
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
-        try skipUnlessSidebarCollapses(app)
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
         for destination in ["All documents", "Inbox", "Inbox", "All documents", "All documents", "Inbox"] {
             returnToSidebar(in: app)
@@ -81,7 +81,7 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["--saved-views"]
         app.launch()
-        try skipUnlessSidebarCollapses(app)
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
         let saveCurrent = app.buttons["Save current view"]
         XCTAssertTrue(saveCurrent.waitForExistence(timeout: 10), app.debugDescription)
         saveCurrent.tap()
@@ -107,7 +107,7 @@ import XCTest
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()
         app.launch()
-        try skipUnlessSidebarCollapses(app)
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
         for (destination, title) in [
             ("Inbox", "First fixture"), ("All documents", "Second fixture"), ("Inbox", "First fixture"),
@@ -133,7 +133,7 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["--handoff"]
         app.launch()
-        try skipUnlessSidebarCollapses(app)
+        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
         XCTAssertTrue(app.navigationBars["Inbox"].waitForExistence(timeout: 10), app.debugDescription)
         navigateBack(in: app)
         let all = app.buttons["All documents"].firstMatch
@@ -297,13 +297,6 @@ import XCTest
         navigateBack(in: app)
         if !app.navigationBars["Folio"].waitForExistence(timeout: 3) { navigateBack(in: app) }
         XCTAssertTrue(app.navigationBars["Folio"].waitForExistence(timeout: 5), app.debugDescription)
-    }
-
-    private func skipUnlessSidebarCollapses(_ app: XCUIApplication) throws {
-        try XCTSkipIf(app.windows.firstMatch.frame.width >= 760, "Covers compact navigation.")
-        try XCTSkipUnless(
-            app.buttons["BackButton"].waitForExistence(timeout: 10),
-            "Needs a collapsed sidebar reached by a back button; iPhone Duo's window has none.")
     }
 
     private func navigateBack(in app: XCUIApplication) {
