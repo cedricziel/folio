@@ -83,7 +83,7 @@ The theme is to stop losing the user's place, data and confidence. Nothing here 
 | B11 | Every connection failure reads "Couldn't reach the server"                                                | Apple, `LiveFolioService.swift:725`                     | code          |                       |
 | B12 | Share extension blames a missing server address for an expired session or no network                      | Apple, `ShareViewController.swift:36`                   | code          |                       |
 | B13 | Tag, correspondent and type changes use form posts outside the API spec and infer success from a redirect | Apple and `routes/documents.rs:785`                     | code          |                       |
-| B14 | An unknown vault role fails the whole vault list                                                          | Apple, `Vault.swift:4`                                  | code          |                       |
+| B14 | An unknown vault role fails the whole vault list                                                          | Apple, `Vault.swift:4`                                  | code          | Done 2026-11-15, #477 |
 | B15 | PDF fails to open in the iOS Files provider                                                               | #177                                                    | issue         |                       |
 | B16 | Document download failures                                                                                | #300                                                    | issue         |                       |
 | B17 | Live lists drift from active filters                                                                      | #125                                                    | issue         |                       |
@@ -94,7 +94,7 @@ The theme is to stop losing the user's place, data and confidence. Nothing here 
 
 | ID  | Finding                                                                                 | Where                                          | Source          | Status                |
 | --- | --------------------------------------------------------------------------------------- | ---------------------------------------------- | --------------- | --------------------- |
-| S1  | With `auth.required=false`, permissive CORS lets any website read and write the archive | `routes/mod.rs:131`, `routes/auth.rs:473`      | code, rechecked |                       |
+| S1  | With `auth.required=false`, permissive CORS lets any website read and write the archive | `routes/mod.rs:131`, `routes/auth.rs:473`      | code, rechecked | Done 2026-11-15, #481 |
 | S2  | A `documents:write` token can create workflows whose webhooks reach private addresses   | `routes/auth.rs:437`, `models/workflow.rs:489` | code            |                       |
 | S3  | Login throttling keys on the TCP peer, so a reverse proxy puts every user in one bucket | `routes/auth.rs:1100`                          | code            |                       |
 | S4  | The setup token is logged at `warn!` and reaches OTLP log export                        | `folio-app/src/main.rs:452`                    | code            |                       |
