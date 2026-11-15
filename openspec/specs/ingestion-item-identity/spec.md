@@ -1,7 +1,7 @@
 # ingestion-item-identity Specification
 
 ## Purpose
-TBD - created by archiving change ingestion-item-identity. Update Purpose after archive.
+Gives each item seen by a source adapter, such as a watched folder or a mailbox attachment, an opaque identity separate from content deduplication. The identity survives retries, restarts, and config changes, so a repeated observation does not count as a new item. Ingestion adapters rely on it, and existing sinks that do not use it receive items as before.
 ## Requirements
 ### Requirement: Stable source observations
 Ingestion adapters SHALL pass opaque item identity independently of content deduplication while preserving existing import, veto, and external cleanup behavior.

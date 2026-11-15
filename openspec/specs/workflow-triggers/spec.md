@@ -1,7 +1,7 @@
 # workflow-triggers Specification
 
 ## Purpose
-TBD - created by archiving change workflow-trigger-catalog. Update Purpose after archive.
+Registers the events a workflow can react to and states which actions each trigger allows. Workflow definitions are validated against each trigger's allowed actions, and document metadata events are dispatched from the transactional outbox. Workflow authors and the workflow engine rely on it; compatibility here never grants permission.
 ## Requirements
 ### Requirement: Explicit trigger action compatibility
 A registered trigger SHALL declare its subject, target compatibility, label, and typed condition fields. Registry validation SHALL reject unknown or duplicate trigger selections and actions incompatible with any selected trigger. Compatibility SHALL NOT grant authorization.

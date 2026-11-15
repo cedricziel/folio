@@ -1,7 +1,7 @@
 # ingestion-outcome-storage Specification
 
 ## Purpose
-TBD - created by archiving change ingestion-outcome-persistence. Update Purpose after archive.
+Stores the result of each ingestion attempt and the health of each ingestion source. Each terminal outcome commits in one transaction with its event, and source health changes emit owner-only events on transitions only. Vault owners and operators rely on it to see what was imported, skipped, duplicated, or failed, and when a source went unhealthy or recovered.
 ## Requirements
 ### Requirement: Terminal outcomes commit atomically
 The repository SHALL commit one imported, skipped, duplicate, or failed outcome per attempt with its existing-outbox event and any content-ledger transition in one transaction.

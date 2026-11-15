@@ -39,7 +39,6 @@ pub(crate) mod workflows;
 pub use events::turbo_streams_for;
 
 use axum::{extract::DefaultBodyLimit, routing::get, Router};
-use tower_http::cors::CorsLayer;
 
 pub use health::HealthChecks;
 
@@ -128,7 +127,6 @@ pub fn create_router(mut state: AppState, auth: auth::AuthState) -> Router {
         .layer(default_vault)
         .layer(enforcement)
         .layer(forward)
-        .layer(CorsLayer::permissive())
         // Allow larger file uploads (50MB)
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         // State

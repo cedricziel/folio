@@ -1,7 +1,7 @@
 # apple-server-contract Specification
 
 ## Purpose
-TBD - created by archiving change remove-apple-server-compat. Update Purpose after archive.
+Defines what the Apple apps (the app, the File Provider extension, and Spotlight links) require from the server. Clients must complete vault discovery first, and they reject unscoped folder, document, and link identifiers instead of falling back to a default vault. Apple app users rely on this so that files and links always open in the vault they belong to.
 ## Requirements
 ### Requirement: Require vault discovery
 
