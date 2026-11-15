@@ -221,7 +221,7 @@ impl AuthState {
     }
 
     /// Whether the username and password form works.
-    pub(crate) fn local_login_allowed(&self) -> bool {
+    pub fn local_login_allowed(&self) -> bool {
         self.oidc.as_ref().is_none_or(|o| o.allow_local_login())
     }
 
@@ -480,6 +480,11 @@ async fn enforce_auth_inner(auth: AuthState, mut request: Request, next: Next) -
         .await;
     }
     if !auth.required {
+        if !is_read_method(request.method())
+            && is_cross_site_write(&auth, request.headers(), request.uri())
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
         return next.run(request).await;
     }
     if is_api {
@@ -503,6 +508,36 @@ async fn enforce_auth_inner(auth: AuthState, mut request: Request, next: Next) -
         "/".into()
     };
     login_redirect(&next_path).into_response()
+}
+
+/// Whether a browser sent this request from another site. Fetch metadata decides
+/// when present. Otherwise the `Origin` must be the configured public origin or
+/// name this request's own host (`Host`, `X-Forwarded-Host` or the URI authority).
+/// Clients that send no `Origin` are not browsers; a request that carries no
+/// host at all (HTTP/2 after the vault path rewrite) cannot be compared and passes.
+fn is_cross_site_write(auth: &AuthState, headers: &HeaderMap, uri: &axum::http::Uri) -> bool {
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    if let Some(site) = text("sec-fetch-site") {
+        return !matches!(site, "same-origin" | "none");
+    }
+    let Some(origin) = text("origin") else {
+        return false;
+    };
+    let public_origin = auth
+        .public_url
+        .as_deref()
+        .and_then(|url| Url::parse(url).ok())
+        .map(|url| url.origin().ascii_serialization());
+    if public_origin.as_deref() == Some(origin) {
+        return false;
+    }
+    let authority = origin.split_once("://").map_or(origin, |(_, rest)| rest);
+    let mut hosts = [text("host"), text("x-forwarded-host")]
+        .into_iter()
+        .flatten()
+        .chain(uri.authority().map(|a| a.as_str()))
+        .peekable();
+    hosts.peek().is_some() && !hosts.any(|h| h.eq_ignore_ascii_case(authority))
 }
 
 fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response {

@@ -15,11 +15,24 @@ scope gets `403` with `error="insufficient_scope"`. Client telemetry POSTs under
 `/api/telemetry/` require `documents:read` because they do not modify documents. Cookie-authenticated writes
 must come from the same origin (`Sec-Fetch-Site`, or `Origin` on older browsers).
 
+With `auth.required = false` Folio sends no CORS headers, so a page on another
+origin cannot read the archive from a browser. State-changing requests (anything
+but `GET`, `HEAD` and `OPTIONS`) that a browser marks as cross-site get `403`.
+Requests without an `Origin` header, such as the CLI and the native apps, are
+unaffected. Behind a reverse proxy that rewrites `Host`, set
+`server.public_url` or forward the original host in `X-Forwarded-Host`;
+otherwise same-origin form posts over plain HTTP are refused.
+
 ## First run
 
 While no user exists, anyone who can reach the server could claim the owner
-account, so `/setup` needs a one-time token. Folio prints the full link in its
-log at startup:
+account, so `/setup` needs a one-time token. Folio prints the full link once to
+standard error at startup, so it shows in a terminal and in `docker logs`. The
+link does not go through tracing or OTLP export, but anything that collects the
+process's standard error (container log drivers, journald, Promtail, Fluent
+Bit) still sees it. If that matters, set `FOLIO_AUTH__SETUP_TOKEN_FILE` to a
+token you provide instead. The first `GET /setup?token=...` also stays in
+browser history and reverse-proxy access logs:
 
 ```
 No owner account exists yet. Open this link to create it:
@@ -28,7 +41,7 @@ No owner account exists yet. Open this link to create it:
 ```
 
 Open it and create the owner account (username and a password of 12 to 1024
-characters). Without the token `/setup` only says to look in the server log.
+characters). Without the token `/setup` only says to look in the server output.
 Set `FOLIO_AUTH__SETUP_TOKEN` (or `FOLIO_AUTH__SETUP_TOKEN_FILE`) to choose the
 token yourself, for example in provisioning scripts; otherwise a new random one
 is generated on every start. The token stops mattering once a user exists, and

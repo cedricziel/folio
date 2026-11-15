@@ -64,66 +64,70 @@ Proposed targets. The numbers are a starting point for discussion, not measureme
 
 ## Now: trust and triage
 
-The theme is to stop losing the user's place, data and confidence. Nothing here needs a design phase.
+The theme is to stop losing the user's place, data and confidence. Nothing here needs a design phase. The Status column records the merge date and PR for each item, and a decision not to fix is recorded there too with its date. B20, S6, P7 and P8 were added on 2026-11-14 from PR reviews.
 
 ### Bugs
 
-| ID  | Bug                                                                                                       | Where                                                   | Source        |
-| --- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------- |
-| B1  | Vault selector resets to the default vault after visiting Settings                                        | web, `base.html:2002`                                   | seen          |
-| B2  | Titles cannot be edited on the web, so uploads keep raw filenames                                         | web, `document_view.html:13`                            | seen          |
-| B3  | Back link from a document always goes to Inbox, dropping filters and search                               | web, `document_view.html:10`                            | seen          |
-| B4  | Raw UUIDs and nanosecond timestamps shown as people and times                                             | web, `vaults.html`, `entries.html`                      | seen          |
-| B5  | A `.txt` upload is accepted, then reported as "Completed with no text"                                    | web upload                                              | seen          |
-| B6  | Edits reload silently, trash has no toast or undo                                                         | web                                                     | seen          |
-| B7  | Sidebar navigation on iPhone can stop responding, likely the rest of #209                                 | Apple, `WorkspaceView.swift:35-38`                      | suspected     |
-| B8  | Lists never refresh on push, foreground or timer                                                          | Apple, `InboxView.swift`, `PushNotifications.swift:116` | code          |
-| B9  | App lock discards navigation, search, a pending upload review and an unfiled scan                         | Apple, `FolioApp.swift:311`                             | code          |
-| B10 | A 5xx during token refresh forces a full re-sign-in                                                       | Apple, `OAuthSession.swift:163`                         | code          |
-| B11 | Every connection failure reads "Couldn't reach the server"                                                | Apple, `LiveFolioService.swift:725`                     | code          |
-| B12 | Share extension blames a missing server address for an expired session or no network                      | Apple, `ShareViewController.swift:36`                   | code          |
-| B13 | Tag, correspondent and type changes use form posts outside the API spec and infer success from a redirect | Apple and `routes/documents.rs:785`                     | code          |
-| B14 | An unknown vault role fails the whole vault list                                                          | Apple, `Vault.swift:4`                                  | code          |
-| B15 | PDF fails to open in the iOS Files provider                                                               | #177                                                    | issue         |
-| B16 | Document download failures                                                                                | #300                                                    | issue         |
-| B17 | Live lists drift from active filters                                                                      | #125                                                    | issue         |
-| B18 | Live event streams outlive graceful shutdown                                                              | #151                                                    | issue         |
-| B19 | Destructive actions confirm differently by mouse and keyboard, and some have no confirmation              | web, `vaults.html`, `sources.html`                      | seen and code |
+| ID  | Bug                                                                                                                  | Where                                                   | Source        | Status                |
+| --- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------- | --------------------- |
+| B1  | Vault selector resets to the default vault after visiting Settings                                                   | web, `base.html:2002`                                   | seen          | Done 2026-11-14, #479 |
+| B2  | Titles cannot be edited on the web, so uploads keep raw filenames                                                    | web, `document_view.html:13`                            | seen          |                       |
+| B3  | Back link from a document always goes to Inbox, dropping filters and search                                          | web, `document_view.html:10`                            | seen          |                       |
+| B4  | Raw UUIDs and nanosecond timestamps shown as people and times                                                        | web, `vaults.html`, `entries.html`                      | seen          |                       |
+| B5  | A `.txt` upload is accepted, then reported as "Completed with no text"                                               | web upload                                              | seen          |                       |
+| B6  | Edits reload silently, trash has no toast or undo                                                                    | web                                                     | seen          |                       |
+| B7  | Sidebar navigation on iPhone can stop responding, likely the rest of #209                                            | Apple, `WorkspaceView.swift:35-38`                      | suspected     |                       |
+| B8  | Lists never refresh on push, foreground or timer                                                                     | Apple, `InboxView.swift`, `PushNotifications.swift:116` | code          |                       |
+| B9  | App lock discards navigation, search, a pending upload review and an unfiled scan                                    | Apple, `FolioApp.swift:311`                             | code          |                       |
+| B10 | A 5xx during token refresh forces a full re-sign-in                                                                  | Apple, `OAuthSession.swift:163`                         | code          |                       |
+| B11 | Every connection failure reads "Couldn't reach the server"                                                           | Apple, `LiveFolioService.swift:725`                     | code          |                       |
+| B12 | Share extension blames a missing server address for an expired session or no network                                 | Apple, `ShareViewController.swift:36`                   | code          |                       |
+| B13 | Tag, correspondent and type changes use form posts outside the API spec and infer success from a redirect            | Apple and `routes/documents.rs:785`                     | code          |                       |
+| B14 | An unknown vault role fails the whole vault list                                                                     | Apple, `Vault.swift:4`                                  | code          | Done 2026-11-15, #477 |
+| B15 | PDF fails to open in the iOS Files provider                                                                          | #177                                                    | issue         |                       |
+| B16 | Document download failures                                                                                           | #300                                                    | issue         |                       |
+| B17 | Live lists drift from active filters                                                                                 | #125                                                    | issue         |                       |
+| B18 | Live event streams outlive graceful shutdown                                                                         | #151                                                    | issue         |                       |
+| B19 | Destructive actions confirm differently by mouse and keyboard, and some have no confirmation                         | web, `vaults.html`, `sources.html`                      | seen and code |                       |
+| B20 | Unscoped links such as the webhook's `/documents/{id}` resolve against the remembered vault and can return not found | web, `crates/folio-core/src/models/webhook.rs:140`      | code          | Added 2026-11-14      |
 
 ### Security
 
-| ID  | Finding                                                                                 | Where                                          | Source          |
-| --- | --------------------------------------------------------------------------------------- | ---------------------------------------------- | --------------- |
-| S1  | With `auth.required=false`, permissive CORS lets any website read and write the archive | `routes/mod.rs:131`, `routes/auth.rs:473`      | code, rechecked |
-| S2  | A `documents:write` token can create workflows whose webhooks reach private addresses   | `routes/auth.rs:437`, `models/workflow.rs:489` | code            |
-| S3  | Login throttling keys on the TCP peer, so a reverse proxy puts every user in one bucket | `routes/auth.rs:1100`                          | code            |
-| S4  | The setup token is logged at `warn!` and reaches OTLP log export                        | `folio-app/src/main.rs:452`                    | code            |
-| S5  | Main app pages send no CSP or frame protection                                          | `routes/auth.rs:667`                           | code            |
+| ID  | Finding                                                                                                                              | Where                                          | Source          | Status                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- | --------------- | --------------------- |
+| S1  | With `auth.required=false`, permissive CORS lets any website read and write the archive                                              | `routes/mod.rs:131`, `routes/auth.rs:473`      | code, rechecked | Done 2026-11-15, #481 |
+| S2  | A `documents:write` token can create workflows whose webhooks reach private addresses                                                | `routes/auth.rs:437`, `models/workflow.rs:489` | code            |                       |
+| S3  | Login throttling keys on the TCP peer, so a reverse proxy puts every user in one bucket                                              | `routes/auth.rs:1100`                          | code            |                       |
+| S4  | The setup token is logged at `warn!` and reaches OTLP log export                                                                     | `folio-app/src/main.rs:452`                    | code            |                       |
+| S5  | Main app pages send no CSP or frame protection                                                                                       | `routes/auth.rs:667`                           | code            |                       |
+| S6  | With `auth.required=false`, DNS rebinding gives a remote page full read and write access, because `Host` is validated only on `/mcp` | `crates/folio-api/src/routes/mod.rs`           | code            | Added 2026-11-14      |
 
 ### Processing safety
 
-| ID  | Item                                                                                          | Where                       | Source          |
-| --- | --------------------------------------------------------------------------------------------- | --------------------------- | --------------- |
-| P1  | AI HTTP clients have no timeout, and the serial worker stalls behind one hung provider (#159) | `infra/ai/pipeline.rs:57`   | code, rechecked |
-| P2  | Completed jobs are never deleted because `JobQueue::cleanup` has no caller                    | `infra/queue/mod.rs:350`    | code, rechecked |
-| P3  | SQLite runs without WAL or a busy timeout (#461)                                              | `database/sqlite/mod.rs:57` | code, rechecked |
-| P4  | SQLite dequeue panics the worker on a malformed row                                           | `queue/sqlite.rs:190`       | code            |
-| P5  | One embedding model per document across batches (#162)                                        | worker                      | issue           |
-| P6  | Mixed digital and scanned PDFs lose the scanned pages' text (#161)                            | OCR                         | issue           |
+| ID  | Item                                                                                          | Where                                                                                                 | Source          | Status                |
+| --- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | --------------- | --------------------- |
+| P1  | AI HTTP clients have no timeout, and the serial worker stalls behind one hung provider (#159) | `infra/ai/pipeline.rs:57`                                                                             | code, rechecked |                       |
+| P2  | Completed jobs are never deleted because `JobQueue::cleanup` has no caller                    | `infra/queue/mod.rs:350`                                                                              | code, rechecked |                       |
+| P3  | SQLite runs without WAL or a busy timeout (#461)                                              | `database/sqlite/mod.rs:57`                                                                           | code, rechecked |                       |
+| P4  | SQLite dequeue panics the worker on a malformed row                                           | `queue/sqlite.rs:190`                                                                                 | code            |                       |
+| P5  | One embedding model per document across batches (#162)                                        | worker                                                                                                | issue           |                       |
+| P6  | Mixed digital and scanned PDFs lose the scanned pages' text (#161)                            | OCR                                                                                                   | issue           |                       |
+| P7  | Thumbnail subprocesses and the fastembed model download run without a timeout                 | `crates/folio-infra/src/thumbnail/mod.rs:226`, `crates/folio-infra/src/ai/embeddings/fastembed.rs:56` | code            | Added 2026-11-14      |
+| P8  | The `workflow-triggers` spec requires registry validation that production code does not run   | `crates/folio-core/src/models/workflow_trigger.rs:153`, `openspec/specs/workflow-triggers`            | code            | Added 2026-11-14      |
 
 ### Triage features
 
-| ID  | Feature                                                          | Jobs |
-| --- | ---------------------------------------------------------------- | ---- |
-| F1  | Inline title editing on the document page and in lists           | J2   |
-| F2  | Bulk select with bulk tag, type, sender, trash and mark reviewed | J2   |
-| F3  | Keyboard triage in the inbox: accept, next, previous, trash      | J2   |
-| F4  | Sort and list or grid toggle on every list, not only saved views | J3   |
-| F5  | "Empty trash"                                                    | J5   |
-| F6  | Toasts with undo for edits and trash on web                      | J5   |
-| F7  | Apple lists refresh on push and on foreground                    | J5   |
-| F8  | Vault members shown and added by name, with a picker             | J5   |
-| F9  | Autocomplete combobox for correspondents, types and tags (#92)   | J2   |
+| ID  | Feature                                                          | Jobs | Status                |
+| --- | ---------------------------------------------------------------- | ---- | --------------------- |
+| F1  | Inline title editing on the document page and in lists           | J2   |                       |
+| F2  | Bulk select with bulk tag, type, sender, trash and mark reviewed | J2   |                       |
+| F3  | Keyboard triage in the inbox: accept, next, previous, trash      | J2   |                       |
+| F4  | Sort and list or grid toggle on every list, not only saved views | J3   |                       |
+| F5  | "Empty trash"                                                    | J5   |                       |
+| F6  | Toasts with undo for edits and trash on web                      | J5   |                       |
+| F7  | Apple lists refresh on push and on foreground                    | J5   |                       |
+| F8  | Vault members shown and added by name, with a picker             | J5   |                       |
+| F9  | Autocomplete combobox for correspondents, types and tags (#92)   | J2   |                       |
 
 Exit for this phase: every B, S and P item above is closed or has a dated decision not to fix, and G5 and G6 are met.
 
@@ -192,9 +196,9 @@ These run alongside the phases and make the feature work cheaper.
 
 ## Housekeeping
 
-- Close or archive stale OpenSpec work. `integration-access` is complete and not archived. Five specs still carry a placeholder purpose. Done 2026-11-14 in #480.
+- Close or archive stale OpenSpec work. `integration-access` is complete and not archived. Five specs still carry a placeholder purpose. Done 2026-11-14 in #480, follow-up #483.
 - Merge the two `verify` skills in `.claude` and `.agents` into one. Done 2026-11-14 in #476.
-- Update `docs/deployment.md`, which pins image `0.1.0`, and `docs/database.md`, which names a table the code no longer uses.
+- Update `docs/deployment.md`, which pins image `0.1.0`, and `docs/database.md`, which names a table the code no longer uses. Done 2026-11-14 in #474.
 - Stop duplicate changelog lines for a commit and its PR.
 
 ## What we pause

@@ -18,7 +18,7 @@ It runs as one binary with SQLite and local storage by default.
 docker run -d --name folio -p 3000:3000 -v folio-data:/data \
   -e FOLIO_SERVER__PUBLIC_URL=http://localhost:3000 \
   ghcr.io/cedricziel/folio:latest
-docker logs folio   # open the /setup link it prints
+docker logs folio   # open the /setup link it prints (standard error)
 ```
 
 For a real deployment, with a reverse proxy, upgrades and backups, read

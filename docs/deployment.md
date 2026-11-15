@@ -57,7 +57,7 @@ set later on the `/settings` page.
 
 ## Sign in for the first time
 
-On a fresh install Folio prints a one-time setup link to its log:
+On a fresh install Folio prints a one-time setup link to standard error. It does not go through tracing or OTLP export, but anything that collects standard error (container log drivers, journald, Promtail, Fluent Bit) still sees it; set `FOLIO_AUTH__SETUP_TOKEN_FILE` if that matters:
 
 ```sh
 docker logs folio
@@ -163,7 +163,9 @@ Only for self-built Apple apps; the App Store app ignores this. After setting
 ## Upgrade
 
 Pull the new image or unpack the new release, then restart. Folio runs its
-database migrations at startup. Back up first.
+database migrations at startup. Back up first. Stop the old version before
+starting the new one: the first start switches an existing SQLite database to
+WAL and needs exclusive access for a moment.
 
 ```sh
 docker compose pull
@@ -179,5 +181,16 @@ What to back up depends on where Folio keeps its data:
 - **PostgreSQL and S3:** a database dump and the bucket.
 
 Back up the database and the documents together, so a restore does not point
-at files that are missing. Stop Folio while copying an SQLite file, or copy it
-with `sqlite3 folio.db ".backup backup.db"`.
+at files that are missing.
+
+SQLite runs in WAL mode, so the database has `folio.db-wal` and `folio.db-shm`
+next to `folio.db`. After a clean stop, the `-wal` file can still hold
+committed data. Back up in one of these ways:
+
+- With Folio stopped, copy `folio.db`, `folio.db-wal` and `folio.db-shm`
+  together. Copying `folio.db` alone can lose recent writes.
+- Run `sqlite3 folio.db ".backup backup.db"`. This works while Folio runs.
+- Take a snapshot of the whole volume.
+
+Keep the database on a local disk. Do not put it on NFS or SMB: WAL needs
+shared memory that network file systems do not provide.
