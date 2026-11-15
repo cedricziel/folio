@@ -13,8 +13,8 @@ There is no data migration between backends. Pick one for a new installation.
 
 On SQLite, Folio uses write-ahead logging (WAL) with `synchronous=NORMAL` and a
 five-second busy timeout. Readers do not block the writer, and a second writer
-waits instead of failing. The database gets `-wal` and `-shm` side files; see
-[Back up](deployment.md#back-up).
+waits up to five seconds instead of failing at once. The database gets `-wal`
+and `-shm` side files; see [Back up](deployment.md#back-up).
 
 ## Layout
 

@@ -163,7 +163,9 @@ Only for self-built Apple apps; the App Store app ignores this. After setting
 ## Upgrade
 
 Pull the new image or unpack the new release, then restart. Folio runs its
-database migrations at startup. Back up first.
+database migrations at startup. Back up first. Stop the old version before
+starting the new one: the first start switches an existing SQLite database to
+WAL and needs exclusive access for a moment.
 
 ```sh
 docker compose pull
@@ -185,8 +187,8 @@ SQLite runs in WAL mode, so the database has `folio.db-wal` and `folio.db-shm`
 next to `folio.db`. After a clean stop, the `-wal` file can still hold
 committed data. Back up in one of these ways:
 
-- Copy `folio.db`, `folio.db-wal` and `folio.db-shm` together. Copying
-  `folio.db` alone can lose recent writes.
+- With Folio stopped, copy `folio.db`, `folio.db-wal` and `folio.db-shm`
+  together. Copying `folio.db` alone can lose recent writes.
 - Run `sqlite3 folio.db ".backup backup.db"`. This works while Folio runs.
 - Take a snapshot of the whole volume.
 

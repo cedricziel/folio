@@ -112,7 +112,13 @@ async fn migration_lock(
             .filter(|dir| !dir.as_os_str().is_empty())
             .unwrap_or_else(|| std::path::Path::new("."));
         let file = std::fs::File::open(dir)?;
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)?;
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Err(rustix::io::Errno::WOULDBLOCK) => {
+                tracing::info!("waiting for another process to finish migrations");
+                rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)?;
+            }
+            result => result?,
+        }
         Ok::<_, std::io::Error>(file)
     })
     .await
