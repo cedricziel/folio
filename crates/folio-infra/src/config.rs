@@ -463,6 +463,8 @@ pub struct AiConfig {
     pub provider: String,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
+    /// Seconds one AI provider request may take before the job fails
+    pub request_timeout_secs: u64,
 }
 
 impl fmt::Debug for AiConfig {
@@ -471,6 +473,7 @@ impl fmt::Debug for AiConfig {
             .field("provider", &self.provider)
             .field("openai_api_key", &Redacted(&self.openai_api_key))
             .field("anthropic_api_key", &Redacted(&self.anthropic_api_key))
+            .field("request_timeout_secs", &self.request_timeout_secs)
             .finish()
     }
 }
@@ -481,6 +484,7 @@ impl Default for AiConfig {
             provider: "openai".to_string(),
             openai_api_key: None,
             anthropic_api_key: None,
+            request_timeout_secs: folio_core::models::DEFAULT_AI_REQUEST_TIMEOUT_SECS,
         }
     }
 }
@@ -848,6 +852,11 @@ pub const SETTINGS: &[Setting] = &[
         kind: ValueKind::Str,
     },
     Setting {
+        key: "ai.request_timeout_secs",
+        env: "FOLIO_AI__REQUEST_TIMEOUT_SECS",
+        kind: ValueKind::Int,
+    },
+    Setting {
         key: "ocr.provider",
         env: "FOLIO_OCR__PROVIDER",
         kind: ValueKind::Str,
@@ -1200,6 +1209,7 @@ mod tests {
                 provider: "openai".into(),
                 openai_api_key: Some("sk-openai-secret".into()),
                 anthropic_api_key: Some("sk-anthropic-secret".into()),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -1604,6 +1614,19 @@ vault = "{VAULT}"
                 setting.key
             );
         }
+    }
+
+    #[test]
+    fn ai_request_timeout_defaults_to_300_and_reads_from_the_file() {
+        assert_eq!(
+            lookup(&load(&[]), "ai.request_timeout_secs").as_deref(),
+            Some("300")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[ai]\nrequest_timeout_secs = 900\n").unwrap();
+        let config = Config::load_with(path.to_str().unwrap(), env(&[])).unwrap();
+        assert_eq!(config.ai.request_timeout_secs, 900);
     }
 
     #[test]

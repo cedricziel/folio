@@ -51,7 +51,7 @@ impl PipelineContext {
                 ai: AiSettings {
                     openai_api_key: config.ai.openai_api_key.clone().unwrap_or_default(),
                     anthropic_api_key: config.ai.anthropic_api_key.clone().unwrap_or_default(),
-                    ..AiSettings::default()
+                    request_timeout_secs: config.ai.request_timeout_secs,
                 },
             },
             ocr_registry: ocr::builtin(),

@@ -78,6 +78,7 @@ pub use push::{
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
+    DEFAULT_AI_REQUEST_TIMEOUT_SECS,
 };
 pub use source::{
     DocumentSource, EmailOrigin, FolderOrigin, SourceConditions, SourceKind, TextMatch,

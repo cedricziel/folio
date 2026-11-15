@@ -123,6 +123,7 @@ async fn harness_full(
         provider: "local".into(),
         openai_api_key: None,
         anthropic_api_key: None,
+        ..Default::default()
     };
     let thumbnails = Arc::new(ThumbnailService::new(store.clone()));
 
