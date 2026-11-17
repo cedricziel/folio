@@ -50,16 +50,114 @@ public enum FolioError: Error, Equatable, LocalizedError {
     case invalidServerURL
     case server(status: Int, message: String?)
     case unreachable
+    case offline
+    case timedOut
+    case hostUnreachable(host: String?)
+    case untrustedCertificate(host: String?)
+    case secureConnectionFailed(host: String?)
+    case clientCertificate(host: String?)
+    case redirectLoop(host: String?)
+    case networkSignInRequired
+    case insecureAddress
     case unreadableResponse
     case signInRequired
     case signInFailed(String)
 
+    /// Names the cause of a failed request. Only the host of the failing URL (and its port when not the scheme's
+    /// default) is kept, never its path or query.
+    public init(transport error: URLError) {
+        let url = error.failingURL
+        var host = url?.host()
+        if let name = host, let port = url?.port, port != (url?.scheme?.lowercased() == "http" ? 80 : 443) {
+            host = "\(name):\(port)"
+        }
+        switch error.code {
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff,
+            .callIsActive:
+            self = .offline
+        case .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost:
+            self = .hostUnreachable(host: host)
+        case .timedOut:
+            self = .timedOut
+        case .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot,
+            .serverCertificateNotYetValid:
+            self = .untrustedCertificate(host: host)
+        case .secureConnectionFailed:
+            self = .secureConnectionFailed(host: host)
+        case .clientCertificateRejected, .clientCertificateRequired:
+            self = .clientCertificate(host: host)
+        case .badURL, .unsupportedURL:
+            self = .invalidServerURL
+        case .badServerResponse, .cannotParseResponse:
+            self = .unreadableResponse
+        case .httpTooManyRedirects, .redirectToNonExistentLocation:
+            self = .redirectLoop(host: host)
+        case .userAuthenticationRequired:
+            self = .networkSignInRequired
+        case .appTransportSecurityRequiresSecureConnection:
+            self = .insecureAddress
+        default:
+            self = .unreachable
+        }
+    }
+
+    /// Whether trying again can succeed without the user changing anything. A certificate problem or a blocked
+    /// `http://` address stays the same on every attempt.
+    public var isRetryable: Bool {
+        switch self {
+        case .unreachable, .offline, .timedOut, .hostUnreachable: true
+        case let .server(status, _): status >= 500 || status == 408 || status == 429
+        case .untrustedCertificate, .secureConnectionFailed, .clientCertificate, .redirectLoop, .networkSignInRequired,
+            .insecureAddress, .invalidServerURL, .unreadableResponse, .signInRequired,
+            .signInFailed:
+            false
+        }
+    }
+
+    /// A failure to reach the server at all, as opposed to an answer from it.
+    public var isConnectionFailure: Bool {
+        switch self {
+        case .unreachable, .offline, .timedOut, .hostUnreachable, .untrustedCertificate, .secureConnectionFailed,
+            .clientCertificate, .redirectLoop, .networkSignInRequired, .insecureAddress:
+            true
+        case .server, .invalidServerURL, .unreadableResponse, .signInRequired, .signInFailed: false
+        }
+    }
+
     public var errorDescription: String? {
         switch self {
+        case .offline:
+            "You're offline. Try again when you're connected."
+        case .timedOut:
+            "The server took too long to answer. Try again."
+        case let .hostUnreachable(host?):
+            "Couldn't connect to \(host). Check the address, or the server may be down."
+        case .hostUnreachable(nil):
+            "Couldn't connect to the server. Check the address, or the server may be down."
+        case let .untrustedCertificate(host?):
+            "\(host) doesn't have a certificate this device trusts, so Folio won't connect. "
+                + "Check the address, or ask whoever runs the server to fix its certificate."
+        case .untrustedCertificate(nil):
+            "The server doesn't have a certificate this device trusts, so Folio won't connect. "
+                + "Check the address, or ask whoever runs the server to fix its certificate."
+        case let .secureConnectionFailed(host):
+            "Couldn't make a secure connection to \(host ?? "the server"). "
+                + "Check that the address and port are right and the server uses HTTPS."
+        case let .clientCertificate(host):
+            "\(host ?? "The server") wants a certificate from this device, and it has none the server accepts. "
+                + "Install the certificate your administrator gave you."
+        case let .redirectLoop(host):
+            "\(host ?? "The server") keeps redirecting somewhere that doesn't work. Check the address."
+        case .networkSignInRequired:
+            "This network asks you to sign in first. Sign in there, then try again."
+        case .insecureAddress:
+            "Folio can't use http:// addresses. Use an https:// address instead."
         case .invalidServerURL:
             "That doesn't look like a server address."
         case let .server(_, message?):
             message
+        case .server(let status, nil) where status >= 500:
+            "The server had a problem. Try again later."
         case .server(let status, nil):
             "The server answered with status \(status)."
         case .unreachable:
@@ -67,7 +165,7 @@ public enum FolioError: Error, Equatable, LocalizedError {
         case .unreadableResponse:
             "Couldn't read the server's answer."
         case .signInRequired:
-            "Sign in again to continue."
+            "Your session has expired. Sign in again."
         case let .signInFailed(message):
             message
         }
