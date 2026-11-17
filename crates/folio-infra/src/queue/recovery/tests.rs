@@ -663,6 +663,42 @@ async fn nonstage_and_prelease_jobs_still_recover(db: &Database) {
     assert!(f.events().await.is_empty());
 }
 
+async fn unreadable_payload_is_failed_and_skipped(db: &Database) {
+    execute(db, "DELETE FROM jobs;", "DELETE FROM jobs;").await;
+    let bad = Uuid::new_v4();
+    let early = "2000-01-01T00:00:00+00:00";
+    let payload = r#"{"type":"from_the_future","data":{}}"#;
+    execute(
+        db,
+        &format!("INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at) VALUES ('{bad}', 'from_the_future', '{payload}', 'pending', 0, 3, '{early}', '{early}', '{early}')"),
+        &format!("INSERT INTO jobs (id, job_type, payload, status, attempts, max_attempts, created_at, updated_at, scheduled_at) VALUES ('{bad}', 'from_the_future', '{payload}'::jsonb, 'pending', 0, 3, '{early}', '{early}', '{early}')"),
+    )
+    .await;
+    let queue = db.repositories().await.jobs;
+    let good = queue
+        .enqueue(JobType::extract_text(Uuid::new_v4()))
+        .await
+        .unwrap();
+    let job = queue.dequeue().await.unwrap().unwrap();
+    assert_eq!(job.id, good);
+    assert!(queue.dequeue().await.unwrap().is_none());
+    let sql = format!("SELECT status || '|' || error FROM jobs WHERE id = '{bad}'");
+    let state: String = match db {
+        Database::Sqlite(pool) => sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+        Database::Postgres(pool) => sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .fetch_one(pool)
+            .await
+            .unwrap(),
+    };
+    assert!(
+        state.starts_with("failed|") && state.contains("payload"),
+        "{state}"
+    );
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
     transient_failure_is_atomic_and_preserves_source_lineage(db).await;
@@ -680,6 +716,8 @@ async fn contract(db: &Database) {
     superseded_stage_is_untouched_by_failure(db).await;
     terminal_stage_is_untouched_by_late_failure(db).await;
     nonstage_and_prelease_jobs_still_recover(db).await;
+    unreadable_payload_is_failed_and_skipped(db).await;
+    listing_skips_unreadable_rows(db).await;
 }
 
 #[tokio::test]
