@@ -310,6 +310,41 @@ struct DocumentViewTemplate {
     show_page_nav: bool,
     page_count: u32,
     pages_without_preview: bool,
+    back_href: String,
+    back_label: &'static str,
+    back_restores: bool,
+    return_to: String,
+}
+
+/// Back to the document page after a form post, still remembering which list it was opened from
+fn back_to_document(id: Uuid, return_to: Option<&str>) -> Response {
+    let href = crate::vault::url(&format!("/documents/{id}"));
+    let href = match crate::back_link::resolve(return_to) {
+        Some(back) => back.carried_by(href),
+        None => href,
+    };
+    Redirect::to(&href).into_response()
+}
+
+/// Whether the browser came from `href`, so going back can restore that page as it was
+fn referrer_is(headers: &axum::http::HeaderMap, href: &str) -> bool {
+    headers
+        .get(axum::http::header::REFERER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| url::Url::parse(value).ok())
+        .is_some_and(|referrer| {
+            let mut target = referrer.path().to_owned();
+            if let Some(query) = referrer.query() {
+                target.push('?');
+                target.push_str(query);
+            }
+            target == href
+        })
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct DocumentQuery {
+    return_to: Option<String>,
 }
 
 /// Document detail (full page view)
@@ -317,7 +352,11 @@ async fn document_detail(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<DocumentQuery>,
 ) -> ApiResult<Html<String>> {
+    let back = crate::back_link::resolve(query.return_to.as_deref())
+        .unwrap_or_else(crate::back_link::inbox);
     let document = state
         .document_repo
         .find_by_id(vault, id)
@@ -380,6 +419,10 @@ async fn document_detail(
         show_page_nav: live.show_page_nav,
         page_count: live.page_count,
         pages_without_preview: live.pages_without_preview,
+        back_restores: referrer_is(&headers, &back.href),
+        return_to: back.target.clone(),
+        back_href: back.href,
+        back_label: back.label,
     };
 
     Ok(Html(template.render().unwrap_or_else(|e| {
@@ -820,9 +863,11 @@ async fn delete_document(
     user: Uploader,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> ApiResult<Response> {
     super::trash::trash_document(&state, vault, &user, id).await?;
-    Ok(Redirect::to("/").into_response())
+    let back = crate::back_link::resolve_or_inbox(crate::back_link::from_form(&body).as_deref());
+    Ok(Redirect::to(&back.href).into_response())
 }
 
 /// Reprocess a document (re-run OCR, thumbnails, embeddings)
@@ -830,6 +875,7 @@ async fn reprocess_document(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    body: axum::body::Bytes,
 ) -> ApiResult<Response> {
     debug!("Reprocess requested for document {}", id);
 
@@ -867,7 +913,10 @@ async fn reprocess_document(
     debug!("Successfully queued reprocessing job for document {}", id);
 
     // Redirect back to document with a success message
-    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+    Ok(back_to_document(
+        id,
+        crate::back_link::from_form(&body).as_deref(),
+    ))
 }
 
 /// Search query parameters
@@ -917,6 +966,7 @@ async fn search_documents(
 #[derive(Debug, serde::Deserialize)]
 pub struct SetCorrespondentForm {
     correspondent_id: Option<String>,
+    return_to: Option<String>,
 }
 
 /// Set document correspondent (form handler with redirect)
@@ -941,13 +991,14 @@ async fn set_document_correspondent(
         )
         .await?;
 
-    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+    Ok(back_to_document(id, form.return_to.as_deref()))
 }
 
 /// Form data for setting document type
 #[derive(Debug, serde::Deserialize)]
 pub struct SetDocumentTypeForm {
     document_type_id: Option<String>,
+    return_to: Option<String>,
 }
 
 /// Set document type (form handler with redirect)
@@ -972,7 +1023,7 @@ async fn set_document_type(
         )
         .await?;
 
-    Ok(Redirect::to(&format!("/documents/{}", id)).into_response())
+    Ok(back_to_document(id, form.return_to.as_deref()))
 }
 
 /// Form data for adding a tag
@@ -1023,6 +1074,7 @@ async fn remove_document_tag(
 struct DocumentDateForm {
     document_date: Option<String>,
     clear: Option<bool>,
+    return_to: Option<String>,
 }
 
 async fn set_document_date(
@@ -1054,13 +1106,14 @@ async fn set_document_date(
             },
         )
         .await?;
-    Ok(Redirect::to(&crate::vault::url(&format!("/documents/{id}"))).into_response())
+    Ok(back_to_document(id, form.return_to.as_deref()))
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DocumentReviewForm {
     reviewed: bool,
+    return_to: Option<String>,
 }
 
 async fn set_document_review(
@@ -1073,5 +1126,5 @@ async fn set_document_review(
         .document_repo
         .set_reviewed(vault, id, form.reviewed)
         .await?;
-    Ok(Redirect::to(&crate::vault::url(&format!("/documents/{id}"))).into_response())
+    Ok(back_to_document(id, form.return_to.as_deref()))
 }

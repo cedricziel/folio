@@ -55,7 +55,7 @@ test.describe("document lifecycle", () => {
   test("detail page opens", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("link", { name: new RegExp(title) }).click();
-    await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}$/);
+    await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}(\?.*)?$/);
     await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
     const processing = page.getByRole("region", { name: "Processing", exact: true });
     await expect(processing).toBeVisible();

@@ -62,4 +62,21 @@
     </section>
     {% endif %}
 </section>
+<script>
+// Rows pushed live are rendered without knowing which list shows them; the server still validates the target.
+if (!window.folioRowTargets) {
+  window.folioRowTargets = true;
+  document.addEventListener("turbo:before-stream-render", (event) => {
+    const content = event.detail.newStream.templateElement?.content;
+    if (!content) return;
+    const target = location.pathname + location.search;
+    content.querySelectorAll('a.f-row[href*="/documents/"], #inbox-notice a[href*="/documents/"]').forEach((link) => {
+      const url = new URL(link.getAttribute("href"), location.origin);
+      if (url.searchParams.has("return_to")) return;
+      url.searchParams.set("return_to", target);
+      link.setAttribute("href", url.pathname + url.search);
+    });
+  });
+}
+</script>
 {% endblock %}

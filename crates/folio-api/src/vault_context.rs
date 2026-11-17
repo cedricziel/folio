@@ -25,6 +25,8 @@ pub struct VaultContext {
     pub user: Option<UserId>,
     /// Scopes of the bearer token, or `None` for a browser session or no sign-in
     pub token_scopes: Option<Vec<String>>,
+    /// Path and query of the page being rendered, so links out of a list can lead back to it
+    pub page: String,
 }
 
 tokio::task_local! {
@@ -126,6 +128,22 @@ pub mod filters {
         _: &dyn askama::Values,
     ) -> askama::Result<String> {
         Ok(url(&value.to_string()))
+    }
+
+    /// Link to a document that remembers the list it is opened from
+    #[askama::filter_fn]
+    pub fn document_href(
+        id: impl std::fmt::Display,
+        _: &dyn askama::Values,
+    ) -> askama::Result<String> {
+        let href = url(&format!("/documents/{id}"));
+        let page = CURRENT_VAULT
+            .try_with(|ctx| ctx.page.clone())
+            .unwrap_or_default();
+        Ok(match crate::back_link::resolve(Some(&page)) {
+            Some(back) => back.carried_by(href),
+            None => href,
+        })
     }
 
     #[askama::filter_fn]
