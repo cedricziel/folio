@@ -15,6 +15,15 @@ struct WorkspaceView: View {
     @State private var pendingViewDelete: SavedView?
     @State private var workspace: WorkspaceViewModel
     @State private var activityVault: Vault?
+    /// The saved view being opened, held until the model has loaded it so the row stays selected meanwhile.
+    @State private var openingSavedView: SavedView.ID?
+    /// The load behind `openingSavedView`, cancelled by any later choice so a late response cannot override it.
+    @State private var savedViewOpen: Task<Void, Never>?
+
+    private enum SidebarItem: Hashable {
+        case destination(WorkspaceDestination)
+        case savedView(SavedView.ID)
+    }
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
@@ -33,8 +42,8 @@ struct WorkspaceView: View {
         NavigationSplitView {
             List(
                 selection: Binding(
-                    get: { Optional(workspace.destination) },
-                    set: { if let destination = $0 { navigate(to: destination) } }
+                    get: { sidebarSelection },
+                    set: { if let item = $0 { select(item) } }
                 )
             ) {
                 if workspace.isReady {
@@ -53,7 +62,7 @@ struct WorkspaceView: View {
                 }
                 Section("Library") {
                     ForEach(WorkspaceDestination.allCases, id: \.self) { destination in
-                        NavigationLink(value: destination) {
+                        NavigationLink(value: SidebarItem.destination(destination)) {
                             Label(destination.title, systemImage: destination.systemImage)
                         }
                     }
@@ -61,10 +70,7 @@ struct WorkspaceView: View {
                 if workspace.isReady {
                     Section("Saved views") {
                         ForEach(workspace.savedViews) { view in
-                            Button {
-                                FolioTelemetry.shared.action(.savedViewOpen)
-                                Task { await workspace.openSavedView(view.id) }
-                            } label: {
+                            NavigationLink(value: SidebarItem.savedView(view.id)) {
                                 Label(view.name, systemImage: view.visibility == .private ? "bookmark" : "person.2")
                             }
                             .contextMenu {
@@ -218,6 +224,31 @@ struct WorkspaceView: View {
                 showTaxonomy = true
             } label: {
                 Label("Classifications", systemImage: "tag")
+            }
+        }
+    }
+
+    private var sidebarSelection: SidebarItem {
+        if let id = openingSavedView { return .savedView(id) }
+        if let id = workspace.selectedSavedViewID, workspace.savedViews.contains(where: { $0.id == id }) {
+            return .savedView(id)
+        }
+        return .destination(workspace.destination)
+    }
+
+    private func select(_ item: SidebarItem) {
+        savedViewOpen?.cancel()
+        switch item {
+        case .destination(let destination):
+            savedViewOpen = nil
+            openingSavedView = nil
+            navigate(to: destination)
+        case .savedView(let id):
+            FolioTelemetry.shared.action(.savedViewOpen)
+            openingSavedView = id
+            savedViewOpen = Task {
+                await workspace.openSavedView(id)
+                if openingSavedView == id { openingSavedView = nil }
             }
         }
     }
