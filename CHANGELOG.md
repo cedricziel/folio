@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.18.0](https://github.com/cedricziel/folio/compare/v0.17.0...v0.18.0) (2026-11-21)
+
+
+### Features
+
+* **ai:** make the provider request timeout a pipeline setting ([8990d36](https://github.com/cedricziel/folio/commit/8990d36221c7424a25a627a87c99d060da731cdd))
+* **config:** read ai.request_timeout_secs from config.toml and the environment ([1e0731b](https://github.com/cedricziel/folio/commit/1e0731bd015ed58e3e2338890a00ca145cfa7b2d))
+* **settings:** edit the AI request timeout on /settings ([2b82a34](https://github.com/cedricziel/folio/commit/2b82a34e91b66daa2fadf0569f7e0a45417ccde3))
+
+
+### Bug Fixes
+
+* **ai:** bound provider HTTP requests with connect and request timeouts ([9e922ab](https://github.com/cedricziel/folio/commit/9e922ab8ae7839188efb4aef4cd03c4b62326ee5))
+* **ai:** bound provider requests and PDF/OCR subprocesses with timeouts ([#482](https://github.com/cedricziel/folio/issues/482)) ([5349303](https://github.com/cedricziel/folio/commit/5349303c83dd720576966a3fab982174e10b5dcb)), closes [#159](https://github.com/cedricziel/folio/issues/159)
+* **ai:** cap the PDF page-scaled limit, keep the group kill on pipe errors, share the pdfinfo limit ([abd99d9](https://github.com/cedricziel/folio/commit/abd99d9ea462b73ffd3719181a9b97c667b7c96c))
+* **ai:** kill PDF and OCR subprocesses that run past five minutes ([a3971e9](https://github.com/cedricziel/folio/commit/a3971e934cce5ae1b9bb627bd0febc808ef9b757))
+* **ai:** kill the whole process group when a tool times out or is cancelled ([6c55d77](https://github.com/cedricziel/folio/commit/6c55d778fffb848224fbe5647fb031f1ac62c63d))
+* **ai:** scale the PDF rendering time limit with page count ([b99ebb1](https://github.com/cedricziel/folio/commit/b99ebb1ba1a3fe7521e5abf2d482d418e0805e6b))
+* **apple:** load vaults whose role this app does not know ([4d36fb5](https://github.com/cedricziel/folio/commit/4d36fb534189ead6ea4a056f0a94376a2f5e41bc))
+* **apple:** load vaults whose role this app does not know ([#477](https://github.com/cedricziel/folio/issues/477)) ([0dde006](https://github.com/cedricziel/folio/commit/0dde00617c9b333b054811eff9ff077681bd1846))
+* **config:** reject an AI request timeout outside 1 to 3600 seconds ([86420e6](https://github.com/cedricziel/folio/commit/86420e6fdc37d7484afaefae93f82952d5216dd9))
+* **db:** log when a migration waits on another process, tighten WAL docs ([9dca9cb](https://github.com/cedricziel/folio/commit/9dca9cbabee170e5877514132967bdb66bec455c))
+* **db:** run file-backed SQLite in WAL mode with a busy timeout ([5bf57cc](https://github.com/cedricziel/folio/commit/5bf57cc5d042b18faa49ae3eb21cd6c1b6280b4d))
+* **db:** run file-backed SQLite in WAL mode with a busy timeout ([#478](https://github.com/cedricziel/folio/issues/478)) ([124cd2e](https://github.com/cedricziel/folio/commit/124cd2e4bdaa0cd96022d43cad47791935da5bbe)), closes [#461](https://github.com/cedricziel/folio/issues/461)
+* **db:** serialize SQLite migrations with a directory lock under WAL ([49ae2ac](https://github.com/cedricziel/folio/commit/49ae2ac9415e22a6aa36ffe6636bafeea1133100))
+* **mcp:** adopt rmcp 3.10 typed skills API (supersedes [#469](https://github.com/cedricziel/folio/issues/469)) ([#471](https://github.com/cedricziel/folio/issues/471)) ([c0c5fe6](https://github.com/cedricziel/folio/commit/c0c5fe6902988bf51371a368eafeda74fd1b7e98))
+* **mcp:** serve bundled skills through the typed rmcp 3.10 skills API ([4fdbb6f](https://github.com/cedricziel/folio/commit/4fdbb6fb20842ea2633613277e93bfc8371db39d))
+* **security:** accept proxied same-origin posts and document auth-off behaviour ([7240ff2](https://github.com/cedricziel/folio/commit/7240ff25130e8113d50f31d8e491526f03fd5e54))
+* **security:** close cross-origin access when auth is off ([#481](https://github.com/cedricziel/folio/issues/481)) ([7c9c00e](https://github.com/cedricziel/folio/commit/7c9c00e157d132a675c74b00e12a224a3a9ecc2e))
+* **security:** keep the setup token out of tracing ([464d67b](https://github.com/cedricziel/folio/commit/464d67b7a483d77e5486ff150050bb2563949c0c))
+* **security:** keep the setup token out of tracing ([#485](https://github.com/cedricziel/folio/issues/485)) ([9ad6989](https://github.com/cedricziel/folio/commit/9ad69893da959518b0769b95c3ba2bccfb217b58))
+* **security:** reject cross-site state-changing requests when auth is off ([9b1a483](https://github.com/cedricziel/folio/commit/9b1a48374381c7208ac5199a34c47d9babcfd326))
+* **security:** skip the setup link when local login is off ([5a6c3a4](https://github.com/cedricziel/folio/commit/5a6c3a4695674d4342d464124a74c3769df74600))
+* **security:** stop answering cross-origin browser requests with CORS headers ([5eb2e8c](https://github.com/cedricziel/folio/commit/5eb2e8ce560a94079cf8cbd469c7ed198c67925b))
+* **thumbnail:** bound pdfinfo, pdftoppm and convert runs with the shared timeout ([c193cb1](https://github.com/cedricziel/folio/commit/c193cb18f905346b851cad1ffdc7c60f1cf30cae))
+* **web:** keep the selected vault on pages outside the vault path ([17819ea](https://github.com/cedricziel/folio/commit/17819eaa3d4acc907c783b8ff897a782a6209103))
+* **web:** keep the selected vault when leaving vault-scoped pages ([#479](https://github.com/cedricziel/folio/issues/479)) ([42803be](https://github.com/cedricziel/folio/commit/42803bea117e3e82b6232dd46d7a621c2b8ee745))
+* **web:** remember the vault only on page navigations ([ba10bfb](https://github.com/cedricziel/folio/commit/ba10bfbf2e136cd9d395ea93a9ce2915abab2a3d))
+
 ## [0.17.0](https://github.com/cedricziel/folio/compare/v0.16.0...v0.17.0) (2026-11-09)
 
 
