@@ -17,6 +17,12 @@ CLANG_MODULE_CACHE_PATH="$verify_dir/clang" xcrun swift test \
   --security-path "$verify_dir/security" --disable-keychain --disable-netrc
 ```
 
+Intent fixtures must inject a complete catalog with an in-memory upload progress
+store and an explicit test scope through `IntentEnvironment.use(catalog:)`.
+Injecting only a mock service rebuilds a catalog with shared progress storage and
+server preferences. Keep replacements inside the serialized `IntentTests` suite;
+never inspect or clear App Group upload locks to make a fixture pass.
+
 The API adapter tests use an ephemeral URLSession with a local protocol stub.
 `ProcessingSummaryTests` checks stage labels, empty OCR completion, skipped work,
 and the distinction between a scheduled retry and terminal failure.
