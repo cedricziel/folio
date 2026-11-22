@@ -888,16 +888,23 @@ async fn changed_ocr_replaces_newer_completed_embedding_plan(db: &Database) {
     assert_eq!(chunk_count(db, fixture.document).await, 0);
     assert_eq!(fixture.embedding_jobs().await.len(), 1);
     assert_eq!(fixture.embedding_state().await.5, "pending");
-    let current = repos
-        .documents
-        .processing_stage_summaries(fixture.vault, fixture.document)
+    let child = repos.jobs.dequeue().await.unwrap().unwrap();
+    assert!(repos
+        .jobs
+        .start_derived(
+            &child,
+            folio_core::processing_events::ProcessingEventStage::Embedding,
+        )
         .await
-        .unwrap();
-    let current_embedding = current
-        .iter()
-        .find(|stage| stage.stage == folio_core::processing_events::ProcessingEventStage::Embedding)
-        .unwrap();
-    assert_eq!(current_embedding.run_id, fixture.embedding_run);
+        .unwrap()
+        .is_some());
+    let events = fixture.events().await;
+    let started = events.last().unwrap().envelope.as_ref().unwrap();
+    assert_eq!(
+        started.event_type(),
+        "document.processing.embedding.started"
+    );
+    assert_eq!(started.data()["run_id"], fixture.embedding_run.to_string());
     fixture.finish().await;
 }
 
