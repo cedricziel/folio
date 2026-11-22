@@ -557,9 +557,15 @@ pub(crate) async fn document_thumbnail(
             .find_by_id(vault, id)
             .await?
             .ok_or_else(|| ApiError::not_found("Document not found"))?;
+        let key = state
+            .document_repo
+            .thumbnail_result_prefix(vault, id)
+            .await?
+            .map(|prefix| format!("{prefix}/thumbnail.jpg"))
+            .unwrap_or_else(|| folio_core::ports::keys::thumbnail(id));
         let bytes = state
             .store
-            .get_bytes(&folio_core::ports::keys::thumbnail(id))
+            .get_bytes(&key)
             .await
             .map_err(|error| match error {
                 folio_core::Error::NotFound { .. } => {

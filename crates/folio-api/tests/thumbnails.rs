@@ -273,3 +273,121 @@ async fn thumbnail_requires_api_read_scope_and_authorized_vault_selection() {
     assert_eq!(allowed.status(), StatusCode::OK);
     assert_eq!(text(allowed).await, "private thumbnail");
 }
+
+#[tokio::test]
+async fn thumbnail_uses_the_last_committed_run_while_a_new_run_is_pending() {
+    let h = harness().await;
+    let id = document(&h, h.vault).await;
+    let committed = Uuid::new_v4();
+    let pending = Uuid::new_v4();
+    let prefix = format!("thumbnails/{id}/runs/{committed}/claim");
+    let folio_infra::Database::Sqlite(pool) = &h.database else {
+        unreachable!()
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("INSERT INTO processing_stage_runs (id, document_id, vault_id, group_id, stage, state, attempt, queue_attempt, result_prefix, is_current, created_at, updated_at) VALUES ('{committed}', '{id}', '{}', '{committed}', 'thumbnail', 'completed', 1, 0, '{prefix}', FALSE, '2026-11-03T00:00:00Z', '2026-11-03T00:00:00Z'), ('{pending}', '{id}', '{}', '{pending}', 'thumbnail', 'pending', 0, 0, NULL, TRUE, '2026-11-04T00:00:00Z', '2026-11-04T00:00:00Z')", h.vault, h.vault))).execute(pool).await.unwrap();
+    h.state
+        .store
+        .put(&keys::thumbnail(id), Bytes::from_static(b"legacy preview"))
+        .await
+        .unwrap();
+    h.state
+        .store
+        .put(
+            &format!("{prefix}/thumbnail.jpg"),
+            Bytes::from_static(b"committed preview"),
+        )
+        .await
+        .unwrap();
+    let response = get(&h, id, None, None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(text(response).await, "committed preview");
+}
+
+async fn committed_non_pdf_page_preview(mime: &str, data: &[u8], content: Option<&str>) {
+    let h = harness().await;
+    let id = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "Single-page preview".into(),
+                mime_type: Some(mime.into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    h.state
+        .document_repo
+        .set_page_count(h.vault, id, 1)
+        .await
+        .unwrap();
+    let run = Uuid::new_v4();
+    let prefix = format!("thumbnails/{id}/runs/{run}/claim");
+    h.state
+        .thumbnail_service
+        .generate_at(&prefix, data, mime, content)
+        .await
+        .unwrap();
+    let folio_infra::Database::Sqlite(pool) = &h.database else {
+        unreachable!()
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO processing_stage_runs (id, document_id, vault_id, group_id, stage, state, attempt, queue_attempt, result_prefix, is_current, created_at, updated_at) VALUES ('{run}', '{id}', '{}', '{run}', 'thumbnail', 'completed', 1, 0, '{prefix}', TRUE, '2026-11-03T00:00:00Z', '2026-11-03T00:00:00Z')", h.vault
+    ))).execute(pool).await.unwrap();
+
+    let thumbnail = get(&h, id, None, None).await;
+    let expected = axum::body::to_bytes(thumbnail.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("/documents/{id}/page/1/thumbnail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/jpeg");
+    let actual = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(actual, expected);
+    assert!(actual.starts_with(&[0xff, 0xd8]));
+    let beyond_first = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("/documents/{id}/page/2/thumbnail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(beyond_first.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn image_page_one_serves_the_generated_committed_thumbnail() {
+    committed_non_pdf_page_preview(
+        "image/png",
+        include_bytes!("../../../static/icons/icon-192.png"),
+        None,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn text_page_one_serves_the_generated_committed_thumbnail() {
+    committed_non_pdf_page_preview(
+        "text/plain",
+        b"An archived letter",
+        Some("An archived letter"),
+    )
+    .await;
+}
