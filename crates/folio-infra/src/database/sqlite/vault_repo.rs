@@ -274,6 +274,8 @@ impl VaultRepository for SqliteVaultRepository {
         .execute(&mut *tx)
         .await
         .map_err(db)?;
+        sqlx::query("UPDATE archival_attempts SET state = 'skipped', reason = 'Vault deleted' WHERE state = 'queued' AND document_id IN (SELECT id FROM documents WHERE vault_id = $1)")
+            .bind(id.to_string()).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("UPDATE workflow_runs SET status = 'failed', finished_at = $2, last_error = 'Vault deleted before workflow execution completed' WHERE status = 'pending' AND workflow_id IN (SELECT id FROM workflows WHERE vault_id = $1)")
             .bind(id.to_string()).bind(now.to_rfc3339()).execute(&mut *tx).await.map_err(db)?;
         emit_vault(&mut tx, &changed, "deleted", Uuid::new_v4()).await?;

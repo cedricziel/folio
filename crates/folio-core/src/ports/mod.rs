@@ -4,6 +4,7 @@
 
 mod access;
 mod ai;
+mod archival;
 mod caller;
 mod document_entries;
 mod health;
@@ -24,6 +25,7 @@ pub use ai::{
     EmbeddedChunk, EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SearchResult,
     SearchService,
 };
+pub use archival::ArchivalRepository;
 pub use caller::CallerResolver;
 pub use document_entries::{DocumentEntryRepository, EntryCreation};
 pub use health::HealthCheck;
