@@ -42,21 +42,19 @@ async fn revision_upgrade_contract(db: Database) {
 
     macro_rules! execute {
         ($sql:expr) => {{
-            let sql = $sql;
+            let sql = sqlx::AssertSqlSafe($sql);
             match &db {
-                Database::Sqlite(pool) => sqlx::raw_sql(&sql).execute(pool).await.map(|_| ()),
-                Database::Postgres(pool) => sqlx::raw_sql(&sql).execute(pool).await.map(|_| ()),
+                Database::Sqlite(pool) => sqlx::raw_sql(sql).execute(pool).await.map(|_| ()),
+                Database::Postgres(pool) => sqlx::raw_sql(sql).execute(pool).await.map(|_| ()),
             }
         }};
     }
     macro_rules! count {
         ($sql:expr) => {{
-            let sql = $sql;
+            let sql = sqlx::AssertSqlSafe($sql);
             match &db {
-                Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await,
-                Database::Postgres(pool) => {
-                    sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await
-                }
+                Database::Sqlite(pool) => sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await,
+                Database::Postgres(pool) => sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await,
             }
             .unwrap()
         }};
