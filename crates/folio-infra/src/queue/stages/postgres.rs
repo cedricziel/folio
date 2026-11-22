@@ -292,9 +292,9 @@ async fn finish_ocr(
             ));
         }
         sqlx::query("UPDATE processing_stage_runs SET is_current = FALSE, updated_at = $1 WHERE document_id = $2 AND stage = 'embedding' AND is_current = TRUE")
-            .bind(&now).bind(fence.document_id).execute(&mut *tx).await.map_err(repo_err)?;
+            .bind(now).bind(fence.document_id).execute(&mut *tx).await.map_err(repo_err)?;
         sqlx::query("UPDATE processing_stage_runs SET is_current = TRUE, updated_at = $1 WHERE document_id = $2 AND group_id = $3 AND stage = 'embedding' AND state = 'pending' AND attempt = 0 AND job_id IS NULL AND revision_id IS NULL")
-            .bind(&now).bind(fence.document_id).bind(fence.group_id).execute(&mut *tx).await.map_err(repo_err)?;
+            .bind(now).bind(fence.document_id).bind(fence.group_id).execute(&mut *tx).await.map_err(repo_err)?;
         owns_embedding = true;
     }
     sqlx::query(
@@ -547,7 +547,7 @@ async fn finish_derived(
                     .bind(*model)
                     .bind(chunk.embedding.len() as i32)
                     .bind(&chunk.embedding)
-                    .bind(&now);
+                    .bind(now);
                 let query = if pgvector {
                     query.bind(format!(
                         "[{}]",
@@ -594,13 +594,13 @@ async fn finish_derived(
         _ => None,
     };
     let changed = sqlx::query("UPDATE processing_stage_runs SET state = $1, claim_id = NULL, reason_code = $2, retry_at = NULL, result_prefix = $3, updated_at = $4 WHERE id = $5 AND EXISTS (SELECT 1 FROM jobs WHERE id = $6 AND claim_id = $7 AND attempts = $8 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint)")
-        .bind(if skipped { "skipped" } else { "completed" }).bind(reason.map(reason_code).transpose()?).bind(prefix).bind(&now).bind(fence.run_id).bind(fence.job_id).bind(fence.claim_id).bind(fence.queue_attempt)
+        .bind(if skipped { "skipped" } else { "completed" }).bind(reason.map(reason_code).transpose()?).bind(prefix).bind(now).bind(fence.run_id).bind(fence.job_id).bind(fence.claim_id).bind(fence.queue_attempt)
         .execute(&mut *tx).await.map_err(repo_err)?;
     if changed.rows_affected() != 1 {
         return Ok(false);
     }
     sqlx::query("UPDATE documents SET embed_status = CASE WHEN $1 = 'embedding' THEN $2 ELSE embed_status END, page_count = COALESCE($3, page_count), updated_at = $4 WHERE id = $5")
-        .bind(super::stage_name(fence.stage)).bind(if skipped { "skipped" } else { "done" }).bind(pages.map(|n| n as i32)).bind(&now).bind(fence.document_id)
+        .bind(super::stage_name(fence.stage)).bind(if skipped { "skipped" } else { "done" }).bind(pages.map(|n| n as i32)).bind(now).bind(fence.document_id)
         .execute(&mut *tx).await.map_err(repo_err)?;
     let snapshot = capture_document(&mut tx, fence.document_id, Some(fence.vault_id))
         .await?

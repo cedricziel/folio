@@ -811,11 +811,10 @@ impl Worker {
         } else {
             None
         };
-        Ok(self
-            .queue
+        self.queue
             .complete_thumbnail(&fence, page_count)
             .await
-            .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?)
+            .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))
     }
 
     async fn process_claimed_embedding(&self, job: &Job) -> Result<(), BoxError> {
