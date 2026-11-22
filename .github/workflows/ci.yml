@@ -129,3 +129,11 @@ jobs:
             e2e/test-results
             e2e/tests/__screenshots__
           retention-days: 7
+      - name: Upload lifecycle screen evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: lifecycle-evidence
+          path: e2e/test-results/lifecycle-evidence
+          if-no-files-found: warn
+          retention-days: 7

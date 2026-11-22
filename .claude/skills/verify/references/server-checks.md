@@ -388,6 +388,10 @@ rollback, terminal-state fencing, inactive queue admission, and legacy upgrades.
 Restore must preserve failed pending runs rather than replay their queued jobs.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test workflows --test vaults` for
 management controls, deleted-workflow history, secret masking, and vault access.
+The workflow page tests check creator and updater identities on active lists,
+Trash lists, and retained history, including system or unknown attribution and
+HTML escaping. Run the `workflows` screen tour, then inspect a retained history
+page on desktop and mobile in both themes. Check long actor labels for wrapping.
 Regenerate OpenAPI after response or route changes. Never verify workflow delivery
 against an existing webhook receiver or user archive.
 
@@ -400,8 +404,25 @@ claim fencing, active-name reuse, restore conflicts, no-op suppression, and atom
 source/outbox rollback. Configured sources remain outside managed lifecycle storage.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test sources --test vaults` for the
 existing management page, deleted-source listing, restore controls, masked credentials,
-and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
+and vault authorization. The source suite also checks retained outcomes through
+JSON and HTML, owner-only access, revoked membership, deleted vaults, cross-vault
+denial, and the return link to Trash. Run the screen tour for `sources`, then open
+Outcomes from a source in Trash and return to Trash in the same vault. Inspect
+desktop and mobile layouts in both themes using only the disposable instance.
+The source page tests verify server-recorded creation and update actors on active
+and trashed sources, the explicit system or unknown fallback, and HTML escaping
+of retained actor identifiers. Inspect long actor labels for wrapping and overflow
+in the same screen tour.
+Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
+
+The `e2e/tests/lifecycle-evidence.spec.ts` Playwright fixture checks source and
+workflow attribution in active lists, Trash, and retained history against its own
+isolated instance. It uses disabled sources and workflows, temporary historical
+records, and a fresh vault per viewport and theme. It captures desktop/mobile screenshots,
+axe results, and clipping checks in `e2e/test-results/lifecycle-evidence`.
+CI uploads `lifecycle-evidence` even when another E2E test fails. Inspect the PNGs
+before merging; passing assertions alone do not verify the rendered labels.
 
 ## Verify classification lifecycle
 

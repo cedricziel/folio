@@ -140,14 +140,25 @@ async fn list_page(
 }
 
 fn lifecycle_summary(workflow: &Workflow) -> String {
-    match workflow.deleted_at {
-        Some(at) => format!("Deleted {}", at.format("%Y-%m-%d %H:%M UTC")),
-        None => format!(
-            "Created {}, updated {}",
-            workflow.created_at.format("%Y-%m-%d %H:%M UTC"),
-            workflow.updated_at.format("%Y-%m-%d %H:%M UTC")
-        ),
+    let created_by = workflow
+        .created_by
+        .as_ref()
+        .map(|actor| format!(" by {actor}"))
+        .unwrap_or_else(|| " by System or unknown".into());
+    let updated_by = workflow
+        .updated_by
+        .as_ref()
+        .map(|actor| format!(" by {actor}"))
+        .unwrap_or_else(|| " by System or unknown".into());
+    let mut summary = format!(
+        "Created {}{created_by}, updated {}{updated_by}",
+        workflow.created_at.format("%Y-%m-%d %H:%M UTC"),
+        workflow.updated_at.format("%Y-%m-%d %H:%M UTC")
+    );
+    if let Some(at) = workflow.deleted_at {
+        summary.push_str(&format!(", deleted {}", at.format("%Y-%m-%d %H:%M UTC")));
     }
+    summary
 }
 
 #[derive(Template)]
