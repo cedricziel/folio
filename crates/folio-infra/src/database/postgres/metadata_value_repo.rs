@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, SubsecRound, Utc};
 use folio_core::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use folio_core::models::{
-    DocumentMetadata, DocumentMetadataValue, Id, MetadataChange, MetadataLinkTarget, MetadataValue,
-    UserId, VaultId,
+    DocumentMetadata, DocumentMetadataValue, Id, MetadataChange, MetadataLinkTarget,
+    MetadataSearchHit, MetadataSearchPage, MetadataSearchQuery, MetadataValue, UserId, VaultId,
 };
 use folio_core::ports::MetadataValueRepository;
 use folio_core::{Error, Result};
@@ -477,6 +477,71 @@ pub(crate) async fn prepare_move(
 
 #[async_trait]
 impl MetadataValueRepository for PostgresMetadataValueRepository {
+    async fn search_exact(
+        &self,
+        vault: VaultId,
+        query: MetadataSearchQuery,
+    ) -> Result<MetadataSearchPage> {
+        query.validate_limit()?;
+        let mut tx = self.pool.begin().await.map_err(db_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+        let kind: String = sqlx::query_scalar(
+            "SELECT kind FROM metadata_fields WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL",
+        )
+        .bind(vault.0)
+        .bind(query.filter.field_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| not_found("Metadata field", query.filter.field_id))?;
+        let value = query.canonical_value(vault, parse_kind(&kind)?)?;
+        let key = canonical_key(&value)?;
+        let columns = Columns::from_value(Some(&value))?;
+        let after = query.cursor.as_ref().map(|cursor| cursor.after);
+        let rows: Vec<(Id, String)> = sqlx::query_as(
+            "SELECT doc.id, doc.title FROM metadata_values mv
+             JOIN documents doc ON doc.vault_id = mv.vault_id AND doc.id = mv.document_id
+             WHERE mv.vault_id = $1 AND mv.field_id = $2 AND mv.canonical_key = $3
+               AND mv.deleted_at IS NULL AND doc.deleted_at IS NULL
+               AND doc.purge_requested_at IS NULL AND NOT doc.upload_pending
+               AND ($4::uuid IS NULL OR mv.document_id > $4)
+               AND mv.text_value COLLATE \"C\" IS NOT DISTINCT FROM $5
+               AND mv.boolean_value IS NOT DISTINCT FROM $6
+               AND mv.integer_value IS NOT DISTINCT FROM $7
+               AND mv.decimal_value COLLATE \"C\" IS NOT DISTINCT FROM $8
+               AND mv.date_value COLLATE \"C\" IS NOT DISTINCT FROM $9
+               AND mv.currency COLLATE \"C\" IS NOT DISTINCT FROM $10
+               AND mv.option_id IS NOT DISTINCT FROM $11
+               AND mv.target_document_id IS NOT DISTINCT FROM $12
+             ORDER BY mv.document_id LIMIT $13",
+        )
+        .bind(vault.0)
+        .bind(query.filter.field_id)
+        .bind(key)
+        .bind(after)
+        .bind(columns.text)
+        .bind(columns.boolean)
+        .bind(columns.integer)
+        .bind(columns.decimal)
+        .bind(columns.date)
+        .bind(columns.currency)
+        .bind(columns.option)
+        .bind(columns.target)
+        .bind(i64::from(query.limit) + 1)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        let documents = rows
+            .into_iter()
+            .map(|(id, title)| MetadataSearchHit { id, title })
+            .collect();
+        query.finish(vault, &value, documents)
+    }
+
     async fn get(&self, vault: VaultId, document: Id) -> Result<DocumentMetadata> {
         let mut tx = self.pool.begin().await.map_err(db_error)?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")

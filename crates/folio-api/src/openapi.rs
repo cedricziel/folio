@@ -26,6 +26,7 @@ use crate::routes::{
         license(name = "AGPL-3.0-only", identifier = "AGPL-3.0-only"),
     ),
     paths(
+        crate::routes::metadata::search_metadata,
         crate::routes::metadata::list_fields,
         crate::routes::metadata::get_field,
         crate::routes::metadata::create_field,

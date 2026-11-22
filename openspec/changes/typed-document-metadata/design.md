@@ -40,6 +40,8 @@ GET returns 200, POST creation returns 201, PATCH returns 200, DELETE retirement
 
 An explicit metadata search endpoint accepts a definition ID and typed exact value, with bounded cursor pagination. It returns authorized active logical documents. Missing definitions invalidate the query rather than broaden it. Decimal range filters and full-text indexing of custom values are deferred. Existing MCP document responses remain compatible; expose metadata through typed tools only when shared access rules can be reused.
 
+Exact search uses the reusable `MetadataExactFilter` criterion with `field_id` and a tagged `value`. The GET route accepts that value as JSON in the `value` query parameter. Its continuation binds the vault, field ID, and canonical value. A saved-view query that adopts this criterion must preserve the typed value and reject an unavailable field on reopen.
+
 Register request and response schemas in openapi/openapi.json. Apple generation uses the existing schema symlink and generator configuration; verify generated code by building the package. No handwritten alternative wire schema.
 
 ## Web and Apple experience
