@@ -7,7 +7,7 @@ Documents in Trash, pending uploads, and documents without a verified
 original are unavailable. For legacy originals, Folio must first complete
 its original-identity backfill.
 
-The response is an attachment named `folio-{id}.zip`. It contains:
+The response is an attachment named `folio-{id}.zip` with fixed entry names.
 
 | Entry | Contents |
 | --- | --- |
