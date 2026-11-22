@@ -211,6 +211,24 @@ fn active_job_from_row(row: ActiveRow) -> std::result::Result<Job, MalformedFiel
 }
 
 /// SQLite-backed job queue
+pub(crate) async fn insert_current_processing(
+    conn: &mut SqliteConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    force: bool,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let document = super::processing_scope::sqlite::document(conn, document_id).await?;
+    let job = super::processing_scope::bind_requested_processing(
+        document.as_ref(),
+        vault,
+        document_id,
+        force,
+        super::REVISION_DISPATCH_ENABLED,
+    )?;
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
+}
+
 #[derive(Clone)]
 pub struct SqliteJobQueue {
     pool: SqlitePool,
@@ -246,6 +264,26 @@ impl SqliteJobQueue {
     ) -> Result<Uuid> {
         self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS, trace)
             .await
+    }
+
+    pub(super) async fn enqueue_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        force: bool,
+        trace: Option<super::JobTraceContext>,
+    ) -> Result<Uuid> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        let id =
+            insert_current_processing(&mut tx, vault, document_id, force, trace.as_ref()).await?;
+        tx.commit()
+            .await
+            .map_err(|error| Error::Repository(error.to_string()))?;
+        Ok(id)
     }
 
     /// Enqueue a job with its own retry budget

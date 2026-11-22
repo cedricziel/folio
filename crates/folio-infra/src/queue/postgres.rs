@@ -70,6 +70,24 @@ pub(crate) async fn insert_job(
     Ok(id)
 }
 
+pub(crate) async fn insert_current_processing(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    force: bool,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let document = super::processing_scope::postgres::document(conn, document_id).await?;
+    let job = super::processing_scope::bind_requested_processing(
+        document.as_ref(),
+        vault,
+        document_id,
+        force,
+        super::REVISION_DISPATCH_ENABLED,
+    )?;
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
+}
+
 #[derive(Clone)]
 pub struct PostgresJobQueue {
     pool: PgPool,
@@ -157,6 +175,26 @@ impl PostgresJobQueue {
     ) -> Result<Uuid> {
         self.enqueue_with_max_attempts(job_type, scheduled_at, DEFAULT_MAX_ATTEMPTS, trace)
             .await
+    }
+
+    pub(super) async fn enqueue_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        force: bool,
+        trace: Option<super::JobTraceContext>,
+    ) -> Result<Uuid> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to schedule current processing"))?;
+        let id =
+            insert_current_processing(&mut tx, vault, document_id, force, trace.as_ref()).await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to schedule current processing"))?;
+        Ok(id)
     }
 
     #[instrument(skip(self, trace))]

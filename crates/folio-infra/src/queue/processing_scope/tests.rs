@@ -805,6 +805,11 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         f.queue.enqueue(JobType::process_document(f.document)).await,
         Err(folio_core::Error::Conflict(_))
     ));
+    assert!(matches!(
+        f.queue.enqueue_current_processing(f.vault, f.document, false).await,
+        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+    ));
+
     let current = JobType::ProcessDocumentRevision {
         document_id: f.document,
         revision_id: revision,
@@ -854,6 +859,26 @@ async fn revision_enqueue_plan_seeds_only_the_current_revision(db: &Database) {
         3
     );
     assert_eq!(f.rows("TRUE").await, 3);
+
+    execute(
+        db,
+        format!(
+            "UPDATE documents SET file_path = 'original' WHERE id = '{}'",
+            f.document
+        ),
+    )
+    .await;
+    let documents = db.repositories().await.documents;
+    documents.delete(f.vault, f.document).await.unwrap();
+    assert!(matches!(
+        documents.restore(f.vault, f.document).await,
+        Err(folio_core::Error::Conflict(message)) if message == "File revision processing is not yet enabled"
+    ));
+    assert!(documents
+        .find_trashed_by_id(f.vault, f.document)
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
@@ -885,6 +910,44 @@ async fn child_scope_cannot_drop_or_substitute_a_parent_revision() {
         assert_eq!(parent.group_id, scope.group_id);
     })
     .await;
+}
+
+#[test]
+fn requested_processing_binds_the_current_revision_when_available() {
+    use super::{bind_requested_processing, DocumentScope};
+
+    let vault = VaultId::new();
+    let document = Uuid::new_v4();
+    let revision = Uuid::new_v4();
+    let first = DocumentScope {
+        vault_id: vault.to_string(),
+        unavailable: false,
+        revision_id: Some(revision.to_string()),
+        legacy_current: true,
+    };
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, true, false).unwrap(),
+        JobType::ProcessDocument { document_id, force: true } if document_id == document
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&first), vault, document, true, true).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: true }
+            if document_id == document && revision_id == revision
+    ));
+
+    let newer = DocumentScope {
+        legacy_current: false,
+        ..first
+    };
+    assert!(matches!(
+        bind_requested_processing(Some(&newer), vault, document, true, false).unwrap(),
+        JobType::ProcessDocumentRevision { document_id, revision_id, force: true }
+            if document_id == document && revision_id == revision
+    ));
+    assert!(matches!(
+        bind_requested_processing(Some(&newer), VaultId::new(), document, true, true),
+        Err(folio_core::Error::NotFound { .. })
+    ));
 }
 
 async fn contract(db: &Database) {
