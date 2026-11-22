@@ -20,10 +20,16 @@ use folio_core::models::{
     DocumentSource, EmailOrigin, IngestionSourceInput, LedgerEntry, SourceConfig, SourceKind,
     SourceStatus,
 };
-use folio_core::ports::{EmbeddedChunk, ProcessingQueue, SearchService};
-use folio_core::services::{DispatcherConfig, EventConsumer, OutboxDispatcher};
+use folio_core::ports::{
+    EmbeddedChunk, EmbeddingBatch, EmbeddingService, ProcessingQueue, SearchService,
+};
+use folio_core::services::{
+    DispatcherConfig, DocumentQuery, EventConsumer, LibraryService, OutboxDispatcher,
+};
 use folio_core::{DocumentEvent, EventOrigin, OutboxEvent};
-use folio_infra::{Database, JobType, PostgresSearchService, Repositories};
+use folio_infra::{
+    Database, JobType, ObjectStoreDocumentStore, PostgresSearchService, Repositories,
+};
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::runners::AsyncRunner;
 use testcontainers_modules::testcontainers::ImageExt;
@@ -898,6 +904,175 @@ async fn search_contract(
                 .bind(near.id.to_string()).bind(mid.id.to_string()).execute(pool).await.unwrap();
         }
     }
+}
+
+struct FixedEmbeddings(String);
+
+#[async_trait]
+impl EmbeddingService for FixedEmbeddings {
+    async fn embed(&self, texts: &[&str]) -> folio_core::Result<EmbeddingBatch> {
+        Ok(EmbeddingBatch {
+            vectors: vec![vec![1.0, 0.0, 0.0]; texts.len()],
+            model: self.0.clone(),
+            dimensions: 3,
+        })
+    }
+
+    async fn model_id(&self) -> folio_core::Result<String> {
+        Ok(self.0.clone())
+    }
+
+    async fn health(&self) -> folio_core::Result<()> {
+        Ok(())
+    }
+}
+
+async fn library_semantic_filter_contract(
+    db: &Database,
+    r: &Repositories,
+    search: Arc<dyn SearchService>,
+) {
+    let vault = r.vaults.instance_default().await.unwrap();
+    let suffix = Id::new_v4();
+    let model = format!("semantic-filter-{suffix}");
+    let foreign = r
+        .vaults
+        .create(&format!("Semantic {suffix}"), None)
+        .await
+        .unwrap()
+        .id;
+    let tag = r
+        .tags
+        .create(
+            vault,
+            CreateTag {
+                name: format!("Tag {suffix}"),
+                color: None,
+            },
+        )
+        .await
+        .unwrap();
+    let correspondent = r
+        .correspondents
+        .create(
+            vault,
+            CreateCorrespondent {
+                name: format!("From {suffix}"),
+            },
+        )
+        .await
+        .unwrap();
+    let document_type = r
+        .document_types
+        .create(
+            vault,
+            CreateDocumentType {
+                name: format!("Type {suffix}"),
+            },
+        )
+        .await
+        .unwrap();
+    let from = "2024-01-01T00:00:00+00:00"
+        .parse::<chrono::DateTime<Utc>>()
+        .unwrap();
+    let to = from + Duration::days(1);
+
+    let mut wanted = Vec::new();
+    for (name, date, score) in [
+        ("missing tag", from, 0.99_f32),
+        ("missing correspondent", from, 0.98),
+        ("missing type", from, 0.97),
+        ("too early", from - Duration::seconds(1), 0.96),
+        ("at exclusive end", to, 0.95),
+        ("in trash", from, 0.94),
+        ("another vault", from, 1.0),
+        ("eligible 1", from, 0.5),
+        ("eligible 2", from, 0.5),
+    ] {
+        let owner = if name == "another vault" {
+            foreign
+        } else {
+            vault
+        };
+        let doc = r
+            .documents
+            .create(
+                owner,
+                CreateDocument {
+                    correspondent_id: (owner == vault && name != "missing correspondent")
+                        .then_some(correspondent.id),
+                    document_type_id: (owner == vault && name != "missing type")
+                        .then_some(document_type.id),
+                    tag_ids: if owner == vault && name != "missing tag" {
+                        vec![tag.id]
+                    } else {
+                        vec![]
+                    },
+                    ..new_document(name)
+                },
+            )
+            .await
+            .unwrap();
+        match db {
+            Database::Sqlite(pool) => {
+                sqlx::query("UPDATE documents SET created_at = ? WHERE id = ?")
+                    .bind(date.to_rfc3339())
+                    .bind(doc.id.to_string())
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+            Database::Postgres(pool) => {
+                sqlx::query("UPDATE documents SET created_at = $1 WHERE id = $2")
+                    .bind(date)
+                    .bind(doc.id)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        let vector = [score, (1.0 - score * score).sqrt(), 0.0];
+        search
+            .store_chunks(owner, doc.id, &model, &[chunk(0, name, &vector)])
+            .await
+            .unwrap();
+        if name == "in trash" {
+            r.documents.delete(vault, doc.id).await.unwrap();
+        } else if name.starts_with("eligible") {
+            wanted.push(doc.id);
+        }
+    }
+    wanted.sort_unstable();
+
+    let candidates = search
+        .search(vault, &model, &[1.0, 0.0, 0.0], 10)
+        .await
+        .unwrap();
+    assert_eq!(candidates.len(), 7);
+    let library = LibraryService::new(
+        r.documents.clone(),
+        r.tags.clone(),
+        r.correspondents.clone(),
+        r.document_types.clone(),
+        Arc::new(FixedEmbeddings(model)),
+        search,
+        Arc::new(ObjectStoreDocumentStore::in_memory()),
+        Arc::new(r.jobs.clone()),
+    );
+    let query = DocumentQuery {
+        text: Some("unrelated words".into()),
+        tags: vec![tag.name],
+        correspondent: Some(correspondent.name),
+        document_type: Some(document_type.name),
+        created_after: Some(from),
+        created_before: Some(to),
+        limit: 1,
+    };
+    let hits = library.search(vault, query).await.unwrap();
+    assert_eq!(
+        hits.iter().map(|hit| hit.document.id).collect::<Vec<_>>(),
+        [wanted[0]]
+    );
 }
 
 async fn jobs_contract(db: &Database, r: &Repositories) {
@@ -4094,6 +4269,8 @@ async fn sqlite_satisfies_the_contract() {
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("folio.db").display());
     let db = Database::connect(&url).await.unwrap();
     run_contract(&db).await;
+    let repos = db.repositories().await;
+    library_semantic_filter_contract(&db, &repos, repos.search.clone()).await;
 }
 
 #[tokio::test]
@@ -4274,6 +4451,7 @@ async fn postgres_satisfies_the_contract() {
         &fallback,
     )
     .await;
+    library_semantic_filter_contract(&db, &repos, repos.search.clone()).await;
 }
 
 #[tokio::test]
@@ -4300,6 +4478,8 @@ async fn postgres_without_the_vector_extension_falls_back() {
     assert!(!PostgresSearchService::new(pool.clone())
         .await
         .uses_pgvector());
+    let repos = db.repositories().await;
+    library_semantic_filter_contract(&db, &repos, repos.search.clone()).await;
 }
 
 #[tokio::test]

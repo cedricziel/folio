@@ -4,13 +4,14 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use tracing::instrument;
 
 use folio_core::error::{Error, Result};
-use folio_core::models::{Id, VaultId};
+use folio_core::models::{DocumentFilter, Id, VaultId};
 use folio_core::ports::{EmbeddedChunk, SearchResult, SearchService};
 
+use super::document_repo::push_filter;
 use crate::ai::cosine_similarity;
 
 fn db_error(e: sqlx::Error) -> Error {
@@ -125,24 +126,33 @@ impl SearchService for SqliteSearchService {
         Ok(count as u64)
     }
 
-    #[instrument(skip(self, query_embedding, limit), fields(limit = limit as i64))]
-    async fn search(
+    #[instrument(skip(self, query_embedding, limit, filter), fields(limit = limit as i64))]
+    async fn search_filtered(
         &self,
         vault: VaultId,
         model: &str,
         query_embedding: &[f32],
         limit: usize,
+        filter: Option<DocumentFilter>,
     ) -> Result<Vec<SearchResult>> {
-        let rows: Vec<(String, String, Vec<u8>)> = sqlx::query_as(
+        let mut query = QueryBuilder::<Sqlite>::new(
             "SELECT c.document_id, c.text, c.embedding
-             FROM document_chunks c JOIN documents d ON d.id = c.document_id
-             WHERE d.deleted_at IS NULL AND d.vault_id = ? AND c.model = ? AND c.stale = 0",
-        )
-        .bind(vault.to_string())
-        .bind(model)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db_error)?;
+             FROM document_chunks c JOIN (
+                 SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+        );
+        query.push_bind(vault.to_string());
+        if let Some(filter) = filter {
+            push_filter(&mut query, filter)?;
+        }
+        query
+            .push(") d ON d.id = c.document_id WHERE c.model = ")
+            .push_bind(model)
+            .push(" AND c.stale = 0");
+        let rows: Vec<(String, String, Vec<u8>)> = query
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_error)?;
 
         let mut best: HashMap<Id, SearchResult> = HashMap::new();
         for (doc_id, text, blob) in rows {
@@ -166,6 +176,7 @@ impl SearchService for SqliteSearchService {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.document_id.cmp(&b.document_id))
         });
         results.truncate(limit);
         Ok(results)

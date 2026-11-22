@@ -198,22 +198,17 @@ impl LibraryService {
         let mut hits: Vec<(Document, Option<f32>)> = Vec::new();
 
         if let Some(text) = text {
-            let allowed: HashSet<Id> = self
-                .documents
-                .list_ids(vault, Some(metadata_filter.clone()))
-                .await?
-                .into_iter()
-                .collect();
-
             // Semantic search is best effort: it needs a configured AI provider
-            let semantic: Vec<_> = self
+            let semantic = self
                 .semantic
-                .search_documents(vault, text, limit * SEMANTIC_OVERFETCH)
+                .search_documents(
+                    vault,
+                    text,
+                    limit.saturating_mul(SEMANTIC_OVERFETCH),
+                    Some(metadata_filter.clone()),
+                )
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|s| allowed.contains(&s.document.id))
-                .collect();
+                .unwrap_or_default();
             let scores: HashMap<Id, f32> =
                 semantic.iter().map(|s| (s.document.id, s.score)).collect();
 

@@ -391,7 +391,7 @@ impl PostgresDocumentRepository {
 }
 
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
-fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Result<()> {
+pub(super) fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Result<()> {
     filter.validate()?;
     if let Some(reviewed) = filter.reviewed {
         qb.push(if reviewed {
@@ -703,7 +703,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         if let Some(filter) = filter {
             push_filter(&mut qb, filter)?;
         }
-        qb.push(" ORDER BY created_at DESC");
+        qb.push(" ORDER BY created_at DESC, id");
 
         qb.build_query_scalar()
             .fetch_all(&self.pool)

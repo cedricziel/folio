@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::models::{Id, VaultId};
+use crate::models::{DocumentFilter, Id, VaultId};
 
 /// Result of running an OCR engine over a document
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -176,5 +176,18 @@ pub trait SearchService: Send + Sync {
         model: &str,
         query_embedding: &[f32],
         limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        self.search_filtered(vault, model, query_embedding, limit, None)
+            .await
+    }
+
+    /// Apply the document filter before ranking and limiting semantic matches.
+    async fn search_filtered(
+        &self,
+        vault: VaultId,
+        model: &str,
+        query_embedding: &[f32],
+        limit: usize,
+        filter: Option<DocumentFilter>,
     ) -> Result<Vec<SearchResult>>;
 }
