@@ -39,6 +39,7 @@ export const config = tour.loadConfig() as {
 // (unique titles from other specs) never leaks into screenshots.
 export class TourInstance {
   baseURL = "";
+  verifyDirectory = "";
   private envFile = "";
   private storageState:
     Awaited<ReturnType<BrowserContext["storageState"]>> | undefined;
@@ -56,6 +57,7 @@ export class TourInstance {
         .map((l) => l.split(/=(.*)/s).slice(0, 2)),
     );
     this.baseURL = vars.BASE_URL;
+    this.verifyDirectory = vars.VERIFY_DIR;
     tour.useSetupToken(vars.VERIFY_DIR);
   }
 

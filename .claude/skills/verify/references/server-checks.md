@@ -391,6 +391,14 @@ in the same screen tour.
 Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
 
+The `e2e/tests/lifecycle-evidence.spec.ts` Playwright fixture checks source and
+workflow attribution in active lists, Trash, and retained history against its own
+isolated instance. It uses disabled sources and workflows, temporary historical
+records, and a fresh vault per viewport and theme. It captures desktop/mobile screenshots,
+axe results, and clipping checks in `e2e/test-results/lifecycle-evidence`.
+CI uploads `lifecycle-evidence` even when another E2E test fails. Inspect the PNGs
+before merging; passing assertions alone do not verify the rendered labels.
+
 ## Verify classification lifecycle
 
 Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test taxonomy_lifecycle --test repository_contract`
