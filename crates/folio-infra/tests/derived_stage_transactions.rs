@@ -555,6 +555,7 @@ async fn contract(db: &Database) {
     );
 
     legacy_claim_is_fenced_by_replacement(db).await;
+    revision_claims_preserve_identity(db).await;
 }
 
 async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
@@ -601,6 +602,23 @@ async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
         .unwrap()
         .expect("revision one accepts a legacy job");
     let before = events(db).await.len();
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = NULL WHERE id = '{doc}'"),
+    )
+    .await;
+    assert!(repos
+        .jobs
+        .start_derived(&job, ProcessingEventStage::Thumbnail)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!repos
+        .jobs
+        .complete_thumbnail(&fence, Some(42))
+        .await
+        .unwrap());
+    assert_eq!(events(db).await.len(), before);
 
     execute(db, format!(
         "INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
@@ -624,12 +642,22 @@ async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
         .skip_derived(&fence, ProcessingReason::ProviderDisabled)
         .await
         .unwrap());
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = NULL WHERE id = '{doc}'"),
+    )
+    .await;
     repos
         .jobs
         .fail(&job, "synthetic expired work", true)
         .await
         .unwrap();
     assert_eq!(events(db).await.len(), before);
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = '{second}' WHERE id = '{doc}'"),
+    )
+    .await;
     assert_eq!(
         repos
             .documents
@@ -648,6 +676,192 @@ async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
             .page_count,
         None
     );
+}
+
+async fn seed_revision_run(
+    db: &Database,
+    vault: folio_core::models::VaultId,
+    job: JobType,
+    stage: &str,
+) -> uuid::Uuid {
+    let id = uuid::Uuid::new_v4();
+    let document = job.document_id().unwrap();
+    let revision = job.revision_id().unwrap();
+    let payload = serde_json::to_string(&job).unwrap();
+    execute(
+        db,
+        format!(
+            "INSERT INTO jobs (id, job_type, payload, status, scheduled_at, created_at, updated_at,
+                 origin_vault_id, correlation_id, processing_group_id)
+             VALUES ('{id}', '{}', '{payload}', 'pending', '2000-01-01T00:00:00Z',
+                 '2026-11-22T00:00:00Z', '2026-11-22T00:00:00Z', '{vault}', '{id}', '{id}');
+             INSERT INTO processing_stage_runs (id, document_id, vault_id, revision_id, group_id,
+                 job_id, stage, state, attempt, queue_attempt, created_at, updated_at)
+             VALUES ('{id}', '{document}', '{vault}', '{revision}', '{id}', '{id}', '{stage}',
+                 'pending', 0, 0, '2026-11-22T00:00:00Z', '2026-11-22T00:00:00Z');",
+            job.type_name()
+        ),
+    )
+    .await;
+    id
+}
+
+async fn revision_claims_preserve_identity(db: &Database) {
+    execute(db, "DELETE FROM jobs; DELETE FROM outbox_events;".into()).await;
+    let repos = db.repositories().await;
+    let vault = repos.vaults.create("Bound stages", None).await.unwrap().id;
+    let doc = repos
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                title: "Current original".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let file = uuid::Uuid::new_v4();
+    let first = uuid::Uuid::new_v4();
+    let second = uuid::Uuid::new_v4();
+    execute(db, format!(
+        "INSERT INTO document_files (id, document_id, vault_id, role, storage_key, mime_type, verification_state)
+         VALUES ('{file}', '{doc}', '{vault}', 'original', 'fixture', 'application/pdf', 'pending');
+         INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES ('{first}', '{doc}', '{vault}', 1, '{file}', '2026-11-22T00:00:00Z'),
+                ('{second}', '{doc}', '{vault}', 2, '{file}', '2026-11-22T00:01:00Z');
+         UPDATE documents SET current_revision_id = '{first}' WHERE id = '{doc}';"
+    )).await;
+    let thumbnail = ProcessingEventStage::Thumbnail;
+    let kind = JobType::GenerateRevisionThumbnail {
+        document_id: doc,
+        revision_id: first,
+    };
+    // Seed the persisted contract directly while revision dispatch is gated.
+    let id = seed_revision_run(db, vault, kind, "thumbnail").await;
+    let job = repos.jobs.dequeue().await.unwrap().unwrap();
+    let mut mismatched = job.clone();
+    mismatched.job_type = JobType::GenerateRevisionThumbnail {
+        document_id: doc,
+        revision_id: second,
+    };
+    let before = events(db).await.len();
+    assert!(repos
+        .jobs
+        .start_derived(&mismatched, thumbnail)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repos.jobs.start_ocr(&job).await.unwrap().is_none());
+    assert_eq!(events(db).await.len(), before);
+    repos
+        .jobs
+        .start_derived(&job, thumbnail)
+        .await
+        .unwrap()
+        .unwrap();
+
+    execute(
+        db,
+        format!("UPDATE jobs SET lease_expires_at = 0 WHERE id = '{id}'"),
+    )
+    .await;
+    assert_eq!(repos.jobs.reset_stuck().await.unwrap(), 1);
+    let attempts = events(db).await;
+    let transitions = &attempts[before..];
+    assert_eq!(transitions.len(), 2);
+    let retry = transitions[1].envelope.as_ref().unwrap();
+    assert_eq!(
+        retry.event_type(),
+        "document.processing.thumbnail.retry_scheduled"
+    );
+    assert_eq!(retry.data()["reason_code"], "lease_expired");
+    for transition in transitions {
+        assert_eq!(
+            transition.envelope.as_ref().unwrap().data()["revision_id"],
+            first.to_string()
+        );
+    }
+
+    execute(
+        db,
+        format!("UPDATE jobs SET scheduled_at = '2000-01-01T00:00:00Z' WHERE id = '{id}'"),
+    )
+    .await;
+    let reattempt = repos.jobs.dequeue().await.unwrap().unwrap();
+    let fence = repos
+        .jobs
+        .start_derived(&reattempt, thumbnail)
+        .await
+        .unwrap()
+        .unwrap();
+    let before = events(db).await.len();
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = '{second}' WHERE id = '{doc}'"),
+    )
+    .await;
+    assert!(!repos
+        .jobs
+        .complete_thumbnail(&fence, Some(42))
+        .await
+        .unwrap());
+    execute(
+        db,
+        format!("UPDATE jobs SET lease_expires_at = 0 WHERE id = '{id}'"),
+    )
+    .await;
+    assert_eq!(repos.jobs.reset_stuck().await.unwrap(), 1);
+    assert_eq!(events(db).await.len(), before);
+
+    let ocr = seed_revision_run(
+        db,
+        vault,
+        JobType::ExtractRevisionText {
+            document_id: doc,
+            revision_id: second,
+            force: true,
+        },
+        "ocr",
+    )
+    .await;
+    let embedding = uuid::Uuid::new_v4();
+    execute(
+        db,
+        format!(
+            "INSERT INTO processing_stage_runs (id, document_id, vault_id, revision_id, group_id,
+             stage, state, attempt, queue_attempt, created_at, updated_at)
+         VALUES ('{embedding}', '{doc}', '{vault}', '{second}', '{ocr}', 'embedding', 'pending',
+             0, 0, '2026-11-22T00:01:00Z', '2026-11-22T00:01:00Z')"
+        ),
+    )
+    .await;
+    let job = repos.jobs.dequeue().await.unwrap().unwrap();
+    assert_eq!(job.id, ocr);
+    let fence = repos.jobs.start_ocr(&job).await.unwrap().unwrap();
+    let before = events(db).await.len();
+    refuse_outbox(db).await;
+    assert!(repos.jobs.complete_ocr(&fence, "", false).await.is_err());
+    assert_eq!(events(db).await.len(), before);
+    allow_outbox(db).await;
+    assert!(repos.jobs.complete_ocr(&fence, "", false).await.unwrap());
+    assert!(!repos.jobs.complete_ocr(&fence, "", false).await.unwrap());
+    let outcomes = events(db).await;
+    let transitions = &outcomes[before..];
+    assert_eq!(transitions.len(), 2);
+    let done = transitions[0].envelope.as_ref().unwrap();
+    let skip = transitions[1].envelope.as_ref().unwrap();
+    assert_eq!(done.event_type(), "document.processing.ocr.completed");
+    assert_eq!(done.data()["has_text"], false);
+    assert_eq!(skip.event_type(), "document.processing.embedding.skipped");
+    assert_eq!(skip.data()["reason_code"], "no_text");
+    for transition in transitions {
+        assert_eq!(
+            transition.envelope.as_ref().unwrap().data()["revision_id"],
+            second.to_string()
+        );
+    }
 }
 
 #[tokio::test]

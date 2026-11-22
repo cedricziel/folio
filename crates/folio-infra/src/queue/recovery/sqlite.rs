@@ -19,27 +19,39 @@ async fn load(conn: &mut SqliteConnection, id: Uuid) -> Result<Option<JobRow>> {
     .map_err(repo_err)
 }
 
-async fn stages(conn: &mut SqliteConnection, id: Uuid) -> Result<Vec<StageRow>> {
-    sqlx::query_as("SELECT r.id, r.document_id, r.vault_id, r.stage, r.attempt,
+async fn stages(
+    conn: &mut SqliteConnection,
+    id: Uuid,
+    document_id: Uuid,
+    revision_id: Option<Uuid>,
+) -> Result<Vec<StageRow>> {
+    sqlx::query_as(
+        "SELECT r.id, r.document_id, r.vault_id, r.stage, r.attempt, r.revision_id,
                j.correlation_id, j.causation_id
         FROM processing_stage_runs r JOIN jobs j ON j.id = r.job_id
         JOIN documents d ON d.id = r.document_id
         JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
         WHERE j.id = ? AND r.group_id = j.processing_group_id AND r.vault_id = j.origin_vault_id
           AND d.vault_id = r.vault_id AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
-          AND r.state = 'running' AND r.is_current = TRUE AND r.revision_id IS NULL
-          AND (d.current_revision_id IS NULL OR EXISTS (
+          AND r.state = 'running' AND r.is_current = TRUE
+          AND d.id = ? AND r.revision_id IS ?
+          AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+          )) OR EXISTS (
               SELECT 1 FROM document_revisions revision
               WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
-                AND revision.vault_id = d.vault_id AND revision.number = 1
+                AND revision.vault_id = d.vault_id
+                AND (revision.id = r.revision_id OR (r.revision_id IS NULL AND revision.number = 1))
           ))
           AND r.claim_id = j.claim_id AND r.queue_attempt = j.attempts
-          AND j.correlation_id IS NOT NULL
-          AND json_extract(j.payload, '$.data.document_id') = d.id
-          AND json_extract(j.payload, '$.type') = CASE j.job_type
-              WHEN 'process_document' THEN 'ProcessDocument' WHEN 'extract_text' THEN 'ExtractText'
-              WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail' END")
-        .bind(id.to_string()).fetch_all(conn).await.map_err(repo_err)
+          AND j.correlation_id IS NOT NULL",
+    )
+    .bind(id.to_string())
+    .bind(document_id.to_string())
+    .bind(revision_id.map(|id| id.to_string()))
+    .fetch_all(conn)
+    .await
+    .map_err(repo_err)
 }
 
 async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Option<FailOutcome>> {
@@ -55,7 +67,8 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
     let Some(row) = load(&mut tx, id).await? else {
         return Ok(None);
     };
-    if row.document_id() != document_id {
+    let job = row.typed_job();
+    if job.as_ref().and_then(crate::queue::JobType::document_id) != document_id {
         return Ok(None);
     }
     let now: String = sqlx::query_scalar("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')")
@@ -66,7 +79,18 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
     let Some(decision) = failure.decision(&row, now)? else {
         return Ok(None);
     };
-    let running = stages(&mut tx, id).await?;
+    let running = match (document_id, job) {
+        (Some(document_id), Some(job)) => {
+            let mut running = stages(&mut tx, id, document_id, job.revision_id()).await?;
+            running.retain(|stage| {
+                stage
+                    .stage()
+                    .is_ok_and(|stage| super::super::stages::supports_stage(&job, stage))
+            });
+            running
+        }
+        _ => Vec::new(),
+    };
     let changed = sqlx::query(
         "UPDATE jobs SET status = ?, error = ?, scheduled_at = COALESCE(?, scheduled_at),
             completed_at = ?, updated_at = ?, claim_id = NULL, lease_expires_at = NULL
