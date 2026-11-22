@@ -145,6 +145,15 @@ On macOS, a `system-configuration` NULL-object panic during HTTP-client
 initialization can indicate blocked OS networking configuration access. Rerun
 with that access while keeping the temporary test state.
 
+## Verify mixed PDF OCR
+
+Run `cargo test -p folio-infra --lib ai::ocr::tests` and
+`cargo test -p folio-infra --test mixed_pdf_ocr` with Poppler, Tesseract, and
+English Tesseract language data installed. The synthetic PDF has four digital
+pages and one scanned page. Verify that only the scanned page reaches the
+OCR engine and that its recognized phrase is searchable after storing the text.
+The literal search check uses a temporary SQLite database.
+
 ## Verify configuration, storage, and provisioning
 
 Run `RUSTC_WRAPPER= cargo test -p folio-infra config::tests --lib` for canonical

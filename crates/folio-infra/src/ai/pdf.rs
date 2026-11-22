@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::process::Command;
 
@@ -12,9 +12,6 @@ use folio_core::error::{Error, Result};
 
 /// A page needs at least this many letters or digits to count as having text
 const MIN_ALNUM_PER_PAGE: usize = 20;
-
-/// Share of pages that must carry text before the text layer replaces OCR
-const MIN_TEXT_PAGE_RATIO: f32 = 0.8;
 
 /// Image format produced by [`render_pages`]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,16 +43,12 @@ impl PageFormat {
     }
 }
 
-/// Whether the text layer is substantial enough to skip OCR
-pub fn has_meaningful_text(pages: &[String]) -> bool {
-    if pages.is_empty() {
-        return false;
-    }
-    let with_text = pages
-        .iter()
-        .filter(|p| p.chars().filter(|c| c.is_alphanumeric()).count() >= MIN_ALNUM_PER_PAGE)
-        .count();
-    with_text as f32 / pages.len() as f32 >= MIN_TEXT_PAGE_RATIO
+pub(super) fn has_meaningful_text(page: &str) -> bool {
+    page.chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(MIN_ALNUM_PER_PAGE)
+        .count()
+        == MIN_ALNUM_PER_PAGE
 }
 
 fn tool_error(tool: &str, err: std::io::Error) -> Error {
@@ -98,9 +91,7 @@ async fn limit_for(pdf: &Path) -> Duration {
     limit_for_pages(pages)
 }
 
-/// Extract the embedded text layer, one string per page
-///
-/// Returns an empty vector when the PDF has no pages with text.
+/// Extract one string per PDF page, retaining empty pages.
 pub async fn text_layer(data: &[u8]) -> Result<Vec<String>> {
     let dir = tempfile::tempdir().map_err(|e| Error::Storage(e.to_string()))?;
     let pdf = dir.path().join("in.pdf");
@@ -127,38 +118,57 @@ pub async fn text_layer(data: &[u8]) -> Result<Vec<String>> {
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
-    let mut pages: Vec<String> = text.split('\x0c').map(str::to_string).collect();
-    // pdftotext terminates every page with a form feed, leaving one empty tail.
-    if pages.last().is_some_and(|p| p.trim().is_empty()) {
-        pages.pop();
-    }
-    Ok(pages)
+    // pdftotext terminates each page with a form feed, even if it has no text.
+    let Some(pages) = text.strip_suffix('\x0c') else {
+        return Ok(Vec::new());
+    };
+    Ok(pages.split('\x0c').map(str::to_string).collect())
 }
 
-/// Render every page of a PDF to an image at the given resolution
-pub async fn render_pages(data: &[u8], dpi: u32, format: PageFormat) -> Result<Vec<Vec<u8>>> {
+/// Render the requested sorted page numbers, or every page when none are specified.
+pub(super) async fn render_pages(
+    data: &[u8],
+    dpi: u32,
+    format: PageFormat,
+    page_numbers: Option<&[u32]>,
+) -> Result<Vec<Vec<u8>>> {
     let dir = tempfile::tempdir().map_err(|e| Error::Storage(e.to_string()))?;
     let pdf = dir.path().join("in.pdf");
     tokio::fs::write(&pdf, data)
         .await
         .map_err(|e| Error::Storage(format!("Failed to write temp PDF: {e}")))?;
 
-    let limit = limit_for(&pdf).await;
-    let output = process::output_within(
-        Command::new("pdftoppm")
-            .args([format.flag(), "-r", &dpi.to_string()])
-            .arg(&pdf)
-            .arg(dir.path().join("page")),
-        limit,
-    )
-    .await
-    .map_err(|e| tool_error("pdftoppm", e))?;
+    let (limit, ranges) = match page_numbers {
+        Some(pages) => (
+            limit_for_pages(pages.len().min(MAX_PAGES as usize) as u32),
+            pages
+                .chunk_by(|a, b| a.checked_add(1) == Some(*b))
+                .map(|run| Some((run[0], run[run.len() - 1])))
+                .collect::<Vec<_>>(),
+        ),
+        None => (limit_for(&pdf).await, vec![None]),
+    };
 
-    if !output.status.success() {
-        return Err(Error::AiService(format!(
-            "PDF conversion failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
+    let deadline = Instant::now() + limit;
+    let prefix = dir.path().join("page");
+    for range in ranges {
+        let mut command = Command::new("pdftoppm");
+        command.args([format.flag(), "-r", &dpi.to_string()]);
+        if let Some((first, last)) = range {
+            command.args(["-f", &first.to_string(), "-l", &last.to_string()]);
+        }
+        let output = process::output_within(
+            command.arg(&pdf).arg(&prefix),
+            deadline.saturating_duration_since(Instant::now()),
+        )
+        .await
+        .map_err(|e| tool_error("pdftoppm", e))?;
+        if !output.status.success() {
+            return Err(Error::AiService(format!(
+                "PDF conversion failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
     }
 
     let mut files = page_files(dir.path(), format.extension())?;
@@ -166,6 +176,12 @@ pub async fn render_pages(data: &[u8], dpi: u32, format: PageFormat) -> Result<V
     if files.is_empty() {
         return Err(Error::AiService(
             "PDF conversion produced no images".to_string(),
+        ));
+    }
+
+    if page_numbers.is_some_and(|pages| files.iter().map(|(n, _)| *n).ne(pages.iter().copied())) {
+        return Err(Error::AiService(
+            "PDF conversion did not produce the requested pages".into(),
         ));
     }
 
@@ -259,24 +275,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn sparse_text_layer_is_not_meaningful() {
-        assert!(!has_meaningful_text(&[]));
-        assert!(!has_meaningful_text(&["  \n".to_string()]));
-        assert!(!has_meaningful_text(&["p. 1".to_string()]));
-    }
-
-    #[test]
-    fn full_text_layer_is_meaningful() {
-        let page = "The quick brown fox jumps over the lazy dog".to_string();
-        assert!(has_meaningful_text(&[page.clone(), page]));
-    }
-
-    #[test]
-    fn one_text_page_among_many_scanned_pages_still_needs_ocr() {
-        let text = "The quick brown fox jumps over the lazy dog".to_string();
-        let mut pages = vec![String::new(); 9];
-        pages.push(text);
-        assert!(!has_meaningful_text(&pages));
+    fn only_pages_with_enough_letters_or_digits_have_meaningful_text() {
+        assert!(!has_meaningful_text(""));
+        assert!(!has_meaningful_text("p. 1"));
+        assert!(has_meaningful_text(
+            "The quick brown fox jumps over the lazy dog"
+        ));
     }
 
     #[tokio::test]
@@ -297,10 +301,23 @@ pub(crate) mod tests {
             eprintln!("skipping: pdftoppm not installed");
             return;
         }
-        let pages = render_pages(&tiny_pdf("Hello"), 72, PageFormat::Png)
+        let pages = render_pages(&tiny_pdf("Hello"), 72, PageFormat::Png, None)
             .await
             .unwrap();
         assert_eq!(pages.len(), 1);
         assert_eq!(&pages[0][..4], b"\x89PNG");
+    }
+    #[tokio::test]
+    async fn render_pages_accepts_disjoint_ranges() {
+        if !tool_available("pdftoppm") {
+            assert!(std::env::var_os("CI").is_none(), "CI must install pdftoppm");
+            eprintln!("skipping: pdftoppm not installed");
+            return;
+        }
+        let pdf = include_bytes!("../../tests/fixtures/mixed-digital-scan.pdf");
+        let images = render_pages(pdf, 72, PageFormat::Png, Some(&[1, 3, 4]))
+            .await
+            .unwrap();
+        assert_eq!(images.len(), 3);
     }
 }

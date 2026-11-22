@@ -12,7 +12,6 @@ use folio_core::ports::{
     EmbeddingBatch, EmbeddingService, OcrOutput, OcrService, SettingsRepository,
 };
 
-use super::ocr::TextLayerFirst;
 use super::registry::{EmbeddingRegistry, OcrRegistry, ProviderContext};
 use super::{embeddings, ocr};
 use crate::config::{AiConfig, Config};
@@ -100,14 +99,10 @@ impl PipelineContext {
         settings
     }
 
-    /// Build the configured OCR provider, wrapped with the PDF text-layer fast path
+    /// Build the configured OCR provider
     pub fn build_ocr(&self, settings: &PipelineSettings) -> Result<Arc<dyn OcrService>> {
         let ctx = self.provider_context(settings);
-        let engine = self.ocr_registry.create(&settings.ocr.provider, &ctx)?;
-        if settings.ocr.provider == "none" {
-            return Ok(engine);
-        }
-        Ok(Arc::new(TextLayerFirst::new(engine)))
+        self.ocr_registry.create(&settings.ocr.provider, &ctx)
     }
 
     /// Build the configured embedding provider

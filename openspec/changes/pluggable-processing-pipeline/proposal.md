@@ -5,7 +5,7 @@ OCR and embeddings are hard-wired to OpenAI and Anthropic with fixed model names
 ## What Changes
 
 - Introduce a provider registry per stage. OCR providers: `tesseract` (default), `openai-vision`, `anthropic-vision`, `ollama-vision`, `none`. Embedding providers: `openai` (any OpenAI-compatible endpoint), `ollama`, `fastembed` (cargo feature), `none` (default). Adding one is a module plus one registry line.
-- Use an embedded PDF text layer (`pdftotext`) instead of OCR when it is substantial.
+- Keep embedded text on each PDF page with at least 20 letters or digits. OCR the other pages and combine the text in page order.
 - Run OCR and embedding as separate tracked stages (`ocr_status`, `embed_status`) honouring `processing.auto_ocr` and `processing.auto_embed`.
 - Split text into overlapping chunks; store vectors per chunk with model id and dimensions; search only compares vectors of the active model and aggregates per document. Offer "Re-embed all".
 - **BREAKING**: replace `ai.provider`, `ai.ocr_model`, `ai.embedding_model` and `processing.auto_embedding` with `ocr.*`, `embeddings.*` and `processing.auto_embed`; a migration copies values. Existing embeddings are dropped and recomputed because they carry no model id.
