@@ -28,6 +28,15 @@ It covers identity changes on JSON, fetch, and HTML requests, matching-session
 reuse, cookieless session bounds, trusted proxies, shared secrets, repeated
 headers, and bearer-request isolation. Do not use a live gateway or user session.
 
+## Verify server shutdown
+
+Run `cargo test -p folio-app shutdown::tests` to check the HTTP drain deadline
+and completion or cancellation of background tasks. On Unix, run
+`cargo test -p folio-app --test shutdown`. This test starts a child process
+with its own SQLite database, storage directory, and loopback ports. It keeps
+`/events` connected during SIGTERM, checks clean exit and stream completion,
+and receives the final shutdown log through a local OTLP collector.
+
 ## Verify ingestion claims
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
