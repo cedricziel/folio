@@ -10,7 +10,7 @@ use crate::database::postgres::{
     capture_document, insert_domain_event_with_origin, insert_event_with_envelope,
 };
 use crate::queue::processing_scope::with_scope;
-use crate::queue::{insert_job_postgres, Job, JobType, DEFAULT_MAX_ATTEMPTS};
+use crate::queue::{insert_job_postgres, Job, DEFAULT_MAX_ATTEMPTS};
 
 use super::{
     claimed_ocr_document, embedding_skip_envelope, envelope, reason_code, repo_err, LoadedStage,
@@ -44,10 +44,9 @@ async fn load(
     if job.is_none() {
         return Ok(None);
     }
-    // Unbound legacy jobs can only publish before a document has been replaced.
     let row = sqlx::query_as::<_, StageRow>(
         "SELECT r.id::text AS run_id, r.vault_id::text, r.group_id::text, r.stage, r.state, r.attempt, j.payload::text AS payload,
-                r.claim_id::text AS stage_claim_id, r.queue_attempt AS stage_queue_attempt,
+                r.revision_id::text, r.claim_id::text AS stage_claim_id, r.queue_attempt AS stage_queue_attempt,
                 j.correlation_id::text, j.causation_id::text
          FROM documents d JOIN jobs j ON j.id = $1
          JOIN processing_stage_runs r ON r.document_id = d.id AND r.job_id = j.id
@@ -55,18 +54,24 @@ async fn load(
          WHERE d.id = $2 AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
            AND d.vault_id = j.origin_vault_id
            AND r.vault_id = j.origin_vault_id AND r.group_id = j.processing_group_id
-           AND r.stage = $6 AND r.is_current AND r.revision_id IS NULL
-           AND (d.current_revision_id IS NULL OR EXISTS (
+           AND r.stage = $6 AND r.is_current
+           AND r.revision_id::text IS NOT DISTINCT FROM j.payload->'data'->>'revision_id'
+           AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL) OR EXISTS (
                SELECT 1 FROM document_revisions revision
                WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
-                 AND revision.vault_id = d.vault_id AND revision.number = 1
+                 AND revision.vault_id = d.vault_id
+                 AND (revision.id = r.revision_id OR (r.revision_id IS NULL AND revision.number = 1))
            ))
            AND j.status = 'processing' AND j.claim_id = $3 AND j.attempts = $4
            AND j.lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint
            AND j.correlation_id IS NOT NULL
            AND j.job_type = $5 AND j.payload->>'type' = CASE j.job_type
                WHEN 'process_document' THEN 'ProcessDocument' WHEN 'extract_text' THEN 'ExtractText'
-               WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail' END
+               WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail'
+               WHEN 'process_document_revision' THEN 'ProcessDocumentRevision'
+               WHEN 'extract_revision_text' THEN 'ExtractRevisionText'
+               WHEN 'generate_revision_embedding' THEN 'GenerateRevisionEmbedding'
+               WHEN 'generate_revision_thumbnail' THEN 'GenerateRevisionThumbnail' END
            AND j.payload->'data'->>'document_id' = d.id::text
          FOR UPDATE OF r FOR SHARE OF v",
     )
@@ -83,7 +88,7 @@ async fn load(
         .transpose()
 }
 
-/// Start a seeded legacy OCR run, or return `None` for stale or terminal work.
+/// Start a seeded OCR run, or return `None` for stale or terminal work.
 /// Repeating a live claim returns the same fence without another event.
 pub async fn start_ocr(pool: &PgPool, job: &Job) -> Result<Option<OcrStageFence>> {
     let Some((document_id, claim_id)) = claimed_ocr_document(job) else {
@@ -132,6 +137,9 @@ async fn start_stage(
     else {
         return Ok(None);
     };
+    if stage.fence.revision_id != job.job_type.revision_id() {
+        return Ok(None);
+    }
     if stage.owns_running_attempt() {
         if !live_claim(&mut tx, &stage.fence).await? {
             return Ok(None);
@@ -275,16 +283,19 @@ async fn finish_ocr(
     }
     let mut owns_embedding: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM processing_stage_runs WHERE group_id = $1 AND document_id = $2
-             AND stage = 'embedding' AND is_current AND revision_id IS NULL)",
+             AND vault_id = $3 AND revision_id IS NOT DISTINCT FROM $4
+             AND stage = 'embedding' AND is_current)",
     )
     .bind(fence.group_id)
     .bind(fence.document_id)
+    .bind(fence.vault_id.0)
+    .bind(fence.revision_id)
     .fetch_one(&mut *tx)
     .await
     .map_err(repo_err)?;
     if !owns_embedding && content != prior_content {
-        let unassigned: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM processing_stage_runs WHERE group_id = $1 AND document_id = $2 AND vault_id = $3 AND stage = 'embedding' AND state = 'pending' AND attempt = 0 AND job_id IS NULL AND revision_id IS NULL)")
-            .bind(fence.group_id).bind(fence.document_id).bind(fence.vault_id.0)
+        let unassigned: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM processing_stage_runs WHERE group_id = $1 AND document_id = $2 AND vault_id = $3 AND stage = 'embedding' AND state = 'pending' AND attempt = 0 AND job_id IS NULL AND revision_id IS NOT DISTINCT FROM $4)")
+            .bind(fence.group_id).bind(fence.document_id).bind(fence.vault_id.0).bind(fence.revision_id)
             .fetch_one(&mut *tx).await.map_err(repo_err)?;
         if !unassigned {
             return Err(Error::Conflict(
@@ -293,8 +304,8 @@ async fn finish_ocr(
         }
         sqlx::query("UPDATE processing_stage_runs SET is_current = FALSE, updated_at = $1 WHERE document_id = $2 AND stage = 'embedding' AND is_current = TRUE")
             .bind(now).bind(fence.document_id).execute(&mut *tx).await.map_err(repo_err)?;
-        sqlx::query("UPDATE processing_stage_runs SET is_current = TRUE, updated_at = $1 WHERE document_id = $2 AND group_id = $3 AND stage = 'embedding' AND state = 'pending' AND attempt = 0 AND job_id IS NULL AND revision_id IS NULL")
-            .bind(now).bind(fence.document_id).bind(fence.group_id).execute(&mut *tx).await.map_err(repo_err)?;
+        sqlx::query("UPDATE processing_stage_runs SET is_current = TRUE, updated_at = $1 WHERE document_id = $2 AND group_id = $3 AND stage = 'embedding' AND state = 'pending' AND attempt = 0 AND job_id IS NULL AND vault_id = $4 AND revision_id IS NOT DISTINCT FROM $5")
+            .bind(now).bind(fence.document_id).bind(fence.group_id).bind(fence.vault_id.0).bind(fence.revision_id).execute(&mut *tx).await.map_err(repo_err)?;
         owns_embedding = true;
     }
     sqlx::query(
@@ -375,7 +386,7 @@ async fn complete_embedding_plan(
                 with_scope(Some(fence.scope()), async {
                     insert_job_postgres(
                         conn,
-                        JobType::generate_embedding(fence.document_id),
+                        fence.embedding_job(),
                         Utc::now(),
                         DEFAULT_MAX_ATTEMPTS,
                         crate::queue::JobTraceContext::current().as_ref(),
@@ -392,7 +403,7 @@ async fn complete_embedding_plan(
              job_id = COALESCE(job_id, $2), claim_id = NULL, reason_code = $8,
              retry_at = NULL, updated_at = $3
          WHERE group_id = $4 AND document_id = $5 AND vault_id = $6 AND stage = 'embedding'
-           AND state = 'pending' AND attempt = 0 AND is_current AND revision_id IS NULL
+           AND state = 'pending' AND attempt = 0 AND is_current AND revision_id IS NOT DISTINCT FROM $9
            AND EXISTS (SELECT 1 FROM jobs WHERE id = $2 AND claim_id = $7 AND attempts = $1
                AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint)
          RETURNING id",
@@ -405,12 +416,14 @@ async fn complete_embedding_plan(
     .bind(fence.vault_id.0)
     .bind(fence.claim_id)
     .bind(reason_code(reason)?)
+    .bind(fence.revision_id)
     .fetch_optional(&mut *conn)
     .await
     .map_err(repo_err)?;
     let run_id = run_id
         .ok_or_else(|| Error::Conflict("Pending embedding run or OCR lease changed".into()))?;
-    let event = embedding_skip_envelope(snapshot, run_id, lineage, reason).await?;
+    let event =
+        embedding_skip_envelope(snapshot, run_id, fence.revision_id, lineage, reason).await?;
     insert_event_with_envelope(
         conn,
         &DocumentEvent::Processed {
