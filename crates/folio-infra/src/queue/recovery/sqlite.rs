@@ -130,6 +130,22 @@ pub(in crate::queue) async fn fail(
     .unwrap_or(FailOutcome::LostLease))
 }
 
+/// Fail an expired row whose id is not a UUID, so recovery stops retrying it
+async fn fail_unreadable_id(pool: &SqlitePool, id: &str) -> Result<Option<FailOutcome>> {
+    tracing::warn!(job.id = %id, field = "id", "Failing expired job row with an unreadable id");
+    let now = Utc::now().to_rfc3339();
+    let changed = sqlx::query("UPDATE jobs SET status = 'failed', error = ?, updated_at = ?, completed_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND status = 'processing'")
+        .bind(crate::queue::damaged_row_message("id", "not a valid id"))
+        .bind(&now)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(repo_err)?
+        .rows_affected();
+    Ok((changed == 1).then_some(FailOutcome::GaveUp))
+}
+
 pub(in crate::queue) async fn reset_stuck(pool: &SqlitePool) -> Result<i64> {
     let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= unixepoch())")
         .fetch_all(pool).await.map_err(repo_err)?;
@@ -137,7 +153,7 @@ pub(in crate::queue) async fn reset_stuck(pool: &SqlitePool) -> Result<i64> {
     for id in ids {
         let settled = match id.parse() {
             Ok(id) => settle(pool, id, Failure::Expired).await,
-            Err(error) => Err(repo_err(error)),
+            Err(_) => fail_unreadable_id(pool, &id).await,
         };
         match settled {
             Ok(Some(_)) => recovered += 1,

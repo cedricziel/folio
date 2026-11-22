@@ -207,6 +207,23 @@ pub struct Job {
 /// Retry budget of a job unless the caller sets one
 pub(crate) const DEFAULT_MAX_ATTEMPTS: i32 = 3;
 pub(crate) const LEASE_SECONDS: i64 = 300;
+/// Most unreadable rows one dequeue call sets aside before handing control back to the worker
+pub(crate) const MAX_UNREADABLE_PER_DEQUEUE: usize = 100;
+
+/// Plain-words reason a stored payload cannot be read; never quotes the payload
+pub(crate) fn payload_problem(error: &serde_json::Error) -> &'static str {
+    use serde_json::error::Category;
+    match error.classify() {
+        Category::Data if error.to_string().starts_with("unknown variant") => "unknown job type",
+        Category::Data => "wrong shape",
+        _ => "not valid JSON",
+    }
+}
+
+/// The error stored on a job row that was set aside because a field could not be read
+pub(crate) fn damaged_row_message(field: &str, problem: &str) -> String {
+    format!("Job row is damaged: its {field} could not be read ({problem})")
+}
 pub(crate) const HEARTBEAT_SECONDS: u64 = 60;
 
 /// Job queue backed by the configured database.

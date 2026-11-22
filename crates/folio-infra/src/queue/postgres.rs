@@ -6,12 +6,15 @@
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgConnection, PgPool};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
+use super::{
+    damaged_row_message, payload_problem, FailOutcome, Job, JobClass, JobStatus, JobType,
+    DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, MAX_UNREADABLE_PER_DEQUEUE,
+};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
 pub(crate) async fn insert_job(
@@ -98,27 +101,26 @@ macro_rules! job_columns {
     };
 }
 
-impl TryFrom<JobRow> for Job {
-    type Error = Error;
-
-    fn try_from(row: JobRow) -> Result<Self> {
-        let job_type: JobType = serde_json::from_str(&row.payload)
-            .map_err(|e| Error::Repository(format!("Failed to deserialize job: {}", e)))?;
+impl JobRow {
+    /// Build the job, or say in plain words which field could not be read
+    fn into_job(self) -> std::result::Result<Job, &'static str> {
+        let job_type: JobType =
+            serde_json::from_str(&self.payload).map_err(|e| payload_problem(&e))?;
         Ok(Job {
-            id: row.id,
+            id: self.id,
             job_type,
-            status: JobStatus::from(row.status),
-            attempts: row.attempts,
-            max_attempts: row.max_attempts,
-            error: row.error,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-            scheduled_at: row.scheduled_at,
-            started_at: row.started_at,
-            completed_at: row.completed_at,
-            claim_id: row.claim_id,
-            lease_expires_at: row.lease_expires_at,
-            trace: super::JobTraceContext::from_columns(row.trace_parent, row.trace_state),
+            status: JobStatus::from(self.status),
+            attempts: self.attempts,
+            max_attempts: self.max_attempts,
+            error: self.error,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            scheduled_at: self.scheduled_at,
+            started_at: self.started_at,
+            completed_at: self.completed_at,
+            claim_id: self.claim_id,
+            lease_expires_at: self.lease_expires_at,
+            trace: super::JobTraceContext::from_columns(self.trace_parent, self.trace_state),
         })
     }
 }
@@ -183,7 +185,23 @@ impl PostgresJobQueue {
         Ok(id)
     }
 
+    /// Claim the next job; a row that cannot be read is marked failed and skipped
     pub async fn dequeue(&self, class: Option<JobClass>) -> Result<Option<Job>> {
+        for _ in 0..MAX_UNREADABLE_PER_DEQUEUE {
+            let Some(row) = self.claim_next(class).await? else {
+                return Ok(None);
+            };
+            let (id, claim_id) = (row.id, row.claim_id);
+            match row.into_job() {
+                Ok(job) => return Ok(Some(job)),
+                Err(problem) => self.quarantine(id, claim_id, problem).await?,
+            }
+        }
+        warn!("Set aside {MAX_UNREADABLE_PER_DEQUEUE} unreadable job rows in one call, pausing");
+        Ok(None)
+    }
+
+    async fn claim_next(&self, class: Option<JobClass>) -> Result<Option<JobRow>> {
         let now = Utc::now();
         let class_filter = class.map_or("TRUE", JobClass::condition);
 
@@ -207,8 +225,22 @@ impl PostgresJobQueue {
         .fetch_optional(&self.pool)
         .await
         .map_err(repo_err("Failed to dequeue job"))?;
+        Ok(row)
+    }
 
-        row.map(TryInto::try_into).transpose()
+    /// Take an unreadable row out of circulation, keeping it for an operator to inspect
+    async fn quarantine(&self, id: Uuid, claim_id: Option<Uuid>, problem: &str) -> Result<()> {
+        warn!(job_id = %id, field = "payload", "Skipping job row with an unreadable field");
+        sqlx::query(
+            "UPDATE jobs SET status = 'failed', error = $1, updated_at = now(), completed_at = now(), claim_id = NULL, lease_expires_at = NULL WHERE id = $2 AND claim_id = $3",
+        )
+        .bind(damaged_row_message("payload", problem))
+        .bind(id)
+        .bind(claim_id)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err("Failed to quarantine job"))?;
+        Ok(())
     }
 
     pub async fn complete(&self, job: &Job) -> Result<bool> {
@@ -317,7 +349,19 @@ impl PostgresJobQueue {
         .await
         .map_err(repo_err("Failed to find jobs for document"))?;
 
-        rows.into_iter().map(TryInto::try_into).collect()
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = row.id;
+                match row.into_job() {
+                    Ok(job) => Some(job),
+                    Err(_) => {
+                        warn!(job_id = %id, field = "payload", "Ignoring job row with an unreadable field");
+                        None
+                    }
+                }
+            })
+            .collect())
     }
 
     pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {
