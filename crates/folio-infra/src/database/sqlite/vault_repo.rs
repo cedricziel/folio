@@ -640,6 +640,21 @@ impl AuditLog for SqliteVaultRepository {
     }
 
     async fn list(&self, vault: VaultId, limit: u32) -> Result<Vec<AuditEvent>> {
+        self.audit_history(vault, limit, false).await
+    }
+
+    async fn list_lifecycle(&self, vault: VaultId, limit: u32) -> Result<Vec<AuditEvent>> {
+        self.audit_history(vault, limit, true).await
+    }
+}
+
+impl SqliteVaultRepository {
+    async fn audit_history(
+        &self,
+        vault: VaultId,
+        limit: u32,
+        lifecycle_only: bool,
+    ) -> Result<Vec<AuditEvent>> {
         type Row = (
             String,
             String,
@@ -652,10 +667,15 @@ impl AuditLog for SqliteVaultRepository {
         );
         let rows: Vec<Row> = sqlx::query_as(
             "SELECT id, at, actor_user_id, action, vault_id, target_type, target_id, details
-             FROM audit_events WHERE vault_id = $1 ORDER BY at DESC, id LIMIT $2",
+             FROM audit_events WHERE vault_id = $1
+             AND (NOT $3 OR action IN ('vault.created', 'vault.updated', 'vault.deleted',
+                 'vault.restored', 'vault_membership.granted', 'vault_membership.role_changed',
+                 'vault_membership.revoked'))
+             ORDER BY at DESC, id LIMIT $2",
         )
         .bind(vault.to_string())
         .bind(limit as i64)
+        .bind(lifecycle_only)
         .fetch_all(&self.pool)
         .await
         .map_err(db)?;

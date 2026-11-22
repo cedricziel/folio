@@ -492,6 +492,34 @@ async fn lifecycle_contract(db: Database) {
     assert!(history.iter().any(|event| event.action == "vault.deleted"));
     assert!(history.iter().any(|event| event.action == "vault.restored"));
 
+    let lifecycle_ids: Vec<_> = history.iter().map(|event| event.id).collect();
+    for _ in 0..101 {
+        r.audit
+            .record(folio_core::models::NewAuditEvent {
+                actor: None,
+                action: "document.moved".into(),
+                vault_id: Some(vault.id),
+                target_type: Some("document".into()),
+                target_id: Some(document.id.to_string()),
+                details: json!({}),
+            })
+            .await
+            .unwrap();
+    }
+    let service = folio_core::services::VaultService::new(r.vaults.clone(), r.members.clone())
+        .with_audit(r.audit.clone());
+    let retained_history = service
+        .history(&UserId::from("vault-owner"), vault.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        retained_history
+            .iter()
+            .map(|event| event.id)
+            .collect::<Vec<_>>(),
+        lifecycle_ids
+    );
+
     let group = r
         .members
         .ensure_group("external", "vault-recovery")
