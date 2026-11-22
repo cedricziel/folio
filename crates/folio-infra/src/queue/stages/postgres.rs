@@ -56,7 +56,9 @@ async fn load(
            AND r.vault_id = j.origin_vault_id AND r.group_id = j.processing_group_id
            AND r.stage = $6 AND r.is_current
            AND r.revision_id::text IS NOT DISTINCT FROM j.payload->'data'->>'revision_id'
-           AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL) OR EXISTS (
+           AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL AND NOT EXISTS (
+               SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+           )) OR EXISTS (
                SELECT 1 FROM document_revisions revision
                WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
                  AND revision.vault_id = d.vault_id

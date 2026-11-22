@@ -35,7 +35,9 @@ async fn stages(
           AND d.vault_id = r.vault_id AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
           AND r.state = 'running' AND r.is_current = TRUE
           AND d.id = ? AND r.revision_id IS ?
-          AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL) OR EXISTS (
+          AND ((r.revision_id IS NULL AND d.current_revision_id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+          )) OR EXISTS (
               SELECT 1 FROM document_revisions revision
               WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
                 AND revision.vault_id = d.vault_id

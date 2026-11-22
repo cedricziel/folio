@@ -602,6 +602,23 @@ async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
         .unwrap()
         .expect("revision one accepts a legacy job");
     let before = events(db).await.len();
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = NULL WHERE id = '{doc}'"),
+    )
+    .await;
+    assert!(repos
+        .jobs
+        .start_derived(&job, ProcessingEventStage::Thumbnail)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!repos
+        .jobs
+        .complete_thumbnail(&fence, Some(42))
+        .await
+        .unwrap());
+    assert_eq!(events(db).await.len(), before);
 
     execute(db, format!(
         "INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
@@ -625,12 +642,22 @@ async fn legacy_claim_is_fenced_by_replacement(db: &Database) {
         .skip_derived(&fence, ProcessingReason::ProviderDisabled)
         .await
         .unwrap());
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = NULL WHERE id = '{doc}'"),
+    )
+    .await;
     repos
         .jobs
         .fail(&job, "synthetic expired work", true)
         .await
         .unwrap();
     assert_eq!(events(db).await.len(), before);
+    execute(
+        db,
+        format!("UPDATE documents SET current_revision_id = '{second}' WHERE id = '{doc}'"),
+    )
+    .await;
     assert_eq!(
         repos
             .documents
