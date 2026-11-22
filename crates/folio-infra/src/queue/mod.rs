@@ -357,6 +357,15 @@ impl JobQueue {
         )
     }
 
+    pub(super) async fn repair_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        stage: folio_core::models::ProcessingStage,
+    ) -> Result<bool> {
+        dispatch!(self, repair_current_processing(vault, document_id, stage))
+    }
+
     /// Claim the next available job of any class
     pub async fn dequeue(&self) -> Result<Option<Job>> {
         dispatch!(self, dequeue(None))
