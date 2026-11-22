@@ -27,6 +27,15 @@ struct JobRow {
 }
 
 impl JobRow {
+    fn origin(&self) -> Result<folio_core::EventOrigin> {
+        Ok(
+            match serde_json::from_str::<JobType>(&self.payload).map_err(repo_err)? {
+                JobType::GenerateEmbedding { origin, .. } => origin,
+                _ => folio_core::EventOrigin::User,
+            },
+        )
+    }
+
     fn document_id(&self) -> Option<Uuid> {
         let job = serde_json::from_str::<JobType>(&self.payload).ok()?;
         if job.type_name() == self.job_type {

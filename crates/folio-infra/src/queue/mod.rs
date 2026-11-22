@@ -285,6 +285,82 @@ impl JobQueue {
         dispatch!(self, complete(job))
     }
 
+    /// Start a seeded embedding or thumbnail attempt under its queue claim.
+    pub async fn start_derived(
+        &self,
+        job: &Job,
+        stage: folio_core::processing_events::ProcessingEventStage,
+    ) -> Result<Option<stages::StageFence>> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::start_derived(queue.pool(), job, stage).await,
+            Self::Postgres(queue) => {
+                stages::postgres::start_derived(queue.pool(), job, stage).await
+            }
+        }
+    }
+
+    /// Commit embedding chunks and their terminal event atomically.
+    pub async fn complete_embedding(
+        &self,
+        fence: &stages::StageFence,
+        expected_content: &str,
+        model: &str,
+        chunks: &[folio_core::ports::EmbeddedChunk],
+    ) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => {
+                stages::sqlite::complete_embedding(
+                    queue.pool(),
+                    fence,
+                    expected_content,
+                    model,
+                    chunks,
+                )
+                .await
+            }
+            Self::Postgres(queue) => {
+                stages::postgres::complete_embedding(
+                    queue.pool(),
+                    fence,
+                    expected_content,
+                    model,
+                    chunks,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Skip a derived stage with an allowlisted reason.
+    pub async fn skip_derived(
+        &self,
+        fence: &stages::StageFence,
+        reason: folio_core::processing_events::ProcessingReason,
+    ) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => stages::sqlite::skip_derived(queue.pool(), fence, reason).await,
+            Self::Postgres(queue) => {
+                stages::postgres::skip_derived(queue.pool(), fence, reason).await
+            }
+        }
+    }
+
+    /// Publish thumbnail references and their terminal event atomically.
+    pub async fn complete_thumbnail(
+        &self,
+        fence: &stages::StageFence,
+        page_count: Option<u32>,
+    ) -> Result<bool> {
+        match self {
+            Self::Sqlite(queue) => {
+                stages::sqlite::complete_thumbnail(queue.pool(), fence, page_count).await
+            }
+            Self::Postgres(queue) => {
+                stages::postgres::complete_thumbnail(queue.pool(), fence, page_count).await
+            }
+        }
+    }
+
     /// Mark a job as failed, rescheduling it when `retry` is set and attempts remain
     pub async fn fail(&self, job: &Job, error: &str, retry: bool) -> Result<FailOutcome> {
         dispatch!(self, fail(job, error, retry))
