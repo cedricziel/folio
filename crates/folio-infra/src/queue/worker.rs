@@ -1770,7 +1770,12 @@ mod tests {
             .unwrap();
         let path = folio_core::ports::keys::original(doc.id);
         storage
-            .put(&path, b"not a real png".as_slice().into())
+            .put(
+                &path,
+                include_bytes!("../../../../static/icons/icon-192.png")
+                    .as_slice()
+                    .into(),
+            )
             .await
             .unwrap();
         repo.set_file_path(crate::database::test_vault(), doc.id, &path)
@@ -2015,12 +2020,22 @@ mod tests {
 
             let stored = f.repo.find_by_id(vault, doc.id).await.unwrap().unwrap();
             assert_eq!(stored.page_count, Some(pages));
+            let prefix = f
+                .repo
+                .thumbnail_result_prefix(vault, doc.id)
+                .await
+                .unwrap()
+                .unwrap();
             assert!(f
                 .storage
-                .exists(&keys::page(doc.id, PREVIEW_PAGE_LIMIT))
+                .exists(&format!("{prefix}/pages/{PREVIEW_PAGE_LIMIT}.jpg"))
                 .await
                 .unwrap());
-            assert!(!f.storage.exists(&keys::page(doc.id, pages)).await.unwrap());
+            assert!(!f
+                .storage
+                .exists(&format!("{prefix}/pages/{pages}.jpg"))
+                .await
+                .unwrap());
         }
     }
 
