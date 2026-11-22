@@ -94,6 +94,29 @@ async fn back_link_names_and_restores_the_origin_list() {
 }
 
 #[tokio::test]
+async fn history_restore_requires_the_folio_origin() {
+    let h = common::harness().await;
+    let id = document(&h).await;
+    let list = format!("/vaults/{}/?view=all", h.vault);
+    let target = encode(&list);
+    let detail = format!("/vaults/{}/documents/{id}?return_to={target}", h.vault);
+    for (origin, restores) in [
+        (h.state.public_url.as_str(), true),
+        ("http://other.test", false),
+    ] {
+        let mut request = common::get(&detail);
+        request
+            .headers_mut()
+            .insert("referer", format!("{origin}{list}").parse().unwrap());
+        let response = h.app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let html = common::text(response).await;
+        assert_eq!(html.contains(" data-back-restores"), restores);
+        assert_eq!(back_link(&html).0, list);
+    }
+}
+
+#[tokio::test]
 async fn back_link_falls_back_to_the_inbox() {
     let h = common::harness().await;
     let id = document(&h).await;

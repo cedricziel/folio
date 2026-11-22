@@ -331,19 +331,15 @@ fn back_to_document(id: Uuid, return_to: Option<&str>) -> Response {
 }
 
 /// Whether the browser came from `href`, so going back can restore that page as it was
-fn referrer_is(headers: &axum::http::HeaderMap, href: &str) -> bool {
+fn referrer_is(headers: &HeaderMap, public_url: &str, href: &str) -> bool {
+    let Ok(target) = url::Url::parse(public_url).and_then(|base| base.join(href)) else {
+        return false;
+    };
     headers
-        .get(axum::http::header::REFERER)
+        .get(header::REFERER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| url::Url::parse(value).ok())
-        .is_some_and(|referrer| {
-            let mut target = referrer.path().to_owned();
-            if let Some(query) = referrer.query() {
-                target.push('?');
-                target.push_str(query);
-            }
-            target == href
-        })
+        .is_some_and(|referrer| referrer == target)
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -423,7 +419,7 @@ async fn document_detail(
         show_page_nav: live.show_page_nav,
         page_count: live.page_count,
         pages_without_preview: live.pages_without_preview,
-        back_restores: referrer_is(&headers, &back.href),
+        back_restores: referrer_is(&headers, &state.public_url, &back.href),
         return_to: back.target.clone(),
         back_href: back.href,
         back_label: back.label,
