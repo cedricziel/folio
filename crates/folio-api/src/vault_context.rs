@@ -87,40 +87,123 @@ pub fn can_edit_document(document: &Document) -> bool {
         .unwrap_or(false)
 }
 
+pub struct ProcessingSummary {
+    pub title: &'static str,
+    pub status: &'static str,
+    pub detail: Option<&'static str>,
+    pub attempt: u32,
+    pub retry_at: Option<String>,
+}
+
+pub fn processing_summaries(
+    document: &Document,
+    stages: &[folio_core::models::ProcessingStageSummary],
+) -> Vec<ProcessingSummary> {
+    use folio_core::models::{ProcessingStatus, StageOutcome};
+    use folio_core::processing_events::{ProcessingEventStage, ProcessingReason};
+
+    let mut summaries = Vec::new();
+    for (stage, title, running, legacy) in [
+        (
+            ProcessingEventStage::Ocr,
+            "Text extraction",
+            "Reading",
+            Some(document.ocr_status),
+        ),
+        (
+            ProcessingEventStage::Embedding,
+            "Search indexing",
+            "Indexing",
+            Some(document.embed_status),
+        ),
+        (
+            ProcessingEventStage::Thumbnail,
+            "Page previews",
+            "Generating",
+            None,
+        ),
+    ] {
+        if let Some(current) = stages.iter().find(|summary| summary.stage == stage) {
+            let status = match current.state {
+                StageOutcome::Pending => "Waiting",
+                StageOutcome::Running => running,
+                StageOutcome::WaitingToRetry => "Waiting to retry",
+                StageOutcome::Completed
+                    if stage == ProcessingEventStage::Ocr && current.has_text == Some(false) =>
+                {
+                    "Completed with no text"
+                }
+                StageOutcome::Completed => "Completed",
+                StageOutcome::Failed => "Failed",
+                StageOutcome::Skipped => "Skipped",
+            };
+            let detail = match current.reason_code {
+                Some(ProcessingReason::ProviderDisabled) => Some("Disabled in settings."),
+                Some(ProcessingReason::NoText) => Some("There is no extracted text to index."),
+                Some(ProcessingReason::UnsupportedFormat) => {
+                    Some("Page previews are unavailable for this file type.")
+                }
+                Some(ProcessingReason::ProviderFailed) => {
+                    Some("The processing service could not complete this attempt.")
+                }
+                Some(ProcessingReason::InvalidResponse) => {
+                    Some("The processing service returned an unusable result.")
+                }
+                Some(ProcessingReason::StorageFailed) => Some("A file could not be read or saved."),
+                Some(ProcessingReason::LeaseExpired) => {
+                    Some("The processing attempt expired before finishing.")
+                }
+                None if current.state == StageOutcome::Failed => {
+                    Some("Processing did not finish. The original file is unchanged.")
+                }
+                None => None,
+            };
+            summaries.push(ProcessingSummary {
+                title,
+                status,
+                detail,
+                attempt: current.attempt,
+                retry_at: current
+                    .retry_at
+                    .map(|time| time.format("%Y-%m-%d %H:%M UTC").to_string()),
+            });
+        } else if let Some(legacy) = legacy {
+            let status = match legacy {
+                ProcessingStatus::Pending => "Waiting",
+                ProcessingStatus::Running => running,
+                ProcessingStatus::Done
+                    if stage == ProcessingEventStage::Ocr
+                        && document.content.as_deref() == Some("") =>
+                {
+                    "Completed with no text"
+                }
+                ProcessingStatus::Done => "Completed",
+                ProcessingStatus::Failed => "Last attempt failed",
+                ProcessingStatus::Skipped => "Skipped",
+            };
+            let detail = if legacy == ProcessingStatus::Failed {
+                Some(if stage == ProcessingEventStage::Ocr {
+                    "Text extraction did not finish. The original file is unchanged."
+                } else {
+                    "Search indexing did not finish. The original file is unchanged."
+                })
+            } else {
+                None
+            };
+            summaries.push(ProcessingSummary {
+                title,
+                status,
+                detail,
+                attempt: 0,
+                retry_at: None,
+            });
+        }
+    }
+    summaries
+}
+
 pub mod filters {
     use super::*;
-
-    #[askama::filter_fn]
-    pub fn processing_status(
-        status: &folio_core::models::ProcessingStatus,
-        _: &dyn askama::Values,
-    ) -> askama::Result<&'static str> {
-        Ok(processing_label(status))
-    }
-
-    fn processing_label(status: &folio_core::models::ProcessingStatus) -> &'static str {
-        use folio_core::models::ProcessingStatus;
-        match status {
-            ProcessingStatus::Pending => "Waiting",
-            ProcessingStatus::Running => "Running",
-            ProcessingStatus::Done => "Completed",
-            ProcessingStatus::Failed => "Last attempt failed",
-            ProcessingStatus::Skipped => "Skipped",
-        }
-    }
-
-    #[askama::filter_fn]
-    pub fn ocr_processing_status(
-        document: &Document,
-        _: &dyn askama::Values,
-    ) -> askama::Result<&'static str> {
-        if document.ocr_status == folio_core::models::ProcessingStatus::Done
-            && document.content.as_deref() == Some("")
-        {
-            return Ok("Completed with no text");
-        }
-        Ok(processing_label(&document.ocr_status))
-    }
 
     #[askama::filter_fn]
     pub fn vault_url(

@@ -279,6 +279,7 @@ async function seed(request, { withBroken = true } = {}) {
     "create source",
   );
 
+  let brokenId;
   if (withBroken) {
     const res = await request.post("/api/documents/upload", {
       multipart: {
@@ -291,10 +292,10 @@ async function seed(request, { withBroken = true } = {}) {
       },
     });
     const broken = await json(res, "upload broken");
-    // Wait for the worker to give up, so screenshots show a settled state.
-    await waitProcessed(request, [broken.id], { ocrOnly: true });
+    brokenId = broken.id;
+    await waitProcessed(request, [brokenId], { ocrOnly: true });
   }
-  return { skipped: false, ids, documents: uploaded };
+  return { skipped: false, ids, documents: uploaded, brokenId };
 }
 
 module.exports = { seed, pdf, documents, brokenDocument };

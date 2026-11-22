@@ -20,7 +20,7 @@ for (const screen of config.screens.filter((s) => s.snapshot)) {
   for (const viewport of viewportsFor(screen, ["desktop", "mobile"])) {
     for (const theme of config.themes) {
       test(`snapshot: ${screen.name} ${viewport.name} ${theme}`, async ({ browser }) => {
-        await instance.ready(browser, { seeded: true });
+        await instance.ready(browser, { seeded: true, freezeFailedStage: true });
         const context = await instance.context(browser, screen, viewport, theme);
         const page = await context.newPage();
         await tour.openScreen(page, screen);

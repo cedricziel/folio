@@ -810,6 +810,18 @@ extension Document {
         canEditDocumentDate = raw.value2.canEditDocumentDate ?? false
         canReviewDocument = raw.value2.canReviewDocument ?? false
         reviewed = raw.value2.reviewed
+        processingStages = try (raw.value2.processingStages ?? []).map { stage in
+            guard let kind = ProcessingStageSummary.Stage(rawValue: stage.stage.rawValue),
+                let state = ProcessingStageSummary.State(rawValue: stage.state.rawValue)
+            else { throw FolioError.unreadableResponse }
+            return try ProcessingStageSummary(
+                runID: LiveFolioService.uuid(stage.runId),
+                revisionID: stage.revisionId.map(LiveFolioService.uuid),
+                stage: kind, attempt: Int(stage.attempt), state: state,
+                reason: stage.reasonCode.flatMap { ProcessingStageSummary.Reason(rawValue: $0.rawValue) },
+                retryAt: stage.retryAt, hasText: stage.hasText
+            )
+        }
         tags = try raw.value2.tags.map {
             try Tag(id: LiveFolioService.uuid($0.id), name: $0.name, color: $0.color, deletedAt: $0.deletedAt)
         }
