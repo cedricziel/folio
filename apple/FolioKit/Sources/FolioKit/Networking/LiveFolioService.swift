@@ -586,17 +586,57 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
         }
     }
 
-    public func downloadFile(for document: Document) async throws -> URL {
-        try await call("documents.downloadFile") { try await downloadFileRequest(for: document) }
+    public func fileRevisions(for documentID: Document.ID, before: Int64?) async throws -> DocumentFileRevisionPage? {
+        do {
+            return try await call("documents.fileRevisions") {
+                let page = try await client.listDocumentRevisions(
+                    path: .init(id: documentID.uuidString.lowercased()), query: .init(before: before)
+                ).ok.body.json
+                let revisions = try page.revisions.map { revision in
+                    let status = revision.original.verification.rawValue
+                    guard let verification = DocumentFileRevision.Verification(rawValue: status) else {
+                        throw FolioError.unreadableResponse
+                    }
+                    return try DocumentFileRevision(
+                        id: Self.uuid(revision.id), number: revision.number, isCurrent: revision.isCurrent,
+                        createdAt: revision.createdAt, filename: revision.original.filename,
+                        mimeType: revision.original.mimeType, verification: verification,
+                        byteSize: revision.original.byteSize
+                    )
+                }
+                return DocumentFileRevisionPage(revisions: revisions, nextBefore: page.nextBefore)
+            }
+        } catch FolioError.server(status: 404, message: nil) {
+            return nil
+        }
     }
 
-    private func downloadFileRequest(for document: Document) async throws -> URL {
-        let request = URLRequest(url: endpoint("api/documents/\(document.id.uuidString.lowercased())/download"))
+    public func downloadFile(for document: Document) async throws -> URL {
+        try await call("documents.downloadFile") {
+            try await downloadFileRequest(
+                path: "api/documents/\(document.id.uuidString.lowercased())/download",
+                filename: document.originalFilename, mimeType: document.mimeType
+            )
+        }
+    }
+
+    public func downloadFile(for documentID: Document.ID, revision: DocumentFileRevision) async throws -> URL {
+        try await call("documents.downloadRevision") {
+            let documentPath = "api/documents/\(documentID.uuidString.lowercased())"
+            return try await downloadFileRequest(
+                path: "\(documentPath)/revisions/\(revision.id.uuidString.lowercased())/download",
+                filename: revision.filename, mimeType: revision.mimeType
+            )
+        }
+    }
+
+    private func downloadFileRequest(path: String, filename: String?, mimeType: String?) async throws -> URL {
+        let request = URLRequest(url: endpoint(path))
         let (temporary, response) = try await authorizedTransfer(request) { try await session.download(for: $0) }
         defer { try? FileManager.default.removeItem(at: temporary) }
         try check(response, body: Self.prefix(of: temporary, upTo: 65_536))
 
-        let filename = Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
+        let filename = Self.safeFilename(filename, mimeType: mimeType)
         let directory =
             downloadDirectory
             ?? FileManager.default.temporaryDirectory
