@@ -1,10 +1,12 @@
 mod common;
 
 use folio_core::models::{
-    CreateDocument, MetadataChange, MetadataExactFilter, MetadataFieldInput, MetadataKind,
-    MetadataSearchQuery, MetadataValue,
+    CreateDocument, DocumentFilter, DocumentPageQuery, DocumentSort, MetadataChange,
+    MetadataExactFilter, MetadataFieldInput, MetadataKind, MetadataSearchQuery, MetadataValue,
 };
-use folio_core::ports::MetadataValueRepository;
+use folio_core::ports::{EmbeddedChunk, MetadataValueRepository};
+
+const MODEL: &str = "metadata:scope-test";
 use folio_core::Error;
 use folio_infra::database::{
     postgres::PostgresMetadataValueRepository, sqlite::SqliteMetadataValueRepository,
@@ -83,6 +85,24 @@ async fn search_contract(db: &Database) {
         }
         values
             .patch(owner, document.id, None, changes)
+            .await
+            .unwrap();
+        repos
+            .search
+            .store_chunks(
+                owner,
+                document.id,
+                MODEL,
+                &[EmbeddedChunk {
+                    index: 0,
+                    text: name.into(),
+                    embedding: match name {
+                        "Nearest" => vec![1.0, 0.0, 0.0],
+                        "Invoice" => vec![0.5, 0.5, 0.0],
+                        _ => vec![0.0, 0.0, 1.0],
+                    },
+                }],
+            )
             .await
             .unwrap();
         if matches!(name, "Invoice" | "Receipt") {
@@ -166,6 +186,97 @@ async fn search_contract(db: &Database) {
     assert_eq!(boolean.documents.len(), 1);
     assert_eq!(boolean.documents[0].title, "Invoice");
 
+    let mut page_query = DocumentPageQuery {
+        filter: DocumentFilter {
+            metadata_exact: Some(query("9007199254740993.0100", 1, None).filter),
+            ..Default::default()
+        },
+        sort: DocumentSort::Title,
+        limit: 1,
+        ..Default::default()
+    };
+    let first_page = repos
+        .documents
+        .page(vault, page_query.clone())
+        .await
+        .unwrap();
+    assert_eq!(first_page.documents[0].title, "Invoice");
+    page_query.cursor = first_page.next_cursor;
+    assert!(page_query.cursor.is_some());
+    page_query.filter.metadata_exact = Some(query("9007199254740993.01", 1, None).filter);
+    let second_page = repos
+        .documents
+        .page(vault, page_query.clone())
+        .await
+        .unwrap();
+    assert_eq!(second_page.documents[0].title, "Receipt");
+    assert!(second_page.next_cursor.is_none());
+    page_query.filter.metadata_exact = Some(query("9007199254740993.02", 1, None).filter);
+    assert!(matches!(
+        repos.documents.page(vault, page_query).await,
+        Err(Error::Validation(_))
+    ));
+
+    let filter = DocumentFilter {
+        metadata_exact: Some(query("9007199254740993.01", 1, None).filter),
+        ..Default::default()
+    };
+    let matches = repos
+        .search
+        .search_filtered(vault, MODEL, &[1.0, 0.0, 0.0], 1, Some(filter.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        matches
+            .iter()
+            .map(|hit| hit.snippet.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("Invoice")]
+    );
+    assert!(repos
+        .documents
+        .list_ids(other, Some(filter.clone()))
+        .await
+        .unwrap()
+        .is_empty());
+    let wrong_kind = DocumentFilter {
+        metadata_exact: Some(MetadataExactFilter {
+            field_id: decimal.id,
+            value: MetadataValue::Boolean(false),
+        }),
+        ..Default::default()
+    };
+    assert!(repos
+        .documents
+        .list_ids(vault, Some(wrong_kind))
+        .await
+        .unwrap()
+        .is_empty());
+    let invalid_value = DocumentFilter {
+        metadata_exact: Some(query("not-a-decimal", 1, None).filter),
+        ..Default::default()
+    };
+    assert!(matches!(
+        repos.documents.list_ids(vault, Some(invalid_value)).await,
+        Err(Error::Validation(_))
+    ));
+    let text_filter = DocumentFilter {
+        search_query: Some("Receipt".into()),
+        ..filter.clone()
+    };
+    let matching_docs = repos
+        .documents
+        .list(vault, Some(text_filter))
+        .await
+        .unwrap();
+    assert_eq!(
+        matching_docs
+            .iter()
+            .map(|doc| doc.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Receipt"]
+    );
+
     repos
         .metadata_fields
         .set_deleted(vault, decimal.id, true)
@@ -177,6 +288,12 @@ async fn search_contract(db: &Database) {
             .await,
         Err(Error::NotFound { .. })
     ));
+    assert!(repos
+        .documents
+        .list_ids(vault, Some(filter))
+        .await
+        .unwrap()
+        .is_empty());
     assert!(matches!(
         values
             .search_exact(other, query("9007199254740993.01", 1, None))

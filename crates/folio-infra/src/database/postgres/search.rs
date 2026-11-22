@@ -200,7 +200,7 @@ fn push_vault_filter(
 ) -> Result<()> {
     query.push_bind(vault.0);
     if let Some(filter) = filter {
-        push_filter(query, filter)?;
+        push_filter(query, vault, filter)?;
     }
     Ok(())
 }
