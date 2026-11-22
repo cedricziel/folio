@@ -1306,11 +1306,11 @@ impl DocumentRepository for PostgresDocumentRepository {
             .bind(id).bind(vault.0).bind(Utc::now()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx).await.map_err(repo_err)?;
         if document.file_path.is_some() {
-            crate::queue::insert_job_postgres(
+            crate::queue::insert_current_processing_postgres(
                 &mut tx,
-                crate::queue::JobType::process_document(id),
-                Utc::now(),
-                crate::queue::DEFAULT_MAX_ATTEMPTS,
+                vault,
+                id,
+                false,
                 crate::queue::JobTraceContext::current().as_ref(),
             )
             .await?;

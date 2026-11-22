@@ -1347,7 +1347,11 @@ impl DocumentRepository for SqliteDocumentRepository {
     }
 
     async fn restore(&self, vault: VaultId, id: Id) -> Result<Document> {
-        let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_sqlx_error)?;
         let row: Option<DocumentRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {DOC_COLS} FROM documents
              WHERE id = ? AND vault_id = ?"
@@ -1372,11 +1376,11 @@ impl DocumentRepository for SqliteDocumentRepository {
                  updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND purge_requested_at IS NULL")
             .bind(Utc::now().to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
         if document.file_path.is_some() {
-            crate::queue::insert_job_sqlite(
+            crate::queue::insert_current_processing_sqlite(
                 &mut tx,
-                crate::queue::JobType::process_document(id),
-                Utc::now(),
-                crate::queue::DEFAULT_MAX_ATTEMPTS,
+                vault,
+                id,
+                false,
                 crate::queue::JobTraceContext::current().as_ref(),
             )
             .await?;
