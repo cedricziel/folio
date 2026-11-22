@@ -19,13 +19,15 @@ import Testing
         #expect(!String(describing: rows).contains("private"))
     }
 
-    @Test func enablingFetchesCurrentSettingsAndPreservesMaskedSecret() async throws {
+    @Test func disablingFetchesCurrentSettingsAndPreservesMaskedSecret() async throws {
         let vault = UUID(), source = UUID()
         SourceLifecycleURLProtocol.handler = { request in
             #expect(request.url?.path == "/api/sources/\(source.uuidString.lowercased())")
             #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vault.uuidString.lowercased())
             if request.httpMethod == "PUT" {
-                let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                let body = SourceLifecycleURLProtocol.body(for: request).flatMap {
+                    try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+                }
                 #expect(body?["enabled"] as? Bool == false)
                 #expect(body?["name"] as? String == "Mailbox")
                 #expect((body?["config"] as? [String: Any])?["password"] as? String == "********")
@@ -111,4 +113,19 @@ private final class SourceLifecycleURLProtocol: URLProtocol, @unchecked Sendable
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+
+    static func body(for request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count >= 0 else { return nil }
+            if count == 0 { return data }
+            data.append(buffer, count: count)
+        }
+    }
 }
