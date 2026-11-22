@@ -9,6 +9,15 @@ final class ProviderErrorTests: XCTestCase {
         XCTAssertEqual(error.code, NSFileProviderError.serverUnreachable.rawValue)
     }
 
+    func testCertificateFailureUsesConnectionErrorAndPreservesCause() {
+        let original = FolioError.untrustedCertificate(host: "folio.example.invalid")
+        let error = original.providerError as NSError
+        XCTAssertEqual(error.domain, NSFileProviderErrorDomain)
+        XCTAssertEqual(error.code, NSFileProviderError.serverUnreachable.rawValue)
+        XCTAssertEqual(error.localizedDescription, original.localizedDescription)
+        XCTAssertEqual(error.userInfo[NSUnderlyingErrorKey] as? FolioError, original)
+    }
+
     func testMissingOriginalReportsNoSuchItem() {
         let error = FolioError.server(status: 404, message: "Missing original").providerError as NSError
         XCTAssertEqual(error.domain, NSFileProviderErrorDomain)

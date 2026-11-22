@@ -13,8 +13,13 @@ extension Error {
         switch self as? FolioError {
         case .signInRequired, .server(status: 401, message: _):
             return NSFileProviderError(.notAuthenticated)
-        case .unreachable:
+        case let folio? where folio.isConnectionFailure && folio.isRetryable:
             return NSFileProviderError(.serverUnreachable)
+        case let folio? where folio.isConnectionFailure:
+            // File Provider automatically retries generic errors. This code waits for the user to retry.
+            return NSError(
+                domain: NSFileProviderErrorDomain, code: NSFileProviderError.serverUnreachable.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: folio.localizedDescription, NSUnderlyingErrorKey: folio])
         case .server(status: 404, message: _):
             return NSFileProviderError(.noSuchItem)
         case .server(status: 403, message: _):

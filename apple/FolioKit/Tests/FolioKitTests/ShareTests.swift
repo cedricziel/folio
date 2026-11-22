@@ -191,7 +191,7 @@ struct ShareViewModelTests {
         model.selectedTagIDs = [tag.id]
 
         await model.upload()
-        #expect(model.state == .failed("The server answered with status 500."))
+        #expect(model.state == .failed("The server had a problem. Try again later."))
         #expect(model.progress == .init(uploaded: 1, total: 1))
         #expect(model.hasUnfinishedBatch)
 
