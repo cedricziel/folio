@@ -447,19 +447,24 @@ impl PostgresDocumentRepository {
 }
 
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
-pub(super) fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Result<()> {
+pub(super) fn push_filter(
+    qb: &mut QueryBuilder<Postgres>,
+    vault: VaultId,
+    filter: DocumentFilter,
+) -> Result<()> {
     filter.validate()?;
     if let Some(filter) = filter.metadata_exact {
         let kind = filter.value.kind();
         let value = filter.value.validate(kind, false)?;
         qb.push(
-            " AND documents.purge_requested_at IS NULL AND NOT documents.upload_pending
-              AND EXISTS (
-                SELECT 1 FROM metadata_values mv
+            " AND purge_requested_at IS NULL AND NOT upload_pending
+              AND id IN (
+                SELECT mv.document_id FROM metadata_values mv
                 JOIN metadata_fields mf ON mf.vault_id = mv.vault_id AND mf.id = mv.field_id AND mf.kind = mv.kind
-                WHERE mv.document_id = documents.id AND mv.vault_id = documents.vault_id
-                  AND mv.deleted_at IS NULL AND mf.deleted_at IS NULL AND mv.field_id = ",
+                WHERE mv.deleted_at IS NULL AND mf.deleted_at IS NULL AND mv.vault_id = ",
         )
+        .push_bind(vault.0)
+        .push(" AND mv.field_id = ")
         .push_bind(filter.field_id);
         super::metadata_value_repo::push_exact_value(qb, &value)?;
         qb.push(")");
@@ -733,7 +738,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         qb.push_bind(vault.0);
 
         if let Some(filter) = filter {
-            push_filter(&mut qb, filter)?;
+            push_filter(&mut qb, vault, filter)?;
         }
 
         qb.push(" ORDER BY created_at DESC");
@@ -758,7 +763,7 @@ impl DocumentRepository for PostgresDocumentRepository {
             "WHERE deleted_at IS NULL AND vault_id = "
         ));
         qb.push_bind(vault.0);
-        push_filter(&mut qb, query.filter.clone())?;
+        push_filter(&mut qb, vault, query.filter.clone())?;
         let (column, direction, comparison) = match query.sort {
             DocumentSort::Newest => ("created_at", "DESC", " < "),
             DocumentSort::Oldest => ("created_at", "ASC", " > "),
@@ -806,7 +811,7 @@ impl DocumentRepository for PostgresDocumentRepository {
         );
         qb.push_bind(vault.0);
         if let Some(filter) = filter {
-            push_filter(&mut qb, filter)?;
+            push_filter(&mut qb, vault, filter)?;
         }
         qb.push(" ORDER BY created_at DESC, id");
 
