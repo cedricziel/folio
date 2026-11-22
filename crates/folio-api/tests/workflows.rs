@@ -544,6 +544,58 @@ async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
 }
 
 #[tokio::test]
+async fn lifecycle_trigger_editor_explains_when_document_actions_are_unavailable() {
+    let app = test_app().await;
+    let (status, tag) =
+        json_request(&app, "POST", "/api/tags", Some(json!({"name": "restored"}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let tag = tag["id"].as_str().unwrap();
+    let (status, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(json!({
+            "name": "Tag after restore",
+            "trigger": "document.restored",
+            "actions": [{"type": "add_tags", "tag_ids": [tag]}],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let workflow = created["id"].as_str().unwrap();
+    let edit_url = format!("/workflows/{workflow}");
+    let (status, html) = send(&app, "GET", &edit_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(html.contains("value=\"document.restored\" selected"));
+    assert!(html.contains("When a document is restored"));
+
+    let form =
+        format!("name=Tag+after+restore&trigger=document.moved_out&enabled=on&action_tag_{tag}=on");
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post(edit_url)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body)
+        .contains("Only webhook actions can run for this document lifecycle event"));
+    let (status, stored) =
+        json_request(&app, "GET", &format!("/api/workflows/{workflow}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["trigger"], "document.restored");
+}
+
+#[tokio::test]
 async fn the_form_explains_rejected_input() {
     let app = test_app().await;
     let form = "name=Bad&trigger=document.uploaded&webhook_url=ftp%3A%2F%2Fexample.com";
