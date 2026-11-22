@@ -51,7 +51,12 @@ fn stages(job: &JobType) -> &'static [&'static str] {
         JobType::ExtractText { .. } => &["ocr", "embedding"],
         JobType::GenerateThumbnail { .. } => &["thumbnail"],
         JobType::GenerateEmbedding { .. } => &["embedding"],
-        JobType::PurgeDocument { .. } | JobType::ExecuteWorkflowRun { .. } => &[],
+        JobType::PurgeDocument { .. }
+        | JobType::ExecuteWorkflowRun { .. }
+        | JobType::ProcessDocumentRevision { .. }
+        | JobType::GenerateRevisionThumbnail { .. }
+        | JobType::ExtractRevisionText { .. }
+        | JobType::GenerateRevisionEmbedding { .. } => &[],
     }
 }
 
@@ -73,6 +78,7 @@ pub(super) enum ClaimPreparation {
 }
 
 pub(super) async fn prepare_claim(queue: &JobQueue, job: &Job) -> Result<ClaimPreparation> {
+    job.job_type.ensure_dispatchable()?;
     if stages(&job.job_type).is_empty() {
         return Ok(ClaimPreparation::Ready(None));
     }
