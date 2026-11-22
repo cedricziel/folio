@@ -1,20 +1,39 @@
 use axum::{
-    extract::State,
+    extract::{FromRequest, Request, State},
     http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
 use folio_core::models::{MetadataField, MetadataFieldInput, MetadataOption, MetadataOptionInput};
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use utoipa::IntoParams;
 use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ApiResult},
-    extract::{ApiJson, ApiPath, ApiQuery},
+    extract::{ApiPath, ApiQuery},
     state::AppState,
     vault::DefaultVault,
 };
+
+pub(crate) struct MetadataJson<T>(T);
+
+impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for MetadataJson<T> {
+    type Rejection = ApiError;
+
+    async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(input) = Json::<T>::from_request(request, state)
+            .await
+            .map_err(|error| {
+                if error.status() == StatusCode::UNPROCESSABLE_ENTITY {
+                    ApiError::bad_request(error.body_text())
+                } else {
+                    error.into()
+                }
+            })?;
+        Ok(Self(input))
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -102,7 +121,7 @@ pub(crate) async fn create_field(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath((_vault_id,)): ApiPath<(Uuid,)>,
-    ApiJson(input): ApiJson<MetadataFieldInput>,
+    MetadataJson(input): MetadataJson<MetadataFieldInput>,
 ) -> ApiResult<(StatusCode, Json<MetadataField>)> {
     Ok((
         StatusCode::CREATED,
@@ -115,7 +134,7 @@ pub(crate) async fn update_field(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath((_vault_id, field_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(input): ApiJson<MetadataFieldInput>,
+    MetadataJson(input): MetadataJson<MetadataFieldInput>,
 ) -> ApiResult<Json<MetadataField>> {
     Ok(Json(
         state.metadata_fields.update(vault, field_id, input).await?,
@@ -196,7 +215,7 @@ pub(crate) async fn create_option(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath((_vault_id, field_id)): ApiPath<(Uuid, Uuid)>,
-    ApiJson(input): ApiJson<MetadataOptionInput>,
+    MetadataJson(input): MetadataJson<MetadataOptionInput>,
 ) -> ApiResult<(StatusCode, Json<MetadataOption>)> {
     Ok((
         StatusCode::CREATED,
@@ -214,7 +233,7 @@ pub(crate) async fn update_option(
     DefaultVault(vault): DefaultVault,
     State(state): State<AppState>,
     ApiPath((_vault_id, field_id, option_id)): ApiPath<(Uuid, Uuid, Uuid)>,
-    ApiJson(input): ApiJson<MetadataOptionInput>,
+    MetadataJson(input): MetadataJson<MetadataOptionInput>,
 ) -> ApiResult<Json<MetadataOption>> {
     Ok(Json(
         state

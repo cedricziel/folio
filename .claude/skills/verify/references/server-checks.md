@@ -486,8 +486,6 @@ properties from an unlocked read before a full repository update.
 
 Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`,
 then rerun without `UPDATE_OPENAPI` to check the committed generated contract.
-These new API commands remain unverified until their isolated suites run.
-Document value writes require the SSE replay dependency before exposure.
 
 ## Verify SQLite trash contention
 
