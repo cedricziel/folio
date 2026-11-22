@@ -118,6 +118,11 @@ The embedding job SHALL split the content into overlapping windows of at most 15
 - **WHEN** a 4000-character document is embedded
 - **THEN** several overlapping chunks are stored with the model id
 
+#### Scenario: Embedding model or dimensions change between batches
+
+- **WHEN** a batch's model differs from the model selected at the start of the attempt or its dimensions differ from an earlier batch
+- **THEN** the attempt fails before replacing any stored chunks and the job follows its normal retry policy
+
 #### Scenario: OpenAI-compatible endpoint
 
 - **WHEN** `embeddings.provider` is `openai` and `embeddings.base_url` points at a local server
