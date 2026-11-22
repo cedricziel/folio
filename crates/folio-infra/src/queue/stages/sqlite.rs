@@ -541,7 +541,7 @@ async fn finish_derived(
                 .await
                 .map_err(repo_err)?;
             for chunk in *chunks {
-                let query = sqlx::query("INSERT INTO document_chunks (document_id, chunk_index, text, model, dimensions, embedding, stale, created_at) VALUES (?,?,?,?,?,?,0,?)");
+                let query = sqlx::query("INSERT INTO document_chunks (document_id, chunk_index, text, model, dimensions, embedding, stale, created_at, revision_id) VALUES (?,?,?,?,?,?,0,?,?)");
                 let query = query
                     .bind(fence.document_id.to_string())
                     .bind(i64::from(chunk.index))
@@ -555,7 +555,8 @@ async fn finish_derived(
                             .flat_map(|f| f.to_le_bytes())
                             .collect::<Vec<u8>>(),
                     )
-                    .bind(&now);
+                    .bind(&now)
+                    .bind(fence.revision_id.map(|id| id.to_string()));
 
                 query.execute(&mut *tx).await.map_err(repo_err)?;
             }
