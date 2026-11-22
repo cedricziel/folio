@@ -169,6 +169,20 @@ pub trait DocumentRepository: Send + Sync {
         identity: &FileIdentity,
     ) -> Result<bool>;
 
+    /// Append a verified original or restore a verified historical original in the live vault.
+    /// A receipt replays before checking the expected pointer. The new revision, changed projection,
+    /// scoped processing job and events commit together.
+    async fn publish_revision(
+        &self,
+        vault: VaultId,
+        id: Id,
+        publication: &crate::models::RevisionPublication,
+    ) -> Result<crate::models::RevisionPublicationResult>;
+
+    /// Whether a staged original still belongs to a committed revision after publication returned.
+    /// This storage cleanup check spans vaults so a move cannot hide an owned original.
+    async fn retains_revision_original(&self, document: Id, candidate: Id) -> Result<bool>;
+
     /// Update the file path for a document; a new path forgets the recorded size
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
 

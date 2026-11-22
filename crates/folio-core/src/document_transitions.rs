@@ -162,6 +162,14 @@ pub fn metadata_envelopes(
     before: &EventSnapshot,
     after: &EventSnapshot,
 ) -> Result<Vec<DomainEventEnvelope>> {
+    metadata_envelopes_with_unreview_reason(before, after, None)
+}
+
+fn metadata_envelopes_with_unreview_reason(
+    before: &EventSnapshot,
+    after: &EventSnapshot,
+    unreview_reason: Option<&str>,
+) -> Result<Vec<DomainEventEnvelope>> {
     if before.document_id != after.document_id || before.vault_id != after.vault_id {
         return Err(Error::Validation(
             "Metadata transitions require the same document and vault".into(),
@@ -199,7 +207,12 @@ pub fn metadata_envelopes(
         &after_tags,
     );
     let mut events = Vec::new();
-    for change in changes {
+    for mut change in changes {
+        if let (DocumentChange::Unreviewed { reason, .. }, Some(revision_reason)) =
+            (&mut change, unreview_reason)
+        {
+            *reason = revision_reason.into();
+        }
         let mut delta =
             serde_json::to_value(change).map_err(|error| Error::Repository(error.to_string()))?;
         let event_type = delta
@@ -237,25 +250,107 @@ pub fn metadata_envelopes(
     Ok(events)
 }
 
-/// Build the revision occurrence for a first upload and inherit its mutation identity.
+#[derive(Debug, Clone, Copy)]
+pub struct RevisionOccurrence<'a> {
+    pub revision_id: Id,
+    pub revision_number: i64,
+    pub previous_revision_id: Option<Id>,
+    pub restored_from_revision_id: Option<Id>,
+    pub original: &'a FileIdentity,
+}
+
+/// Build the first revision occurrence and preserve the upload's identity and lineage.
 pub fn first_revision_envelope(
     uploaded: &DomainEventEnvelope,
     document: &EventSnapshot,
     revision_id: Id,
     original: &FileIdentity,
 ) -> Result<DomainEventEnvelope> {
-    let mut data = uploaded.data().clone();
+    revision_envelope(
+        "document.revision_created",
+        uploaded,
+        document,
+        RevisionOccurrence {
+            revision_id,
+            revision_number: 1,
+            previous_revision_id: None,
+            restored_from_revision_id: None,
+            original,
+        },
+    )
+}
+
+/// Build occurrences for one successful replacement or restore transaction.
+pub fn revision_publication_envelopes(
+    before: &EventSnapshot,
+    after: &EventSnapshot,
+    occurrence: RevisionOccurrence<'_>,
+) -> Result<Vec<DomainEventEnvelope>> {
+    let Some(previous_revision_id) = occurrence.previous_revision_id else {
+        return Err(Error::Validation(
+            "A revision publication requires a previous revision".into(),
+        ));
+    };
+    if occurrence.revision_number <= 1
+        || previous_revision_id == occurrence.revision_id
+        || occurrence.restored_from_revision_id.is_some_and(|source| {
+            source == occurrence.revision_id || source == previous_revision_id
+        })
+        || after.reviewed_at.is_some()
+        || after.reviewed_by.is_some()
+        || after.review_origin.is_some()
+    {
+        return Err(Error::Validation(
+            "Invalid revision publication snapshot".into(),
+        ));
+    }
+
+    let restoring = occurrence.restored_from_revision_id.is_some();
+    let reason = if restoring {
+        "file_restored"
+    } else {
+        "file_replaced"
+    };
+    let mut events = metadata_envelopes_with_unreview_reason(before, after, Some(reason))?;
+    let updated = events
+        .pop()
+        .ok_or_else(|| Error::Validation("Revision publication has no update occurrence".into()))?;
+    events.push(revision_envelope(
+        "document.revision_created",
+        &updated,
+        after,
+        occurrence,
+    )?);
+    if restoring {
+        events.push(revision_envelope(
+            "document.revision_restored",
+            &updated,
+            after,
+            occurrence,
+        )?);
+    }
+    events.push(updated);
+    Ok(events)
+}
+
+fn revision_envelope(
+    event_type: &str,
+    previous: &DomainEventEnvelope,
+    document: &EventSnapshot,
+    occurrence: RevisionOccurrence<'_>,
+) -> Result<DomainEventEnvelope> {
+    let mut data = previous.data().clone();
     data["source"] = serde_json::to_value(&document.source)
         .map_err(|error| Error::Repository(error.to_string()))?;
-    data["revision_id"] = serde_json::json!(revision_id);
-    data["revision_number"] = serde_json::json!(1);
-    data["previous_revision_id"] = serde_json::Value::Null;
-    data["restored_from_revision_id"] = serde_json::Value::Null;
-    data["mime_type"] = serde_json::json!(original.mime_type);
-    data["byte_size"] = serde_json::json!(original.byte_size);
-    data["sha256"] = serde_json::json!(original.sha256);
+    data["revision_id"] = serde_json::json!(occurrence.revision_id);
+    data["revision_number"] = serde_json::json!(occurrence.revision_number);
+    data["previous_revision_id"] = serde_json::json!(occurrence.previous_revision_id);
+    data["restored_from_revision_id"] = serde_json::json!(occurrence.restored_from_revision_id);
+    data["mime_type"] = serde_json::json!(occurrence.original.mime_type);
+    data["byte_size"] = serde_json::json!(occurrence.original.byte_size);
+    data["sha256"] = serde_json::json!(occurrence.original.sha256);
     DomainEventEnvelope::new(
-        "document.revision_created",
+        event_type,
         document.vault_id,
         DomainEventSubject {
             subject_type: "document".into(),
@@ -265,8 +360,8 @@ pub fn first_revision_envelope(
         EventAudience::Vault,
         data,
     )?
-    .with_mutation(uploaded.mutation_id())?
-    .with_correlation(uploaded.correlation_id(), uploaded.causation_id())
+    .with_mutation(previous.mutation_id())?
+    .with_correlation(previous.correlation_id(), previous.causation_id())
 }
 
 /// Capture each side of a move without exposing the other vault's identifiers.

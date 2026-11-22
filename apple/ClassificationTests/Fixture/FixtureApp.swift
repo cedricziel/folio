@@ -3,10 +3,16 @@ import SwiftUI
 
 @main struct ClassificationFixtureApp: App {
     var body: some Scene {
-        WindowGroup { ClassificationFixture() }
-            #if os(macOS)
-                .defaultSize(width: 640, height: 760)
-            #endif
+        WindowGroup {
+            if ProcessInfo.processInfo.arguments.contains("--source-lifecycle") {
+                SourceLifecycleFixture()
+            } else {
+                ClassificationFixture()
+            }
+        }
+        #if os(macOS)
+            .defaultSize(width: 640, height: 760)
+        #endif
     }
 }
 

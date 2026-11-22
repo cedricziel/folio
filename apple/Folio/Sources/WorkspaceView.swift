@@ -42,15 +42,6 @@ struct WorkspaceView: View {
                         vaultPicker
                     }
                 }
-                if workspace.selectedVault?.role == .owner, service is any SourceActivityService {
-                    Section("Sources") {
-                        Button {
-                            activityVault = workspace.selectedVault
-                        } label: {
-                            Label("Ingestion activity", systemImage: "tray.and.arrow.down")
-                        }
-                    }
-                }
                 Section("Library") {
                     ForEach(WorkspaceDestination.allCases, id: \.self) { destination in
                         NavigationLink(value: destination) {
@@ -144,10 +135,14 @@ struct WorkspaceView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showTaxonomy = false } } }
             }
         }
-        .onChange(of: workspace.selectedVaultID) { showTaxonomy = false }
+        .onChange(of: workspace.selectedVaultID) {
+            showTaxonomy = false
+            activityVault = nil
+        }
         .sheet(item: $activityVault) { vault in
             if let activityService = service as? any SourceActivityService {
-                SourceActivityView(vaultID: vault.id, service: activityService) { documentID in
+                SourceActivityView(vaultID: vault.id, service: activityService, canManage: vault.role == .owner) {
+                    documentID in
                     activityVault = nil
                     workspace.open(documentID, vaultID: vault.id)
                 }
@@ -218,6 +213,13 @@ struct WorkspaceView: View {
                 showTaxonomy = true
             } label: {
                 Label("Classifications", systemImage: "tag")
+            }
+            if workspace.selectedVault?.role == .owner, service is any SourceActivityService {
+                Button {
+                    activityVault = workspace.selectedVault
+                } label: {
+                    Label("Ingestion activity", systemImage: "tray.and.arrow.down")
+                }
             }
         }
     }

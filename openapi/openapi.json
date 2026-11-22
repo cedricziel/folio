@@ -9808,6 +9808,14 @@
         },
         "additionalProperties": false
       },
+      "MetadataChangeState": {
+        "type": "string",
+        "enum": [
+          "set",
+          "replaced",
+          "cleared"
+        ]
+      },
       "MetadataField": {
         "type": "object",
         "required": [
@@ -12034,7 +12042,8 @@
           "date",
           "timestamp",
           "identifier",
-          "identifier_set"
+          "identifier_set",
+          "metadata_value"
         ]
       },
       "WorkflowConditions": {
@@ -12074,14 +12083,7 @@
             "description": "The document has this document type"
           },
           "event": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowEventConditions"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowEventConditions"
           },
           "filename_glob": {
             "type": [
@@ -12139,6 +12141,9 @@
                 "type": "null"
               }
             ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WorkflowMetadataConditions"
           },
           "subject_id": {
             "type": [
@@ -12245,6 +12250,31 @@
             "$ref": "#/components/schemas/WorkflowTrigger"
           }
         }
+      },
+      "WorkflowMetadataConditions": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/MetadataValue"
+          },
+          "before": {
+            "$ref": "#/components/schemas/MetadataValue"
+          },
+          "field_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MetadataKind"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MetadataChangeState"
+          }
+        },
+        "additionalProperties": false
       },
       "WorkflowRun": {
         "type": "object",

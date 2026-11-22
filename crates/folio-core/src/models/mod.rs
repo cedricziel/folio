@@ -21,6 +21,7 @@ mod metadata_value;
 mod processing_attempt;
 mod processing_summary;
 mod push;
+mod revision_publication;
 mod saved_view;
 mod settings;
 mod source;
@@ -81,6 +82,9 @@ pub use push::{
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
     PushEnvironment, PushToken, PushTokenKind, VaultSelection,
 };
+pub use revision_publication::{
+    RevisionPublication, RevisionPublicationResult, RevisionPublicationSource,
+};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,
@@ -104,7 +108,8 @@ pub use workflow::{
 };
 
 pub use workflow_event_conditions::{
-    WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    WorkflowMetadataConditions,
 };
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,

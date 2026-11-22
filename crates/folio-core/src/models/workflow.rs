@@ -309,6 +309,7 @@ pub struct WorkflowConditions {
     pub source: SourceConditions,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowEventConditions, required = false))]
     pub event: Option<WorkflowEventConditions>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -476,9 +477,14 @@ impl WorkflowConditions {
                 .is_none_or(|id| document_type_id == Some(id))
     }
 
-    fn validate_ingest_conditions(&self, trigger: WorkflowTrigger) -> Result<()> {
-        if let Some(ingest) = self.event.as_ref().and_then(|event| event.ingest.as_ref()) {
-            ingest.validate_trigger(trigger)?;
+    fn validate_event_conditions(&self, trigger: WorkflowTrigger) -> Result<()> {
+        if let Some(event) = &self.event {
+            if let Some(ingest) = &event.ingest {
+                ingest.validate_trigger(trigger)?;
+            }
+            if let Some(metadata) = &event.metadata {
+                metadata.validate_trigger(trigger)?;
+            }
         }
         for child in self
             .all
@@ -486,7 +492,7 @@ impl WorkflowConditions {
             .chain(self.any.iter().flatten())
             .chain(&self.none)
         {
-            child.validate_ingest_conditions(trigger)?;
+            child.validate_event_conditions(trigger)?;
         }
         Ok(())
     }
@@ -636,6 +642,9 @@ pub struct Workflow {
     pub actions: Vec<WorkflowAction>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub revision: i64,
     #[serde(default)]
     pub deleted_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -706,7 +715,7 @@ impl WorkflowInput {
             }
         }
         self.conditions.validate()?;
-        self.conditions.validate_ingest_conditions(self.trigger)?;
+        self.conditions.validate_event_conditions(self.trigger)?;
         if self.trigger == WorkflowTrigger::IngestReceived
             && self.conditions.requires_event_context()
         {
@@ -817,6 +826,9 @@ pub struct WorkflowRun {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub source_event_id: Option<i64>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub definition_revision: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
 }
@@ -856,9 +868,15 @@ impl WorkflowRun {
             payload,
             actions: Vec::new(),
             source_event_id: None,
+            definition_revision: None,
             created_at: Utc::now(),
             finished_at: None,
         }
+    }
+
+    pub fn with_definition(mut self, workflow: &Workflow) -> Self {
+        self.definition_revision = Some(workflow.revision);
+        self.with_actions(workflow.actions.clone())
     }
 
     /// Freeze the actions to execute

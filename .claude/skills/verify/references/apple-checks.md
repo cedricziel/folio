@@ -163,3 +163,12 @@ current view, reopens its editor, persists a rename, and deletes it. It retains 
 saved-view screenshot for inspection. Use a fresh simulator and the bounded
 procedure above; compilation or an accessibility timeout before the first tap
 does not verify the controls.
+
+## Apple source lifecycle
+
+Run the isolated package suite with `--filter 'SourceLifecycleTests|SourceLifecycleServiceTests|SourceActivityTests'`.
+It covers explicit vault scoping, configured-source restrictions, masked settings,
+trash and restore conflicts, retained outcomes, and failed requests.
+Run `SourceLifecycleUITests` in the ClassificationTests fixture with temporary
+simulator state. Its `--source-lifecycle` launch mode uses in-memory services
+and exercises owner controls, read-only access, retry, and conflicts.
