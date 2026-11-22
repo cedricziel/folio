@@ -138,9 +138,35 @@ async fn archival_contract(db: Database) {
         ArchiveState::Completed(failed),
     );
 
+    let canceled = Id::new_v4();
+    assert!(archives
+        .enqueue_archive(&source, canceled, Some(second))
+        .await
+        .unwrap());
+    documents.delete(vault, id).await.unwrap();
+    assert!(archives.current_attempt(vault, id).await.unwrap().is_none());
+    assert!(!archives
+        .complete_archive(&source, canceled, &skipped)
+        .await
+        .unwrap());
+    documents.restore(vault, id).await.unwrap();
+    assert!(!archives
+        .complete_archive(&source, canceled, &skipped)
+        .await
+        .unwrap());
+    assert_eq!(
+        archives
+            .current_attempt(vault, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        ArchiveState::Completed(ArchiveCompletion::Skipped("Document trashed".into())),
+    );
+
     let third = Id::new_v4();
     assert!(archives
-        .enqueue_archive(&source, third, Some(second))
+        .enqueue_archive(&source, third, Some(canceled))
         .await
         .unwrap());
     let output = output(&source, third);
@@ -263,43 +289,13 @@ async fn archival_contract(db: Database) {
         moved.state,
         ArchiveState::Completed(ArchiveCompletion::Skipped("Document moved".into()))
     );
-    let pending = Id::new_v4();
-    assert!(archives
-        .enqueue_archive(&moved.source, pending, Some(moved.id))
-        .await
-        .unwrap());
-    documents.delete(other_vault, id).await.unwrap();
-    assert!(archives
-        .current_attempt(other_vault, id)
-        .await
-        .unwrap()
-        .is_none());
-    assert!(!archives
-        .complete_archive(&moved.source, pending, &skipped)
-        .await
-        .unwrap());
-    documents.restore(other_vault, id).await.unwrap();
-    assert!(!archives
-        .complete_archive(&moved.source, pending, &skipped)
-        .await
-        .unwrap());
-    let restored = archives
-        .current_attempt(other_vault, id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        restored.state,
-        ArchiveState::Completed(ArchiveCompletion::Skipped("Document trashed".into()))
-    );
-
     let final_attempt = Id::new_v4();
     assert!(archives
-        .enqueue_archive(&restored.source, final_attempt, Some(restored.id))
+        .enqueue_archive(&moved.source, final_attempt, Some(moved.id))
         .await
         .unwrap());
     assert!(archives
-        .complete_archive(&restored.source, final_attempt, &skipped)
+        .complete_archive(&moved.source, final_attempt, &skipped)
         .await
         .unwrap());
     assert_eq!(

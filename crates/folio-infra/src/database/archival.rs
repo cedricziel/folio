@@ -4,7 +4,7 @@ use folio_core::models::{
     ArchiveAttempt, ArchiveCompletion, ArchiveSource, ArchiveState, ArchiveTool, FileIdentity, Id,
     ValidatedArchive, VaultId,
 };
-use folio_core::ports::{keys, ArchivalRepository};
+use folio_core::ports::ArchivalRepository;
 use folio_core::{Error, Result};
 
 use super::Database;
@@ -42,7 +42,8 @@ const SOURCE: &str = concat!(
 const ATTEMPT: &str = concat!(
     "SELECT ",
     source_columns!(),
-    ", CAST(a.id AS TEXT) AS attempt_id, a.state, a.reason, a.output_sha256, a.output_size,
+    ", CAST(a.id AS TEXT) AS attempt_id, a.state, a.reason, a.output_storage_key,
+          a.output_sha256, a.output_size,
           a.profile, a.converter_name, a.converter_version, a.validator_name, a.validator_version",
     live_original!(),
     " JOIN archival_attempts a ON a.revision_id = r.id AND a.document_id = d.id
@@ -96,6 +97,7 @@ struct AttemptRow {
     attempt_id: String,
     state: String,
     reason: Option<String>,
+    output_storage_key: Option<String>,
     output_sha256: Option<String>,
     output_size: Option<i64>,
     profile: Option<String>,
@@ -128,7 +130,7 @@ impl AttemptRow {
                     sha256: required(self.output_sha256)?,
                     byte_size: required(self.output_size)?.try_into().map_err(repo_error)?,
                     mime_type: "application/pdf".into(),
-                    storage_key: keys::revision_artifact(document, source.revision_id, id),
+                    storage_key: required(self.output_storage_key)?,
                 },
                 profile: required(self.profile)?,
                 converter: ArchiveTool {
@@ -315,12 +317,13 @@ impl ArchivalRepository for Database {
 
             sqlx::query(
                 "UPDATE archival_attempts
-                SET state = $1, reason = $2, output_sha256 = $3, output_size = $4,
-                    profile = $5, converter_name = $6, converter_version = $7,
-                    validator_name = $8, validator_version = $9 WHERE id = $10",
+                SET state = $1, reason = $2, output_storage_key = $3, output_sha256 = $4, output_size = $5,
+                    profile = $6, converter_name = $7, converter_version = $8,
+                    validator_name = $9, validator_version = $10 WHERE id = $11",
             )
             .bind(state)
             .bind(reason)
+            .bind(output.map(|output| output.file.storage_key.as_str()))
             .bind(output.map(|output| output.file.sha256.as_str()))
             .bind(output.map(|output| output.file.byte_size as i64))
             .bind(output.map(|output| output.profile.as_str()))

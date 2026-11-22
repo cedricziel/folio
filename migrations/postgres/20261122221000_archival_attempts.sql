@@ -6,6 +6,7 @@ CREATE TABLE archival_attempts (
     is_current BOOLEAN NOT NULL DEFAULT TRUE,
     state TEXT NOT NULL DEFAULT 'queued',
     reason TEXT,
+    output_storage_key TEXT UNIQUE,
     output_sha256 TEXT,
     output_size BIGINT,
     profile TEXT,
@@ -21,14 +22,15 @@ CREATE TABLE archival_attempts (
         OR (state IN ('queued', 'ready') AND reason IS NULL)
     ),
     CHECK (
-        (state = 'ready' AND output_sha256 IS NOT NULL AND output_sha256 ~ '^[0-9a-f]{64}$'
+        (state = 'ready' AND output_storage_key IS NOT NULL AND length(output_storage_key) > 0
+            AND output_sha256 IS NOT NULL AND output_sha256 ~ '^[0-9a-f]{64}$'
             AND output_size IS NOT NULL AND output_size > 0
             AND profile IS NOT NULL AND length(trim(profile)) > 0
             AND converter_name IS NOT NULL AND length(trim(converter_name)) > 0
             AND converter_version IS NOT NULL AND length(trim(converter_version)) > 0
             AND validator_name IS NOT NULL AND length(trim(validator_name)) > 0
             AND validator_version IS NOT NULL AND length(trim(validator_version)) > 0)
-        OR (state <> 'ready' AND output_sha256 IS NULL AND output_size IS NULL AND profile IS NULL
+        OR (state <> 'ready' AND output_storage_key IS NULL AND output_sha256 IS NULL AND output_size IS NULL AND profile IS NULL
             AND converter_name IS NULL AND converter_version IS NULL
             AND validator_name IS NULL AND validator_version IS NULL)
     )
