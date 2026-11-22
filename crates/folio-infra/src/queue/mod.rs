@@ -83,6 +83,28 @@ pub enum JobType {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         force: bool,
     },
+    ProcessDocumentRevision {
+        document_id: Uuid,
+        revision_id: Uuid,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
+    GenerateRevisionThumbnail {
+        document_id: Uuid,
+        revision_id: Uuid,
+    },
+    ExtractRevisionText {
+        document_id: Uuid,
+        revision_id: Uuid,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        force: bool,
+    },
+    GenerateRevisionEmbedding {
+        document_id: Uuid,
+        revision_id: Uuid,
+        #[serde(default, skip_serializing_if = "is_user")]
+        origin: EventOrigin,
+    },
     /// Remove objects and metadata after an explicit permanent-deletion request.
     PurgeDocument {
         document_id: Uuid,
@@ -128,9 +150,32 @@ impl JobType {
             | JobType::ExtractText { document_id, .. }
             | JobType::GenerateEmbedding { document_id, .. }
             | JobType::PurgeDocument { document_id, .. }
-            | JobType::ProcessDocument { document_id, .. } => Some(*document_id),
+            | JobType::ProcessDocument { document_id, .. }
+            | JobType::ProcessDocumentRevision { document_id, .. }
+            | JobType::GenerateRevisionThumbnail { document_id, .. }
+            | JobType::ExtractRevisionText { document_id, .. }
+            | JobType::GenerateRevisionEmbedding { document_id, .. } => Some(*document_id),
             JobType::ExecuteWorkflowRun { .. } => None,
         }
+    }
+
+    pub fn revision_id(&self) -> Option<Uuid> {
+        match self {
+            JobType::ProcessDocumentRevision { revision_id, .. }
+            | JobType::GenerateRevisionThumbnail { revision_id, .. }
+            | JobType::ExtractRevisionText { revision_id, .. }
+            | JobType::GenerateRevisionEmbedding { revision_id, .. } => Some(*revision_id),
+            _ => None,
+        }
+    }
+
+    fn ensure_dispatchable(&self) -> Result<()> {
+        if self.revision_id().is_some() {
+            return Err(folio_core::Error::Conflict(
+                "File revision processing is not yet enabled".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn type_name(&self) -> &'static str {
@@ -139,6 +184,10 @@ impl JobType {
             JobType::ExtractText { .. } => "extract_text",
             JobType::GenerateEmbedding { .. } => "generate_embedding",
             JobType::ProcessDocument { .. } => "process_document",
+            JobType::ProcessDocumentRevision { .. } => "process_document_revision",
+            JobType::GenerateRevisionThumbnail { .. } => "generate_revision_thumbnail",
+            JobType::ExtractRevisionText { .. } => "extract_revision_text",
+            JobType::GenerateRevisionEmbedding { .. } => "generate_revision_embedding",
             JobType::PurgeDocument { .. } => "purge_document",
             JobType::ExecuteWorkflowRun { .. } => "execute_workflow_run",
         }
