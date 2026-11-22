@@ -277,9 +277,22 @@ async fn archival_contract(db: Database) {
     assert_eq!(new_source.revision_id, replacement);
     assert_eq!(new_source.original, source.original);
 
+    // Move schedules processing. Restore the initial fixture revision before
+    // exercising lifecycle behavior: dispatch of replacement revisions is gated.
+    let sql = sqlx::AssertSqlSafe(format!(
+        "UPDATE documents SET current_revision_id = '{id}' WHERE id = '{id}'"
+    ));
+    match &db {
+        Database::Sqlite(pool) => sqlx::raw_sql(sql).execute(pool).await.map(|_| ()),
+        Database::Postgres(pool) => sqlx::raw_sql(sql).execute(pool).await.map(|_| ()),
+    }
+    .unwrap();
+    let new_source = archives.current_source(vault, id).await.unwrap().unwrap();
+    assert_eq!(new_source, source);
+
     let pending = Id::new_v4();
     assert!(archives
-        .enqueue_archive(&new_source, pending, None)
+        .enqueue_archive(&new_source, pending, Some(third))
         .await
         .unwrap());
     documents
