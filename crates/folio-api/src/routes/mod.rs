@@ -7,6 +7,7 @@ pub(crate) mod browse;
 pub(crate) mod correspondents;
 pub mod devices;
 pub(crate) mod document_entries;
+pub(crate) mod document_revisions;
 pub(crate) mod document_types;
 pub(crate) mod documents;
 mod entry_pages;
@@ -177,6 +178,14 @@ fn api_router() -> Router<AppState> {
         .nest("/documents", documents::router())
         .route("/documents/browse", get(browse::browse_default))
         .route("/vaults/{vault_id}/documents", get(browse::browse_vault))
+        .route(
+            "/vaults/{vault_id}/documents/{id}/revisions",
+            get(document_revisions::list_scoped),
+        )
+        .route(
+            "/vaults/{vault_id}/documents/{id}/revisions/{revision_id}/download",
+            get(document_revisions::download_scoped),
+        )
         .nest("/tags", tags::router())
         .nest("/correspondents", correspondents::router())
         .nest("/document_types", document_types::router())

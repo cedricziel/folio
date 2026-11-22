@@ -52,6 +52,11 @@ pub fn router() -> Router<AppState> {
         )
         .route("/{id}/review", axum::routing::put(set_document_review))
         .route("/{id}/download", get(download_document))
+        .route("/{id}/revisions", get(super::document_revisions::list))
+        .route(
+            "/{id}/revisions/{revision_id}/download",
+            get(super::document_revisions::download),
+        )
         .route("/{id}/thumbnail", get(document_thumbnail))
         .route("/{id}/correspondent", post(set_correspondent))
         .route("/{id}/document_type", post(set_document_type))
@@ -616,14 +621,6 @@ pub(crate) async fn download_document(
         .file_path
         .ok_or_else(|| ApiError::not_found("Document has no file"))?;
 
-    let object = state.store.get(&file_path).await.map_err(|e| match e {
-        folio_core::Error::NotFound { .. } => ApiError::not_found("Stored file not found"),
-        e => {
-            tracing::error!("Failed to read {file_path}: {e}");
-            ApiError::internal("Failed to read file")
-        }
-    })?;
-
     let mime_type = document
         .mime_type
         .unwrap_or_else(|| "application/octet-stream".to_string());
@@ -632,9 +629,26 @@ pub(crate) async fn download_document(
         .original_filename
         .unwrap_or_else(|| format!("document-{}", id));
 
+    download_original(&state, &file_path, &mime_type, &filename).await
+}
+
+pub(crate) async fn download_original(
+    state: &AppState,
+    file_path: &str,
+    mime_type: &str,
+    filename: &str,
+) -> ApiResult<Response> {
+    let object = state.store.get(file_path).await.map_err(|e| match e {
+        folio_core::Error::NotFound { .. } => ApiError::not_found("Stored file not found"),
+        e => {
+            tracing::error!("Failed to read {file_path}: {e}");
+            ApiError::internal("Failed to read file")
+        }
+    })?;
+
     let mut response = Response::builder()
         .header(header::CONTENT_TYPE, mime_type)
-        .header(header::CONTENT_DISPOSITION, content_disposition(&filename));
+        .header(header::CONTENT_DISPOSITION, content_disposition(filename));
     if let Some(size) = object.size {
         response = response.header(header::CONTENT_LENGTH, size);
     }

@@ -1111,3 +1111,129 @@ async fn document_detail_distinguishes_empty_ocr_from_indexing_failure() {
     assert!(html.contains("Last attempt failed"));
     assert!(html.contains("The original file is unchanged."));
 }
+
+#[tokio::test]
+async fn revision_history_lists_metadata_and_downloads_the_original() {
+    let h = test_app().await;
+    let doc = h
+        .state
+        .document_repo
+        .create_for_upload(
+            h.vault,
+            CreateDocument {
+                title: "Invoice".into(),
+                original_filename: Some("invoice.pdf".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let key = keys::original(doc.id);
+    let original = b"the bytes of revision one";
+    h.state
+        .store
+        .put(&key, original.as_slice().into())
+        .await
+        .unwrap();
+    let identity = folio_core::models::FileIdentity::from_bytes(&key, "application/pdf", original);
+    h.state
+        .document_repo
+        .finalize_verified_upload(h.vault, doc.id, &identity)
+        .await
+        .unwrap();
+
+    let history = format!("/api/documents/{}/revisions", doc.id);
+    let response = h
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&history)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 16)
+        .await
+        .unwrap();
+    let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let revision = &page["revisions"][0];
+    assert_eq!(revision["number"], 1);
+    assert_eq!(revision["is_current"], true);
+    assert_eq!(revision["original"]["filename"], "invoice.pdf");
+    assert_eq!(revision["original"]["byte_size"], original.len());
+    assert_eq!(revision["original"]["verification"], "verified");
+    assert!(revision["original"].get("storage_key").is_none());
+
+    let revision_id = revision["id"].as_str().unwrap();
+    let download = format!("{history}/{revision_id}/download");
+    let response = h
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&download)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "application/pdf");
+    assert!(response.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .contains("invoice.pdf"));
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        original
+    );
+
+    let scoped_history = format!("/api/vaults/{}/documents/{}/revisions", h.vault, doc.id);
+    let scoped_download = format!("{scoped_history}/{revision_id}/download");
+    let response = h
+        .router
+        .clone()
+        .oneshot(Request::get(scoped_download).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .as_ref(),
+        original,
+    );
+
+    let wrong_scope = format!(
+        "/api/vaults/{}/documents/{}/revisions",
+        Uuid::new_v4(),
+        doc.id
+    );
+    let response = h
+        .router
+        .clone()
+        .oneshot(Request::get(wrong_scope).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    h.state.document_repo.delete(h.vault, doc.id).await.unwrap();
+    let response = h
+        .router
+        .oneshot(
+            Request::builder()
+                .uri(&download)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

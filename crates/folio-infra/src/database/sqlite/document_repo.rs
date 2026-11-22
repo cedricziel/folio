@@ -8,6 +8,8 @@ use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool, Transaction};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+use crate::database::document_revisions::{RevisionRow, READ_REVISIONS};
+
 use super::outbox::{
     capture_document, insert_domain_event_with_origin, insert_event, insert_event_with_envelope,
 };
@@ -17,10 +19,10 @@ use folio_core::document_transitions::{
 use folio_core::error::{Error, Result};
 use folio_core::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentSource, DocumentType, EntryKind, ExternalRef, FileIdentity, Id,
-    ImportedDocument, ProcessingStage, ProcessingStatus, ReviewOrigin, SourceKind, Tag,
-    UnverifiedOriginal, UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId,
-    VaultId,
+    DocumentFilter, DocumentRevision, DocumentSource, DocumentType, EntryKind, ExternalRef,
+    FileIdentity, Id, ImportedDocument, ProcessingStage, ProcessingStatus, ReviewOrigin,
+    SourceKind, Tag, UnverifiedOriginal, UpdateCorrespondent, UpdateDocument, UpdateDocumentType,
+    UpdateTag, UserId, VaultId,
 };
 use folio_core::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, TagRepository,
@@ -659,6 +661,50 @@ impl DocumentRepository for SqliteDocumentRepository {
         .await
         .map_err(map_sqlx_error)?;
 
+        row.map(TryInto::try_into).transpose()
+    }
+
+    async fn list_revisions(
+        &self,
+        vault: VaultId,
+        id: Id,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<DocumentRevision>> {
+        if !(1..=101).contains(&limit) || before.is_some_and(|before| before <= 0) {
+            return Err(Error::Validation("Invalid revision page".into()));
+        }
+        let rows = sqlx::query_as::<_, RevisionRow>(sqlx::AssertSqlSafe(format!(
+            "{READ_REVISIONS} WHERE d.id = ?1 AND d.vault_id = ?2 AND d.deleted_at IS NULL
+              AND (?3 IS NULL OR r.number < ?3)
+            ORDER BY r.number DESC LIMIT ?4"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(before)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    async fn find_revision(
+        &self,
+        vault: VaultId,
+        id: Id,
+        revision_id: Id,
+    ) -> Result<Option<DocumentRevision>> {
+        let row = sqlx::query_as::<_, RevisionRow>(sqlx::AssertSqlSafe(format!(
+            "{READ_REVISIONS} WHERE d.id = ?1 AND d.vault_id = ?2 AND d.deleted_at IS NULL
+              AND r.id = ?3"
+        )))
+        .bind(id.to_string())
+        .bind(vault.to_string())
+        .bind(revision_id.to_string())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx_error)?;
         row.map(TryInto::try_into).transpose()
     }
 

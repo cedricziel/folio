@@ -9,6 +9,7 @@
 //! rather than `query!` macros, so building needs neither a live database nor
 //! an offline cache per backend.
 
+mod document_revisions;
 mod health;
 mod ingest_outcomes;
 mod metadata_value;

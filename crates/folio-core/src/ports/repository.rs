@@ -6,10 +6,10 @@ use crate::error::Result;
 use crate::models::AuditEvent;
 use crate::models::{
     Correspondent, CreateCorrespondent, CreateDocument, CreateDocumentType, CreateTag, Document,
-    DocumentFilter, DocumentType, ExternalRef, FileIdentity, GroupId, Id, ImportedDocument,
-    NewAuditEvent, Principal, ProcessingStage, ProcessingStatus, Setting, Tag, UnverifiedOriginal,
-    UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId, Vault, VaultId,
-    VaultMember, VaultRole,
+    DocumentFilter, DocumentRevision, DocumentType, ExternalRef, FileIdentity, GroupId, Id,
+    ImportedDocument, NewAuditEvent, Principal, ProcessingStage, ProcessingStatus, Setting, Tag,
+    UnverifiedOriginal, UpdateCorrespondent, UpdateDocument, UpdateDocumentType, UpdateTag, UserId,
+    Vault, VaultId, VaultMember, VaultRole,
 };
 
 /// Repository for document operations
@@ -45,6 +45,24 @@ pub trait DocumentRepository: Send + Sync {
 
     /// Find a document by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
+
+    /// Newest first, with an exclusive upper bound on revision number.
+    /// Returns no history for a missing, trashed, or out-of-vault document.
+    async fn list_revisions(
+        &self,
+        vault: VaultId,
+        id: Id,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<DocumentRevision>>;
+
+    /// Read one specific revision of a live document in this vault.
+    async fn find_revision(
+        &self,
+        vault: VaultId,
+        id: Id,
+        revision_id: Id,
+    ) -> Result<Option<DocumentRevision>>;
 
     /// List all documents with optional filtering
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;
