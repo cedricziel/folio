@@ -6,7 +6,7 @@ import XCTest
         let vault = app.buttons.containing(.staticText, identifier: "Household").firstMatch
         XCTAssertTrue(vault.waitForExistence(timeout: 10), app.debugDescription)
         vault.tap()
-        XCTAssertTrue(app.staticTexts["Morgan"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Created by, Morgan"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.buttons["Save name"].exists, app.debugDescription)
         scrollTo(app.buttons["Grant access"], in: app)
         XCTAssertTrue(app.buttons["Change role"].exists, app.debugDescription)
@@ -21,7 +21,7 @@ import XCTest
         let vault = app.buttons.containing(.staticText, identifier: "Household").firstMatch
         XCTAssertTrue(vault.waitForExistence(timeout: 10), app.debugDescription)
         vault.tap()
-        XCTAssertTrue(app.staticTexts["Taylor"].firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Updated by, Taylor"].waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(app.buttons["Save name"].exists)
         XCTAssertFalse(app.buttons["Grant access"].exists)
         XCTAssertFalse(app.buttons["Delete vault"].exists)
@@ -41,8 +41,21 @@ import XCTest
         let restore = app.buttons["Restore vault"].firstMatch
         XCTAssertTrue(restore.waitForExistence(timeout: 5), app.debugDescription)
         restore.tap()
-        let confirmation = app.buttons["Restore vault"].firstMatch
-        XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
+        #if os(macOS)
+            let dialog = app.popovers.firstMatch
+        #else
+            let dialog = app.sheets.firstMatch
+        #endif
+        guard dialog.waitForExistence(timeout: 5) else {
+            XCTFail("The restore confirmation did not appear.\n\(app.debugDescription)")
+            return
+        }
+        let confirmation = dialog.buttons["Restore vault"]
+        guard confirmation.waitForExistence(timeout: 5) else {
+            XCTFail("The restore confirmation action is missing.\n\(app.debugDescription)")
+            return
+        }
+        capture(app, name: "Vault restore confirmation")
         confirmation.tap()
         XCTAssertTrue(app.buttons["Save name"].waitForExistence(timeout: 5), app.debugDescription)
         scrollTo(app.staticTexts["Restored Household"], in: app)
