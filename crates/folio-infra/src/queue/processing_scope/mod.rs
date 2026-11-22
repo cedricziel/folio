@@ -86,8 +86,14 @@ fn repo_err(error: impl std::fmt::Display) -> Error {
     Error::Repository(error.to_string())
 }
 
+const STALE_PARENT: &str = "processing parent claim or group is no longer current";
+
+pub(super) fn is_stale_parent(error: &Error) -> bool {
+    matches!(error, Error::Conflict(reason) if reason == STALE_PARENT)
+}
+
 fn stale_parent() -> Error {
-    Error::Conflict("processing parent claim or group is no longer current".into())
+    Error::Conflict(STALE_PARENT.into())
 }
 
 fn payload_type(job: &JobType) -> Result<String> {

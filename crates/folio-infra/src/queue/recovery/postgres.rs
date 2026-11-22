@@ -5,7 +5,7 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use super::{repo_err, Failure, JobRow, StageRow};
-use crate::database::postgres::{capture_document, insert_domain_event};
+use crate::database::postgres::{capture_document, insert_domain_event_with_origin};
 use crate::queue::{FailOutcome, Job};
 
 async fn load(conn: &mut PgConnection, id: Uuid) -> Result<Option<JobRow>> {
@@ -34,15 +34,21 @@ async fn stages(conn: &mut PgConnection, id: Uuid) -> Result<Vec<StageRow>> {
                j.correlation_id::text, j.causation_id::text
         FROM processing_stage_runs r JOIN jobs j ON j.id = r.job_id
         JOIN documents d ON d.id = r.document_id
+        JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
         WHERE j.id = $1::uuid AND r.group_id = j.processing_group_id AND r.vault_id = j.origin_vault_id
           AND d.vault_id = r.vault_id AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
           AND r.state = 'running' AND r.is_current = TRUE AND r.revision_id IS NULL
+          AND (d.current_revision_id IS NULL OR EXISTS (
+              SELECT 1 FROM document_revisions revision
+              WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
+                AND revision.vault_id = d.vault_id AND revision.number = 1
+          ))
           AND r.claim_id = j.claim_id AND r.queue_attempt = j.attempts
           AND j.correlation_id IS NOT NULL
           AND j.payload->'data'->>'document_id' = d.id::text
           AND j.payload->>'type' = CASE j.job_type
               WHEN 'process_document' THEN 'ProcessDocument' WHEN 'extract_text' THEN 'ExtractText'
-              WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail' END FOR UPDATE OF r")
+              WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail' END FOR UPDATE OF r FOR SHARE OF v")
         .bind(id.to_string()).fetch_all(conn).await.map_err(repo_err)
 }
 
@@ -81,7 +87,7 @@ async fn settle(pool: &PgPool, id: Uuid, failure: Failure<'_>) -> Result<Option<
         .bind(if decision.retry_at.is_some() { "pending" } else { "failed" })
         .bind(&decision.error).bind(decision.retry_at.map(|at| at.to_rfc3339()))
         .bind(decision.retry_at.is_none().then(|| now.to_rfc3339())).bind(now.to_rfc3339())
-        .bind(id.to_string()).bind(row.attempts).bind(row.claim_id)
+        .bind(id.to_string()).bind(row.attempts).bind(row.claim_id.as_deref())
         .bind(failure.expired()).bind(failure.expired())
         .execute(&mut *tx).await.map_err(repo_err)?;
     if changed.rows_affected() != 1 {
@@ -102,7 +108,7 @@ async fn settle(pool: &PgPool, id: Uuid, failure: Failure<'_>) -> Result<Option<
             .await?
             .ok_or_else(|| repo_err("Fenced processing document disappeared"))?;
         let envelope = stage.envelope(&snapshot, &decision).await?;
-        insert_domain_event(&mut tx, &envelope).await?;
+        insert_domain_event_with_origin(&mut tx, &envelope, row.origin()?).await?;
     }
     tx.commit().await.map_err(repo_err)?;
     Ok(Some(decision.outcome()))

@@ -531,13 +531,37 @@ impl Worker {
                 return Ok(());
             }
         }
-        let result = if matches!(job_type, JobType::ExtractText { .. }) {
-            match claim {
-                Some(job) => Box::pin(self.process_claimed_ocr(job)).await,
-                None => Box::pin(self.run_job(job_type)).await,
-            }
-        } else {
-            Box::pin(self.run_job(job_type)).await
+        let result = match claim {
+            Some(job) => match job_type {
+                JobType::ExtractText { .. } => Box::pin(self.process_claimed_ocr(job)).await,
+                JobType::GenerateEmbedding { .. } => {
+                    Box::pin(self.process_claimed_embedding(job)).await
+                }
+                JobType::GenerateThumbnail { .. } => Box::pin(self.process_claimed_thumbnail(job))
+                    .await
+                    .map(|_| ()),
+                JobType::ProcessDocument { document_id, force } => {
+                    Box::pin(async {
+                        if let Err(error) = self
+                            .queue
+                            .enqueue(JobType::ExtractText {
+                                document_id: *document_id,
+                                force: *force,
+                            })
+                            .await
+                        {
+                            if !super::processing_scope::is_stale_parent(&error) {
+                                return Err(error.into());
+                            }
+                        }
+                        self.process_claimed_thumbnail(job).await?;
+                        Ok(())
+                    })
+                    .await
+                }
+                _ => Box::pin(self.run_job(job_type)).await,
+            },
+            None => Box::pin(self.run_job(job_type)).await,
         };
         if let Some(document_id) = job_type.document_id() {
             if let Err(e) = self.purge_if_deleted(document_id).await {
@@ -718,6 +742,127 @@ impl Worker {
         }
     }
 
+    async fn process_claimed_thumbnail(&self, job: &Job) -> Result<bool, BoxError> {
+        use folio_core::processing_events::{ProcessingEventStage, ProcessingReason};
+        let Some(fence) = self
+            .queue
+            .start_derived(job, ProcessingEventStage::Thumbnail)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if matches!(job.job_type, JobType::ProcessDocument { .. })
+            && !self.pipeline.settings().await.processing.auto_thumbnail
+        {
+            return Ok(self
+                .queue
+                .skip_derived(&fence, ProcessingReason::ProviderDisabled)
+                .await?);
+        }
+        let document = self
+            .document_repo
+            .find_by_id(fence.vault_id(), fence.document_id())
+            .await?
+            .ok_or("Document not found")?;
+        let mime = document
+            .mime_type
+            .as_deref()
+            .unwrap_or("application/octet-stream");
+        if !mime.starts_with("image/") && mime != "application/pdf" && document.content.is_none() {
+            return Ok(self
+                .queue
+                .skip_derived(&fence, ProcessingReason::UnsupportedFormat)
+                .await?);
+        }
+        let path = document
+            .file_path
+            .as_deref()
+            .ok_or_else(|| processing_failure(ProcessingReason::StorageFailed, "No file path"))?;
+        let data = self
+            .store
+            .get_bytes(path)
+            .await
+            .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+        let prefix = fence.result_prefix();
+        self.thumbnail_service
+            .generate_at(&prefix, &data, mime, document.content.as_deref())
+            .await
+            .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+        let page_count = if mime == "application/pdf" {
+            let local = self
+                .store
+                .download_to_temp(path)
+                .await
+                .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+            let count = self
+                .thumbnail_service
+                .get_pdf_page_count(local.path())
+                .await
+                .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+            for page in 1..=count.min(folio_core::ports::PREVIEW_PAGE_LIMIT) {
+                self.thumbnail_service
+                    .generate_page_at(&prefix, local.path(), page)
+                    .await
+                    .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+            }
+            Some(count)
+        } else if mime.starts_with("image/") {
+            Some(1)
+        } else {
+            None
+        };
+        self.queue
+            .complete_thumbnail(&fence, page_count)
+            .await
+            .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))
+    }
+
+    async fn process_claimed_embedding(&self, job: &Job) -> Result<(), BoxError> {
+        use folio_core::processing_events::{ProcessingEventStage, ProcessingReason};
+        let JobType::GenerateEmbedding { .. } = job.job_type else {
+            return Ok(());
+        };
+        let Some(fence) = self
+            .queue
+            .start_derived(job, ProcessingEventStage::Embedding)
+            .await?
+        else {
+            return Ok(());
+        };
+        let document = self
+            .document_repo
+            .find_by_id(fence.vault_id(), fence.document_id())
+            .await?
+            .ok_or("Document not found")?;
+        let content = document.content.unwrap_or_default();
+        let chunks = chunk_text(&content, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS);
+        let reason = if chunks.is_empty() {
+            Some(ProcessingReason::NoText)
+        } else if self.pipeline.settings().await.embeddings.provider == "none" {
+            Some(ProcessingReason::ProviderDisabled)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            self.queue
+                .skip_derived(&fence, reason)
+                .await
+                .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+            return Ok(());
+        }
+        let model = self
+            .embedding_service
+            .model_id()
+            .await
+            .map_err(|e| processing_failure(ProcessingReason::ProviderFailed, e))?;
+        let embedded = self.embed_chunks(&chunks, &model).await?;
+        self.queue
+            .complete_embedding(&fence, &content, &model, &embedded)
+            .await
+            .map_err(|e| processing_failure(ProcessingReason::StorageFailed, e))?;
+        Ok(())
+    }
+
     async fn process_claimed_ocr(&self, job: &Job) -> Result<(), BoxError> {
         use folio_core::processing_events::ProcessingReason;
         let Some(fence) = self.queue.start_ocr(job).await? else {
@@ -742,7 +887,9 @@ impl Worker {
                 .map_err(|error| processing_failure(ProcessingReason::StorageFailed, error))?;
             return Ok(());
         }
-        if settings.ocr.provider == "none" {
+        if settings.ocr.provider == "none"
+            || (!force && fence.group_id != job.id && !settings.processing.auto_ocr)
+        {
             self.queue
                 .skip_ocr(&fence, embed)
                 .await
@@ -894,21 +1041,34 @@ impl Worker {
         &self,
         chunks: &[String],
         model: &str,
-    ) -> folio_core::Result<Vec<EmbeddedChunk>> {
+    ) -> Result<Vec<EmbeddedChunk>, BoxError> {
+        use folio_core::processing_events::ProcessingReason;
         let mut embedded = Vec::with_capacity(chunks.len());
         let mut dimensions = None;
         for (batch_no, batch_texts) in chunks.chunks(EMBED_BATCH_SIZE).enumerate() {
             let texts: Vec<&str> = batch_texts.iter().map(String::as_str).collect();
-            let batch = self.embedding_service.embed(&texts).await?;
-            batch.validate(texts.len())?;
+            let batch = self
+                .embedding_service
+                .embed(&texts)
+                .await
+                .map_err(|error| processing_failure(ProcessingReason::ProviderFailed, error))?;
+            batch
+                .validate(texts.len())
+                .map_err(|error| processing_failure(ProcessingReason::InvalidResponse, error))?;
             if batch.model != model {
-                return Err(folio_core::Error::AiService(
-                    "Embedding model changed during document processing".into(),
+                return Err(processing_failure(
+                    ProcessingReason::InvalidResponse,
+                    folio_core::Error::AiService(
+                        "Embedding model changed during document processing".into(),
+                    ),
                 ));
             }
             if *dimensions.get_or_insert(batch.dimensions) != batch.dimensions {
-                return Err(folio_core::Error::AiService(
-                    "Embedding dimensions changed during document processing".into(),
+                return Err(processing_failure(
+                    ProcessingReason::InvalidResponse,
+                    folio_core::Error::AiService(
+                        "Embedding dimensions changed during document processing".into(),
+                    ),
                 ));
             }
             for (i, (text, embedding)) in batch_texts.iter().zip(batch.vectors).enumerate() {
@@ -1290,6 +1450,162 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claimed_root_skips_disabled_preview_and_ocr_without_provider_work() {
+        let f = fixture("should not run").await;
+        f.settings
+            .set("processing.auto_thumbnail", "false")
+            .await
+            .unwrap();
+        f.settings
+            .set("processing.auto_ocr", "false")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        f.queue
+            .enqueue(JobType::process_document(f.doc_id))
+            .await
+            .unwrap();
+        let root = f.queue.dequeue().await.unwrap().unwrap();
+        f.worker.process_claim(&root).await.unwrap();
+        f.worker.process_claim(&root).await.unwrap();
+        let assigned: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE job_type = 'extract_text'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(assigned, 1);
+        f.queue.complete(&root).await.unwrap();
+        let ocr = f.queue.dequeue().await.unwrap().unwrap();
+        f.worker.process_claim(&ocr).await.unwrap();
+        let states: Vec<(String, String, Option<String>)> = sqlx::query_as("SELECT stage, state, reason_code FROM processing_stage_runs WHERE document_id = ? ORDER BY stage")
+            .bind(f.doc_id.to_string()).fetch_all(&f.pool).await.unwrap();
+        assert_eq!(
+            states,
+            vec![
+                ("embedding".into(), "skipped".into(), Some("no_text".into())),
+                (
+                    "ocr".into(),
+                    "skipped".into(),
+                    Some("provider_disabled".into())
+                ),
+                (
+                    "thumbnail".into(),
+                    "skipped".into(),
+                    Some("provider_disabled".into())
+                ),
+            ]
+        );
+        let content: Option<String> =
+            sqlx::query_scalar("SELECT content FROM documents WHERE id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(content, None);
+    }
+
+    #[tokio::test]
+    async fn claimed_root_retries_ocr_assignment_before_thumbnail_work() {
+        let f = fixture("synthetic OCR").await;
+        f.settings
+            .set("processing.auto_thumbnail", "false")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        f.queue
+            .enqueue(JobType::process_document(f.doc_id))
+            .await
+            .unwrap();
+        let root = f.queue.dequeue().await.unwrap().unwrap();
+        sqlx::raw_sql("CREATE TRIGGER refuse_ocr_assignment BEFORE INSERT ON jobs WHEN NEW.job_type = 'extract_text' BEGIN SELECT RAISE(ABORT, 'refused'); END")
+            .execute(&f.pool).await.unwrap();
+        assert!(f.worker.process_claim(&root).await.is_err());
+        let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM processing_stage_runs WHERE document_id = ? AND state = 'pending'")
+            .bind(f.doc_id.to_string()).fetch_one(&f.pool).await.unwrap();
+        assert_eq!(pending, 3);
+        sqlx::raw_sql("DROP TRIGGER refuse_ocr_assignment")
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        f.worker.process_claim(&root).await.unwrap();
+        let assigned: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE job_type = 'extract_text'")
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(assigned, 1);
+    }
+
+    #[tokio::test]
+    async fn thumbnail_retry_continues_after_newer_ocr_supersedes_child_plan() {
+        use folio_core::processing_events::ProcessingReason;
+        let f = fixture("synthetic OCR").await;
+        f.queue
+            .enqueue(JobType::process_document(f.doc_id))
+            .await
+            .unwrap();
+        let root = f.queue.dequeue().await.unwrap().unwrap();
+        sqlx::query("UPDATE documents SET file_path = 'missing-synthetic-file' WHERE id = ?")
+            .bind(f.doc_id.to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        assert!(f.worker.process_claim(&root).await.is_err());
+        f.queue
+            .fail_with_reason(
+                &root,
+                "fixture storage failure",
+                true,
+                ProcessingReason::StorageFailed,
+            )
+            .await
+            .unwrap();
+        let newer = f
+            .queue
+            .enqueue(JobType::extract_text(f.doc_id))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE jobs SET scheduled_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+            .bind(root.id.to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        f.settings
+            .set("processing.auto_thumbnail", "false")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        let retry = f.queue.dequeue().await.unwrap().unwrap();
+        assert_eq!(retry.id, root.id);
+        f.worker.process_claim(&retry).await.unwrap();
+        let thumbnail: (String, i64) = sqlx::query_as("SELECT state, attempt FROM processing_stage_runs WHERE job_id = ? AND stage = 'thumbnail'")
+            .bind(root.id.to_string()).fetch_one(&f.pool).await.unwrap();
+        assert_eq!(thumbnail, ("skipped".into(), 2));
+        let current_ocr: String = sqlx::query_scalar("SELECT job_id FROM processing_stage_runs WHERE document_id = ? AND stage = 'ocr' AND is_current = 1")
+            .bind(f.doc_id.to_string()).fetch_one(&f.pool).await.unwrap();
+        assert_eq!(current_ocr, newer.to_string());
+    }
+
+    #[tokio::test]
+    async fn claimed_root_thumbnail_failure_still_assigns_ocr() {
+        let f = fixture("synthetic OCR").await;
+        f.queue
+            .enqueue(JobType::process_document(f.doc_id))
+            .await
+            .unwrap();
+        let root = f.queue.dequeue().await.unwrap().unwrap();
+        sqlx::query("UPDATE documents SET file_path = 'missing-synthetic-file' WHERE id = ?")
+            .bind(f.doc_id.to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        assert!(f.worker.process_claim(&root).await.is_err());
+        let assigned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM processing_stage_runs WHERE document_id = ? AND stage = 'ocr' AND job_id IS NOT NULL AND state = 'pending'")
+            .bind(f.doc_id.to_string()).fetch_one(&f.pool).await.unwrap();
+        assert_eq!(assigned, 1);
+    }
+
+    #[tokio::test]
     async fn missing_embedding_vectors_never_publish_completion() {
         let mut f = fixture("invoice").await;
         f.worker.embedding_service = Arc::new(MissingEmbeddings);
@@ -1329,6 +1645,83 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(completed, 0);
+    }
+
+    #[tokio::test]
+    async fn claimed_embedding_records_invalid_response_and_can_retry() {
+        let mut f = fixture("invoice").await;
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        f.repo
+            .complete_ocr(crate::database::test_vault(), f.doc_id, "invoice")
+            .await
+            .unwrap();
+        f.worker.embedding_service = Arc::new(MissingEmbeddings);
+        let id = f
+            .queue
+            .enqueue(JobType::generate_embedding(f.doc_id))
+            .await
+            .unwrap();
+        let first = f.queue.dequeue().await.unwrap().unwrap();
+
+        f.worker.handle_job(first).await;
+
+        let pool = &f.pool;
+        let read_occurrences = || async {
+            let payloads: Vec<String> =
+                sqlx::query_scalar("SELECT payload FROM outbox_events ORDER BY id")
+                    .fetch_all(pool)
+                    .await
+                    .unwrap();
+            payloads
+                .iter()
+                .filter_map(|payload| {
+                    folio_core::events::decode_stored_outbox_payload(payload)
+                        .unwrap()
+                        .envelope
+                })
+                .filter(|event| {
+                    event
+                        .event_type()
+                        .starts_with("document.processing.embedding.")
+                })
+                .collect::<Vec<_>>()
+        };
+        let events = read_occurrences().await;
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[1].event_type(),
+            "document.processing.embedding.retry_scheduled"
+        );
+        assert_eq!(events[1].data()["reason_code"], "invalid_response");
+        let stored: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM document_chunks WHERE document_id = ?")
+                .bind(f.doc_id.to_string())
+                .fetch_one(&f.pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, 0);
+
+        f.worker.embedding_service = Arc::new(FixedEmbeddings);
+        sqlx::query("UPDATE jobs SET scheduled_at = '2000-01-01T00:00:00Z' WHERE id = ?")
+            .bind(id.to_string())
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        let retry = f.queue.dequeue().await.unwrap().unwrap();
+        f.worker.handle_job(retry).await;
+
+        let events = read_occurrences().await;
+        assert_eq!(events.len(), 4);
+        assert_eq!(
+            events[3].event_type(),
+            "document.processing.embedding.completed"
+        );
+        assert_eq!(events[3].data()["attempt"], 2);
+        assert_eq!(events[3].data()["run_id"], events[1].data()["run_id"]);
     }
 
     struct Fixture {
@@ -1377,7 +1770,12 @@ mod tests {
             .unwrap();
         let path = folio_core::ports::keys::original(doc.id);
         storage
-            .put(&path, b"not a real png".as_slice().into())
+            .put(
+                &path,
+                include_bytes!("../../../../static/icons/icon-192.png")
+                    .as_slice()
+                    .into(),
+            )
             .await
             .unwrap();
         repo.set_file_path(crate::database::test_vault(), doc.id, &path)
@@ -1622,12 +2020,22 @@ mod tests {
 
             let stored = f.repo.find_by_id(vault, doc.id).await.unwrap().unwrap();
             assert_eq!(stored.page_count, Some(pages));
+            let prefix = f
+                .repo
+                .thumbnail_result_prefix(vault, doc.id)
+                .await
+                .unwrap()
+                .unwrap();
             assert!(f
                 .storage
-                .exists(&keys::page(doc.id, PREVIEW_PAGE_LIMIT))
+                .exists(&format!("{prefix}/pages/{PREVIEW_PAGE_LIMIT}.jpg"))
                 .await
                 .unwrap());
-            assert!(!f.storage.exists(&keys::page(doc.id, pages)).await.unwrap());
+            assert!(!f
+                .storage
+                .exists(&format!("{prefix}/pages/{pages}.jpg"))
+                .await
+                .unwrap());
         }
     }
 

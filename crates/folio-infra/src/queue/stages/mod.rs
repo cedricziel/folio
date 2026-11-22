@@ -13,13 +13,14 @@ use uuid::Uuid;
 use super::processing_scope::ProcessingScope;
 use super::{Job, JobStatus, JobType};
 
-/// A started OCR attempt, usable only while its persisted queue claim remains live.
+/// A started processing attempt, usable only while its persisted queue claim remains live.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OcrStageFence {
+pub struct StageFence {
+    stage: ProcessingEventStage,
     run_id: Uuid,
     document_id: Uuid,
     vault_id: VaultId,
-    group_id: Uuid,
+    pub(super) group_id: Uuid,
     job_id: Uuid,
     job_type: &'static str,
     claim_id: Uuid,
@@ -27,7 +28,18 @@ pub struct OcrStageFence {
     attempt: u32,
 }
 
-impl OcrStageFence {
+/// Compatibility name for OCR callers.
+pub type OcrStageFence = StageFence;
+
+impl StageFence {
+    /// Immutable object namespace for results produced by this claim.
+    pub fn result_prefix(&self) -> String {
+        format!(
+            "documents/{}/processing/{}/{}",
+            self.document_id, self.run_id, self.claim_id
+        )
+    }
+
     /// The logical document fenced by this attempt.
     pub fn document_id(&self) -> Uuid {
         self.document_id
@@ -53,6 +65,8 @@ impl OcrStageFence {
 #[derive(sqlx::FromRow)]
 struct StageRow {
     run_id: String,
+    stage: String,
+    payload: String,
     vault_id: String,
     group_id: String,
     state: String,
@@ -64,6 +78,7 @@ struct StageRow {
 }
 
 struct LoadedStage {
+    origin: folio_core::EventOrigin,
     fence: OcrStageFence,
     attempt_state: ProcessingAttempt,
     stage_claim_id: Option<Uuid>,
@@ -84,9 +99,19 @@ impl StageRow {
         let outcome =
             serde_json::from_value(serde_json::Value::String(self.state)).map_err(repo_err)?;
         let attempt_state = ProcessingAttempt::restore(number, outcome)
-            .ok_or_else(|| repo_err("Invalid persisted OCR attempt"))?;
+            .ok_or_else(|| repo_err("Invalid persisted processing attempt"))?;
         Ok(LoadedStage {
-            fence: OcrStageFence {
+            origin: match serde_json::from_str::<JobType>(&self.payload).map_err(repo_err)? {
+                JobType::GenerateEmbedding { origin, .. } => origin,
+                _ => folio_core::EventOrigin::User,
+            },
+            fence: StageFence {
+                stage: match self.stage.as_str() {
+                    "ocr" => ProcessingEventStage::Ocr,
+                    "embedding" => ProcessingEventStage::Embedding,
+                    "thumbnail" => ProcessingEventStage::Thumbnail,
+                    _ => return Err(repo_err("Invalid processing stage")),
+                },
                 run_id: self.run_id.parse().map_err(repo_err)?,
                 document_id,
                 vault_id: VaultId(self.vault_id.parse().map_err(repo_err)?),
@@ -167,7 +192,7 @@ async fn envelope(
         &ProcessingOccurrence {
             run_id: fence.run_id,
             revision_id: None,
-            stage: ProcessingEventStage::Ocr,
+            stage: fence.stage,
             attempt: fence.attempt,
             outcome,
         },
@@ -219,4 +244,57 @@ fn reason_code(reason: ProcessingReason) -> Result<String> {
 
 fn repo_err(error: impl std::fmt::Display) -> Error {
     Error::Repository(error.to_string())
+}
+
+fn claimed_stage_document(job: &Job, stage: ProcessingEventStage) -> Option<(Uuid, Uuid)> {
+    if job.status != JobStatus::Processing || job.attempts <= 0 {
+        return None;
+    }
+    let document_id = match (&job.job_type, stage) {
+        (JobType::GenerateEmbedding { document_id, .. }, ProcessingEventStage::Embedding)
+        | (JobType::GenerateThumbnail { document_id }, ProcessingEventStage::Thumbnail)
+        | (JobType::ProcessDocument { document_id, .. }, ProcessingEventStage::Thumbnail) => {
+            *document_id
+        }
+        _ => return None,
+    };
+    Some((document_id, job.claim_id?))
+}
+
+fn stage_name(stage: ProcessingEventStage) -> &'static str {
+    match stage {
+        ProcessingEventStage::Ocr => "ocr",
+        ProcessingEventStage::Embedding => "embedding",
+        ProcessingEventStage::Thumbnail => "thumbnail",
+    }
+}
+
+enum DerivedResult<'a> {
+    Embedding {
+        expected_content: &'a str,
+        model: &'a str,
+        chunks: &'a [folio_core::ports::EmbeddedChunk],
+    },
+    Thumbnail {
+        page_count: Option<u32>,
+    },
+    Skipped(ProcessingReason),
+}
+
+fn validate_chunks(model: &str, chunks: &[folio_core::ports::EmbeddedChunk]) -> Result<()> {
+    let dimensions = chunks
+        .first()
+        .map(|chunk| chunk.embedding.len())
+        .unwrap_or(0);
+    if model.trim().is_empty()
+        || dimensions == 0
+        || chunks.iter().enumerate().any(|(i, chunk)| {
+            chunk.index as usize != i
+                || chunk.embedding.len() != dimensions
+                || chunk.embedding.iter().any(|value| !value.is_finite())
+        })
+    {
+        return Err(repo_err("Invalid embedding result"));
+    }
+    Ok(())
 }
