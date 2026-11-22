@@ -9683,6 +9683,17 @@
                 ],
                 "description": "Name of the document type, when one is set"
               },
+              "processing_stages": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/components/schemas/ProcessingStageSummary",
+                  "readOnly": true
+                },
+                "description": "Current persisted stage runs on document detail; empty for documents predating stage tracking."
+              },
               "reviewed": {
                 "type": "boolean"
               },
@@ -10809,6 +10820,71 @@
           "group"
         ]
       },
+      "ProcessingEventStage": {
+        "type": "string",
+        "enum": [
+          "ocr",
+          "embedding",
+          "thumbnail"
+        ]
+      },
+      "ProcessingStageSummary": {
+        "type": "object",
+        "description": "Current persisted stage state; absent legacy runs are never synthesized.",
+        "required": [
+          "run_id",
+          "stage",
+          "attempt",
+          "state"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Counts stage starts within this run; zero means the stage has not started.",
+            "minimum": 0
+          },
+          "has_text": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Set only for completed OCR; `false` is a successful completion with no extracted text."
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Allowlisted reason for a retry, skip, or terminal failure."
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Absent for runs that started before immutable revision identity was available."
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessingEventStage"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StageOutcome"
+          }
+        }
+      },
       "ProcessingStatus": {
         "type": "string",
         "description": "State of one pipeline stage for one document",
@@ -11398,6 +11474,17 @@
             "format": "uuid"
           }
         }
+      },
+      "StageOutcome": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "waiting_to_retry",
+          "completed",
+          "failed",
+          "skipped"
+        ]
       },
       "Tag": {
         "type": "object",

@@ -321,6 +321,15 @@ quarantine and listings that retain readable jobs without altering damaged rows.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
 
+For processing results, run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ocr_stage_transactions --test derived_stage_transactions --test processing_summaries`.
+These fixtures cover atomic artifacts and events, duplicate or expired claims,
+superseded inputs, retry lineage, and current stage reads on both databases.
+Run `cargo test -p folio-api --test processing_summaries --test thumbnails` and
+`cargo test -p folio-api --lib processing_tests` for access control, committed
+preview reads, retry copy, and legacy fallback. Regenerate the API description
+with `make openapi`. Run the document Playwright tests against the disposable
+instance to check that an open document shows a retry schedule without navigating.
+
 ## Verify document trash
 
 Run `cargo test -p folio-api --test trash --test vaults --test live` for default

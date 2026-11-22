@@ -1,12 +1,14 @@
 <section class="panel" aria-label="Processing" id="document-{{ document.id }}-processing">
     <h2 class="heading">Processing</h2>
     <dl class="f-meta-list">
-        <dt>Text extraction</dt>
-        <dd>{{ document|ocr_processing_status }}</dd>
-        <dt>Search indexing</dt>
-        <dd>{{ document.embed_status|processing_status }}</dd>
+        {% for stage in processing %}
+        <dt>{{ stage.title }}</dt>
+        <dd>
+            {{ stage.status }}
+            {% if stage.attempt > 0 %}<p class="hint">Attempt {{ stage.attempt }}</p>{% endif %}
+            {% if let Some(retry_at) = stage.retry_at %}<p class="hint">Retry after {{ retry_at }}</p>{% endif %}
+            {% if let Some(detail) = stage.detail %}<p class="hint">{{ detail }}</p>{% endif %}
+        </dd>
+        {% endfor %}
     </dl>
-    {% if document.embed_status.as_str() == "failed" %}
-    <p class="hint">Search indexing did not finish. The original file is unchanged.</p>
-    {% endif %}
 </section>

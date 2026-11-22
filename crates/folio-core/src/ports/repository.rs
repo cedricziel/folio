@@ -71,6 +71,14 @@ pub trait DocumentRepository: Send + Sync {
         revision_id: Id,
     ) -> Result<Option<DocumentRevision>>;
 
+    /// Current persisted stage runs for a live document in an active vault, ordered by stage.
+    /// Missing, trashed, wrong-vault, and legacy documents return an empty list.
+    async fn processing_stage_summaries(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<Vec<crate::models::ProcessingStageSummary>>;
+
     /// Latest committed thumbnail for the current original. Legacy keys apply only to the first version.
     /// Returns `None` for an unavailable document or a replacement without a committed preview.
     async fn thumbnail_location(&self, vault: VaultId, id: Id)
