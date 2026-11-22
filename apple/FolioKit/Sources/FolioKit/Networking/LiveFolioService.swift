@@ -97,8 +97,8 @@ public struct LiveFolioService: FolioService, SourceActivityService, CustomMetad
                 try LenientDateTranscoder().decode(decoder.singleValueContainer().decode(String.self))
             }
             guard let catalog = try? decoder.decode(VaultCatalog.self, from: data),
-                let defaultID = catalog.defaultVaultID,
-                catalog.vaults.contains(where: { $0.id == defaultID })
+                catalog.defaultVaultID.map({ id in catalog.vaults.contains(where: { $0.id == id }) })
+                    ?? catalog.vaults.isEmpty
             else { throw FolioError.unreadableResponse }
             return catalog
         }

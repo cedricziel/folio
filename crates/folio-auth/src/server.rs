@@ -7,7 +7,10 @@ use serde_json::{json, Value};
 
 use crate::{
     crypto::{ct_eq, hash_token, random_token, verify_pkce},
-    model::{AccessToken, AuthCode, OAuthClient, RefreshToken, SCOPES},
+    model::{
+        AccessToken, AuthCode, OAuthClient, RefreshToken, SCOPES, SUPPORTED_SCOPES,
+        VAULT_MANAGEMENT_SCOPE,
+    },
     redirect::{redirect_uri_matches, validate_redirect_uri},
     store::{AuthError, AuthStore, IssuedTokens, RefreshExchange},
 };
@@ -60,6 +63,7 @@ impl From<AuthError> for OAuthError {
 #[derive(Debug, Deserialize)]
 pub struct RegistrationRequest {
     pub client_name: Option<String>,
+    pub scope: Option<String>,
     #[serde(default)]
     pub redirect_uris: Vec<String>,
     pub token_endpoint_auth_method: Option<String>,
@@ -132,7 +136,7 @@ pub fn authorization_server_metadata(base: &str) -> Value {
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
         "authorization_response_iss_parameter_supported": true,
-        "scopes_supported": SCOPES,
+        "scopes_supported": SUPPORTED_SCOPES,
     })
 }
 
@@ -141,7 +145,7 @@ pub fn protected_resource_metadata(base: &str, resource_path: &str) -> Value {
     json!({
         "resource": format!("{base}{resource_path}"),
         "authorization_servers": [base],
-        "scopes_supported": SCOPES,
+        "scopes_supported": if resource_path == "/api" { SUPPORTED_SCOPES.as_slice() } else { SCOPES.as_slice() },
         "bearer_methods_supported": ["header"],
     })
 }
@@ -152,7 +156,7 @@ fn parse_scopes(scope: Option<&str>) -> Result<Vec<String>, String> {
         Some(s) => {
             let mut out: Vec<String> = Vec::new();
             for item in s.split_whitespace() {
-                if !SCOPES.contains(&item) {
+                if !SUPPORTED_SCOPES.contains(&item) {
                     return Err(format!("unknown scope: {item}"));
                 }
                 if !out.iter().any(|o| o == item) {
@@ -245,6 +249,8 @@ impl OAuthServer {
                 return Err(invalid("unsupported response_types"));
             }
         }
+        let scopes =
+            parse_scopes(req.scope.as_deref()).map_err(|m| OAuthError::new("invalid_scope", m))?;
         let name: String = req
             .client_name
             .map(|n| n.trim().to_string())
@@ -266,7 +272,7 @@ impl OAuthServer {
             "token_endpoint_auth_method": "none",
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
-            "scope": SCOPES.join(" "),
+            "scope": scopes.join(" "),
         }))
     }
 
@@ -329,6 +335,15 @@ impl OAuthServer {
         let scopes = parse_scopes(p.scope.as_deref()).map_err(|m| fail("invalid_scope", &m))?;
         let audience = resolve_audience(base, p.resource.as_deref())
             .map_err(|m| fail("invalid_target", &m))?;
+
+        if scopes.iter().any(|scope| scope == VAULT_MANAGEMENT_SCOPE)
+            && audience != format!("{base}/api")
+        {
+            return Err(fail(
+                "invalid_scope",
+                "vault management requires the API resource",
+            ));
+        }
 
         Ok(ValidatedAuthorize {
             client,

@@ -86,15 +86,25 @@ public enum VaultSharing: Sendable, Equatable {
 public struct VaultCatalog: Codable, Equatable, Sendable {
     public let vaults: [Vault]
     public let defaultVaultID: UUID?
+    public let deletedVaults: [VaultMetadata]
 
     enum CodingKeys: String, CodingKey {
         case vaults
         case defaultVaultID = "default_vault_id"
+        case deletedVaults = "deleted_vaults"
     }
 
-    public init(vaults: [Vault], defaultVaultID: UUID?) {
+    public init(vaults: [Vault], defaultVaultID: UUID?, deletedVaults: [VaultMetadata] = []) {
         self.vaults = vaults
         self.defaultVaultID = defaultVaultID
+        self.deletedVaults = deletedVaults
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        vaults = try container.decode([Vault].self, forKey: .vaults)
+        defaultVaultID = try container.decodeIfPresent(UUID.self, forKey: .defaultVaultID)
+        deletedVaults = try container.decodeIfPresent([VaultMetadata].self, forKey: .deletedVaults) ?? []
     }
 
     public static let empty = VaultCatalog(vaults: [], defaultVaultID: nil)

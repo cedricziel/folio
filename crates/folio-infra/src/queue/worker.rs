@@ -2906,6 +2906,7 @@ mod tests {
                     file_path: path,
                     content_sha256: identity.sha256,
                     file_size: identity.byte_size,
+                    archive: None,
                     document_date: None,
                     created_at: now,
                     updated_at: now,

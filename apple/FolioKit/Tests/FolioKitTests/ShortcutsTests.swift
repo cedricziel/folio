@@ -26,6 +26,10 @@ private func document(
         correspondentID: correspondent?.id, documentTypeID: type?.id, tags: tags, createdAt: day(offset))
 }
 
+private func isolatedCatalog(_ service: any FolioService, calendar: Calendar = .current) -> DocumentCatalog {
+    DocumentCatalog(service: service, calendar: calendar, progress: InMemoryUploadProgressStore(), uploadScope: "tests")
+}
+
 private func makeCatalog(
     _ documents: [Document] = [], tags: [Tag] = [utilities, taxes]
 ) async -> (DocumentCatalog, MockFolioService) {
@@ -34,8 +38,7 @@ private func makeCatalog(
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(identifier: "UTC")!
     return (
-        DocumentCatalog(
-            service: service, calendar: calendar, progress: InMemoryUploadProgressStore(), uploadScope: "tests"),
+        isolatedCatalog(service, calendar: calendar),
         service
     )
 }
@@ -171,8 +174,8 @@ private actor FlushLog {
     private let runs = IntentRuns()
 
     private func install(_ documents: [Document] = []) async -> MockFolioService {
-        let (_, service) = await makeCatalog(documents)
-        IntentEnvironment.use { service }
+        let (catalog, service) = await makeCatalog(documents)
+        IntentEnvironment.use(catalog: catalog)
         let runs = runs
         IntentEnvironment.recordRuns { runs.append($0) }
         IntentEnvironment.flushRuns {}
@@ -333,7 +336,7 @@ private actor FlushLog {
         let inB = document("Lease")
         let (_, scopedB) = await makeCatalog([inB])
         let root = MockFolioService(documents: [], vaultServices: [vaultB: scopedB])
-        IntentEnvironment.use { root }
+        IntentEnvironment.use(catalog: isolatedCatalog(root))
         let fake = await installSpotlight([inB], vaultID: vaultB)
         defer { IntentEnvironment.use(spotlight: .shared) }
 
@@ -349,7 +352,7 @@ private actor FlushLog {
         let vault = UUID()
         let kept = document("Kept"), gone = document("Gone")
         let (_, scoped) = await makeCatalog([kept])
-        IntentEnvironment.use { MockFolioService(documents: [], vaultServices: [vault: scoped]) }
+        IntentEnvironment.use(catalog: isolatedCatalog(MockFolioService(documents: [], vaultServices: [vault: scoped])))
         let fake = await installSpotlight([kept, gone], vaultID: vault)
         defer { IntentEnvironment.use(spotlight: .shared) }
 
@@ -381,7 +384,7 @@ private actor FlushLog {
         let kept = document("Kept"), flaky = document("Flaky")
         let (_, scoped) = await makeCatalog([kept, flaky])
         await scoped.setFailingDocuments([flaky.id])
-        IntentEnvironment.use { MockFolioService(documents: [], vaultServices: [vault: scoped]) }
+        IntentEnvironment.use(catalog: isolatedCatalog(MockFolioService(documents: [], vaultServices: [vault: scoped])))
         let fake = await installSpotlight([kept, flaky], vaultID: vault)
         defer { IntentEnvironment.use(spotlight: .shared) }
 
@@ -419,7 +422,7 @@ private actor FlushLog {
         _ = try await AddTagIntent(document: entity, tag: TagEntity(utilities)).perform()
         #expect(await flushes.taggedAtFlush == [1])
 
-        IntentEnvironment.use { nil }
+        IntentEnvironment.use(catalog: nil)
         await #expect(throws: ShortcutError.notSignedIn) {
             try await GetLatestDocumentIntent().perform()
         }
@@ -427,7 +430,7 @@ private actor FlushLog {
     }
 
     @Test func notSignedInSaysToOpenTheApp() async {
-        IntentEnvironment.use { nil }
+        IntentEnvironment.use(catalog: nil)
         await #expect(throws: ShortcutError.notSignedIn) {
             try await GetLatestDocumentIntent().perform()
         }
@@ -484,7 +487,7 @@ extension IntentTests {
             vaults: VaultCatalog(vaults: [MockFolioService.defaultVault, family], defaultVaultID: nil),
             vaultServices: [family.id: scoped])
         _ = await install()
-        IntentEnvironment.use { root }
+        IntentEnvironment.use(catalog: isolatedCatalog(root))
 
         let searched = try await SearchDocumentsIntent(query: "lease", vault: VaultEntity(family)).perform()
         #expect(searched.value?.map(\.title) == ["Lease"])
@@ -500,7 +503,7 @@ extension IntentTests {
         let family = Vault(id: UUID(), name: "Family", role: .owner, shared: true)
         let root = MockFolioService(vaults: VaultCatalog(vaults: [family], defaultVaultID: family.id))
         _ = await install()
-        IntentEnvironment.use { root }
+        IntentEnvironment.use(catalog: isolatedCatalog(root))
 
         let vaults = try await VaultEntityQuery().entities(matching: "fam")
         #expect(vaults.map(\.name) == ["Family"])
@@ -515,7 +518,7 @@ extension IntentTests {
             vaults: VaultCatalog(vaults: [MockFolioService.defaultVault, work], defaultVaultID: nil),
             vaultServices: [work.id: workTags], tags: [utilities])
         _ = await install()
-        IntentEnvironment.use { root }
+        IntentEnvironment.use(catalog: isolatedCatalog(root))
 
         let tags = try await TagEntityQuery().suggestedEntities()
         #expect(tags.map(\.name) == ["Utilities", "Taxes"])

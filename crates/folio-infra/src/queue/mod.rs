@@ -8,10 +8,17 @@ pub mod stages;
 mod trace_context;
 mod worker;
 
-pub(crate) use postgres::insert_job as insert_job_postgres;
 use postgres::PostgresJobQueue;
-pub(crate) use sqlite::insert_job as insert_job_sqlite;
+pub(crate) use postgres::{
+    insert_current_processing as insert_current_processing_postgres,
+    insert_current_thumbnail as insert_current_thumbnail_postgres,
+    insert_job as insert_job_postgres,
+};
 use sqlite::SqliteJobQueue;
+pub(crate) use sqlite::{
+    insert_current_processing as insert_current_processing_sqlite,
+    insert_current_thumbnail as insert_current_thumbnail_sqlite, insert_job as insert_job_sqlite,
+};
 pub use trace_context::JobTraceContext;
 pub use worker::{Worker, WorkerConfig};
 
@@ -25,6 +32,8 @@ use async_trait::async_trait;
 use folio_core::error::Result;
 use folio_core::events::EventOrigin;
 use folio_core::ports::{ProcessingQueue, ProcessingStatus};
+
+const REVISION_DISPATCH_ENABLED: bool = false;
 
 /// Job status
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +138,17 @@ impl JobType {
         }
     }
 
+    fn embedding_for_revision(document_id: Uuid, revision_id: Option<Uuid>) -> Self {
+        match revision_id {
+            Some(revision_id) => Self::GenerateRevisionEmbedding {
+                document_id,
+                revision_id,
+                origin: EventOrigin::User,
+            },
+            None => Self::generate_embedding(document_id),
+        }
+    }
+
     pub fn process_document(document_id: Uuid) -> Self {
         JobType::ProcessDocument {
             document_id,
@@ -170,7 +190,7 @@ impl JobType {
     }
 
     fn ensure_dispatchable(&self) -> Result<()> {
-        if self.revision_id().is_some() {
+        if self.revision_id().is_some() && !REVISION_DISPATCH_ENABLED {
             return Err(folio_core::Error::Conflict(
                 "File revision processing is not yet enabled".into(),
             ));
@@ -334,6 +354,25 @@ impl JobQueue {
             self,
             enqueue_with_max_attempts(job_type, scheduled_at, max_attempts, trace)
         )
+    }
+
+    /// Schedule new work for the current original in an authorized vault.
+    pub async fn enqueue_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        force: bool,
+    ) -> Result<Uuid> {
+        let trace = JobTraceContext::current();
+        dispatch!(
+            self,
+            enqueue_current_processing(vault, document_id, force, trace)
+        )
+    }
+
+    /// Re-embed documents whose current OCR text is ready, without inheriting the settings trace.
+    pub async fn reembed_documents(&self) -> Result<usize> {
+        dispatch!(self, reembed_documents())
     }
 
     /// Claim the next available job of any class
