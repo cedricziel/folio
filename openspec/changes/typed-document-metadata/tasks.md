@@ -14,7 +14,8 @@
 
 ## 3. API and web
 
-- [ ] In progress: expose manager-authorized field/option JSON lifecycle routes, bounded reads, and generated OpenAPI with isolated API regressions. Document value endpoints follow this increment.
+- [x] Merge scoped field/option JSON lifecycle and OpenAPI as #521. All nine metadata router tests, workspace CI, end-to-end, fastembed, Paperless, and architecture builds passed.
+- [ ] In progress: expose document metadata reads and atomic revision-checked updates, including retained links and generated OpenAPI.
 
 - [ ] Write failing router tests for manager/editor/viewer permissions, contributor ownership, revoked membership, cross-vault targets, errors, and CSRF; implement documented JSON and HTML routes.
 - [ ] Write failing search tests for canonical equality, bounds, cursor binding, and retired fields; implement exact metadata filtering.

@@ -9,6 +9,7 @@ use super::{MetadataValue, UserId};
 pub struct DocumentMetadataValue {
     pub field_id: uuid::Uuid,
     pub value: Option<MetadataValue>,
+    pub link_target: Option<MetadataLinkTarget>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -16,6 +17,13 @@ pub struct DocumentMetadataValue {
     pub created_by: Option<UserId>,
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
     pub updated_by: Option<UserId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct MetadataLinkTarget {
+    pub title: String,
+    pub trashed: bool,
 }
 
 /// All retained values of one logical document, ordered by field ID.
@@ -36,6 +44,7 @@ pub struct MetadataChange {
     pub field_id: uuid::Uuid,
     /// Required: an explicit `null` clears, so a missing key cannot clear by accident.
     #[serde(deserialize_with = "Option::deserialize")]
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub value: Option<MetadataValue>,
 }
 

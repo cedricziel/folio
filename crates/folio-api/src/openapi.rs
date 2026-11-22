@@ -38,6 +38,8 @@ use crate::routes::{
         crate::routes::metadata::update_option,
         crate::routes::metadata::delete_option,
         crate::routes::metadata::restore_option,
+        crate::routes::metadata::get_document_metadata,
+        crate::routes::metadata::patch_document_metadata,
 
         tokens::list_personal_tokens,
         tokens::create_personal_token,

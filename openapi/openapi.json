@@ -5150,6 +5150,175 @@
         ]
       }
     },
+    "/api/vaults/{vault_id}/documents/{document_id}/metadata": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "getDocumentMetadata",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained assignments and their revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentMetadata"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "patchDocumentMetadata",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchDocumentMetadata"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Assignments after the atomic update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentMetadata"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale metadata revision, uniqueness, or lifecycle conflict"
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/vaults/{vault_id}/history": {
       "get": {
         "tags": [
@@ -8735,6 +8904,96 @@
           }
         }
       },
+      "DocumentMetadata": {
+        "type": "object",
+        "description": "All retained values of one logical document, ordered by field ID.",
+        "required": [
+          "document_id",
+          "values"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Compare-and-swap token; `None` until the first metadata change."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentMetadataValue"
+            }
+          }
+        }
+      },
+      "DocumentMetadataValue": {
+        "type": "object",
+        "description": "A retained assignment; a cleared value keeps its lifecycle attribution with `value: None`.",
+        "required": [
+          "field_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "link_target": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetadataLinkTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetadataValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "DocumentReviewRequest": {
         "type": "object",
         "required": [
@@ -9400,6 +9659,32 @@
         },
         "additionalProperties": false
       },
+      "MetadataChange": {
+        "type": "object",
+        "description": "One explicit replacement (`Some`) or clear (`None`); fields absent from a patch stay unchanged.",
+        "required": [
+          "field_id",
+          "value"
+        ],
+        "properties": {
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetadataValue",
+                "description": "Required: an explicit `null` clears, so a missing key cannot clear by accident."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "MetadataField": {
         "type": "object",
         "required": [
@@ -9499,6 +9784,21 @@
           "document_link"
         ]
       },
+      "MetadataLinkTarget": {
+        "type": "object",
+        "required": [
+          "title",
+          "trashed"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "trashed": {
+            "type": "boolean"
+          }
+        }
+      },
       "MetadataOption": {
         "type": "object",
         "required": [
@@ -9576,6 +9876,204 @@
           }
         },
         "additionalProperties": false
+      },
+      "MetadataValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "long_text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "boolean"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "integer"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "decimal"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "money"
+                ]
+              },
+              "value": {
+                "type": "object",
+                "required": [
+                  "amount",
+                  "currency"
+                ],
+                "properties": {
+                  "amount": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "select"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "document_link"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
       },
       "NamedRef": {
         "type": "object",
@@ -9687,6 +10185,30 @@
           "new_only",
           "mirror"
         ]
+      },
+      "PatchDocumentMetadata": {
+        "type": "object",
+        "required": [
+          "revision",
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataChange"
+            }
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Revision returned by the last read. Send null before the first change."
+          }
+        },
+        "additionalProperties": false
       },
       "PersonalTokenMetadata": {
         "type": "object",

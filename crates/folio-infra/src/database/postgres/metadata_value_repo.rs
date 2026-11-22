@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, SubsecRound, Utc};
 use folio_core::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use folio_core::models::{
-    DocumentMetadata, DocumentMetadataValue, Id, MetadataChange, MetadataValue, UserId, VaultId,
+    DocumentMetadata, DocumentMetadataValue, Id, MetadataChange, MetadataLinkTarget, MetadataValue,
+    UserId, VaultId,
 };
 use folio_core::ports::MetadataValueRepository;
 use folio_core::{Error, Result};
@@ -14,7 +15,7 @@ use tokio::sync::Notify;
 
 use crate::database::metadata_value::{canonical_key, change, parse_kind, Columns};
 
-const VALUE_COLS: &str = "field_id, kind, text_value, boolean_value, integer_value, decimal_value, date_value, currency, option_id, target_document_id, created_at, updated_at, deleted_at, created_by, updated_by";
+const VALUE_COLS: &str = "value.field_id, value.kind, value.text_value, value.boolean_value, value.integer_value, value.decimal_value, value.date_value, value.currency, value.option_id, value.target_document_id, value.created_at, value.updated_at, value.deleted_at, value.created_by, value.updated_by";
 
 #[derive(Clone)]
 pub struct PostgresMetadataValueRepository {
@@ -52,6 +53,10 @@ struct ValueRow {
     deleted_at: Option<DateTime<Utc>>,
     created_by: Option<String>,
     updated_by: Option<String>,
+    #[sqlx(default)]
+    target_title: Option<String>,
+    #[sqlx(default)]
+    target_trashed: bool,
 }
 
 impl TryFrom<ValueRow> for DocumentMetadataValue {
@@ -72,6 +77,10 @@ impl TryFrom<ValueRow> for DocumentMetadataValue {
         Ok(Self {
             field_id: row.field_id,
             value,
+            link_target: row.target_title.map(|title| MetadataLinkTarget {
+                title,
+                trashed: row.target_trashed,
+            }),
             created_at: row.created_at,
             updated_at: row.updated_at,
             deleted_at: row.deleted_at,
@@ -139,7 +148,11 @@ async fn load(conn: &mut PgConnection, vault: VaultId, document: Id) -> Result<D
     }
     let revision = current_revision(conn, vault, document).await?;
     let rows: Vec<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {VALUE_COLS} FROM metadata_values WHERE vault_id = $1 AND document_id = $2 ORDER BY field_id"
+        "SELECT {VALUE_COLS}, target.title AS target_title,
+                target.deleted_at IS NOT NULL OR target.purge_requested_at IS NOT NULL AS target_trashed
+             FROM metadata_values value
+             LEFT JOIN documents target ON target.vault_id = value.vault_id AND target.id = value.target_document_id
+             WHERE value.vault_id = $1 AND value.document_id = $2 ORDER BY value.field_id"
     )))
     .bind(vault.0)
     .bind(document)
@@ -515,7 +528,7 @@ impl MetadataValueRepository for PostgresMetadataValueRepository {
             } = field_for_write(&mut tx, vault, field_id).await?;
             let kind = parse_kind(&kind_name)?;
             let existing: Option<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT {VALUE_COLS} FROM metadata_values WHERE vault_id = $1 AND document_id = $2 AND field_id = $3"
+                "SELECT {VALUE_COLS} FROM metadata_values value WHERE value.vault_id = $1 AND value.document_id = $2 AND field_id = $3"
             )))
             .bind(vault.0)
             .bind(document)
