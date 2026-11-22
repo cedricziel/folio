@@ -299,6 +299,10 @@ pub struct UpdateDocument {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct DocumentFilter {
+    /// Exclude filed documents while retaining documents with active or failed processing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "openapi", schema(required = false))]
+    pub inbox_only: bool,
     pub reviewed: Option<bool>,
     #[cfg_attr(feature = "openapi", schema(value_type = Option<String>, format = Date))]
     pub document_date_from: Option<DocumentDate>,

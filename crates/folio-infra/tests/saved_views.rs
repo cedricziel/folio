@@ -61,7 +61,7 @@ async fn contract(repos: Repositories) {
         .is_none());
     assert!(repos
         .saved_views
-        .list(vault, &bob, None, 100)
+        .list(vault, &bob, None, 100, None)
         .await
         .unwrap()
         .is_empty());
@@ -116,7 +116,7 @@ async fn contract(repos: Repositories) {
         .is_err());
     assert!(repos
         .saved_views
-        .list(vault, &alice, None, 101)
+        .list(vault, &alice, None, 101, None)
         .await
         .is_err());
 }
@@ -386,7 +386,7 @@ async fn rollback_contract(database: &Database) {
     assert_eq!(
         repos
             .saved_views
-            .list(vault, &owner, None, 100)
+            .list(vault, &owner, None, 100, None)
             .await
             .unwrap()
             .len(),

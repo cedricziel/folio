@@ -139,14 +139,15 @@ impl SavedViewRepository for SqliteSavedViewRepository {
         access: &SavedViewAccess,
         after: Option<Id>,
         limit: u32,
+        max_query_version: Option<u32>,
     ) -> Result<Vec<SavedView>> {
         if !(1..=100).contains(&limit) {
             return Err(Error::Validation(
                 "Page limit must be between 1 and 100".into(),
             ));
         }
-        let rows = sqlx::query_as::<_, ViewRow>("SELECT * FROM saved_views WHERE vault_id = $1 AND deleted_at IS NULL AND (owner_id = $2 OR visibility = 'shared') AND ($3 IS NULL OR id > $3) ORDER BY id LIMIT $4")
-            .bind(vault.to_string()).bind(access.user.as_str()).bind(after.map(|id| id.to_string())).bind(i64::from(limit))
+        let rows = sqlx::query_as::<_, ViewRow>("SELECT * FROM saved_views WHERE vault_id = $1 AND deleted_at IS NULL AND (owner_id = $2 OR visibility = 'shared') AND ($3 IS NULL OR id > $3) AND ($5 IS NULL OR json_extract(query_json, '$.version') <= $5) ORDER BY id LIMIT $4")
+            .bind(vault.to_string()).bind(access.user.as_str()).bind(after.map(|id| id.to_string())).bind(i64::from(limit)).bind(max_query_version.map(i64::from))
             .fetch_all(&self.pool).await.map_err(storage_error)?;
         rows.into_iter().map(SavedView::try_from).collect()
     }

@@ -20,6 +20,8 @@ use crate::{
 #[into_params(parameter_in = Query)]
 #[allow(dead_code)]
 pub struct BrowseQuery {
+    /// Restrict results to the Inbox, including active or failed processing.
+    inbox_only: Option<bool>,
     /// Literal words to match in title or content. Every word must match; at most 32 words.
     q: Option<String>,
     /// Maximum documents per page, from 1 to 100. Defaults to 50.
@@ -46,6 +48,11 @@ pub(super) fn query(raw: Option<&str>) -> ApiResult<DocumentPageQuery> {
     };
     for (key, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
         match key.as_ref() {
+            "inbox_only" => {
+                query.filter.inbox_only = value
+                    .parse()
+                    .map_err(|_| ApiError::bad_request("Invalid Inbox scope"))?;
+            }
             "q" => {
                 let terms = value.split_whitespace().take(33).collect::<Vec<_>>();
                 if terms.len() > 32 {

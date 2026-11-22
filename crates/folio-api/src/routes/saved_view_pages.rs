@@ -55,7 +55,10 @@ async fn index(
         .map(|(_, value)| value.parse::<Uuid>())
         .transpose()
         .map_err(|_| ApiError::bad_request("Invalid page"))?;
-    let views = state.saved_views.list(vault, &access, after, 50).await?;
+    let views = state
+        .saved_views
+        .list(vault, &access, after, 50, None)
+        .await?;
     let next = if views.len() == 50 {
         views
             .last()
@@ -92,6 +95,7 @@ struct Editor {
     id: String,
     name: String,
     search: String,
+    inbox_only: bool,
     reviewed: String,
     document_date_from: String,
     document_date_to: String,
@@ -225,6 +229,7 @@ async fn editor(
             .map(|view| view.name.clone())
             .unwrap_or_default(),
         search: query.filters.search_query.unwrap_or_default(),
+        inbox_only: query.filters.inbox_only,
         reviewed: query
             .filters
             .reviewed
@@ -297,11 +302,7 @@ async fn new(
         vault,
         &access,
         None,
-        SavedViewQuery {
-            version: 1,
-            filters: query.filter,
-            sort: query.sort,
-        },
+        SavedViewQuery::from_document_page(query),
         None,
     )
     .await
@@ -376,11 +377,7 @@ fn input(bytes: &[u8]) -> ApiResult<SavedViewInput> {
     Ok(SavedViewInput {
         name: field("name").into(),
         visibility,
-        query: SavedViewQuery {
-            version: 1,
-            filters: page.filter,
-            sort: page.sort,
-        },
+        query: SavedViewQuery::from_document_page(page),
         presentation,
     })
 }

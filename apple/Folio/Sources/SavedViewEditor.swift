@@ -14,7 +14,7 @@ struct SavedViewEditor: View {
         _draft = State(
             initialValue: existing.map(SavedViewDraft.init)
                 ?? SavedViewDraft(
-                    query: workspace.session.list.query, presentation: workspace.session.presentation
+                    query: workspace.currentSavedViewQuery, presentation: workspace.session.presentation
                 ))
     }
 
@@ -53,7 +53,7 @@ struct SavedViewEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         var update = draft
-                        if useCurrentQuery { update.query = workspace.session.list.query }
+                        if useCurrentQuery { update.query = workspace.currentSavedViewQuery }
                         Task {
                             if await workspace.saveView(update, replacing: existing?.id) { dismiss() }
                         }
@@ -68,8 +68,9 @@ struct SavedViewEditor: View {
     }
 
     private var summary: String {
-        let query = useCurrentQuery ? workspace.session.list.query : draft.query
-        let search = query.text.isEmpty ? "All matching documents" : "Search: \(query.text)"
+        let query = useCurrentQuery ? workspace.currentSavedViewQuery : draft.query
+        let scope = query.filter.inboxOnly ? "Inbox documents" : "All matching documents"
+        let search = query.text.isEmpty ? scope : "\(scope). Search: \(query.text)"
         let count =
             query.filter.tagIDs.count
             + (query.filter.correspondentID == nil ? 0 : 1)

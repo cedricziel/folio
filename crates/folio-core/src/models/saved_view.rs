@@ -44,6 +44,15 @@ impl Default for SavedViewQuery {
 }
 
 impl SavedViewQuery {
+    /// Save the filters and sort without retaining the page size or continuation.
+    pub fn from_document_page(page: DocumentPageQuery) -> Self {
+        Self {
+            version: if page.filter.inbox_only { 2 } else { 1 },
+            filters: page.filter,
+            sort: page.sort,
+        }
+    }
+
     /// Validate the stored query and bind its continuation to the current vault.
     pub fn page(
         &self,
@@ -51,7 +60,10 @@ impl SavedViewQuery {
         limit: u32,
         cursor: Option<DocumentCursor>,
     ) -> Result<DocumentPageQuery> {
-        if self.version != 1 {
+        if !matches!(
+            (self.version, self.filters.inbox_only),
+            (1, false) | (2, true)
+        ) {
             return Err(Error::Validation(
                 "Unsupported saved-view query version".into(),
             ));

@@ -365,7 +365,7 @@ public final class DocumentListViewModel {
     }
 
     private func showsFiled(_ filter: DocumentFilter) -> Bool {
-        scope == .all || filter.reviewed != nil
+        !filter.inboxOnly && (scope == .all || filter.reviewed != nil)
     }
 
     /// Lists are how Spotlight learns about documents nobody opened yet; names come from the loaded lookups.

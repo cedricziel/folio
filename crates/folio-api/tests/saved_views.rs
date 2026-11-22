@@ -422,3 +422,111 @@ async fn web_editor_keeps_review_and_document_date_filters() {
     assert_eq!(filters["document_date_from"], "2026-01-01");
     assert_eq!(filters["document_date_to"], "2026-01-31");
 }
+
+#[tokio::test]
+async fn saving_inbox_keeps_reviewed_documents_until_they_are_filed() {
+    use folio_core::models::{CreateDocument, ProcessingStage, ProcessingStatus};
+
+    let h = harness_requiring_login().await;
+    let alice = sign_in(&h, "alice").await;
+    let repo = &h.state.document_repo;
+    for (title, status, reviewed) in [
+        ("Inbox fixture processing", ProcessingStatus::Running, true),
+        ("Inbox fixture failed", ProcessingStatus::Failed, true),
+        ("Inbox fixture unreviewed", ProcessingStatus::Done, false),
+        ("Inbox fixture filed", ProcessingStatus::Done, true),
+    ] {
+        let doc = repo
+            .create(
+                alice.vault,
+                CreateDocument {
+                    title: title.into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        repo.set_stage_status(
+            alice.vault,
+            doc.id,
+            ProcessingStage::Ocr,
+            ProcessingStatus::Done,
+        )
+        .await
+        .unwrap();
+        repo.set_stage_status(alice.vault, doc.id, ProcessingStage::Embed, status)
+            .await
+            .unwrap();
+        repo.set_reviewed(alice.vault, doc.id, reviewed)
+            .await
+            .unwrap();
+    }
+
+    let inbox = format!("/vaults/{}/", alice.vault);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", &inbox, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    let new_path = html
+        .split("href=\"")
+        .filter_map(|part| part.split('"').next())
+        .find(|url| url.contains("/saved-views/new?inbox_only=true"))
+        .expect("save link carries the Inbox scope");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", new_path, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(common::text(response)
+        .await
+        .contains("name=\"inbox_only\" value=\"true\""));
+
+    let collection = format!("/vaults/{}/saved-views", alice.vault);
+    let mut create = request(
+        "POST",
+        &collection,
+        &alice,
+        Body::from("name=Morning&visibility=private&presentation=list&inbox_only=true"),
+    );
+    create.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/x-www-form-urlencoded".parse().unwrap(),
+    );
+    let response = h.app.clone().oneshot(create).await.unwrap();
+    assert!(response.status().is_redirection());
+    let saved = response.headers()[header::LOCATION].to_str().unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request("GET", saved, &alice, Body::empty()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = common::text(response).await;
+    assert!(html.contains("Inbox fixture processing"));
+    assert!(html.contains("Inbox fixture failed"));
+    assert!(html.contains("Inbox fixture unreviewed"));
+    assert!(!html.contains("Inbox fixture filed"));
+
+    let collection = format!("/api{collection}");
+    let legacy_list = request("GET", &collection, &alice, Body::empty());
+    let response = h.app.clone().oneshot(legacy_list).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(common::text(response).await, "[]");
+
+    let mut compatible_list = request("GET", &collection, &alice, Body::empty());
+    compatible_list
+        .headers_mut()
+        .insert("x-folio-saved-view-query-version", "2".parse().unwrap());
+    let response = h.app.clone().oneshot(compatible_list).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let views: serde_json::Value = serde_json::from_str(&common::text(response).await).unwrap();
+    assert_eq!(views[0]["query"]["version"], 2);
+    assert_eq!(views[0]["query"]["filters"]["inbox_only"], true);
+}

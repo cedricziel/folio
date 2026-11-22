@@ -171,7 +171,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         return try await call("saved_views.list") {
             try await client.listSavedViews(
                 path: .init(vaultId: vaultID.uuidString.lowercased()),
-                query: .init(after: after?.uuidString.lowercased(), limit: 50)
+                query: .init(after: after?.uuidString.lowercased(), limit: 50),
+                headers: .init(xFolioSavedViewQueryVersion: 2)
             ).ok.body.json.map { try Self.savedView($0) }
         }
     }
@@ -236,7 +237,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         filters.reviewed = draft.query.filter.reviewed
         filters.documentDateFrom = draft.query.filter.documentDateFrom?.rawValue
         filters.documentDateTo = draft.query.filter.documentDateTo?.rawValue
-        var query = Components.Schemas.SavedViewQuery(version: 1)
+        filters.inboxOnly = draft.query.filter.inboxOnly ? true : nil
+        var query = Components.Schemas.SavedViewQuery(version: draft.query.filter.inboxOnly ? 2 : 1)
         query.filters = filters
         query.sort = .init(rawValue: draft.query.sort.rawValue)
         var input = Components.Schemas.SavedViewInput(name: draft.name, query: query)
@@ -246,11 +248,12 @@ public struct LiveFolioService: FolioService, SourceActivityService {
     }
 
     private static func savedView(_ value: Components.Schemas.SavedView) throws -> SavedView {
-        guard value.query.version == 1,
+        let filters = value.query.filters ?? .init()
+        let inboxOnly = filters.inboxOnly == true
+        guard value.query.version == (inboxOnly ? 2 : 1),
             let visibility = SavedView.Visibility(rawValue: value.visibility.rawValue),
             let presentation = SavedView.Presentation(rawValue: value.presentation.rawValue)
         else { throw FolioError.unreadableResponse }
-        let filters = value.query.filters ?? .init()
         let query = try DocumentBrowseQuery(
             text: filters.searchQuery ?? "",
             filter: .init(
@@ -259,7 +262,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 documentTypeID: filters.documentTypeId.map(Self.uuid),
                 createdAfter: filters.createdAfter, createdBefore: filters.createdBefore,
                 reviewed: filters.reviewed, documentDateFrom: Self.documentDate(filters.documentDateFrom),
-                documentDateTo: Self.documentDate(filters.documentDateTo)
+                documentDateTo: Self.documentDate(filters.documentDateTo), inboxOnly: inboxOnly
             ), sort: .init(rawValue: value.query.sort?.rawValue ?? "newest") ?? .newest
         )
         return try SavedView(
@@ -324,6 +327,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         try await call("documents.browse", attributes: query.telemetryAttributes(cursor: cursor)) {
             let filter = query.filter
             let input = Operations.BrowseDocuments.Input.Query(
+                inboxOnly: filter.inboxOnly ? true : nil,
                 q: query.text.isEmpty ? nil : query.text,
                 limit: query.limit, sort: query.sort.rawValue, cursor: cursor,
                 reviewed: filter.reviewed, documentDateFrom: filter.documentDateFrom?.rawValue,

@@ -393,6 +393,9 @@ impl PostgresDocumentRepository {
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
 pub(super) fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Result<()> {
     filter.validate()?;
+    if filter.inbox_only {
+        qb.push(" AND (reviewed_at IS NULL OR ocr_status IN ('pending', 'running', 'failed') OR embed_status IN ('pending', 'running', 'failed'))");
+    }
     if let Some(reviewed) = filter.reviewed {
         qb.push(if reviewed {
             " AND reviewed_at IS NOT NULL"

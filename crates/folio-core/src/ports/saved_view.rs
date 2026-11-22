@@ -11,13 +11,14 @@ pub struct SavedViewAccess {
 
 #[async_trait]
 pub trait SavedViewRepository: Send + Sync {
-    /// List visible live views, bounded to 100 entries after an optional ID.
+    /// List visible live views after an optional ID, with a limit of 100 and an optional query version ceiling.
     async fn list(
         &self,
         vault: VaultId,
         access: &SavedViewAccess,
         after: Option<Id>,
         limit: u32,
+        max_query_version: Option<u32>,
     ) -> Result<Vec<SavedView>>;
     /// Return a live view only when it is visible to the current vault member.
     async fn find(

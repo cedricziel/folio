@@ -1672,6 +1672,15 @@
         "operationId": "browseDocuments",
         "parameters": [
           {
+            "name": "inbox_only",
+            "in": "query",
+            "description": "Restrict results to the Inbox, including active or failed processing.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "description": "Literal words to match in title or content. Every word must match; at most 32 words.",
@@ -4973,6 +4982,15 @@
             }
           },
           {
+            "name": "inbox_only",
+            "in": "query",
+            "description": "Restrict results to the Inbox, including active or failed processing.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "description": "Literal words to match in title or content. Every word must match; at most 32 words.",
@@ -5428,6 +5446,20 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "X-Folio-Saved-View-Query-Version",
+            "in": "header",
+            "description": "Maximum saved query version the client can read. Defaults to 1.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
               "format": "int32",
               "minimum": 0
             }
@@ -7396,6 +7428,10 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "inbox_only": {
+            "type": "boolean",
+            "description": "Exclude filed documents while retaining documents with active or failed processing."
           },
           "reviewed": {
             "type": [

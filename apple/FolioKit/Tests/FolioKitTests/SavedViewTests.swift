@@ -36,6 +36,26 @@ import Testing
         #expect(!workspace.session.list.canLoadMore)
     }
 
+    @Test(arguments: [nil, false, true] as [Bool?])
+    func savingInboxRestoresTheDisplayedScope(reviewed: Bool?) async {
+        let vault = Vault(id: UUID(), name: "Personal", role: .owner)
+        let workspace = WorkspaceViewModel(
+            service: MockFolioService(vaults: .init(vaults: [vault], defaultVaultID: vault.id))
+        )
+        await workspace.loadVaults()
+        workspace.destination = .inbox
+        workspace.session.list.filter.reviewed = reviewed
+        workspace.session.list.searchText = "Receipts"
+
+        let draft = SavedViewDraft(name: "Receipts to check", query: workspace.currentSavedViewQuery)
+        #expect(await workspace.saveView(draft))
+
+        #expect(workspace.selectedSavedViewID != nil)
+        #expect(workspace.session.list.query.filter.inboxOnly == (reviewed == nil))
+        #expect(workspace.session.list.query.filter.reviewed == reviewed)
+        #expect(workspace.session.list.query.text == "Receipts")
+    }
+
     @Test func viewFromAnotherVaultDoesNotReplaceCurrentQuery() async {
         let vault = Vault(id: UUID(), name: "Personal", role: .owner)
         let workspace = WorkspaceViewModel(
