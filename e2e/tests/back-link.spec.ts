@@ -91,21 +91,28 @@ test.describe("document back link", () => {
     await tab.close();
   });
 
-  test("a row updated live keeps pointing back to the list", async ({ page }) => {
+  test("a row added by a live refresh points back to the open list", async ({ page }) => {
+    const connected = page.waitForResponse((response) =>
+      response.ok() && new URL(response.url()).pathname.endsWith("/events"),
+    );
     await page.goto("/?view=all");
-    const link = page.getByRole("link", { name: new RegExp(title) });
-    await expect(link).toHaveAttribute("href", /return_to=/);
-    await page.evaluate(() => {
-      const row = document.querySelector('a.f-row[href*="/documents/"]')!;
-      const clean = row.getAttribute("href")!.split("?")[0];
-      const stream = document.createElement("turbo-stream");
-      stream.setAttribute("action", "replace");
-      stream.setAttribute("target", row.id);
-      stream.innerHTML = `<template><a class="f-row" id="${row.id}" href="${clean}"><div class="f-row-title">live</div></a></template>`;
-      document.body.append(stream);
-    });
-    await expect(page.locator('a.f-row div.f-row-title', { hasText: "live" })).toBeVisible();
-    await expect(page.locator('a.f-row:has(.f-row-title:text("live"))')).toHaveAttribute("href", /return_to=/);
+    await connected;
+
+    const title = uniqueTitle("live-back-link");
+    const response = await page.request.post("/api/documents", { data: { title } });
+    expect(response.ok()).toBeTruthy();
+    const { id } = await response.json();
+    try {
+      const link = page.locator(`#document-${id}`);
+      await expect(link).toHaveAttribute("href", /return_to=/);
+      const href = (await link.getAttribute("href"))!;
+      expect(new URL(href, page.url()).searchParams.get("return_to")).toBe("/?view=all");
+
+      await link.click();
+      await page.getByRole("link", { name: "Back to All documents" }).click();
+      await expect(page).toHaveURL(/\/\?view=all$/);
+    } finally {
+      await page.request.delete(`/api/documents/${id}`);
+    }
   });
 });
-
