@@ -647,6 +647,12 @@ impl DocumentRepository for SqliteDocumentRepository {
         if target.is_none() {
             return Err(not_found("Vault", to.0));
         }
+        sqlx::query(crate::database::archival::CANCEL_QUEUED)
+            .bind("Document moved")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
         super::prepare_move(&mut tx, from, id).await?;
 
         let before = capture_document(&mut tx, id, None)
@@ -1346,6 +1352,12 @@ impl DocumentRepository for SqliteDocumentRepository {
         let now = Utc::now();
         sqlx::query("UPDATE documents SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? AND deleted_at IS NULL")
             .bind(now.to_rfc3339()).bind(now.to_rfc3339()).bind(folio_core::mutation::current_actor().map(|actor| actor.0)).bind(id.to_string()).bind(vault.to_string()).execute(&mut *tx).await.map_err(map_sqlx_error)?;
+        sqlx::query(crate::database::archival::CANCEL_QUEUED)
+            .bind("Document trashed")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_error)?;
         self.emit_in(&mut tx, DocumentEvent::Trashed { document_id: id })
             .await?;
         self.commit(tx).await
