@@ -653,6 +653,36 @@ async fn precise_metadata_trigger_roundtrips_through_api_and_web_editor() {
 }
 
 #[tokio::test]
+async fn web_edit_preserves_processing_predicates_at_the_root_and_in_groups() {
+    let app = test_app().await;
+    let trigger = "document.processing.ocr.completed";
+    let root = json!({"processing": {"has_text": true}});
+    let groups = json!({
+        "all": [{"event": {"processing": {"attempt": 2}}, "filename_glob": "invoice-*"}]
+    });
+    let mut body = workflow_body("https://example.com/hook");
+    body["trigger"] = json!(trigger);
+    body["conditions"] = json!({"event": root, "all": groups["all"]});
+    let (status, created) = json_request(&app, "POST", "/api/workflows", Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let form = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("name", "Reviewed extraction")
+        .append_pair("trigger", trigger)
+        .append_pair("event_actor", "")
+        .append_pair("webhook_url", "https://example.com/hook")
+        .append_pair("condition_groups", &groups.to_string())
+        .finish();
+
+    let (status, html) = post_form(&app, &format!("/workflows/{id}"), form).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "{html}");
+    let (status, saved) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["name"], "Reviewed extraction");
+    assert_eq!(saved["conditions"], created["conditions"]);
+}
+
+#[tokio::test]
 async fn lifecycle_trigger_editor_explains_when_document_actions_are_unavailable() {
     let app = test_app().await;
     let (status, tag) =

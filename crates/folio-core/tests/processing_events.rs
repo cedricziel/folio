@@ -16,7 +16,7 @@ fn snapshot() -> EventSnapshot {
         original_filename: Some("invoice.pdf".into()),
         mime_type: Some("application/pdf".into()),
         file_path: Some("private/storage/key".into()),
-        source: DocumentSource::default(),
+        source: Some(DocumentSource::default()),
         created_at: Utc::now(),
         document_date: None,
         reviewed_at: None,

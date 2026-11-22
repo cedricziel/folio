@@ -634,13 +634,22 @@ impl FormValues {
                     previous_ingest.cloned()
                 };
                 let metadata = metadata_condition(&self, trigger)?;
-                (subject_id.is_some() || actor.is_some() || ingest.is_some() || metadata.is_some())
-                    .then_some(WorkflowEventConditions {
-                        subject_id,
-                        actor,
-                        ingest,
-                        metadata,
-                    })
+                let processing = existing
+                    .filter(|_| trigger.is_processing_outcome())
+                    .and_then(|workflow| workflow.conditions.event.as_ref())
+                    .and_then(|event| event.processing.clone());
+                (subject_id.is_some()
+                    || actor.is_some()
+                    || ingest.is_some()
+                    || metadata.is_some()
+                    || processing.is_some())
+                .then_some(WorkflowEventConditions {
+                    subject_id,
+                    actor,
+                    ingest,
+                    metadata,
+                    processing,
+                })
             }
         };
         let mut conditions = existing

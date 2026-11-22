@@ -11333,6 +11333,18 @@
           "thumbnail"
         ]
       },
+      "ProcessingReason": {
+        "type": "string",
+        "enum": [
+          "provider_disabled",
+          "no_text",
+          "unsupported_format",
+          "provider_failed",
+          "invalid_response",
+          "storage_failed",
+          "lease_expired"
+        ]
+      },
       "ProcessingStageSummary": {
         "type": "object",
         "description": "Current persisted stage state; absent legacy runs are never synthesized.",
@@ -12471,7 +12483,6 @@
           "id",
           "title",
           "tags",
-          "source",
           "created_at",
           "urls"
         ],
@@ -12535,8 +12546,15 @@
             "minimum": 0
           },
           "source": {
-            "$ref": "#/components/schemas/DocumentSource",
-            "description": "How the document entered Folio, with folder or email details when known"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DocumentSource",
+                "description": "How the document entered Folio, with folder or email details when known"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tags": {
             "type": "array",
@@ -12756,6 +12774,9 @@
             "type": "string",
             "format": "date-time"
           },
+          "processing": {
+            "$ref": "#/components/schemas/WebhookProcessing"
+          },
           "source_event": {
             "oneOf": [
               {
@@ -12772,6 +12793,61 @@
             "description": "Payload schema version",
             "example": 1,
             "minimum": 0
+          }
+        }
+      },
+      "WebhookProcessing": {
+        "type": "object",
+        "required": [
+          "payload_version",
+          "stage",
+          "outcome",
+          "run_id",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "has_text": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "payload_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/ProcessingReason"
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessingEventStage"
           }
         }
       },
@@ -13160,6 +13236,9 @@
           "metadata": {
             "$ref": "#/components/schemas/WorkflowMetadataConditions"
           },
+          "processing": {
+            "$ref": "#/components/schemas/WorkflowProcessingConditions"
+          },
           "subject_id": {
             "type": [
               "string",
@@ -13291,6 +13370,59 @@
         },
         "additionalProperties": false
       },
+      "WorkflowProcessingConditions": {
+        "type": "object",
+        "properties": {
+          "attempt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "has_text": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "outcome": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/ProcessingReason"
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessingEventStage"
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowRun": {
         "type": "object",
         "description": "One execution of a workflow for one event",
@@ -13418,7 +13550,22 @@
           "ingest.duplicate",
           "ingest.failed",
           "source.failed",
-          "source.recovered"
+          "source.recovered",
+          "document.processing.ocr.started",
+          "document.processing.ocr.completed",
+          "document.processing.ocr.failed",
+          "document.processing.ocr.skipped",
+          "document.processing.ocr.retry_scheduled",
+          "document.processing.embedding.started",
+          "document.processing.embedding.completed",
+          "document.processing.embedding.failed",
+          "document.processing.embedding.skipped",
+          "document.processing.embedding.retry_scheduled",
+          "document.processing.thumbnail.started",
+          "document.processing.thumbnail.completed",
+          "document.processing.thumbnail.failed",
+          "document.processing.thumbnail.skipped",
+          "document.processing.thumbnail.retry_scheduled"
         ]
       },
       "WorkflowTriggerDefinition": {

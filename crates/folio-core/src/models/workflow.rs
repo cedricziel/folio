@@ -93,10 +93,40 @@ pub enum WorkflowTrigger {
     SourceFailed,
     #[serde(rename = "source.recovered")]
     SourceRecovered,
+    #[serde(rename = "document.processing.ocr.started")]
+    DocumentOcrStarted,
+    #[serde(rename = "document.processing.ocr.completed")]
+    DocumentOcrCompleted,
+    #[serde(rename = "document.processing.ocr.failed")]
+    DocumentOcrFailed,
+    #[serde(rename = "document.processing.ocr.skipped")]
+    DocumentOcrSkipped,
+    #[serde(rename = "document.processing.ocr.retry_scheduled")]
+    DocumentOcrRetryScheduled,
+    #[serde(rename = "document.processing.embedding.started")]
+    DocumentEmbeddingStarted,
+    #[serde(rename = "document.processing.embedding.completed")]
+    DocumentEmbeddingCompleted,
+    #[serde(rename = "document.processing.embedding.failed")]
+    DocumentEmbeddingFailed,
+    #[serde(rename = "document.processing.embedding.skipped")]
+    DocumentEmbeddingSkipped,
+    #[serde(rename = "document.processing.embedding.retry_scheduled")]
+    DocumentEmbeddingRetryScheduled,
+    #[serde(rename = "document.processing.thumbnail.started")]
+    DocumentThumbnailStarted,
+    #[serde(rename = "document.processing.thumbnail.completed")]
+    DocumentThumbnailCompleted,
+    #[serde(rename = "document.processing.thumbnail.failed")]
+    DocumentThumbnailFailed,
+    #[serde(rename = "document.processing.thumbnail.skipped")]
+    DocumentThumbnailSkipped,
+    #[serde(rename = "document.processing.thumbnail.retry_scheduled")]
+    DocumentThumbnailRetryScheduled,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 36] = [
+    pub const ALL: [WorkflowTrigger; 51] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -133,6 +163,21 @@ impl WorkflowTrigger {
         Self::IngestFailed,
         Self::SourceFailed,
         Self::SourceRecovered,
+        Self::DocumentOcrStarted,
+        Self::DocumentOcrCompleted,
+        Self::DocumentOcrFailed,
+        Self::DocumentOcrSkipped,
+        Self::DocumentOcrRetryScheduled,
+        Self::DocumentEmbeddingStarted,
+        Self::DocumentEmbeddingCompleted,
+        Self::DocumentEmbeddingFailed,
+        Self::DocumentEmbeddingSkipped,
+        Self::DocumentEmbeddingRetryScheduled,
+        Self::DocumentThumbnailStarted,
+        Self::DocumentThumbnailCompleted,
+        Self::DocumentThumbnailFailed,
+        Self::DocumentThumbnailSkipped,
+        Self::DocumentThumbnailRetryScheduled,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -174,6 +219,25 @@ impl WorkflowTrigger {
             Self::IngestFailed => "ingest.failed",
             Self::SourceFailed => "source.failed",
             Self::SourceRecovered => "source.recovered",
+            Self::DocumentOcrStarted => "document.processing.ocr.started",
+            Self::DocumentOcrCompleted => "document.processing.ocr.completed",
+            Self::DocumentOcrFailed => "document.processing.ocr.failed",
+            Self::DocumentOcrSkipped => "document.processing.ocr.skipped",
+            Self::DocumentOcrRetryScheduled => "document.processing.ocr.retry_scheduled",
+            Self::DocumentEmbeddingStarted => "document.processing.embedding.started",
+            Self::DocumentEmbeddingCompleted => "document.processing.embedding.completed",
+            Self::DocumentEmbeddingFailed => "document.processing.embedding.failed",
+            Self::DocumentEmbeddingSkipped => "document.processing.embedding.skipped",
+            Self::DocumentEmbeddingRetryScheduled => {
+                "document.processing.embedding.retry_scheduled"
+            }
+            Self::DocumentThumbnailStarted => "document.processing.thumbnail.started",
+            Self::DocumentThumbnailCompleted => "document.processing.thumbnail.completed",
+            Self::DocumentThumbnailFailed => "document.processing.thumbnail.failed",
+            Self::DocumentThumbnailSkipped => "document.processing.thumbnail.skipped",
+            Self::DocumentThumbnailRetryScheduled => {
+                "document.processing.thumbnail.retry_scheduled"
+            }
         }
     }
 
@@ -216,6 +280,21 @@ impl WorkflowTrigger {
             Self::IngestFailed => "When an item import fails",
             Self::SourceFailed => "When a source becomes unavailable",
             Self::SourceRecovered => "When a source recovers",
+            Self::DocumentOcrStarted => "Text extraction started",
+            Self::DocumentOcrCompleted => "Text extraction completed",
+            Self::DocumentOcrFailed => "Text extraction failed",
+            Self::DocumentOcrSkipped => "Text extraction skipped",
+            Self::DocumentOcrRetryScheduled => "Text extraction retry scheduled",
+            Self::DocumentEmbeddingStarted => "Search indexing started",
+            Self::DocumentEmbeddingCompleted => "Search indexing completed",
+            Self::DocumentEmbeddingFailed => "Search indexing failed",
+            Self::DocumentEmbeddingSkipped => "Search indexing skipped",
+            Self::DocumentEmbeddingRetryScheduled => "Search indexing retry scheduled",
+            Self::DocumentThumbnailStarted => "Preview generation started",
+            Self::DocumentThumbnailCompleted => "Preview generation completed",
+            Self::DocumentThumbnailFailed => "Preview generation failed",
+            Self::DocumentThumbnailSkipped => "Preview generation skipped",
+            Self::DocumentThumbnailRetryScheduled => "Preview generation retry scheduled",
         }
     }
 
@@ -236,7 +315,22 @@ impl WorkflowTrigger {
             | Self::DocumentCommentDeleted
             | Self::DocumentMetadataChanged
             | Self::DocumentMovedIn
-            | Self::DocumentRestored => WorkflowTarget::Document,
+            | Self::DocumentRestored
+            | Self::DocumentOcrStarted
+            | Self::DocumentOcrCompleted
+            | Self::DocumentOcrFailed
+            | Self::DocumentOcrSkipped
+            | Self::DocumentOcrRetryScheduled
+            | Self::DocumentEmbeddingStarted
+            | Self::DocumentEmbeddingCompleted
+            | Self::DocumentEmbeddingFailed
+            | Self::DocumentEmbeddingSkipped
+            | Self::DocumentEmbeddingRetryScheduled
+            | Self::DocumentThumbnailStarted
+            | Self::DocumentThumbnailCompleted
+            | Self::DocumentThumbnailFailed
+            | Self::DocumentThumbnailSkipped
+            | Self::DocumentThumbnailRetryScheduled => WorkflowTarget::Document,
             Self::MetadataFieldCreated
             | Self::MetadataFieldUpdated
             | Self::MetadataFieldDeleted
@@ -258,6 +352,10 @@ impl WorkflowTrigger {
             | Self::SourceRecovered => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
+    }
+
+    pub fn is_processing_outcome(self) -> bool {
+        self.as_str().starts_with("document.processing.")
     }
 
     pub fn is_ingest_outcome(self) -> bool {
@@ -396,7 +494,7 @@ impl WorkflowConditions {
         self.matches_metadata(
             document.mime_type.as_deref(),
             document.original_filename.as_deref(),
-            &document.source,
+            Some(&document.source),
             tag_ids,
             document.correspondent_id,
             document.document_type_id,
@@ -409,7 +507,7 @@ impl WorkflowConditions {
         self.matches_metadata(
             snapshot.mime_type.as_deref(),
             snapshot.original_filename.as_deref(),
-            &snapshot.source,
+            snapshot.source.as_ref(),
             &tag_ids,
             snapshot.correspondent_id,
             snapshot.document_type_id,
@@ -447,7 +545,7 @@ impl WorkflowConditions {
                 Some(snapshot) => self.matches_metadata_leaf(
                     snapshot.mime_type.as_deref(),
                     snapshot.original_filename.as_deref(),
-                    &snapshot.source,
+                    snapshot.source.as_ref(),
                     tag_ids,
                     snapshot.correspondent_id,
                     snapshot.document_type_id,
@@ -468,7 +566,7 @@ impl WorkflowConditions {
         &self,
         mime: Option<&str>,
         filename: Option<&str>,
-        source: &DocumentSource,
+        source: Option<&DocumentSource>,
         tag_ids: &[Id],
         correspondent_id: Option<Id>,
         document_type_id: Option<Id>,
@@ -498,7 +596,7 @@ impl WorkflowConditions {
         &self,
         mime: Option<&str>,
         filename: Option<&str>,
-        source: &DocumentSource,
+        source: Option<&DocumentSource>,
         tag_ids: &[Id],
         correspondent_id: Option<Id>,
         document_type_id: Option<Id>,
@@ -520,6 +618,9 @@ impl WorkflowConditions {
             }
             if let Some(metadata) = &event.metadata {
                 metadata.validate_trigger(trigger)?;
+            }
+            if let Some(processing) = &event.processing {
+                processing.validate_trigger(trigger)?;
             }
         }
         for child in self
@@ -562,14 +663,21 @@ impl WorkflowConditions {
         filename: &str,
         source: &DocumentSource,
     ) -> bool {
-        self.matches_metadata(Some(mime_type), Some(filename), source, &[], None, None)
+        self.matches_metadata(
+            Some(mime_type),
+            Some(filename),
+            Some(source),
+            &[],
+            None,
+            None,
+        )
     }
 
     fn matches_file(
         &self,
         mime_type: Option<&str>,
         filename: Option<&str>,
-        source: &DocumentSource,
+        source: Option<&DocumentSource>,
     ) -> bool {
         if let Some(pattern) = &self.mime_type {
             if !mime_type.is_some_and(|mime| glob_match(pattern, mime)) {
@@ -581,7 +689,10 @@ impl WorkflowConditions {
                 return false;
             }
         }
-        self.source.matches(source)
+        source.map_or_else(
+            || self.source.is_empty(),
+            |source| self.source.matches(source),
+        )
     }
 }
 

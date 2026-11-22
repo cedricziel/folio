@@ -2667,7 +2667,7 @@ async fn event_context_contract(db: &Database) {
     assert_eq!(original.original_filename.as_deref(), Some("original.pdf"));
     assert_eq!(original.mime_type.as_deref(), Some("application/pdf"));
     assert_eq!(original.file_path.as_deref(), Some("immutable/original"));
-    assert_eq!(original.source, source);
+    assert_eq!(original.source, Some(source));
     assert_eq!(original.correspondent_id, Some(sender.id));
     assert_eq!(
         original.correspondent_name.as_deref(),
