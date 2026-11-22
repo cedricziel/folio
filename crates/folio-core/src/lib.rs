@@ -10,6 +10,7 @@ pub mod document_transitions;
 pub mod domain_event;
 pub mod error;
 pub mod events;
+pub mod ingestion_triggers;
 pub mod models;
 pub mod mutation;
 pub mod ports;

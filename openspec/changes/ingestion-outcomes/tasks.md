@@ -13,6 +13,7 @@
 ## 3. Workflow integration
 
 - [x] Use the shared domain envelope and outbox (#265 and #266) and typed trigger registry (#280).
+- [x] Define all six producer triggers and verify their condition fields and allowed actions with the shared registry.
 - [ ] Consume the six owner-only outcome and health events through the shared workflow engine. Recheck current authorization and source lifecycle, use the captured event data, and deduplicate replay without collapsing distinct attempts.
 - [ ] Expose the six triggers and their bounded conditions in the web and Apple builders. Reject SkipImport and document actions for these triggers.
 - [ ] Verify producer-to-workflow delivery, retry, replay, lineage, and authorization, then merge through required checks.

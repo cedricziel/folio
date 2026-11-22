@@ -39,6 +39,12 @@ Source detail shows recent outcome time, readable result, retry state, and a doc
 
 Add `GET /api/sources/{id}/outcomes` with `before` and `limit` query parameters, default limit 50 and maximum 100. The response contains vault_id, source_id, outcomes, and nullable next_before. Use the existing X-Folio-Vault selection and source-management permission. Add `GET /settings/sources/{id}/outcomes` for the web page. Update OpenAPI and regenerate Swift. Keep credentials redacted. Shared workflow registry exposes the six labels and source ID/kind, outcome, reason, and retryability conditions. Outcome triggers cannot use SkipImport; it remains synchronous on ingest.received. Register all six triggers as non-document triggers; imported document lifecycle events already provide document automation. Recheck current authorization before any action and retain original event context.
 
+## Workflow trigger definitions
+
+`folio_core::ingestion_triggers::workflow_trigger_definitions` supplies the six definitions for the shared registry. All six have an event target. Each offers `data.source_id` and `data.source_kind`. Item outcomes also offer `data.outcome`, `data.reason_code`, and `data.retryable`. Only `source.failed` offers a reason among the health events. Register the definitions in the shared engine and both builders when owner-authorized delivery is available. The emitted owners audience is independent of the trigger target.
+
+Verify integration with actual ingested events. Replay one outbox envelope and check that the workflow queues a single run. Retry a failed import and check that its distinct attempt can queue its own run. Recheck vault and source authorization before sending a webhook, including after the authorization for that workflow is revoked. Verify that both builders reject document actions and SkipImport for all six triggers.
+
 ## Integration blockers
 
 Actor context, ownership, transactional envelopes/outbox, and trusted lineage are merged in #258, #260, #265, and #266. Stable source item identity is merged in #269. Outcome storage, producers, and source activity are merged in #293, #309, and #316. Source lifecycle #311 added soft deletion, which must be checked during publication. Owner-only workflow dispatch and the builder options still require the workflow owner’s integration.
