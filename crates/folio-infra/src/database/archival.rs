@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use folio_core::models::{
-    ArchiveAttempt, ArchiveCompletion, ArchiveSource, ArchiveState, ArchiveTool, FileIdentity, Id,
-    ValidatedArchive, VaultId,
+    ArchiveAttempt, ArchiveCompletion, ArchiveSource, ArchiveState, ArchiveTool, Document,
+    FileIdentity, Id, ValidatedArchive, VaultId,
 };
 use folio_core::ports::ArchivalRepository;
 use folio_core::{Error, Result};
@@ -232,6 +232,26 @@ impl ArchivalRepository for Database {
                 .map(|row| row.into_source(vault, document))
                 .transpose()
         })
+    }
+
+    async fn export_document(
+        &self,
+        source: &ArchiveSource,
+        text_limit: i64,
+        metadata_limit: i64,
+    ) -> Result<Option<Document>> {
+        match self {
+            Self::Sqlite(pool) => {
+                super::sqlite::SqliteDocumentRepository::new(pool.clone())
+                    .export_document(source, text_limit, metadata_limit)
+                    .await
+            }
+            Self::Postgres(pool) => {
+                super::postgres::PostgresDocumentRepository::new(pool.clone())
+                    .export_document(source, text_limit, metadata_limit)
+                    .await
+            }
+        }
     }
 
     async fn current_attempt(

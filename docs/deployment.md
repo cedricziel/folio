@@ -194,3 +194,22 @@ committed data. Back up in one of these ways:
 
 Keep the database on a local disk. Do not put it on NFS or SMB: WAL needs
 shared memory that network file systems do not provide.
+
+Include the complete local storage tree or configured S3 prefix, including
+revision originals and `documents/{id}/revisions/{revision}/artifacts/`.
+The database holds the matching revision, file identity, archival attempt,
+and validation provenance records. Retain both current and historical
+objects referenced by the database. Use a coordinated snapshot or stop Folio
+and other writers while taking the SQLite backup or PostgreSQL dump and
+copying the local files or S3 objects. A database backup taken on its own
+cannot recover the archived bytes.
+
+To restore, restore the matching database and storage snapshot before starting
+Folio. Preserve relative keys and configure the restored storage directory or
+S3 bucket and prefix. Test a restore on a separate instance. Download a known
+original and export a document with a validated archive, then compare both
+payload checksums with the pre-backup values. If an export reports a missing
+or corrupt object, check that the database and storage snapshots came from the
+same backup point and recover the exact object before serving that restore.
+
+See [portable document export](document-export.md) for single-document bundles.

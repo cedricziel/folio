@@ -355,6 +355,7 @@ async fn main() -> Result<()> {
         vec![Arc::new(DatabaseHealthCheck::new(database.clone()))];
 
     let mut state = AppState::new(
+        repos.archival,
         repos.metadata_fields,
         repos.metadata_options,
         repos.metadata_values,

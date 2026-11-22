@@ -67,6 +67,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         Vec::new(),
     );
     let state = AppState::new(
+        repos.archival,
         repos.metadata_fields,
         repos.metadata_options,
         repos.metadata_values,
