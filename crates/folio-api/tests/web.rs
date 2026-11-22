@@ -722,3 +722,94 @@ async fn long_pdfs_offer_only_the_pages_that_have_previews() {
     let beyond = h.app.clone().oneshot(thumbnail(pages)).await.unwrap();
     assert_eq!(beyond.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
+    use axum::{body::Body, http::Request};
+
+    let h = harness().await;
+    let form = |path: &str, body: &'static str| {
+        Request::post(path)
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let index = "/manage/fields";
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(index, "name=Phase&kind=select&required=true"))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    let field = result.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let page = text(h.app.clone().oneshot(get(&field)).await.unwrap()).await;
+    assert!(page.contains("<h1 class=\"title\">Phase</h1>"));
+    assert!(page.contains("Retire field"));
+
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(index, "name=PHASE&kind=select"))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let page = text(result).await;
+    assert!(page.contains("role=\"alert\""));
+    assert!(page.contains("value=\"PHASE\""));
+
+    let options = format!("{field}/options");
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(&options, "label=Pending&position=4"))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    let field_record = h
+        .state
+        .metadata_fields
+        .list(h.vault, false, None, 10)
+        .await
+        .unwrap()
+        .remove(0);
+    let option = h
+        .state
+        .metadata_options
+        .list(h.vault, field_record.id, false, None, 10)
+        .await
+        .unwrap()
+        .remove(0);
+
+    let retired = h
+        .app
+        .clone()
+        .oneshot(form(&format!("{options}/{}/retire", option.id), ""))
+        .await
+        .unwrap();
+    assert_eq!(retired.status(), StatusCode::SEE_OTHER);
+    let page = text(h.app.clone().oneshot(get(&field)).await.unwrap()).await;
+    assert!(page.contains("Restore option"));
+    let restored = h
+        .app
+        .clone()
+        .oneshot(form(&format!("{options}/{}/restore", option.id), ""))
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::SEE_OTHER);
+    let current = h
+        .state
+        .metadata_options
+        .find(h.vault, field_record.id, option.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.label, "Pending");
+    assert_eq!(current.position, 4);
+    assert!(current.deleted_at.is_none());
+}
