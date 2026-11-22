@@ -176,11 +176,38 @@ fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
     let alternatives = schemas["MetadataChange"]["properties"]["value"]["oneOf"]
         .as_array()
         .unwrap();
-    assert!(alternatives.iter().any(|schema| schema["type"] == "null"));
+    assert_eq!(
+        alternatives[0]["$ref"],
+        "#/components/schemas/MetadataValue"
+    );
+    assert_eq!(alternatives[1], serde_json::json!({"enum": [null]}));
+    let assignment = &schemas["DocumentMetadataValue"]["properties"];
+    for (property, target) in [
+        ("value", "MetadataValue"),
+        ("link_target", "MetadataLinkTarget"),
+    ] {
+        assert_eq!(
+            assignment[property]["oneOf"][0]["$ref"],
+            format!("#/components/schemas/{target}")
+        );
+        assert_eq!(
+            assignment[property]["oneOf"][1],
+            serde_json::json!({"enum": [null]})
+        );
+    }
     assert_eq!(
         schemas["PatchDocumentMetadata"]["required"],
         serde_json::json!(["revision", "changes"])
     );
+    let revision = &schemas["PatchDocumentMetadata"]["properties"]["revision"]["oneOf"];
+    assert_eq!(revision[0]["format"], "uuid");
+    assert_eq!(revision[0]["type"], "string");
+    assert_eq!(revision[1], serde_json::json!({"enum": [null]}));
+    for name in ["MetadataOption", "MetadataOptionInput"] {
+        let position = &schemas[name]["properties"]["position"];
+        assert_eq!(position["format"], "int64");
+        assert_eq!(position["maximum"].as_f64(), Some(f64::from(u32::MAX)));
+    }
 }
 
 #[test]
