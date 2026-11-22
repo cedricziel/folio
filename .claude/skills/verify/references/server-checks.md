@@ -535,6 +535,10 @@ and the API metadata suite. These checks cover exact amounts, false, revision
 conflicts, link scope, retained Trash state, move and purge rules, and atomic
 rollback without a value-change event when a transition exceeds the event budget.
 
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_search`
+and the API metadata suite for exact filtering. Verify canonical amounts, false
+versus missing, unavailable fields, vault isolation, and cursor binding.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.

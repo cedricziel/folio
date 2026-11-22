@@ -911,3 +911,70 @@ async fn oversized_document_transition_rolls_back_without_an_event() {
             |event| event.event_type() == folio_core::domain_event::DOCUMENT_METADATA_CHANGED
         )));
 }
+
+#[tokio::test]
+async fn exact_search_reads_tagged_values_only_in_the_selected_vault() {
+    use folio_core::models::{CreateDocument, MetadataChange, MetadataValue};
+
+    let h = harness_requiring_login().await;
+    let owner = account(&h, "search-owner").await;
+    let outsider = account(&h, "search-outsider").await;
+    let field = create_field(&h, &owner, "decimal").await;
+    let document = h
+        .state
+        .document_repo
+        .create(
+            owner.vault,
+            CreateDocument {
+                title: "Exact amount".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    h.state
+        .metadata_values
+        .patch(
+            owner.vault,
+            document.id,
+            None,
+            vec![MetadataChange {
+                field_id: uuid::Uuid::parse_str(field["id"].as_str().unwrap()).unwrap(),
+                value: Some(MetadataValue::Decimal("9007199254740993.01".into())),
+            }],
+        )
+        .await
+        .unwrap();
+    let encoded = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("field_id", field["id"].as_str().unwrap())
+        .append_pair(
+            "value",
+            r#"{"kind":"decimal","value":"9007199254740993.010"}"#,
+        )
+        .finish();
+    let path = format!("/api/vaults/{}/metadata-search?{encoded}", owner.vault);
+    let (status, page) = call(&h, "GET", &path, &owner.cookie, Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page,
+        json!({"documents":[{"id":document.id,"title":"Exact amount"}],"next_cursor":null})
+    );
+    assert_eq!(
+        call(&h, "GET", &path, &outsider.cookie, Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &h,
+            "GET",
+            &format!("{path}&cursor=broken"),
+            &owner.cookie,
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}

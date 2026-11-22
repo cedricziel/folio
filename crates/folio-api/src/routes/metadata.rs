@@ -4,11 +4,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use folio_core::models::{
-    DocumentMetadata, MetadataChange, MetadataField, MetadataFieldInput, MetadataOption,
-    MetadataOptionInput,
+    DocumentMetadata, MetadataChange, MetadataExactFilter, MetadataField, MetadataFieldInput,
+    MetadataOption, MetadataOptionInput, MetadataSearchHit, MetadataSearchQuery,
 };
-use serde::{de::DeserializeOwned, Deserialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
@@ -40,6 +41,7 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for MetadataJson<T> {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/vaults/{vault_id}/metadata-search", get(search_metadata))
         .route(
             "/vaults/{vault_id}/documents/{document_id}/metadata",
             get(get_document_metadata).patch(patch_document_metadata),
@@ -327,4 +329,74 @@ pub(crate) async fn patch_document_metadata(
                 other => other.into(),
             })?,
     ))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct MetadataSearchParams {
+    field_id: Uuid,
+    /// Tagged JSON value, for example {"kind":"decimal","value":"12.34"}.
+    value: String,
+    #[serde(default = "page_size")]
+    limit: u32,
+    /// Continuation from the same vault, field, and canonical value.
+    cursor: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct MetadataSearchResponse {
+    documents: Vec<MetadataSearchHit>,
+    next_cursor: Option<String>,
+}
+
+#[utoipa::path(get, path = "/api/vaults/{vault_id}/metadata-search",
+    operation_id = "searchMetadata", tag = "metadata",
+    params(("vault_id" = Uuid, Path), MetadataSearchParams),
+    responses((status = 200, description = "Matching active documents in ID order", body = MetadataSearchResponse),
+        crate::openapi::BadRequest, crate::openapi::NotFound, crate::openapi::InternalError))]
+pub(crate) async fn search_metadata(
+    DefaultVault(vault): DefaultVault,
+    State(state): State<AppState>,
+    ApiPath((_vault_id,)): ApiPath<(Uuid,)>,
+    ApiQuery(params): ApiQuery<MetadataSearchParams>,
+) -> ApiResult<Json<MetadataSearchResponse>> {
+    let value = serde_json::from_str(&params.value)
+        .map_err(|_| ApiError::bad_request("Value must be tagged metadata JSON"))?;
+    let cursor = params
+        .cursor
+        .map(|cursor| {
+            if cursor.len() > 512 {
+                return Err(ApiError::bad_request("Invalid metadata cursor"));
+            }
+            let bytes = URL_SAFE_NO_PAD
+                .decode(cursor)
+                .map_err(|_| ApiError::bad_request("Invalid metadata cursor"))?;
+            serde_json::from_slice(&bytes)
+                .map_err(|_| ApiError::bad_request("Invalid metadata cursor"))
+        })
+        .transpose()?;
+    let page = state
+        .metadata_values
+        .search_exact(
+            vault,
+            MetadataSearchQuery {
+                filter: MetadataExactFilter {
+                    field_id: params.field_id,
+                    value,
+                },
+                limit: params.limit,
+                cursor,
+            },
+        )
+        .await?;
+    let next_cursor = page
+        .next_cursor
+        .map(|cursor| serde_json::to_vec(&cursor).map(|bytes| URL_SAFE_NO_PAD.encode(bytes)))
+        .transpose()
+        .map_err(|_| ApiError::internal("Could not encode metadata cursor"))?;
+    Ok(Json(MetadataSearchResponse {
+        documents: page.documents,
+        next_cursor,
+    }))
 }

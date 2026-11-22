@@ -69,7 +69,9 @@ pub use metadata_field::{
     MetadataOptionInput,
 };
 pub use metadata_value::{
-    DocumentMetadata, DocumentMetadataValue, MetadataChange, MetadataLinkTarget,
+    DocumentMetadata, DocumentMetadataValue, MetadataChange, MetadataExactFilter,
+    MetadataLinkTarget, MetadataSearchCursor, MetadataSearchHit, MetadataSearchPage,
+    MetadataSearchQuery,
 };
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use push::{
