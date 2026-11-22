@@ -813,6 +813,10 @@ Stimulus.register(
       "email",
       "actions",
       "discard",
+      "documentFilter",
+      "eventFilter",
+      "actor",
+      "actorUser",
     ];
 
     connect() {
@@ -820,7 +824,16 @@ Stimulus.register(
     }
 
     sync() {
-      const ingest = this.triggerTarget.value === "ingest.received";
+      const trigger = this.triggerTarget.value;
+      const ingest = trigger === "ingest.received";
+      const entry = trigger.startsWith("document_note.") || trigger.startsWith("document_comment.");
+      for (const filter of this.documentFilterTargets) {
+        filter.hidden = entry;
+        filter.disabled = entry;
+      }
+      this.eventFilterTarget.hidden = ingest;
+      this.eventFilterTarget.disabled = ingest;
+      this.actorUserTarget.hidden = this.actorTarget.value !== "user";
       this.actionsTarget.hidden = ingest;
       this.discardTarget.hidden = !ingest;
 

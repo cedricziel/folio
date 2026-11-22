@@ -14,8 +14,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use folio_core::models::{
-    Id, RunStatus, SourceConditions, SourceKind, TextMatch, WebhookMethod, Workflow,
-    WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
+    Id, RunStatus, SourceConditions, SourceKind, TextMatch, UserId, WebhookMethod, Workflow,
+    WorkflowAction, WorkflowActorCondition, WorkflowEventConditions, WorkflowInput, WorkflowRun,
+    WorkflowTrigger,
 };
 
 use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
@@ -203,6 +204,9 @@ struct FormValues {
     correspondent_id: String,
     document_type_id: String,
     filename_glob: String,
+    event_subject_id: String,
+    event_actor: Option<String>,
+    event_user_id: String,
     source_kind: String,
     folder_path_glob: String,
     email_from_mode: String,
@@ -227,6 +231,14 @@ struct FormValues {
 const TAG_FIELD: &str = "action_tag_";
 
 impl FormValues {
+    fn is_system_actor(&self) -> bool {
+        self.event_actor.as_deref() == Some("system")
+    }
+
+    fn is_user_actor(&self) -> bool {
+        self.event_actor.as_deref() == Some("user")
+    }
+
     fn action_tag_ids(&self) -> Vec<Id> {
         self.checkboxes
             .keys()
@@ -245,6 +257,14 @@ impl FormValues {
 
     fn from_workflow(workflow: &Workflow) -> Self {
         let c = &workflow.conditions;
+        let (event_actor, event_user_id) =
+            match c.event.as_ref().and_then(|event| event.actor.as_ref()) {
+                Some(WorkflowActorCondition::System) => ("system", String::new()),
+                Some(WorkflowActorCondition::User { user_id }) => {
+                    ("user", user_id.as_str().to_owned())
+                }
+                None => ("", String::new()),
+            };
         let (webhook_url, webhook_headers) = match first_webhook(&workflow.actions) {
             Some((_, WorkflowAction::Webhook { url, headers, .. })) => (
                 url.clone(),
@@ -295,6 +315,14 @@ impl FormValues {
                 .map(|i| i.to_string())
                 .unwrap_or_default(),
             filename_glob: c.filename_glob.clone().unwrap_or_default(),
+            event_subject_id: c
+                .event
+                .as_ref()
+                .and_then(|event| event.subject_id)
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            event_actor: Some(event_actor.into()),
+            event_user_id,
             source_kind: c
                 .source
                 .kind
@@ -324,13 +352,38 @@ impl FormValues {
                 .map(|v| Uuid::parse_str(&v).map_err(|_| format!("The {what} is not valid.")))
                 .transpose()
         };
-        let conditions = WorkflowConditions {
-            mime_type: optional(&self.mime_type),
-            tag_id: id(&self.tag_id, "tag")?,
-            correspondent_id: id(&self.correspondent_id, "correspondent")?,
-            document_type_id: id(&self.document_type_id, "document type")?,
-            filename_glob: optional(&self.filename_glob),
-            source: SourceConditions {
+        let event = match self.event_actor.as_deref() {
+            None if trigger == WorkflowTrigger::IngestReceived => None,
+            None => existing.and_then(|workflow| workflow.conditions.event.clone()),
+            Some(mode) => {
+                let subject_id = id(&self.event_subject_id, "event subject ID")?;
+                let actor = match mode {
+                    "" => None,
+                    "system" => Some(WorkflowActorCondition::System),
+                    "user" => Some(WorkflowActorCondition::User {
+                        user_id: UserId::from(
+                            optional(&self.event_user_id)
+                                .as_deref()
+                                .ok_or("Enter a user ID.")?,
+                        ),
+                    }),
+                    _ => return Err("Choose an event actor.".into()),
+                };
+                (subject_id.is_some() || actor.is_some())
+                    .then_some(WorkflowEventConditions { subject_id, actor })
+            }
+        };
+        let mut conditions = existing
+            .map(|workflow| workflow.conditions.clone())
+            .unwrap_or_default();
+        conditions.event = event;
+        if trigger.entry_transition().is_none() {
+            conditions.mime_type = optional(&self.mime_type);
+            conditions.tag_id = id(&self.tag_id, "tag")?;
+            conditions.correspondent_id = id(&self.correspondent_id, "correspondent")?;
+            conditions.document_type_id = id(&self.document_type_id, "document type")?;
+            conditions.filename_glob = optional(&self.filename_glob);
+            conditions.source = SourceConditions {
                 kind: optional(&self.source_kind).map(|k| SourceKind::parse(&k)),
                 folder_path_glob: optional(&self.folder_path_glob),
                 email_from: text_match(&self.email_from_mode, &self.email_from),
@@ -338,11 +391,15 @@ impl FormValues {
                 email_subject: text_match(&self.email_subject_mode, &self.email_subject),
                 email_attachment_glob: optional(&self.email_attachment_glob),
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
-            },
-            ..existing
-                .map(|workflow| workflow.conditions.clone())
-                .unwrap_or_default()
-        };
+            };
+        } else if existing.is_some_and(|workflow| workflow.trigger.entry_transition().is_none()) {
+            conditions.mime_type = None;
+            conditions.tag_id = None;
+            conditions.correspondent_id = None;
+            conditions.document_type_id = None;
+            conditions.filename_glob = None;
+            conditions.source = SourceConditions::default();
+        }
 
         if trigger == WorkflowTrigger::IngestReceived {
             return Ok(WorkflowInput {
