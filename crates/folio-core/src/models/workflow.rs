@@ -636,6 +636,9 @@ pub struct Workflow {
     pub actions: Vec<WorkflowAction>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub revision: i64,
     #[serde(default)]
     pub deleted_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -817,6 +820,9 @@ pub struct WorkflowRun {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub source_event_id: Option<i64>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub definition_revision: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
 }
@@ -856,9 +862,15 @@ impl WorkflowRun {
             payload,
             actions: Vec::new(),
             source_event_id: None,
+            definition_revision: None,
             created_at: Utc::now(),
             finished_at: None,
         }
+    }
+
+    pub fn with_definition(mut self, workflow: &Workflow) -> Self {
+        self.definition_revision = Some(workflow.revision);
+        self.with_actions(workflow.actions.clone())
     }
 
     /// Freeze the actions to execute
