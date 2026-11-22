@@ -98,7 +98,8 @@ struct OAuthRequestTests {
             endpoint: old.registrationEndpoint, redirectURI: OAuthConfiguration.redirectURI,
             clientName: "Folio", scopes: OAuthConfiguration.scopes(for: old)
         )
-        let body = try #require(JSONSerialization.jsonObject(with: #require(request.httpBody)) as? [String: Any])
+        let data = try #require(request.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(body["scope"] as? String == "documents:read documents:write")
         let url = OAuthRequests.authorizationURL(
             metadata: old, clientID: "cached-client", redirectURI: OAuthConfiguration.redirectURI,
