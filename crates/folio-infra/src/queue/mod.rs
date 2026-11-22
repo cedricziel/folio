@@ -11,11 +11,13 @@ mod worker;
 use postgres::PostgresJobQueue;
 pub(crate) use postgres::{
     insert_current_processing as insert_current_processing_postgres,
+    insert_current_thumbnail as insert_current_thumbnail_postgres,
     insert_job as insert_job_postgres,
 };
 use sqlite::SqliteJobQueue;
 pub(crate) use sqlite::{
-    insert_current_processing as insert_current_processing_sqlite, insert_job as insert_job_sqlite,
+    insert_current_processing as insert_current_processing_sqlite,
+    insert_current_thumbnail as insert_current_thumbnail_sqlite, insert_job as insert_job_sqlite,
 };
 pub use trace_context::JobTraceContext;
 pub use worker::{Worker, WorkerConfig};

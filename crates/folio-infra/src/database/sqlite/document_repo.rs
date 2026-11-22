@@ -649,6 +649,17 @@ impl DocumentRepository for SqliteDocumentRepository {
         }
         super::prepare_move(&mut tx, from, id).await?;
 
+        let resume_thumbnail: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM processing_stage_runs
+             WHERE document_id = ?1 AND vault_id = ?2 AND stage = 'thumbnail' AND is_current
+               AND state IN ('pending', 'running', 'waiting_to_retry'))",
+        )
+        .bind(id.to_string())
+        .bind(from.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
         let before = capture_document(&mut tx, id, None)
             .await?
             .ok_or_else(|| not_found("Document", id))?;
@@ -730,6 +741,8 @@ impl DocumentRepository for SqliteDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET vault_id = ?, correspondent_id = ?, document_type_id = ?,
+                                  ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
+                                  embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
                                   updated_at = ?, updated_by = ?
              WHERE id = ?",
         )
@@ -739,6 +752,27 @@ impl DocumentRepository for SqliteDocumentRepository {
         .bind(Utc::now().to_rfc3339())
         .bind(actor.map(UserId::as_str))
         .bind(id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(map_sqlx_error)?;
+
+        if resume_thumbnail && doc.file_path.is_some() {
+            crate::queue::insert_current_thumbnail_sqlite(
+                &mut tx,
+                to,
+                id,
+                crate::queue::JobTraceContext::current().as_ref(),
+            )
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE processing_stage_runs SET vault_id = ?1,
+                 is_current = CASE WHEN state IN ('pending', 'running', 'waiting_to_retry') THEN FALSE ELSE is_current END
+             WHERE document_id = ?2 AND vault_id = ?3",
+        )
+        .bind(to.to_string())
+        .bind(id.to_string())
+        .bind(from.to_string())
         .execute(&mut *tx)
         .await
         .map_err(map_sqlx_error)?;
