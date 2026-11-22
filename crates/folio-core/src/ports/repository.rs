@@ -417,4 +417,7 @@ pub trait AuditLog: Send + Sync {
 
     /// Newest first
     async fn list(&self, vault: VaultId, limit: u32) -> Result<Vec<AuditEvent>>;
+
+    /// Newest vault and membership facts, with filtering applied before the limit.
+    async fn list_lifecycle(&self, vault: VaultId, limit: u32) -> Result<Vec<AuditEvent>>;
 }

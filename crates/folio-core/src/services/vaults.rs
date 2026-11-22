@@ -218,6 +218,6 @@ impl VaultService {
             .audit
             .as_ref()
             .ok_or_else(|| crate::Error::Repository("Vault history is not configured".into()))?;
-        audit.list(id, 100).await
+        audit.list_lifecycle(id, 100).await
     }
 }
