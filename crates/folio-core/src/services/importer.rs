@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 
 use super::NewUpload;
-use crate::error::Result;
-use crate::models::{CreateDocument, Document, Id, LedgerEntry, VaultId};
+use crate::error::{Error, Result};
+use crate::models::{CreateDocument, Document, FileIdentity, Id, LedgerEntry, VaultId};
 use crate::ports::{keys, DocumentImporter, DocumentRepository, DocumentStore, ProcessingQueue};
 
 /// Creates the record, stores the file, and queues background processing
@@ -35,17 +36,38 @@ impl Importer {
 }
 
 impl Importer {
+    async fn store_original(&self, document: &Document, data: Vec<u8>) -> Result<FileIdentity> {
+        let key = keys::original(document.id);
+        let mime_type = document
+            .mime_type
+            .as_deref()
+            .filter(|mime_type| !mime_type.is_empty())
+            .unwrap_or("application/octet-stream");
+        let data = Bytes::from(data);
+        let expected = FileIdentity::from_bytes(&key, mime_type, &data);
+        if !self.files.put_if_absent(&key, data).await? {
+            let stored = self
+                .files
+                .get(&key)
+                .await?
+                .file_identity(&key, mime_type)
+                .await?;
+            if stored != expected {
+                return Err(Error::Conflict(
+                    "Stored original differs from this upload".into(),
+                ));
+            }
+        }
+        Ok(expected)
+    }
+
     /// Stores the original of a created upload unless it is already there, finalizes it and queues processing.
     /// Every step can be repeated, so an interrupted import is resumed by running it again.
     async fn finish(&self, vault: VaultId, document: Document, data: Vec<u8>) -> Result<Document> {
-        let file_size = data.len() as u64;
         let imported = async {
-            let key = keys::original(document.id);
-            if !self.files.exists(&key).await? {
-                self.files.put(&key, data.into()).await?;
-            }
+            let identity = self.store_original(&document, data).await?;
             self.documents
-                .finalize_upload(vault, document.id, &key, file_size)
+                .finalize_verified_upload(vault, document.id, &identity)
                 .await?;
             if let Err(e) = self.queue.enqueue_processing(document.id).await {
                 tracing::error!("Failed to queue processing of {}: {e}", document.id);
@@ -154,12 +176,10 @@ impl DocumentImporter for Importer {
             )
             .await?;
 
-        let key = keys::original(document.id);
-        let file_size = upload.data.len() as u64;
-        let stored = match self.files.put(&key, upload.data.into()).await {
-            Ok(()) => {
+        let stored = match self.store_original(&document, upload.data).await {
+            Ok(identity) => {
                 self.documents
-                    .finalize_upload(vault, document.id, &key, file_size)
+                    .finalize_verified_upload(vault, document.id, &identity)
                     .await
             }
             Err(e) => Err(e),

@@ -3,6 +3,7 @@
 //! This module contains the core business logic that orchestrates
 //! domain operations using the port traits.
 
+mod file_identities;
 mod file_sizes;
 mod idempotent_uploads;
 pub mod import;
@@ -15,6 +16,7 @@ mod paperless_sources;
 mod vaults;
 mod workflow_engine;
 
+pub use file_identities::backfill_original_identities;
 pub use file_sizes::backfill_file_sizes;
 pub use idempotent_uploads::{ClaimTiming, IdempotentUploads, UploadOutcome};
 pub use importer::Importer;

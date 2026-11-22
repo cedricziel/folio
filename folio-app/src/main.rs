@@ -13,8 +13,9 @@ use folio_api::{create_router, AppState, AuthState, IngestionState};
 use folio_core::ports::{HealthCheck, RepositoryDocuments, SettingsRepository};
 use folio_core::services::notifications::{NotificationPlanner, NotificationSender, SenderConfig};
 use folio_core::services::{
-    backfill_file_sizes, BroadcastConsumer, DispatcherConfig, Importer, IngestPipeline,
-    IngestScheduler, LibraryService, OutboxDispatcher, VaultService, WorkflowEngine,
+    backfill_file_sizes, backfill_original_identities, BroadcastConsumer, DispatcherConfig,
+    Importer, IngestPipeline, IngestScheduler, LibraryService, OutboxDispatcher, VaultService,
+    WorkflowEngine,
 };
 use folio_core::EventBroadcaster;
 use folio_infra::push::ConfiguredPush;
@@ -217,6 +218,13 @@ async fn main() -> Result<()> {
             Ok(0) => {}
             Ok(recorded) => info!("Recorded the file size of {recorded} documents"),
             Err(e) => tracing::warn!("File size backfill stopped: {e}"),
+        }
+        match backfill_original_identities(sized_documents.as_ref(), sized_store.as_ref(), 200)
+            .await
+        {
+            Ok(0) => {}
+            Ok(verified) => info!("Verified {verified} original file identities"),
+            Err(e) => tracing::warn!("Original verification stopped: {e}"),
         }
     });
 

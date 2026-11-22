@@ -12,9 +12,10 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::{Error, Result};
-use crate::models::Id;
+use crate::models::{FileIdentity, Id};
 
 /// Key layout for everything Folio stores for a document.
 pub mod keys {
@@ -87,6 +88,33 @@ impl StoredObject {
         Ok(data)
     }
 
+    /// Hash the streamed bytes and reject reads that disagree with storage metadata.
+    pub async fn file_identity(
+        mut self,
+        storage_key: &str,
+        mime_type: &str,
+    ) -> Result<FileIdentity> {
+        let mut digest = Sha256::new();
+        let mut byte_size = 0u64;
+        while let Some(chunk) = self.stream.try_next().await? {
+            byte_size = byte_size
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| Error::Storage("Original byte count overflowed".into()))?;
+            digest.update(&chunk);
+        }
+        if self.size.is_some_and(|expected| expected != byte_size) {
+            return Err(Error::Storage(
+                "Read bytes do not match the reported original size".into(),
+            ));
+        }
+        Ok(FileIdentity {
+            sha256: hex::encode(digest.finalize()),
+            byte_size,
+            mime_type: mime_type.to_owned(),
+            storage_key: storage_key.to_owned(),
+        })
+    }
+
     /// Collect the whole object in memory.
     pub async fn into_bytes(self) -> Result<Vec<u8>> {
         let chunks: Vec<Bytes> = self.stream.try_collect().await?;
@@ -118,6 +146,13 @@ pub trait DocumentStore: Send + Sync {
 
     /// Write an object, replacing any existing one.
     async fn put(&self, key: &str, data: Bytes) -> Result<()>;
+
+    /// Atomically create an object. Returns false if the key already exists.
+    async fn put_if_absent(&self, _key: &str, _data: Bytes) -> Result<bool> {
+        Err(Error::Storage(
+            "Storage does not support create-only writes".into(),
+        ))
+    }
 
     /// Open an object for streaming. Missing keys yield [`Error::NotFound`].
     async fn get(&self, key: &str) -> Result<StoredObject>;

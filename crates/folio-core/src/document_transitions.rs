@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use crate::events::{document_event_envelope, DocumentEvent, EventSnapshot};
-use crate::models::{Document, DocumentDate, Id, ReviewOrigin, UserId};
+use crate::models::{Document, DocumentDate, FileIdentity, Id, ReviewOrigin, UserId};
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,6 +235,38 @@ pub fn metadata_envelopes(
     }
     events.push(generic);
     Ok(events)
+}
+
+/// Build the revision occurrence for a first upload and inherit its mutation identity.
+pub fn first_revision_envelope(
+    uploaded: &DomainEventEnvelope,
+    document: &EventSnapshot,
+    revision_id: Id,
+    original: &FileIdentity,
+) -> Result<DomainEventEnvelope> {
+    let mut data = uploaded.data().clone();
+    data["source"] = serde_json::to_value(&document.source)
+        .map_err(|error| Error::Repository(error.to_string()))?;
+    data["revision_id"] = serde_json::json!(revision_id);
+    data["revision_number"] = serde_json::json!(1);
+    data["previous_revision_id"] = serde_json::Value::Null;
+    data["restored_from_revision_id"] = serde_json::Value::Null;
+    data["mime_type"] = serde_json::json!(original.mime_type);
+    data["byte_size"] = serde_json::json!(original.byte_size);
+    data["sha256"] = serde_json::json!(original.sha256);
+    DomainEventEnvelope::new(
+        "document.revision_created",
+        document.vault_id,
+        DomainEventSubject {
+            subject_type: "document".into(),
+            id: document.document_id,
+        },
+        Some(document.document_id),
+        EventAudience::Vault,
+        data,
+    )?
+    .with_mutation(uploaded.mutation_id())?
+    .with_correlation(uploaded.correlation_id(), uploaded.causation_id())
 }
 
 /// Capture each side of a move without exposing the other vault's identifiers.

@@ -44,7 +44,7 @@ pub use document_entry::{
 pub use document_page::{DocumentCursor, DocumentPage, DocumentPageQuery, DocumentSort};
 pub use document_review::{DocumentReview, ReviewDecision, ReviewOrigin};
 pub use document_type::{CreateDocumentType, DocumentType, UpdateDocumentType};
-pub use file_identity::FileIdentity;
+pub use file_identity::{FileIdentity, UnverifiedOriginal};
 pub use import_run::{
     CreateImportRun, FolioState, ImportAction, ImportApplied, ImportItem, ImportItemCount,
     ImportItemOutcome, ImportItemStatus, ImportRun, ImportRunKind, ImportRunStatus, ImportTrigger,
