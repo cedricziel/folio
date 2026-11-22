@@ -60,6 +60,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
+    filtered: bool,
     has_review_filters: bool,
     clear_review_url: String,
     reviewed_filter: String,
@@ -231,6 +232,7 @@ async fn index_page(
         format!("/?{}", query.finish())
     };
     let template = IndexTemplate {
+        filtered,
         has_review_filters,
         clear_review_url,
         reviewed_filter: reviewed.map(|value| value.to_string()).unwrap_or_default(),
@@ -267,6 +269,7 @@ async fn index_page(
 #[derive(Template)]
 #[template(path = "partials/documents_frame.html")]
 struct DocumentsFrameTemplate {
+    filtered: bool,
     rows: Vec<DocumentRow>,
     total: usize,
     view_all: bool,
@@ -281,6 +284,7 @@ async fn documents_list(
     let total = documents.len();
 
     let template = DocumentsFrameTemplate {
+        filtered: false,
         rows: view::rows(DefaultVault(vault), &state, documents).await?,
         total,
         view_all: true,

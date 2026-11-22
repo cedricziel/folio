@@ -452,3 +452,46 @@ test("renaming a saved view retains submillisecond date boundaries", async ({ pa
   const updated = await page.request.get(`/api/vaults/${personal.id}/saved-views/${view.id}`);
   expect((await updated.json()).query.filters.created_after).toBe(boundary);
 });
+
+test("saved view results update without replacing its open editor", async ({ page }) => {
+  const title = uniqueTitle("Live saved result");
+  const api = `/api/vaults/${personal.id}/saved-views`;
+  const documents = `/vaults/${personal.id}/api/documents`;
+  const createdView = await page.request.post(api, {
+    data: { name: uniqueTitle("Live view"), query: { version: 1, filters: { search_query: title } }, presentation: "grid" },
+  });
+  expect(createdView.status()).toBe(201);
+  const view = await createdView.json();
+  const path = `/vaults/${personal.id}/saved-views/${view.id}`;
+  let documentId: string | undefined;
+  try {
+    const connected = page.waitForResponse((response) =>
+      response.ok() && new URL(response.url()).pathname === `/vaults/${personal.id}/events`,
+    );
+    await page.goto(path);
+    await connected;
+    await expect(page.getByText("No documents match this view.")).toBeVisible();
+    await page.getByText("Edit saved view", { exact: true }).click();
+    const name = page.getByLabel("Name", { exact: true });
+    await name.fill("Unsaved view name");
+
+    const created = await page.request.post(documents, { data: { title, content: title } });
+    expect(created.ok()).toBeTruthy();
+    documentId = (await created.json()).id;
+    const result = page.locator(".saved-view-grid").getByRole("link", { name: new RegExp(title) });
+    await expect(result).toBeVisible();
+    await expect(page.getByText("No documents match this view.")).toBeHidden();
+    await expect(name).toBeFocused();
+    await expect(name).toHaveValue("Unsaved view name");
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+
+    expect((await page.request.delete(`${documents}/${documentId}`)).ok()).toBeTruthy();
+    documentId = undefined;
+    await expect(page.getByText("No documents match this view.")).toBeVisible();
+    await expect(result).toHaveCount(0);
+    await expect(name).toBeFocused();
+  } finally {
+    if (documentId) await page.request.delete(`${documents}/${documentId}`);
+    await page.request.delete(`${api}/${view.id}`);
+  }
+});
