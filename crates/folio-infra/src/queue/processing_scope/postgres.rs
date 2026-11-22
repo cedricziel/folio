@@ -4,17 +4,31 @@ use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use super::{
-    assigned_stage, child_scope, repo_err, stages, stale_parent, ClaimPreparation, EnqueuePlan,
-    ProcessingScope,
+    assigned_stage, child_scope, repo_err, stages, stale_parent, validate_enqueue,
+    ClaimPreparation, DocumentScope, EnqueuePlan, ProcessingScope,
 };
 use crate::queue::{Job, JobType};
 
 /// Group, origin vault, correlation, and creation time of a claimed job.
 type ClaimRow = (Option<String>, Option<String>, Option<String>, String);
 
-async fn document(conn: &mut PgConnection, id: Uuid) -> Result<Option<(String, bool)>> {
-    sqlx::query_as("SELECT vault_id::text, (deleted_at IS NOT NULL OR purge_requested_at IS NOT NULL) FROM documents WHERE id = $1::uuid FOR UPDATE")
-        .bind(id.to_string()).fetch_optional(conn).await.map_err(repo_err)
+async fn document(conn: &mut PgConnection, id: Uuid) -> Result<Option<DocumentScope>> {
+    sqlx::query_as(
+        "SELECT d.vault_id::text AS vault_id, (d.deleted_at IS NOT NULL OR d.purge_requested_at IS NOT NULL
+             OR NOT EXISTS (SELECT 1 FROM vaults v WHERE v.id = d.vault_id AND v.deleted_at IS NULL)) AS unavailable,
+             d.current_revision_id::text AS revision_id,
+             ((d.current_revision_id IS NULL AND NOT EXISTS (
+                 SELECT 1 FROM document_revisions history WHERE history.document_id = d.id
+             )) OR EXISTS (
+                 SELECT 1 FROM document_revisions r WHERE r.id = d.current_revision_id
+                    AND r.document_id = d.id AND r.vault_id = d.vault_id AND r.number = 1
+             )) AS legacy_current
+           FROM documents d WHERE d.id = $1::uuid FOR UPDATE OF d",
+    )
+    .bind(id.to_string())
+    .fetch_optional(conn)
+    .await
+    .map_err(repo_err)
 }
 
 async fn lock_job(conn: &mut PgConnection, id: Uuid) -> Result<()> {
@@ -33,17 +47,24 @@ async fn valid_scope(conn: &mut PgConnection, scope: ProcessingScope) -> Result<
          WHERE j.id = $2::uuid AND j.claim_id = $3::uuid AND j.attempts = $4 AND j.status = 'processing'
            AND j.lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint AND j.processing_group_id = $5::uuid
            AND j.origin_vault_id = $6::uuid AND d.vault_id = j.origin_vault_id AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+           AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = d.vault_id AND v.deleted_at IS NULL)
            AND j.payload->'data'->>'document_id' = d.id::text
            AND j.payload->>'type' = CASE j.job_type
                WHEN 'process_document' THEN 'ProcessDocument' WHEN 'extract_text' THEN 'ExtractText'
-               WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail' END
+               WHEN 'generate_embedding' THEN 'GenerateEmbedding' WHEN 'generate_thumbnail' THEN 'GenerateThumbnail'
+               WHEN 'process_document_revision' THEN 'ProcessDocumentRevision'
+               WHEN 'generate_revision_thumbnail' THEN 'GenerateRevisionThumbnail'
+               WHEN 'extract_revision_text' THEN 'ExtractRevisionText'
+               WHEN 'generate_revision_embedding' THEN 'GenerateRevisionEmbedding' END
+           AND j.payload->'data'->>'revision_id' IS NOT DISTINCT FROM $7
            AND EXISTS (SELECT 1 FROM processing_stage_runs r WHERE r.group_id = j.processing_group_id
                AND r.job_id = j.id AND r.document_id = d.id AND r.vault_id = d.vault_id
-               AND r.is_current = TRUE AND r.revision_id IS NULL)
+               AND r.is_current = TRUE AND r.revision_id::text IS NOT DISTINCT FROM $7)
          )")
         .bind(scope.document_id.to_string()).bind(scope.parent_job_id.to_string())
         .bind(scope.claim_id.to_string()).bind(scope.queue_attempt)
         .bind(scope.group_id.to_string()).bind(scope.vault_id.to_string())
+        .bind(scope.revision_id.map(|id| id.to_string()))
         .fetch_one(conn).await.map_err(repo_err)
 }
 
@@ -56,21 +77,23 @@ pub(in crate::queue) async fn prepare_enqueue(
         Some(id) => document(conn, id).await?,
         None => None,
     };
+    let child = child_scope(job)?;
+    validate_enqueue(doc.as_ref(), job)?;
     let vault_id = doc
         .as_ref()
-        .map(|(id, _)| id.parse())
+        .map(|document| document.vault_id.parse())
         .transpose()
         .map_err(repo_err)?;
-    if let Some(scope) = child_scope(job) {
+    if let Some(scope) = child {
         if !valid_scope(conn, scope).await? {
             return Err(stale_parent());
         }
         let stage = assigned_stage(job).ok_or_else(stale_parent)?;
         let row: Option<(Option<String>, String)> = sqlx::query_as(
             "SELECT job_id::text, state FROM processing_stage_runs WHERE group_id = $1::uuid AND stage = $2
-             AND document_id = $3::uuid AND vault_id = $4::uuid AND is_current = TRUE AND revision_id IS NULL")
+             AND document_id = $3::uuid AND vault_id = $4::uuid AND is_current = TRUE AND revision_id::text IS NOT DISTINCT FROM $5")
             .bind(scope.group_id.to_string()).bind(stage).bind(scope.document_id.to_string())
-            .bind(scope.vault_id.to_string()).fetch_optional(&mut *conn).await.map_err(repo_err)?;
+            .bind(scope.vault_id.to_string()).bind(scope.revision_id.map(|id| id.to_string())).fetch_optional(&mut *conn).await.map_err(repo_err)?;
         let Some((assigned, state)) = row else {
             return Err(stale_parent());
         };
@@ -94,7 +117,7 @@ pub(in crate::queue) async fn prepare_enqueue(
         id,
         vault_id,
         group_id: doc
-            .filter(|(_, deleted)| !deleted)
+            .filter(|document| !document.unavailable)
             .filter(|_| !stages(job).is_empty())
             .map(|_| id),
         existing: false,
@@ -114,11 +137,11 @@ async fn seed(
     for stage in stages(job) {
         sqlx::query("UPDATE processing_stage_runs SET is_current = FALSE, updated_at = $1::timestamptz WHERE document_id = $2::uuid AND stage = $3 AND is_current = TRUE")
             .bind(&now).bind(document_id.to_string()).bind(stage).execute(&mut *conn).await.map_err(repo_err)?;
-        sqlx::query("INSERT INTO processing_stage_runs (id, document_id, vault_id, job_id, group_id, stage, state, attempt, queue_attempt, created_at, updated_at)
-                     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'pending', 0, 0, $7::timestamptz, $8::timestamptz)")
+        sqlx::query("INSERT INTO processing_stage_runs (id, document_id, vault_id, job_id, group_id, stage, state, attempt, queue_attempt, created_at, updated_at, revision_id)
+                     VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6, 'pending', 0, 0, $7::timestamptz, $8::timestamptz, $9::uuid)")
             .bind(Uuid::new_v4().to_string()).bind(document_id.to_string()).bind(vault_id.to_string())
             .bind((Some(*stage) == assigned_stage(job)).then(|| job_id.to_string()))
-            .bind(group_id.to_string()).bind(stage).bind(&now).bind(&now)
+            .bind(group_id.to_string()).bind(stage).bind(&now).bind(&now).bind(job.revision_id().map(|id| id.to_string()))
             .execute(&mut *conn).await.map_err(repo_err)?;
     }
     Ok(())
@@ -133,8 +156,8 @@ pub(in crate::queue) async fn finish_enqueue(
         return Ok(());
     };
     if let Some(stage) = plan.child_stage {
-        let changed = sqlx::query("UPDATE processing_stage_runs SET job_id = $1::uuid, updated_at = $2::timestamptz WHERE group_id = $3::uuid AND stage = $4 AND job_id IS NULL AND state = 'pending' AND is_current = TRUE")
-            .bind(plan.id.to_string()).bind(Utc::now().to_rfc3339()).bind(group.to_string()).bind(stage)
+        let changed = sqlx::query("UPDATE processing_stage_runs SET job_id = $1::uuid, updated_at = $2::timestamptz WHERE group_id = $3::uuid AND stage = $4 AND job_id IS NULL AND state = 'pending' AND is_current = TRUE AND revision_id::text IS NOT DISTINCT FROM $5")
+            .bind(plan.id.to_string()).bind(Utc::now().to_rfc3339()).bind(group.to_string()).bind(stage).bind(job.revision_id().map(|id| id.to_string()))
             .execute(conn).await.map_err(repo_err)?;
         if changed.rows_affected() != 1 {
             return Err(stale_parent());
@@ -150,25 +173,33 @@ pub(super) async fn prepare_claim(pool: &PgPool, job: &Job) -> Result<ClaimPrepa
         return Ok(ClaimPreparation::Ready(None));
     };
     let mut tx = pool.begin().await.map_err(repo_err)?;
-    let Some((vault, deleted)) = document(&mut tx, document_id).await? else {
-        return Ok(ClaimPreparation::Ready(None));
+    let revision_id = job.job_type.revision_id();
+    let Some(document) = document(&mut tx, document_id).await? else {
+        return Ok(if revision_id.is_some() {
+            ClaimPreparation::Obsolete
+        } else {
+            ClaimPreparation::Ready(None)
+        });
     };
-    if deleted {
+    if document.unavailable || !document.accepts_revision(revision_id) {
         return Ok(ClaimPreparation::Obsolete);
     }
+    let vault = document.vault_id;
     lock_job(&mut tx, job.id).await?;
     let row: Option<ClaimRow> = sqlx::query_as(
         "SELECT processing_group_id::text, origin_vault_id::text, correlation_id::text, created_at::text FROM jobs
          WHERE id = $1::uuid AND claim_id = $2::uuid AND attempts = $3 AND status = 'processing' AND lease_expires_at > floor(extract(epoch FROM clock_timestamp()))::bigint AND job_type = $4
-           AND payload->>'type' = $5 AND payload->'data'->>'document_id' = $6")
+           AND payload->>'type' = $5 AND payload->'data'->>'document_id' = $6 AND payload->'data'->>'revision_id' IS NOT DISTINCT FROM $7")
         .bind(job.id.to_string()).bind(job.claim_id.map(|id| id.to_string())).bind(job.attempts)
         .bind(job.job_type.type_name()).bind(super::payload_type(&job.job_type)?)
-        .bind(document_id.to_string())
+        .bind(document_id.to_string()).bind(revision_id.map(|id| id.to_string()))
         .fetch_optional(&mut *tx).await.map_err(repo_err)?;
     let Some((group, origin, correlation, created_at)) = row else {
         return Ok(ClaimPreparation::Obsolete);
     };
-    if origin.as_ref().is_some_and(|origin| origin != &vault) {
+    if (revision_id.is_some() && group.is_none())
+        || origin.as_ref().is_some_and(|origin| origin != &vault)
+    {
         return Ok(ClaimPreparation::Obsolete);
     }
     let scope = ProcessingScope {
@@ -179,6 +210,7 @@ pub(super) async fn prepare_claim(pool: &PgPool, job: &Job) -> Result<ClaimPrepa
             .map_err(repo_err)?
             .unwrap_or(job.id),
         document_id,
+        revision_id,
         vault_id: VaultId(vault.parse().map_err(repo_err)?),
         parent_job_id: job.id,
         claim_id: job.claim_id.ok_or_else(stale_parent)?,
