@@ -9,6 +9,7 @@ struct WorkspaceView: View {
     let pendingContinuation: ContinuationInbox.Item?
     /// Takes the waiting continuation when it opens a target in this window.
     let takeContinuation: () -> HandoffRoute?
+    @State private var showVaultManagement = false
     @State private var showTaxonomy = false
     @State private var showCustomFields = false
     @State private var showSavedViewEditor = false
@@ -16,6 +17,7 @@ struct WorkspaceView: View {
     @State private var pendingViewDelete: SavedView?
     @State private var workspace: WorkspaceViewModel
     @State private var activityVault: Vault?
+    @State private var workflowVault: Vault?
 
     init(
         serverURL: URL, service: any FolioService, onSignOut: @escaping () -> Void,
@@ -38,7 +40,7 @@ struct WorkspaceView: View {
                     set: { if let destination = $0 { navigate(to: destination) } }
                 )
             ) {
-                if workspace.isReady {
+                if workspace.isReady, workspace.selectedVaultID != nil {
                     Section {
                         vaultPicker
                     }
@@ -50,7 +52,8 @@ struct WorkspaceView: View {
                         }
                     }
                 }
-                if workspace.isReady {
+                .disabled(!workspace.isReady || workspace.selectedVaultID == nil)
+                if workspace.isReady, workspace.selectedVaultID != nil {
                     Section("Saved views") {
                         ForEach(workspace.savedViews) { view in
                             Button {
@@ -76,12 +79,12 @@ struct WorkspaceView: View {
                             Button("More saved views") { Task { await workspace.loadSavedViews(more: true) } }
                         }
                     }
-                    manageSection
                 }
+                manageSection
             }
             .navigationTitle("Folio")
             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 280)
-            .disabled(!workspace.isReady)
+
         } detail: {
             if workspace.isReady, let vaultID = workspace.selectedVaultID {
                 InboxView(
@@ -117,6 +120,18 @@ struct WorkspaceView: View {
                         .disabled(workspace.destination == .inbox)
                     }
                 }
+            } else if workspace.isReady {
+                ContentUnavailableView {
+                    Label("No active vaults", systemImage: "archivebox")
+                } description: {
+                    Text("Create a vault or restore a deleted vault to open your library.")
+                } actions: {
+                    if service is any VaultManagementService {
+                        Button("Manage vaults") { showVaultManagement = true }
+                    }
+                    Button("Refresh") { Task { await workspace.refreshVaults() } }
+                    Button("Sign out", action: onSignOut)
+                }
             } else if let error = workspace.discoveryError {
                 ContentUnavailableView {
                     Label("Couldn't load vaults", systemImage: "exclamationmark.triangle")
@@ -124,10 +139,18 @@ struct WorkspaceView: View {
                     Text(error)
                 } actions: {
                     Button("Try again") { Task { await workspace.loadVaults() } }
+                    if service is any VaultManagementService {
+                        Button("Manage vaults") { showVaultManagement = true }
+                    }
                     Button("Sign out", action: onSignOut)
                 }
             } else {
                 ProgressView("Loading vaults…")
+            }
+        }
+        .sheet(isPresented: $showVaultManagement) {
+            if let manager = service as? any VaultManagementService {
+                VaultManagementView(service: manager) { await workspace.refreshVaults() }
             }
         }
         .sheet(isPresented: $showTaxonomy, onDismiss: { Task { await workspace.session.list.reloadLookups() } }) {
@@ -145,6 +168,12 @@ struct WorkspaceView: View {
             showTaxonomy = false
             showCustomFields = false
             activityVault = nil
+            workflowVault = nil
+        }
+        .sheet(item: $workflowVault) { vault in
+            if let workflowService = service as? any WorkflowLifecycleService {
+                WorkflowLifecycleView(vaultID: vault.id, service: workflowService, canManage: vault.role == .owner)
+            }
         }
         .sheet(item: $activityVault) { vault in
             if let activityService = service as? any SourceActivityService {
@@ -216,10 +245,19 @@ struct WorkspaceView: View {
 
     private var manageSection: some View {
         Section("Manage") {
-            Button {
-                showTaxonomy = true
-            } label: {
-                Label("Classifications", systemImage: "tag")
+            if workspace.isReady, workspace.selectedVaultID != nil {
+                Button {
+                    showTaxonomy = true
+                } label: {
+                    Label("Classifications", systemImage: "tag")
+                }
+            }
+            if service is any VaultManagementService {
+                Button {
+                    showVaultManagement = true
+                } label: {
+                    Label("Vaults", systemImage: "archivebox")
+                }
             }
             if workspace.service is any CustomMetadataService {
                 Button {
@@ -233,6 +271,13 @@ struct WorkspaceView: View {
                     activityVault = workspace.selectedVault
                 } label: {
                     Label("Ingestion activity", systemImage: "tray.and.arrow.down")
+                }
+            }
+            if workspace.selectedVault?.role == .owner, service is any WorkflowLifecycleService {
+                Button {
+                    workflowVault = workspace.selectedVault
+                } label: {
+                    Label("Workflows", systemImage: "arrow.triangle.branch")
                 }
             }
         }

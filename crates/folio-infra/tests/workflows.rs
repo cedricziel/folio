@@ -1197,7 +1197,7 @@ async fn one_failing_workflow_does_not_skip_the_others() {
 }
 
 #[tokio::test]
-async fn editing_a_workflow_does_not_change_queued_runs() {
+async fn editing_a_workflow_cancels_queued_runs_and_retains_their_inputs() {
     let h = Harness::new().await;
     let server = TestServer::start().await;
     let workflow = h.webhook_workflow(server.url("before"), None).await;
@@ -1224,10 +1224,19 @@ async fn editing_a_workflow_does_not_change_queued_runs() {
         .unwrap();
     assert_eq!(
         h.runner.execute(runs[0].id).await.unwrap(),
-        RunOutcome::Succeeded
+        RunOutcome::Failed
     );
 
-    assert_eq!(server.hits("before"), 1);
+    let retained = h.run(runs[0].id).await;
+    assert_eq!(retained.status, RunStatus::Failed);
+    assert_eq!(
+        retained.last_error.as_deref(),
+        Some("Workflow definition changed")
+    );
+    assert_eq!(retained.attempts, 0);
+    assert_eq!(retained.actions, runs[0].actions);
+    assert_eq!(retained.payload, runs[0].payload);
+    assert_eq!(server.hits("before"), 0);
     assert_eq!(server.hits("after"), 0);
 }
 

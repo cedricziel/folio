@@ -22,7 +22,6 @@ use folio_core::ports::{
 };
 use folio_core::services::NewUpload;
 use folio_core::services::UploadOutcome;
-use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -945,10 +944,7 @@ async fn reprocess_document(
     debug!("Queuing ProcessDocument job for {}", id);
     state
         .job_queue
-        .enqueue(JobType::ProcessDocument {
-            document_id: id,
-            force: true,
-        })
+        .enqueue_current_processing(vault, id, true)
         .await
         .map_err(|e| {
             error!("Failed to queue reprocessing job for {}: {}", id, e);

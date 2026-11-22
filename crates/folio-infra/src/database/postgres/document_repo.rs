@@ -623,6 +623,17 @@ impl DocumentRepository for PostgresDocumentRepository {
         }
         super::prepare_move(&mut tx, from, id).await?;
 
+        let resume_thumbnail: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM processing_stage_runs
+             WHERE document_id = $1 AND vault_id = $2 AND stage = 'thumbnail' AND is_current
+               AND state IN ('pending', 'running', 'waiting_to_retry'))",
+        )
+        .bind(id)
+        .bind(from.0)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
         let before = capture_document(&mut tx, id, None)
             .await?
             .ok_or_else(|| not_found("Document", id))?;
@@ -691,6 +702,8 @@ impl DocumentRepository for PostgresDocumentRepository {
 
         sqlx::query(
             "UPDATE documents SET vault_id = $1, correspondent_id = $2, document_type_id = $3,
+                                  ocr_status = CASE WHEN ocr_status = 'running' THEN 'pending' ELSE ocr_status END,
+                                  embed_status = CASE WHEN embed_status = 'running' THEN 'pending' ELSE embed_status END,
                                   updated_at = now(), updated_by = $5
              WHERE id = $4",
         )
@@ -699,6 +712,27 @@ impl DocumentRepository for PostgresDocumentRepository {
         .bind(document_type)
         .bind(id)
         .bind(actor.map(UserId::as_str))
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+
+        if resume_thumbnail && doc.file_path.is_some() {
+            crate::queue::insert_current_thumbnail_postgres(
+                &mut tx,
+                to,
+                id,
+                crate::queue::JobTraceContext::current().as_ref(),
+            )
+            .await?;
+        }
+        sqlx::query(
+            "UPDATE processing_stage_runs SET vault_id = $1,
+                 is_current = CASE WHEN state IN ('pending', 'running', 'waiting_to_retry') THEN FALSE ELSE is_current END
+             WHERE document_id = $2 AND vault_id = $3",
+        )
+        .bind(to.0)
+        .bind(id)
+        .bind(from.0)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;
@@ -1016,6 +1050,39 @@ impl DocumentRepository for PostgresDocumentRepository {
             actor.as_ref(),
         )
         .await?;
+        if let Some(archive) = &document.archive {
+            let identity = &archive.identity;
+            let byte_size = i64::try_from(identity.byte_size).map_err(|_| {
+                Error::Validation("Archive byte size exceeds database range".into())
+            })?;
+            sqlx::query(
+                "INSERT INTO document_files (
+                    id, document_id, vault_id, role, storage_key, original_filename, mime_type,
+                    verification_state, sha256, byte_size)
+                 VALUES ($1, $2, $3, 'archival', $4, $5, $6, 'verified', $7, $8)",
+            )
+            .bind(archive.id)
+            .bind(id)
+            .bind(vault.0)
+            .bind(&identity.storage_key)
+            .bind(&archive.filename)
+            .bind(&identity.mime_type)
+            .bind(&identity.sha256)
+            .bind(byte_size)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+            sqlx::query(
+                "INSERT INTO document_revision_artifacts (file_id, document_id, vault_id, revision_id)
+                 VALUES ($1, $2, $3, $2)",
+            )
+            .bind(archive.id)
+            .bind(id)
+            .bind(vault.0)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        }
         sqlx::query(
             "UPDATE documents SET current_revision_id = $1, file_size = $3
              WHERE id = $1 AND vault_id = $2",
@@ -1362,11 +1429,11 @@ impl DocumentRepository for PostgresDocumentRepository {
             .bind(id).bind(vault.0).bind(Utc::now()).bind(folio_core::mutation::current_actor().map(|actor| actor.0))
         .execute(&mut *tx).await.map_err(repo_err)?;
         if document.file_path.is_some() {
-            crate::queue::insert_job_postgres(
+            crate::queue::insert_current_processing_postgres(
                 &mut tx,
-                crate::queue::JobType::process_document(id),
-                Utc::now(),
-                crate::queue::DEFAULT_MAX_ATTEMPTS,
+                vault,
+                id,
+                false,
                 crate::queue::JobTraceContext::current().as_ref(),
             )
             .await?;
@@ -1837,6 +1904,29 @@ impl DocumentRepository for PostgresDocumentRepository {
             revision_id,
             created: true,
         })
+    }
+
+    async fn retains_revision_original(&self, document: Id, candidate: Id) -> Result<bool> {
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        sqlx::query("SELECT id FROM documents WHERE id = $1 FOR SHARE")
+            .bind(document)
+            .execute(&mut *tx)
+            .await
+            .map_err(repo_err)?;
+        let retained = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM document_files
+                WHERE document_id = $1 AND id = $2 AND storage_key = $3)",
+        )
+        .bind(document)
+        .bind(candidate)
+        .bind(folio_core::ports::keys::revision_original(
+            document, candidate,
+        ))
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        tx.commit().await.map_err(repo_err)?;
+        Ok(retained)
     }
 
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()> {

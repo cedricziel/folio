@@ -57,6 +57,7 @@ fn workflow_from_row(row: &SqliteRow) -> Result<Workflow> {
         actions: serde_json::from_str(row.get("actions")).map_err(repo_err)?,
         created_at: parse_time(row.get("created_at"))?,
         updated_at: parse_time(row.get("updated_at"))?,
+        revision: row.get("revision"),
         deleted_at: row
             .get::<Option<&str>, _>("deleted_at")
             .map(parse_time)
@@ -85,6 +86,7 @@ fn run_from_row(row: &SqliteRow) -> Result<WorkflowRun> {
         payload: row.get("payload"),
         actions: serde_json::from_str(row.get("actions")).map_err(repo_err)?,
         source_event_id: row.get("source_event_id"),
+        definition_revision: row.get("definition_revision"),
         created_at: parse_time(row.get("created_at"))?,
         finished_at: finished_at.map(parse_time).transpose()?,
     })
@@ -231,7 +233,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         }
         let actor = folio_core::mutation::current_actor();
         let row = sqlx::query(
-            "UPDATE workflows SET name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, name = ?, enabled = ?, trigger_event = ?, conditions = ?, actions = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(&input.name)
         .bind(input.enabled)
@@ -246,6 +248,15 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .await
         .map_err(repo_err)?;
         let workflow = workflow_from_row(&row)?;
+        sqlx::query(
+            "UPDATE workflow_runs SET status = 'failed', last_error = 'Workflow definition changed',
+             finished_at = ? WHERE workflow_id = ? AND status = 'pending'",
+        )
+        .bind(workflow.updated_at.to_rfc3339())
+        .bind(id.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err)?;
         insert_domain_event(&mut tx, &workflow_event(&workflow, "updated")?).await?;
         tx.commit().await.map_err(repo_err)?;
         Ok(workflow)
@@ -271,7 +282,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now().to_rfc3339();
         let row = sqlx::query(
-            "UPDATE workflows SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(Some(&now))
         .bind(&now)
@@ -315,7 +326,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         let actor = folio_core::mutation::current_actor();
         let now = Utc::now().to_rfc3339();
         let row = sqlx::query(
-            "UPDATE workflows SET deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
+            "UPDATE workflows SET revision = revision + 1, deleted_at = ?, updated_at = ?, updated_by = ? WHERE id = ? AND vault_id = ? RETURNING *",
         )
         .bind(None::<String>)
         .bind(&now)
@@ -338,25 +349,33 @@ impl WorkflowRepository for SqliteWorkflowRepository {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(repo_err)?;
-        let owner: Option<String> = sqlx::query_scalar(
-            "SELECT w.vault_id FROM workflows w JOIN vaults v ON v.id = w.vault_id
+        let definition: Option<(String, i64, i64)> = sqlx::query_as(
+            "SELECT w.vault_id, w.revision, w.enabled FROM workflows w JOIN vaults v ON v.id = w.vault_id
              WHERE w.id = ? AND w.deleted_at IS NULL AND v.deleted_at IS NULL",
         )
         .bind(run.workflow_id.to_string())
         .fetch_optional(&mut *tx)
         .await
         .map_err(repo_err)?;
-        if owner != Some(run.vault_id.to_string()) {
+        let Some((_, revision, enabled)) =
+            definition.filter(|(owner, _, _)| *owner == run.vault_id.to_string())
+        else {
             return Err(Error::Validation(
                 "Workflow run belongs to an inactive workflow or vault, or a different vault"
                     .into(),
             ));
+        };
+        if run
+            .definition_revision
+            .is_some_and(|captured| enabled == 0 || revision != captured)
+        {
+            return Ok(false);
         }
         let mutation_id = run.source_identity()?.map(|source| source.mutation_id);
         let result = sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, event, document_id, status, attempts, completed_actions, \
-             last_error, response_status, payload, actions, source_event_id, created_at, finished_at, mutation_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+             last_error, response_status, payload, actions, source_event_id, created_at, finished_at, mutation_id, definition_revision) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
         )
         .bind(run.id.to_string())
         .bind(run.workflow_id.to_string())
@@ -373,6 +392,7 @@ impl WorkflowRepository for SqliteWorkflowRepository {
         .bind(run.created_at.to_rfc3339())
         .bind(run.finished_at.map(|t| t.to_rfc3339()))
         .bind(mutation_id.map(|id| id.to_string()))
+        .bind(revision)
         .execute(&mut *tx)
         .await
         .map_err(repo_err)?;

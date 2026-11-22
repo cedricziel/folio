@@ -39,9 +39,8 @@ pub trait WorkflowRepository: Send + Sync {
 
     /// Insert a run and queue its execution job in one transaction
     ///
-    /// Returns false, queueing nothing, when the run already exists: either
-    /// the same outbox event was handled before or a once-per-document run
-    /// is already there.
+    /// Returns false if the captured definition has changed, the outbox event
+    /// was handled before, or a once-per-document run already exists.
     async fn create_run(&self, run: &WorkflowRun) -> Result<bool>;
 
     async fn find_run(&self, id: Id) -> Result<Option<WorkflowRun>>;

@@ -185,7 +185,7 @@ impl WorkflowEngine {
                 continue;
             }
             let run = WorkflowRun::new(vault, workflow.id, trigger, None, body.clone())
-                .with_actions(workflow.actions.clone())
+                .with_definition(&workflow)
                 .with_source_event(outbox_id);
             match self.workflows.create_run(&run).await {
                 Ok(true) => runs.push(run),
@@ -340,7 +340,7 @@ impl WorkflowEngine {
                 };
                 let run =
                     WorkflowRun::new(workflow.vault_id, workflow.id, trigger, document_id, body)
-                        .with_actions(workflow.actions.clone())
+                        .with_definition(&workflow)
                         .with_source_event(outbox_event.id);
                 Ok::<_, Error>(self.workflows.create_run(&run).await?.then_some(run))
             }
@@ -348,7 +348,7 @@ impl WorkflowEngine {
             match outcome {
                 Ok(Some(run)) => runs.push(run),
                 Ok(None) => debug!(
-                    "Workflow {} already handled event {}",
+                    "Workflow {} did not queue a run for event {}",
                     workflow.id, outbox_event.id
                 ),
                 Err(e) => {
