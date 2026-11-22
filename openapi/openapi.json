@@ -7208,6 +7208,58 @@
         ]
       }
     },
+    "/api/workflows/triggers": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List selectable workflow triggers and their occurrence fields",
+        "operationId": "listWorkflowTriggers",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Selectable workflow triggers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowTriggerDefinition"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/workflows/{id}": {
       "get": {
         "tags": [
@@ -11079,6 +11131,38 @@
           }
         ]
       },
+      "WorkflowConditionField": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "value_type"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value_type": {
+            "$ref": "#/components/schemas/WorkflowConditionType"
+          }
+        }
+      },
+      "WorkflowConditionType": {
+        "type": "string",
+        "enum": [
+          "text",
+          "boolean",
+          "integer",
+          "decimal",
+          "date",
+          "timestamp",
+          "identifier",
+          "identifier_set"
+        ]
+      },
       "WorkflowConditions": {
         "type": "object",
         "description": "Conditions a document must meet; every set condition has to match",
@@ -11313,6 +11397,14 @@
           }
         }
       },
+      "WorkflowTarget": {
+        "type": "string",
+        "enum": [
+          "document",
+          "event",
+          "ingest_candidate"
+        ]
+      },
       "WorkflowTrigger": {
         "type": "string",
         "description": "Events a workflow can listen for",
@@ -11333,6 +11425,36 @@
           "document.deleted",
           "ingest.received"
         ]
+      },
+      "WorkflowTriggerDefinition": {
+        "type": "object",
+        "required": [
+          "event_type",
+          "label",
+          "subject_type",
+          "target",
+          "condition_fields"
+        ],
+        "properties": {
+          "condition_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditionField"
+            }
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/WorkflowTarget"
+          }
+        }
       }
     },
     "securitySchemes": {

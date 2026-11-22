@@ -108,6 +108,7 @@ use crate::routes::{
         document_types::delete_document_type,
         events::sse_handler,
         workflows::list_workflows,
+        workflows::list_triggers,
         workflows::get_workflow,
         workflows::create_workflow,
         workflows::update_workflow,

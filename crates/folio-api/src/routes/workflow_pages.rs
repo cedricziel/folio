@@ -16,7 +16,7 @@ use uuid::Uuid;
 use folio_core::models::{
     Id, RunStatus, SourceConditions, SourceKind, TextMatch, UserId, WebhookMethod, Workflow,
     WorkflowAction, WorkflowActorCondition, WorkflowEventConditions, WorkflowInput, WorkflowRun,
-    WorkflowTrigger,
+    WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
 use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
@@ -641,9 +641,10 @@ async fn build_form(
         ),
         workflow_id: workflow.map(|w| w.id.to_string()),
         triggers: choices(
-            WorkflowTrigger::ALL
+            WorkflowTriggerRegistry::built_in()
+                .definitions()
                 .iter()
-                .map(|t| (t.as_str().to_string(), t.label().to_string()))
+                .map(|trigger| (trigger.event_type.clone(), trigger.label.clone()))
                 .collect(),
             &values.trigger,
         ),
