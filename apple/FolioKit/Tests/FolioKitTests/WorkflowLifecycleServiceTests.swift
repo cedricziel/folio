@@ -91,6 +91,85 @@ import Testing
         }
     }
 
+    @Test func generatedCatalogAndUpdateRoundTripEntryAndIngestionChoices() async throws {
+        let entryIDs = [
+            "document_note.created", "document_note.updated", "document_note.deleted",
+            "document_comment.created", "document_comment.updated", "document_comment.deleted",
+        ]
+        let ingestionIDs = [
+            "ingest.imported", "ingest.skipped", "ingest.duplicate", "ingest.failed",
+            "source.failed", "source.recovered",
+        ]
+        let choiceIDs = entryIDs + ingestionIDs
+        let field = WorkflowTriggerChoice.ConditionField(
+            id: "event.subject_id", title: "Subject ID", valueType: "identifier")
+        let definitions: [[String: Any]] = choiceIDs.map { id in
+            [
+                "event_type": id, "label": "Catalog label for \(id)",
+                "subject_type": String(id.split(separator: ".")[0]),
+                "target": entryIDs.contains(id) ? "document" : "event",
+                "condition_fields": [["key": field.id, "label": field.title, "value_type": field.valueType]],
+            ]
+        }
+        let catalog = try JSONSerialization.data(withJSONObject: definitions)
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            #expect(request.url?.path == "/folio/api/workflows/triggers")
+            #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+            return (200, String(decoding: catalog, as: UTF8.self))
+        }
+        let live = service()
+        let choices = try await live.workflowTriggerChoices(vaultID: vaultID)
+        #expect(choices.map(\.id) == choiceIDs)
+        #expect(choices.map(\.target) == entryIDs.map { _ in .document } + ingestionIDs.map { _ in .event })
+        #expect(choices.allSatisfy { $0.title == "Catalog label for \($0.id)" && $0.conditionFields == [field] })
+
+        let summary = WorkflowConfigurationSummary(
+            id: workflowID, vaultID: vaultID, name: "File invoices", enabled: true, trigger: "document.uploaded",
+            createdAt: try LenientDateTranscoder().decode("2026-11-02T12:34:56.123456789Z"),
+            updatedAt: try LenientDateTranscoder().decode("2026-11-02T12:35:00Z")
+        )
+        let old = workflowJSON(deleted: false)
+        let definition = try #require(JSONSerialization.jsonObject(with: Data(old.utf8)) as? [String: Any])
+        for choice in choices {
+            LifecycleURLProtocol.handler = { request in
+                #expect(request.url?.path == "/folio/api/workflows/\(workflowID.uuidString.lowercased())")
+                #expect(request.value(forHTTPHeaderField: "X-Folio-Vault") == vaultID.uuidString.lowercased())
+                if request.httpMethod == "GET" { return (200, old) }
+                #expect(request.httpMethod == "PUT")
+                guard let data = LifecycleURLProtocol.body(for: request),
+                    let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                else { return (400, "{}") }
+                #expect(body["trigger"] as? String == choice.id)
+                #expect(body["name"] as? String == summary.name)
+                #expect(body["enabled"] as? Bool == true)
+                #expect(body["conditions"] as? NSDictionary == definition["conditions"] as? NSDictionary)
+                #expect(body["actions"] as? NSArray == definition["actions"] as? NSArray)
+                #expect(body["vault_id"] == nil)
+                return (200, workflowJSON(deleted: false, trigger: choice.id))
+            }
+            let updated = try await live.changeWorkflowTrigger(summary, to: choice.id)
+            #expect(updated.trigger == choice.id)
+            #expect(updated.vaultID == vaultID)
+        }
+    }
+
+    @Test func editingAnOlderWorkflowSummaryDoesNotSendAReplacement() async throws {
+        LifecycleURLProtocol.handler = { request in
+            #expect(request.httpMethod == "GET")
+            return (200, workflowJSON(deleted: false))
+        }
+        let summary = WorkflowConfigurationSummary(
+            id: workflowID, vaultID: vaultID, name: "File invoices", enabled: true, trigger: "document.uploaded",
+            createdAt: .distantPast, updatedAt: .distantPast
+        )
+        await #expect(
+            throws: FolioError.server(status: 409, message: "The workflow changed. Reopen it before editing.")
+        ) {
+            try await service().changeWorkflowTrigger(summary, to: "document_note.created")
+        }
+    }
+
     private func service() -> LiveFolioService {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [LifecycleURLProtocol.self]
@@ -100,10 +179,14 @@ import Testing
         )
     }
 
-    private func workflowJSON(deleted: Bool) -> String {
+    private func workflowJSON(deleted: Bool, trigger: String = "document.uploaded") -> String {
         """
         {"id":"\(workflowID)","vault_id":"\(vaultID)","name":"File invoices","enabled":true,
-        "trigger":"document.uploaded","conditions":{},"actions":[{"type":"webhook","secret":"********"}],
+        "trigger":"\(trigger)","conditions":{"any":[{"event":{"actor":{"type":"system"}}},
+        {"source":{"kind":"email","email_from":{"contains":"@example.test"}}}],"none":[]},
+        "actions":[{"type":"webhook","url":"https://receiver.test/hook","method":"POST","secret":"********",
+        "headers":{"Authorization":"********"}},{"type":"webhook","url":"https://receiver.test/hook","method":"POST",
+        "headers":{"X-Custom-Credential":"********"}}],
         "created_at":"2026-11-02T12:34:56.123456789Z","updated_at":"2026-11-02T12:35:00Z",
         "deleted_at":\(deleted ? "\"2026-11-02T12:36:00Z\"" : "null"),"created_by":"creator","updated_by":"editor"}
         """
@@ -130,6 +213,21 @@ private final class LifecycleURLProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(json.utf8))
         client?.urlProtocolDidFinishLoading(self)
+    }
+
+    static func body(for request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count >= 0 else { return nil }
+            if count == 0 { return data }
+            data.append(buffer, count: count)
+        }
     }
 
     override func stopLoading() {}
