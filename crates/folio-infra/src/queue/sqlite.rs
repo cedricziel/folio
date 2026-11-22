@@ -20,6 +20,7 @@ pub(crate) async fn insert_job(
     max_attempts: i32,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
+    job_type.ensure_dispatchable()?;
     let plan =
         super::processing_scope::sqlite::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
     if plan.existing {

@@ -693,3 +693,221 @@ async fn personal_tokens_require_independent_read_and_write_scopes_for_metadata(
     let created: Value = serde_json::from_str(&text(response).await).unwrap();
     assert_eq!(created["created_by"], "owner");
 }
+
+#[tokio::test]
+async fn document_patch_preserves_exact_values_and_rejects_stale_or_invalid_changes() {
+    let h = harness_requiring_login().await;
+    let owner = account(&h, "metadata-owner").await;
+    let document = metadata_document(&h, &owner, &owner).await;
+    let path = format!("/api/vaults/{}/documents/{document}/metadata", owner.vault);
+    let decimal = create_field(&h, &owner, "decimal").await;
+    let (status, flag) = call(
+        &h,
+        "POST",
+        &format!("/api/vaults/{}/metadata-fields", owner.vault),
+        &owner.cookie,
+        json!({"name":"Paid","kind":"boolean"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let before = call(&h, "GET", &path, &owner.cookie, Value::Null).await;
+    assert_eq!(before.0, StatusCode::OK);
+    assert_eq!(before.1["revision"], Value::Null);
+    assert_eq!(before.1["values"], json!([]));
+
+    let patch = json!({"revision":null,"changes":[
+        {"field_id":decimal["id"],"value":{"kind":"decimal","value":"9007199254740993.010"}},
+        {"field_id":flag["id"],"value":{"kind":"boolean","value":false}}
+    ]});
+    let (status, applied) = call(&h, "PATCH", &path, &owner.cookie, patch.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let values = applied["values"].as_array().unwrap();
+    assert!(values
+        .iter()
+        .any(|item| item["value"] == json!({"kind":"boolean","value":false})));
+    assert!(values
+        .iter()
+        .any(|item| item["value"] == json!({"kind":"decimal","value":"9007199254740993.01"})));
+    assert!(values
+        .iter()
+        .all(|item| item["updated_by"] == "metadata-owner"));
+    assert!(applied["revision"].is_string());
+
+    assert_eq!(
+        call(&h, "PATCH", &path, &owner.cookie, patch).await.0,
+        StatusCode::CONFLICT
+    );
+    let invalid = json!({"revision":applied["revision"],"changes":[
+        {"field_id":flag["id"],"value":null},
+        {"field_id":decimal["id"],"value":{"kind":"decimal","value":"1e3"}}
+    ]});
+    assert_eq!(
+        call(&h, "PATCH", &path, &owner.cookie, invalid).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let after = call(&h, "GET", &path, &owner.cookie, Value::Null).await;
+    assert_eq!(after.0, StatusCode::OK);
+    assert_eq!(after.1, applied);
+}
+
+async fn metadata_document(h: &Harness, vault: &Account, uploader: &Account) -> uuid::Uuid {
+    use folio_core::models::CreateDocument;
+    h.state
+        .document_repo
+        .create(
+            vault.vault,
+            CreateDocument {
+                title: "Metadata fixture".into(),
+                uploaded_by: Some(uploader.user.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn document_patch_checks_upload_ownership_and_hides_out_of_vault_link_targets() {
+    let h = harness_requiring_login().await;
+    let owner = account(&h, "metadata-owner").await;
+    let contributor = account(&h, "metadata-contributor").await;
+    h.members
+        .grant(
+            owner.vault,
+            &Principal::User(contributor.user.clone()),
+            VaultRole::Contributor,
+            Some(&owner.user),
+        )
+        .await
+        .unwrap();
+    let attached = metadata_document(&h, &owner, &contributor).await;
+    let other = metadata_document(&h, &owner, &owner).await;
+    let hidden = metadata_document(&h, &contributor, &contributor).await;
+    let path = |document| format!("/api/vaults/{}/documents/{document}/metadata", owner.vault);
+    let field = create_field(&h, &owner, "document_link").await;
+    let body = |target| {
+        json!({"revision":null,"changes":[
+            {"field_id":field["id"],"value":{"kind":"document_link","value":target}}
+        ]})
+    };
+    assert_eq!(
+        call(&h, "GET", &path(other), &contributor.cookie, Value::Null)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        call(
+            &h,
+            "PATCH",
+            &path(other),
+            &contributor.cookie,
+            body(attached)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let inaccessible = call(
+        &h,
+        "PATCH",
+        &path(attached),
+        &contributor.cookie,
+        body(hidden),
+    )
+    .await;
+    let missing = call(
+        &h,
+        "PATCH",
+        &path(attached),
+        &contributor.cookie,
+        body(uuid::Uuid::new_v4()),
+    )
+    .await;
+    assert_eq!(inaccessible.0, StatusCode::NOT_FOUND);
+    assert_eq!(inaccessible, missing);
+    assert_eq!(
+        call(
+            &h,
+            "PATCH",
+            &path(attached),
+            &contributor.cookie,
+            body(other)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    h.state
+        .document_repo
+        .delete(owner.vault, other)
+        .await
+        .unwrap();
+    let (status, retained) =
+        call(&h, "GET", &path(attached), &contributor.cookie, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        retained["values"][0]["value"],
+        json!({"kind":"document_link","value":other})
+    );
+    assert_eq!(
+        retained["values"][0]["link_target"],
+        json!({"title":"Metadata fixture","trashed":true})
+    );
+    assert_eq!(
+        call(&h, "GET", &path(hidden), &contributor.cookie, Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn oversized_document_transition_rolls_back_without_an_event() {
+    let h = harness_requiring_login().await;
+    let owner = account(&h, "metadata-owner").await;
+    let document = metadata_document(&h, &owner, &owner).await;
+    let collection = format!("/api/vaults/{}/metadata-fields", owner.vault);
+    let path = format!("/api/vaults/{}/documents/{document}/metadata", owner.vault);
+    let mut changes = Vec::new();
+    for index in 0..3 {
+        let (status, field) = call(
+            &h,
+            "POST",
+            &collection,
+            &owner.cookie,
+            json!({"name":format!("Notes {index}"),"kind":"long_text"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{field}");
+        changes.push(json!({
+            "field_id":field["id"],
+            "value":{"kind":"long_text","value":"\u{0001}".repeat(65_536)}
+        }));
+    }
+    let (status, body) = call(
+        &h,
+        "PATCH",
+        &path,
+        &owner.cookie,
+        json!({"revision":null,"changes":changes}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, metadata) = call(&h, "GET", &path, &owner.cookie, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(metadata["revision"], Value::Null);
+    assert_eq!(metadata["values"], json!([]));
+    let events = h
+        .state
+        .outbox
+        .replay(0, chrono::DateTime::UNIX_EPOCH, 50)
+        .await
+        .unwrap();
+    assert!(!events
+        .iter()
+        .any(|row| row.envelope.as_ref().is_some_and(
+            |event| event.event_type() == folio_core::domain_event::DOCUMENT_METADATA_CHANGED
+        )));
+}

@@ -164,3 +164,21 @@ fn processing_reason_uses_nullable_string_for_generated_clients() {
     assert_eq!(reason["type"], serde_json::json!(["string", "null"]));
     assert!(reason.get("oneOf").is_none());
 }
+
+#[test]
+fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let schemas = &spec["components"]["schemas"];
+    assert_eq!(
+        schemas["MetadataChange"]["required"],
+        serde_json::json!(["field_id", "value"])
+    );
+    let alternatives = schemas["MetadataChange"]["properties"]["value"]["oneOf"]
+        .as_array()
+        .unwrap();
+    assert!(alternatives.iter().any(|schema| schema["type"] == "null"));
+    assert_eq!(
+        schemas["PatchDocumentMetadata"]["required"],
+        serde_json::json!(["revision", "changes"])
+    );
+}

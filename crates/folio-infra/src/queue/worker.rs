@@ -611,6 +611,12 @@ impl Worker {
             JobType::ProcessDocument { document_id, force } => {
                 self.process_document(*document_id, *force).await
             }
+            JobType::ProcessDocumentRevision { .. }
+            | JobType::GenerateRevisionThumbnail { .. }
+            | JobType::ExtractRevisionText { .. }
+            | JobType::GenerateRevisionEmbedding { .. } => {
+                job_type.ensure_dispatchable().map_err(Into::into)
+            }
             JobType::ExecuteWorkflowRun { run_id } => self.execute_workflow_run(*run_id).await,
             JobType::PurgeDocument {
                 document_id,

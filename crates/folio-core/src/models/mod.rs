@@ -69,7 +69,9 @@ pub use metadata_field::{
     name_key as metadata_name_key, MetadataField, MetadataFieldInput, MetadataOption,
     MetadataOptionInput,
 };
-pub use metadata_value::{DocumentMetadata, DocumentMetadataValue, MetadataChange};
+pub use metadata_value::{
+    DocumentMetadata, DocumentMetadataValue, MetadataChange, MetadataLinkTarget,
+};
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use processing_summary::ProcessingStageSummary;
 pub use push::{

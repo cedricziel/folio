@@ -97,6 +97,12 @@ body-free delivery and replay deduplication, and fence dispatch and runs after
 a parent move. The web fixture creates an entry workflow with actor and subject
 filters and reads it back through the API.
 
+For the shared trigger catalog, `cargo test -p folio-api --test workflows --test vaults --test openapi`
+checks that the web choices match the API, an editor cannot fetch the catalog,
+and the generated schema describes the same choices. The infrastructure
+workflow suite dispatches a row with both a domain event and legacy projection,
+checks each trigger name in its payload, and replays the row.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run
@@ -531,6 +537,12 @@ properties from an unlocked read before a full repository update.
 
 Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`,
 then rerun without `UPDATE_OPENAPI` to check the committed generated contract.
+
+For document assignments, run
+`RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_values`
+and the API metadata suite. These checks cover exact amounts, false, revision
+conflicts, link scope, retained Trash state, move and purge rules, and atomic
+rollback without a value-change event when a transition exceeds the event budget.
 
 ## Verify SQLite trash contention
 

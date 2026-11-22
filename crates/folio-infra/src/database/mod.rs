@@ -126,6 +126,7 @@ impl From<PgPool> for Database {
 pub struct Repositories {
     pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
     pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
+    pub metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
     pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     pub upload_receipts: Arc<dyn folio_core::ports::UploadReceiptRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
@@ -207,6 +208,10 @@ impl Database {
                         sqlite::SqliteMetadataOptionRepository::new(pool.clone())
                             .with_wake(wake.clone()),
                     ),
+                    metadata_values: Arc::new(
+                        sqlite::SqliteMetadataValueRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         sqlite::SqliteDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -264,6 +269,10 @@ impl Database {
                     ),
                     metadata_options: Arc::new(
                         postgres::PostgresMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_values: Arc::new(
+                        postgres::PostgresMetadataValueRepository::new(pool.clone())
                             .with_wake(wake.clone()),
                     ),
                     entries: Arc::new(

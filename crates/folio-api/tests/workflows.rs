@@ -69,6 +69,7 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
     let state = AppState::new(
         repos.metadata_fields,
         repos.metadata_options,
+        repos.metadata_values,
         repos.saved_views,
         repos.documents,
         repos.entries,
@@ -937,4 +938,28 @@ async fn web_editor_creates_an_entry_workflow_with_occurrence_filters() {
             "subject_id": subject, "actor": {"type": "user", "user_id": "editor"}
         })
     );
+}
+
+#[tokio::test]
+async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() {
+    let app = test_app().await;
+    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = json.as_array().unwrap();
+    let (status, html) = send(&app, "GET", "/workflows/new", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(catalog.len(), WorkflowTrigger::ALL.len());
+    for choice in catalog {
+        let event_type = choice["event_type"].as_str().unwrap();
+        assert!(html.contains(&format!(r#"value="{event_type}""#)));
+        assert!(WorkflowTrigger::parse(event_type).is_some());
+        if event_type.starts_with("document_note.") || event_type.starts_with("document_comment.") {
+            assert_eq!(choice["target"], "document");
+            assert!(choice["condition_fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field["key"] == "event.subject_id"));
+        }
+    }
 }
