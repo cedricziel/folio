@@ -573,6 +573,12 @@ for metadata workflow delivery. The test commits a field and document values
 before dispatch, then checks that delivery uses the earlier occurrence values,
 records its outbox identity, deduplicates retries, and skips workflow-origin events.
 
+Run `cargo test -p folio-api --test workflows --test openapi` for typed custom
+field workflow conditions. Verify that a field, change state, and exact previous
+or new value constrain the same occurrence change. Run
+`npx playwright test metadata-workflows.spec.ts` in the disposable instance to
+check the trigger and condition controls, including webhook-only definition events.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.

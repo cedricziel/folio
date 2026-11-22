@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Id, IngestResult, SourceKind, UserId, WebhookIngest, WorkflowTrigger};
+use super::{
+    Id, IngestResult, MetadataKind, MetadataValue, SourceKind, UserId, WebhookIngest,
+    WorkflowTrigger,
+};
 use crate::{DomainEventEnvelope, Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +78,143 @@ impl WorkflowIngestConditions {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub enum MetadataChangeState {
+    Set,
+    Replaced,
+    Cleared,
+}
+
+impl MetadataChangeState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Set => "set",
+            Self::Replaced => "replaced",
+            Self::Cleared => "cleared",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WorkflowMetadataConditions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = MetadataKind, required = false))]
+    pub kind: Option<MetadataKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = MetadataChangeState, required = false))]
+    pub state: Option<MetadataChangeState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = MetadataValue, required = false))]
+    pub before: Option<MetadataValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = MetadataValue, required = false))]
+    pub after: Option<MetadataValue>,
+}
+
+impl WorkflowMetadataConditions {
+    pub fn validate_trigger(&self, trigger: WorkflowTrigger) -> Result<()> {
+        if !trigger.is_custom_metadata()
+            || (trigger != WorkflowTrigger::DocumentMetadataChanged
+                && (self.state.is_some() || self.before.is_some() || self.after.is_some()))
+        {
+            return Err(Error::Validation(
+                "These custom field conditions are unavailable for the selected trigger".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate(&self) -> Result<()> {
+        let kind = self
+            .kind
+            .or_else(|| self.before.as_ref().map(MetadataValue::kind));
+        for value in [&self.before, &self.after].into_iter().flatten() {
+            value
+                .clone()
+                .validate(kind.unwrap_or_else(|| value.kind()), false)?;
+        }
+        if (self.state == Some(MetadataChangeState::Set) && self.before.is_some())
+            || (self.state == Some(MetadataChangeState::Cleared) && self.after.is_some())
+        {
+            return Err(Error::Validation(
+                "Choose a change state that can have the requested value".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn matches(&self, event: &DomainEventEnvelope) -> bool {
+        use crate::domain_event::DOCUMENT_METADATA_CHANGED;
+        use serde_json::Value;
+
+        let matches_field = |data: &Value| {
+            self.field_id.is_none_or(|field| {
+                data["field_id"]
+                    .as_str()
+                    .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                    == Some(field)
+            })
+        };
+        let matches_kind =
+            |kind: Option<&str>| self.kind.is_none_or(|wanted| Some(wanted.as_str()) == kind);
+        let data = event.data();
+        match event.event_type() {
+            DOCUMENT_METADATA_CHANGED => {}
+            name if name.starts_with("metadata_field.") || name.starts_with("metadata_option.") => {
+                let kind = if name.starts_with("metadata_option.") {
+                    Some(MetadataKind::Select.as_str())
+                } else {
+                    data["kind"].as_str()
+                };
+                return self.state.is_none()
+                    && self.before.is_none()
+                    && self.after.is_none()
+                    && matches_field(data)
+                    && matches_kind(kind);
+            }
+            _ => return false,
+        }
+
+        let normalize = |value: &Option<MetadataValue>| -> Result<Option<Value>> {
+            value
+                .as_ref()
+                .map(|value| {
+                    let normalized = value.clone().validate(value.kind(), false)?;
+                    serde_json::to_value(normalized)
+                        .map_err(|error| Error::Validation(error.to_string()))
+                })
+                .transpose()
+        };
+        let (Ok(before), Ok(after)) = (normalize(&self.before), normalize(&self.after)) else {
+            return false;
+        };
+        data["changes"].as_array().is_some_and(|changes| {
+            changes.iter().any(|change| {
+                let (Some(from), Some(to)) = (change.get("before"), change.get("after")) else {
+                    return false;
+                };
+                let state = match (from.is_null(), to.is_null()) {
+                    (true, false) => MetadataChangeState::Set,
+                    (false, false) => MetadataChangeState::Replaced,
+                    (false, true) => MetadataChangeState::Cleared,
+                    (true, true) => return false,
+                };
+                matches_field(change)
+                    && matches_kind(change["kind"].as_str())
+                    && self.state.is_none_or(|wanted| wanted == state)
+                    && before.as_ref().is_none_or(|value| value == from)
+                    && after.as_ref().is_none_or(|value| value == to)
+            })
+        })
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -86,6 +226,9 @@ pub struct WorkflowEventConditions {
     pub actor: Option<WorkflowActorCondition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ingest: Option<WorkflowIngestConditions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowMetadataConditions, required = false))]
+    pub metadata: Option<WorkflowMetadataConditions>,
 }
 
 impl WorkflowEventConditions {
@@ -94,6 +237,9 @@ impl WorkflowEventConditions {
             if user_id.as_str().trim().is_empty() {
                 return Err(Error::Validation("Event actor ID must not be empty".into()));
             }
+        }
+        if let Some(metadata) = &self.metadata {
+            metadata.validate()?;
         }
         Ok(())
     }
@@ -104,10 +250,62 @@ impl WorkflowEventConditions {
                 .ingest
                 .as_ref()
                 .is_none_or(|condition| condition.matches(event))
+            && self
+                .metadata
+                .as_ref()
+                .is_none_or(|condition| condition.matches(event))
             && match &self.actor {
                 None => true,
                 Some(WorkflowActorCondition::System) => event.actor_id().is_none(),
                 Some(WorkflowActorCondition::User { user_id }) => event.actor_id() == Some(user_id),
             }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{DomainEventSubject, EventAudience};
+    use serde_json::json;
+
+    #[test]
+    fn metadata_conditions_compare_exact_values_from_the_same_change() {
+        let document = uuid::Uuid::new_v4();
+        let amount = uuid::Uuid::new_v4();
+        let processed = uuid::Uuid::new_v4();
+        let event = DomainEventEnvelope::new(
+            "document.metadata.changed",
+            super::super::VaultId(uuid::Uuid::new_v4()),
+            DomainEventSubject {
+                subject_type: "document".into(),
+                id: document,
+            },
+            Some(document),
+            EventAudience::Vault,
+            json!({"changes": [
+                {"field_id": amount, "kind": "decimal", "before": null,
+                 "after": {"kind": "decimal", "value": "9007199254740993.01"}},
+                {"field_id": processed, "kind": "boolean", "before": null,
+                 "after": {"kind": "boolean", "value": false}}
+            ]}),
+        )
+        .unwrap();
+        let matches = |metadata| {
+            let conditions: WorkflowEventConditions =
+                serde_json::from_value(json!({"metadata": metadata})).unwrap();
+            conditions.validate().unwrap();
+            conditions.matches(&event)
+        };
+        assert!(matches(json!({"field_id": amount, "state": "set",
+            "after": {"kind": "decimal", "value": "9007199254740993.0100"}})));
+        assert!(!matches(json!({"field_id": amount,
+            "after": {"kind": "decimal", "value": "9007199254740993.02"}})));
+        assert!(!matches(
+            json!({"field_id": amount, "after": {"kind": "boolean", "value": false}})
+        ));
+        assert!(matches(
+            json!({"field_id": processed, "after": {"kind": "boolean", "value": false}})
+        ));
+        assert!(!matches(json!({"field_id": processed, "state": "cleared"})));
     }
 }

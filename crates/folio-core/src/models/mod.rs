@@ -104,7 +104,8 @@ pub use workflow::{
 };
 
 pub use workflow_event_conditions::{
-    WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    MetadataChangeState, WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+    WorkflowMetadataConditions,
 };
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
