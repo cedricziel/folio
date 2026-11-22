@@ -35,25 +35,30 @@ test.describe("keyboard shortcuts", () => {
   });
 
   test("g then i, a, s and w navigate", async ({ page }) => {
-    // Turbo swaps the page after the URL changes, so wait for each heading before the next chord.
+    const navigate = async (key: string) => {
+      // Cached previews can be replaced between the two keys and reset the hotkeys controller.
+      await expect(page.locator("html")).not.toHaveAttribute("data-turbo-preview", "");
+      await expect(page.locator("html")).not.toHaveAttribute("aria-busy", "true");
+      await expect.poll(() => page.evaluate(() => Boolean(
+        Reflect.get(window, "Stimulus")?.getControllerForElementAndIdentifier(document.body, "hotkeys"),
+      ))).toBe(true);
+      await page.keyboard.press("g");
+      await page.keyboard.press(key);
+    };
     await page.goto("/settings");
-    await page.keyboard.press("g");
-    await page.keyboard.press("i");
+    await navigate("i");
     await expect(page.getByRole("heading", { name: "Inbox", level: 1 })).toBeVisible();
     await expect(page).toHaveURL(/\/$/);
 
-    await page.keyboard.press("g");
-    await page.keyboard.press("a");
+    await navigate("a");
     await expect(page.getByRole("heading", { name: "All documents", level: 1 })).toBeVisible();
     await expect(page).toHaveURL(/\/\?view=all$/);
 
-    await page.keyboard.press("g");
-    await page.keyboard.press("s");
+    await navigate("s");
     await expect(page).toHaveURL(/\/settings$/);
     await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
 
-    await page.keyboard.press("g");
-    await page.keyboard.press("w");
+    await navigate("w");
     await expect(page).toHaveURL(/\/workflows$/);
     await expect(page.getByRole("heading", { name: "Workflows", level: 1 })).toBeVisible();
   });
