@@ -56,23 +56,25 @@ import XCTest
         let edit = app.buttons["Edit trigger"]
         XCTAssertTrue(edit.waitForExistence(timeout: 5), app.debugDescription)
         edit.tap()
-        let note = app.staticTexts["When a note is created"]
+        let note = app.buttons["When a note is created"]
         XCTAssertTrue(note.waitForExistence(timeout: 5), app.debugDescription)
         note.tap()
         capture(app, name: "Workflow trigger selected from catalog")
         let save = app.buttons["Save"]
         XCTAssertTrue(save.isEnabled, app.debugDescription)
         save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(app.staticTexts["When a note is created"].waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(edit.waitForExistence(timeout: 5), app.debugDescription)
         edit.tap()
-        let source = app.staticTexts["When a source becomes unavailable"]
+        let source = app.buttons["When a source becomes unavailable"]
         XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertFalse(app.buttons["Save"].isEnabled, app.debugDescription)
+        XCTAssertTrue(note.isSelected, app.debugDescription)
+        XCTAssertFalse(save.isEnabled, app.debugDescription)
         source.tap()
-        app.buttons["Save"].tap()
-        XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
-        XCTAssertTrue(edit.waitForExistence(timeout: 5), app.debugDescription)
+        save.tap()
+        XCTAssertTrue(save.waitForNonExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(
+            app.staticTexts["When a source becomes unavailable"].waitForExistence(timeout: 5), app.debugDescription)
         capture(app, name: "Saved ingestion trigger on workflow")
     }
 
