@@ -102,8 +102,22 @@ fn worker(h: &common::Harness) -> Worker {
 }
 
 async fn upload(h: &common::Harness, traceparent: Option<String>) {
-    let mut request = common::multipart(&[("file", Some("scan.png"), "not really a png")]);
-    *request.uri_mut() = "/api/documents/upload".parse().unwrap();
+    let boundary = common::BOUNDARY;
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"scan.png\"\r\nContent-Type: image/png\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend(include_bytes!("../../../static/icons/icon-192.png"));
+    body.extend(format!("\r\n--{boundary}--\r\n").bytes());
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/documents/upload")
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap();
     if let Some(traceparent) = traceparent {
         request
             .headers_mut()
