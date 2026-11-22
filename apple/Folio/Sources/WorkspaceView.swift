@@ -248,7 +248,7 @@ struct WorkspaceView: View {
             openingSavedView = id
             savedViewOpen = Task {
                 await workspace.openSavedView(id)
-                if openingSavedView == id { openingSavedView = nil }
+                if !Task.isCancelled, openingSavedView == id { openingSavedView = nil }
             }
         }
     }
