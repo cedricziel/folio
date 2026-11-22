@@ -567,6 +567,14 @@ struct OperationFailure: Equatable {
             self.init(type: "401", status: 401)
         case FolioError.unreachable:
             self.init(type: "unreachable")
+        case FolioError.offline, FolioError.hostUnreachable:
+            self.init(type: "unreachable")
+        case FolioError.timedOut:
+            self.init(type: "timeout")
+        case FolioError.untrustedCertificate, FolioError.secureConnectionFailed, FolioError.clientCertificate:
+            self.init(type: "tls")
+        case FolioError.insecureAddress, FolioError.redirectLoop, FolioError.networkSignInRequired:
+            self.init(type: "insecure_address")
         case FolioError.unreadableResponse:
             self.init(type: "unreadable_response")
         default:

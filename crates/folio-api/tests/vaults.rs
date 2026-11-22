@@ -1272,13 +1272,15 @@ async fn editor_cannot_manage_vault_workflows() {
         )
         .await
         .unwrap();
-    let mut req = request("GET", "/api/workflows", &alice, Body::empty());
-    req.headers_mut()
-        .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
-    assert_eq!(
-        h.app.clone().oneshot(req).await.unwrap().status(),
-        StatusCode::FORBIDDEN
-    );
+    for path in ["/api/workflows", "/api/workflows/triggers"] {
+        let mut req = request("GET", path, &alice, Body::empty());
+        req.headers_mut()
+            .insert("x-folio-vault", bob.vault.to_string().parse().unwrap());
+        assert_eq!(
+            h.app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::FORBIDDEN
+        );
+    }
 }
 
 #[tokio::test]

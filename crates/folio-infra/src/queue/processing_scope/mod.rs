@@ -51,7 +51,12 @@ fn stages(job: &JobType) -> &'static [&'static str] {
         JobType::ExtractText { .. } => &["ocr", "embedding"],
         JobType::GenerateThumbnail { .. } => &["thumbnail"],
         JobType::GenerateEmbedding { .. } => &["embedding"],
-        JobType::PurgeDocument { .. } | JobType::ExecuteWorkflowRun { .. } => &[],
+        JobType::PurgeDocument { .. }
+        | JobType::ExecuteWorkflowRun { .. }
+        | JobType::ProcessDocumentRevision { .. }
+        | JobType::GenerateRevisionThumbnail { .. }
+        | JobType::ExtractRevisionText { .. }
+        | JobType::GenerateRevisionEmbedding { .. } => &[],
     }
 }
 
@@ -73,6 +78,7 @@ pub(super) enum ClaimPreparation {
 }
 
 pub(super) async fn prepare_claim(queue: &JobQueue, job: &Job) -> Result<ClaimPreparation> {
+    job.job_type.ensure_dispatchable()?;
     if stages(&job.job_type).is_empty() {
         return Ok(ClaimPreparation::Ready(None));
     }
@@ -86,8 +92,14 @@ fn repo_err(error: impl std::fmt::Display) -> Error {
     Error::Repository(error.to_string())
 }
 
+const STALE_PARENT: &str = "processing parent claim or group is no longer current";
+
+pub(super) fn is_stale_parent(error: &Error) -> bool {
+    matches!(error, Error::Conflict(reason) if reason == STALE_PARENT)
+}
+
 fn stale_parent() -> Error {
-    Error::Conflict("processing parent claim or group is no longer current".into())
+    Error::Conflict(STALE_PARENT.into())
 }
 
 fn payload_type(job: &JobType) -> Result<String> {

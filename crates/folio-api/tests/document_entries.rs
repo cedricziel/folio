@@ -1,12 +1,18 @@
 mod common;
 
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::{header, Request, StatusCode},
     response::Response,
 };
 use folio_auth::{crypto::hash_token, Session, User};
-use folio_core::models::{CreateDocument, Principal, UserId, VaultId, VaultRole};
+use folio_core::{
+    models::{CreateDocument, Principal, UserId, VaultId, VaultRole},
+    services::WorkflowEngine,
+};
+use folio_infra::workflow::{RunOutcome, StorageFileMetadata, WorkflowRunner};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -89,6 +95,131 @@ async fn setup() -> (common::Harness, String) {
         .unwrap();
     let path = format!("/api/documents/{}/entries", document.id);
     (h, path)
+}
+
+#[tokio::test]
+async fn entry_workflow_keeps_running_without_granting_access_to_its_revoked_creator() {
+    let (h, entry_path) = setup().await;
+    let creator = "workflow-creator";
+    let owner = "remaining-owner";
+    member(&h, creator, h.vault, VaultRole::Owner).await;
+    member(&h, owner, h.vault, VaultRole::Owner).await;
+
+    let tag = call(
+        &h,
+        owner,
+        "POST",
+        "/api/tags",
+        None,
+        json!({"name": "Discussed"}),
+    )
+    .await;
+    assert_eq!(tag.status(), StatusCode::OK);
+    let tag: Value = serde_json::from_str(&common::text(tag).await).unwrap();
+    let tag_id: Uuid = serde_json::from_value(tag["id"].clone()).unwrap();
+    let workflow = call(
+        &h,
+        creator,
+        "POST",
+        "/api/workflows",
+        None,
+        json!({
+            "name": "Tag discussed documents",
+            "trigger": "document_note.created",
+            "actions": [{"type": "add_tags", "tag_ids": [tag_id]}]
+        }),
+    )
+    .await;
+    let status = workflow.status();
+    let workflow = common::text(workflow).await;
+    assert_eq!(status, StatusCode::CREATED, "{workflow}");
+    let workflow: Value = serde_json::from_str(&workflow).unwrap();
+    let workflow_id: Uuid = serde_json::from_value(workflow["id"].clone()).unwrap();
+    assert_eq!(workflow["created_by"], creator);
+    let workflow_path = format!("/api/workflows/{workflow_id}");
+    let runs_path = format!("{workflow_path}/runs");
+    for path in [&workflow_path, &runs_path] {
+        assert_eq!(
+            call(&h, creator, "GET", path, None, Value::Null)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+
+    h.members
+        .revoke(h.vault, &Principal::User(UserId(creator.into())))
+        .await
+        .unwrap();
+    let entry = call(
+        &h,
+        "author",
+        "POST",
+        &entry_path,
+        Some(Uuid::new_v4()),
+        json!({"kind": "note", "body": "This note triggers a vault workflow."}),
+    )
+    .await;
+    assert_eq!(entry.status(), StatusCode::CREATED);
+    let entry: Value = serde_json::from_str(&common::text(entry).await).unwrap();
+    let entry_id: Uuid = serde_json::from_value(entry["id"].clone()).unwrap();
+    let document_id: Uuid = serde_json::from_value(entry["document_id"].clone()).unwrap();
+    let event = h
+        .state
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::hours(1), 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| {
+            event.envelope.as_ref().is_some_and(|envelope| {
+                envelope.event_type() == "document_note.created"
+                    && envelope.subject().id == entry_id
+            })
+        })
+        .expect("the committed note creation event");
+
+    let engine = WorkflowEngine::new(
+        h.state.workflow_repo.clone(),
+        h.state.document_repo.clone(),
+        h.state.correspondent_repo.clone(),
+        h.state.document_type_repo.clone(),
+        Arc::new(StorageFileMetadata::new(h.state.store.clone())),
+        h.state.public_url.clone(),
+    );
+    let runs = engine.handle(&event).await.unwrap();
+    let [run] = runs.as_slice() else {
+        panic!("expected one workflow run, found {}", runs.len());
+    };
+    assert_eq!(run.workflow_id, workflow_id);
+    let runner = WorkflowRunner::new(
+        h.state.workflow_repo.clone(),
+        h.database.repositories().await.workflow_documents,
+        h.state.webhook_client.clone(),
+    );
+    assert_eq!(runner.execute(run.id).await.unwrap(), RunOutcome::Succeeded);
+    let tags = h
+        .state
+        .document_repo
+        .get_tags(h.vault, document_id)
+        .await
+        .unwrap();
+    assert!(tags.iter().any(|tag| tag.id == tag_id));
+
+    for path in [&workflow_path, &runs_path] {
+        assert_eq!(
+            call(&h, creator, "GET", path, None, Value::Null)
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let accessible_runs = call(&h, owner, "GET", &runs_path, None, Value::Null).await;
+    assert_eq!(accessible_runs.status(), StatusCode::OK);
+    let accessible_runs: Value =
+        serde_json::from_str(&common::text(accessible_runs).await).unwrap();
+    assert_eq!(accessible_runs[0]["id"], run.id.to_string());
+    assert_eq!(accessible_runs[0]["status"], "succeeded");
 }
 
 #[tokio::test]

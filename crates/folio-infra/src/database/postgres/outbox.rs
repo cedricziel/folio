@@ -331,15 +331,27 @@ impl OutboxStore for PostgresOutboxStore {
         limit: u32,
     ) -> Result<Vec<OutboxEvent>> {
         let rows: Vec<Row> = sqlx::query_as(
-            "SELECT id, payload::text, created_at, attempts FROM outbox_events
-             WHERE created_at >= $2 AND id <> $1
-               AND (dispatched_at IS NULL OR dispatched_at >=
-                    COALESCE((SELECT created_at FROM outbox_events WHERE id = $1), $2))
-             ORDER BY COALESCE(dispatched_at, created_at) DESC, id DESC LIMIT $3",
+            "WITH candidates AS (
+                 SELECT id, COALESCE(dispatched_at, created_at) AS replay_at,
+                        octet_length(payload::text)::bigint AS payload_bytes
+                 FROM outbox_events
+                 WHERE created_at >= $2 AND id <> $1
+                   AND (dispatched_at IS NULL OR dispatched_at >=
+                        COALESCE((SELECT created_at FROM outbox_events WHERE id = $1), $2))
+                 ORDER BY replay_at DESC, id DESC LIMIT $3
+             ), bounded AS (
+                 SELECT id, SUM(payload_bytes) OVER (
+                     ORDER BY replay_at DESC, id DESC ROWS UNBOUNDED PRECEDING
+                 ) AS cumulative_bytes FROM candidates
+             )
+             SELECT e.id, e.payload::text, e.created_at, e.attempts
+             FROM bounded b JOIN outbox_events e ON e.id = b.id
+             WHERE b.cumulative_bytes <= $4::bigint",
         )
         .bind(after_id)
         .bind(since)
         .bind(i64::from(limit))
+        .bind(super::super::OUTBOX_REPLAY_MAX_PAYLOAD_BYTES)
         .fetch_all(&self.pool)
         .await
         .map_err(repo_err)?;

@@ -48,6 +48,8 @@ pub use sqlite::{
     SqliteVaultRepository, SqliteWorkflowRepository,
 };
 
+pub(crate) const OUTBOX_REPLAY_MAX_PAYLOAD_BYTES: i64 = 8 * 1_048_576;
+
 /// The error for an import whose insert hit a unique index: `Conflict` when
 /// the document already exists, otherwise the database error
 async fn import_collision(
@@ -122,6 +124,9 @@ impl From<PgPool> for Database {
 
 /// The ports Folio needs, implemented for one backend
 pub struct Repositories {
+    pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
+    pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
+    pub metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
     pub entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     pub upload_receipts: Arc<dyn folio_core::ports::UploadReceiptRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
@@ -195,6 +200,18 @@ impl Database {
                     )
                 };
                 Repositories {
+                    metadata_fields: Arc::new(
+                        sqlite::SqliteMetadataFieldRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_options: Arc::new(
+                        sqlite::SqliteMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_values: Arc::new(
+                        sqlite::SqliteMetadataValueRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         sqlite::SqliteDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),
@@ -246,6 +263,18 @@ impl Database {
                     )
                 };
                 Repositories {
+                    metadata_fields: Arc::new(
+                        postgres::PostgresMetadataFieldRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_options: Arc::new(
+                        postgres::PostgresMetadataOptionRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
+                    metadata_values: Arc::new(
+                        postgres::PostgresMetadataValueRepository::new(pool.clone())
+                            .with_wake(wake.clone()),
+                    ),
                     entries: Arc::new(
                         postgres::PostgresDocumentEntryRepository::new(pool.clone())
                             .with_wake(wake.clone()),

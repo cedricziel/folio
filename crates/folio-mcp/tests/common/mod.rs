@@ -92,12 +92,13 @@ impl SearchService for FakeSearch {
         Ok(())
     }
 
-    async fn search(
+    async fn search_filtered(
         &self,
         _vault: folio_core::models::VaultId,
         _model: &str,
         _embedding: &[f32],
         limit: usize,
+        _filter: Option<folio_core::models::DocumentFilter>,
     ) -> folio_core::Result<Vec<folio_core::ports::SearchResult>> {
         Ok(self
             .0

@@ -84,7 +84,7 @@ Short notes for features that do not exist on main yet. Check the code first; sk
 - Recovery-code privacy: run `npm test --prefix e2e -- recovery-cache.spec.ts` with the new `FOLIO_BIN`. The test creates an isolated owner and authenticator, checks that acknowledged recovery codes leave no Turbo snapshot, retains HTTP `no-store`, and exercises Back/Forward navigation and link focus. Both throwaway instances are removed afterward.
 - Pipeline startup configuration: run the smoke test with `FOLIO_VERIFY_OCR_PROVIDER=none FOLIO_VERIFY_AUTO_OCR=false FOLIO_VERIFY_AUTO_EMBED=false`. On the fresh database, `/settings` must select `none` and leave both processing checkboxes unchecked; uploads must finish with skipped OCR and embeddings. The scripts pass these test options through the scrubbed environment.
 - Search palette: run `FOLIO_BIN=<new binary> npm test --prefix e2e -- search-races.spec.ts keyboard.spec.ts`. The browser tests delay JSON completion across recent/search requests and closing/reopening, then check that only current results render. They distinguish successful empty results from unavailable search, recent fallback matches, and fallback failure. Include the palette in the screenshot and axe tour.
-- OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; a PDF with an existing text layer bypasses the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
+- OCRmyPDF: install the local `ocrmypdf` CLI and language packs, select `ocrmypdf` in processing settings, and upload an image rendered from the test PDF. Check `ocr_status=done` and the expected text; pages with meaningful embedded text bypass the OCR provider. Run `cargo test -p folio-infra ocrmypdf_reads_a_rendered_pdf_locally` to cover rendered PDF recognition and missing language packs.
 - Real OCR or embeddings: the throwaway instance uses local Tesseract and no embeddings by default. Test hosted providers only with a dedicated test key supplied by the user, never from the environment you inherited.
 
 ## Push notifications
@@ -172,3 +172,14 @@ This skill is canonical at `.claude/skills/verify`. `.agents/skills/verify` is a
 - Document notes and comments: read [references/document-entries.md](references/document-entries.md).
 - Date edits, metadata events, moves and their API/MCP entry points: read [references/document-metadata.md](references/document-metadata.md).
 - Before a PR, run `make format`, `make lint` and `make test` (see the configuration section in [references/server-checks.md](references/server-checks.md)).
+
+## Verify live document lists
+
+Build `folio-app` and run `npx playwright test live-lists.spec.ts` from `e2e/`
+against the disposable instance. Run `npx playwright test vaults.spec.ts --grep
+'saved view results update'` for the saved-view grid and open editor. The
+browser checks use real document events to cover unrelated creation, processing
+and review, tag and date changes, and an interrupted refresh. Check that
+matching rows, empty states, and vault counts update while the URL, selected
+row, and unsaved inputs stay in place. Include Inbox, All documents, and a
+filtered list in the desktop and mobile screen tour.

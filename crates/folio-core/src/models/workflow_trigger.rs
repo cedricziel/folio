@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use super::WorkflowAction;
+use super::{WorkflowAction, WorkflowTrigger};
 use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,6 +101,50 @@ pub struct WorkflowTriggerRegistry {
 }
 
 impl WorkflowTriggerRegistry {
+    pub fn built_in() -> &'static Self {
+        static REGISTRY: std::sync::OnceLock<WorkflowTriggerRegistry> = std::sync::OnceLock::new();
+        REGISTRY.get_or_init(|| {
+            let definitions = WorkflowTrigger::ALL
+                .into_iter()
+                .map(|trigger| {
+                    let event_type = trigger.as_str();
+                    WorkflowTriggerDefinition {
+                        event_type: event_type.into(),
+                        label: trigger.label().into(),
+                        subject_type: event_type
+                            .split('.')
+                            .next()
+                            .expect("built-in event type")
+                            .into(),
+                        target: trigger.target(),
+                        condition_fields: if trigger == WorkflowTrigger::IngestReceived {
+                            Vec::new()
+                        } else {
+                            vec![
+                                WorkflowConditionField {
+                                    key: "event.subject_id".into(),
+                                    label: "Subject ID".into(),
+                                    value_type: WorkflowConditionType::Identifier,
+                                },
+                                WorkflowConditionField {
+                                    key: "event.actor.type".into(),
+                                    label: "Actor type".into(),
+                                    value_type: WorkflowConditionType::Text,
+                                },
+                                WorkflowConditionField {
+                                    key: "event.actor.user_id".into(),
+                                    label: "User ID".into(),
+                                    value_type: WorkflowConditionType::Text,
+                                },
+                            ]
+                        },
+                    }
+                })
+                .collect();
+            Self::new(definitions).expect("valid built-in workflow triggers")
+        })
+    }
+
     /// Register a producer catalog, rejecting malformed or duplicate definitions.
     pub fn new(definitions: Vec<WorkflowTriggerDefinition>) -> Result<Self> {
         let mut registry = Self::default();

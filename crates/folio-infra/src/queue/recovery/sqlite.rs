@@ -5,7 +5,7 @@ use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::{repo_err, Failure, JobRow, StageRow};
-use crate::database::sqlite::{capture_document, insert_domain_event};
+use crate::database::sqlite::{capture_document, insert_domain_event_with_origin};
 use crate::queue::{FailOutcome, Job};
 
 async fn load(conn: &mut SqliteConnection, id: Uuid) -> Result<Option<JobRow>> {
@@ -24,9 +24,15 @@ async fn stages(conn: &mut SqliteConnection, id: Uuid) -> Result<Vec<StageRow>> 
                j.correlation_id, j.causation_id
         FROM processing_stage_runs r JOIN jobs j ON j.id = r.job_id
         JOIN documents d ON d.id = r.document_id
+        JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
         WHERE j.id = ? AND r.group_id = j.processing_group_id AND r.vault_id = j.origin_vault_id
           AND d.vault_id = r.vault_id AND d.deleted_at IS NULL AND d.purge_requested_at IS NULL
           AND r.state = 'running' AND r.is_current = TRUE AND r.revision_id IS NULL
+          AND (d.current_revision_id IS NULL OR EXISTS (
+              SELECT 1 FROM document_revisions revision
+              WHERE revision.id = d.current_revision_id AND revision.document_id = d.id
+                AND revision.vault_id = d.vault_id AND revision.number = 1
+          ))
           AND r.claim_id = j.claim_id AND r.queue_attempt = j.attempts
           AND j.correlation_id IS NOT NULL
           AND json_extract(j.payload, '$.data.document_id') = d.id
@@ -79,7 +85,7 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
     .bind(now.to_rfc3339())
     .bind(id.to_string())
     .bind(row.attempts)
-    .bind(row.claim_id)
+    .bind(row.claim_id.as_deref())
     .bind(failure.expired())
     .bind(failure.expired())
     .execute(&mut *tx)
@@ -103,7 +109,7 @@ async fn settle(pool: &SqlitePool, id: Uuid, failure: Failure<'_>) -> Result<Opt
             .await?
             .ok_or_else(|| repo_err("Fenced processing document disappeared"))?;
         let envelope = stage.envelope(&snapshot, &decision).await?;
-        insert_domain_event(&mut tx, &envelope).await?;
+        insert_domain_event_with_origin(&mut tx, &envelope, row.origin()?).await?;
     }
     tx.commit().await.map_err(repo_err)?;
     Ok(Some(decision.outcome()))
@@ -130,6 +136,22 @@ pub(in crate::queue) async fn fail(
     .unwrap_or(FailOutcome::LostLease))
 }
 
+/// Fail an expired row whose id is not a UUID, so recovery stops retrying it
+async fn fail_unreadable_id(pool: &SqlitePool, id: &str) -> Result<Option<FailOutcome>> {
+    tracing::warn!(job.id = %id, field = "id", "Failing expired job row with an unreadable id");
+    let now = Utc::now().to_rfc3339();
+    let changed = sqlx::query("UPDATE jobs SET status = 'failed', error = ?, updated_at = ?, completed_at = ?, claim_id = NULL, lease_expires_at = NULL WHERE id = ? AND status = 'processing'")
+        .bind(crate::queue::damaged_row_message("id", "not a valid id"))
+        .bind(&now)
+        .bind(&now)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(repo_err)?
+        .rows_affected();
+    Ok((changed == 1).then_some(FailOutcome::GaveUp))
+}
+
 pub(in crate::queue) async fn reset_stuck(pool: &SqlitePool) -> Result<i64> {
     let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM jobs WHERE status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at <= unixepoch())")
         .fetch_all(pool).await.map_err(repo_err)?;
@@ -137,7 +159,7 @@ pub(in crate::queue) async fn reset_stuck(pool: &SqlitePool) -> Result<i64> {
     for id in ids {
         let settled = match id.parse() {
             Ok(id) => settle(pool, id, Failure::Expired).await,
-            Err(error) => Err(repo_err(error)),
+            Err(_) => fail_unreadable_id(pool, &id).await,
         };
         match settled {
             Ok(Some(_)) => recovered += 1,

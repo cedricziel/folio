@@ -98,6 +98,98 @@ document.addEventListener("turbo:before-stream-render", (event) => {
   };
 });
 
+Stimulus.register("live-list", class extends Controller {
+  pending = false;
+  inserted = new Set();
+
+  invalidate(event) {
+    const stream = event.target;
+    if (!stream.hasAttribute("data-live-list")) return;
+    event.preventDefault();
+    if (stream.action === "prepend") {
+      const id = stream.templateContent.firstElementChild?.id;
+      if (id && !document.getElementById(id)) this.inserted.add(id);
+    }
+    this.pending = true;
+    this.schedule();
+  }
+
+  schedule(retry = false) {
+    if (this.timer || this.request) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.refresh(retry);
+    }, retry ? 500 : 150);
+  }
+
+  async refresh(retry) {
+    const url = window.location.href;
+    const request = new AbortController();
+    this.request = request;
+    this.pending = false;
+    const inserted = this.inserted;
+    this.inserted = new Set();
+    let shouldRetry = false;
+
+    try {
+      const response = await fetch(url, { cache: "no-store", signal: request.signal });
+      if (response.status >= 500) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok || response.redirected) return;
+      const html = await response.text();
+      if (request.signal.aborted || !this.element.isConnected || window.location.href !== url) return;
+
+      const next = new DOMParser().parseFromString(html, "text/html");
+      if (next.body.dataset.vaultId !== document.body.dataset.vaultId) return;
+      const list = next.getElementById(this.element.id);
+      if (!list) return;
+      const selected = this.element.querySelector('.f-row[aria-selected="true"]');
+      if (selected) next.getElementById(selected.id)?.setAttribute("aria-selected", "true");
+      const active = document.activeElement;
+      const focusedRow = active?.matches(".f-row[id]") && this.element.contains(active) ? active.id : null;
+      Turbo.morphChildren(this.element, list);
+      if (focusedRow && document.activeElement !== active) {
+        document.getElementById(focusedRow)?.focus({ preventScroll: true });
+      }
+      for (const id of ["inbox-count", "all-count", "inbox-notice"]) {
+        const current = document.getElementById(id);
+        const updated = next.getElementById(id);
+        if (current && updated) Turbo.morphElements(current, updated);
+      }
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        for (const id of inserted) {
+          document.getElementById(id)?.animate(
+            [{ opacity: 0 }, { opacity: 1 }],
+            { duration: 200, easing: "ease-out" },
+          );
+        }
+      }
+    } catch (error) {
+      if (request.signal.aborted) return;
+      if (retry) {
+        console.warn("Could not refresh documents", error);
+      } else {
+        shouldRetry = true;
+        inserted.forEach((id) => this.inserted.add(id));
+      }
+    } finally {
+      if (this.request === request) {
+        this.request = null;
+        if (this.pending) this.schedule();
+        else if (shouldRetry) this.schedule(true);
+      }
+    }
+  }
+
+  disconnect() {
+    clearTimeout(this.timer);
+    this.timer = null;
+    this.request?.abort();
+    this.request = null;
+    this.pending = false;
+    this.inserted.clear();
+  }
+});
+
 // Native <dialog> gives focus placement, a focus trap, Escape and a backdrop.
 // The inner panel carries the padding, so a click that lands on the dialog
 // element itself is a click on the backdrop.
@@ -813,6 +905,10 @@ Stimulus.register(
       "email",
       "actions",
       "discard",
+      "documentFilter",
+      "eventFilter",
+      "actor",
+      "actorUser",
     ];
 
     connect() {
@@ -820,7 +916,16 @@ Stimulus.register(
     }
 
     sync() {
-      const ingest = this.triggerTarget.value === "ingest.received";
+      const trigger = this.triggerTarget.value;
+      const ingest = trigger === "ingest.received";
+      const entry = trigger.startsWith("document_note.") || trigger.startsWith("document_comment.");
+      for (const filter of this.documentFilterTargets) {
+        filter.hidden = entry;
+        filter.disabled = entry;
+      }
+      this.eventFilterTarget.hidden = ingest;
+      this.eventFilterTarget.disabled = ingest;
+      this.actorUserTarget.hidden = this.actorTarget.value !== "user";
       this.actionsTarget.hidden = ingest;
       this.discardTarget.hidden = !ingest;
 

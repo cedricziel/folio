@@ -15,10 +15,11 @@ re-queues documents whose stage is still `pending` and has no active job.
 
 ## OCR
 
-If a PDF has a substantial embedded text layer (extracted with `pdftotext`,
-at least 80% of pages with 20 or more letters or digits) it is used as is and
-the OCR provider is not called. Otherwise pages are rendered by `pdftoppm` at
-300 DPI and handed to the provider.
+Folio reads the embedded text on each PDF page with `pdftotext`. It uses that
+text on pages with at least 20 letters or digits. It renders the remaining pages at 300 DPI
+with `pdftoppm` and sends those images to the OCR provider. If text extraction
+fails, it sends every page to the provider. Folio combines the results in page
+order, so scanned pages contribute searchable text even in a mostly digital PDF.
 
 | `ocr.provider` | What it does | Needs |
 | --- | --- | --- |

@@ -33,6 +33,9 @@ pub struct IngestionState {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
+    pub metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
+    pub metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
+    pub metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
     pub saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
     pub document_repo: Arc<dyn DocumentRepository>,
     pub entry_repo: Arc<dyn DocumentEntryRepository>,
@@ -104,6 +107,9 @@ impl IngestionState {
 impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        metadata_fields: Arc<dyn folio_core::ports::MetadataFieldRepository>,
+        metadata_options: Arc<dyn folio_core::ports::MetadataOptionRepository>,
+        metadata_values: Arc<dyn folio_core::ports::MetadataValueRepository>,
         saved_views: Arc<dyn folio_core::ports::SavedViewRepository>,
         document_repo: Arc<dyn DocumentRepository>,
         entry_repo: Arc<dyn DocumentEntryRepository>,
@@ -139,6 +145,9 @@ impl AppState {
             document_repo.clone(),
         ));
         Self {
+            metadata_fields,
+            metadata_options,
+            metadata_values,
             saved_views,
             document_repo,
             entry_repo,

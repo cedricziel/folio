@@ -19,6 +19,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use folio_core::models::{
     CreateDocument, Document, DocumentFilter, DocumentSource, SourceKind, UpdateDocument,
 };
+use folio_core::ports::{keys, ThumbnailLocation};
 use folio_core::services::SearchServiceFacade;
 
 use super::pages::store_upload;
@@ -557,17 +558,11 @@ pub(crate) async fn document_thumbnail(
     ApiPath(id): ApiPath<Uuid>,
 ) -> Response {
     let result: ApiResult<Response> = async {
-        state
-            .document_repo
-            .find_by_id(vault, id)
-            .await?
-            .ok_or_else(|| ApiError::not_found("Document not found"))?;
-        let key = state
-            .document_repo
-            .thumbnail_result_prefix(vault, id)
-            .await?
-            .map(|prefix| format!("{prefix}/thumbnail.jpg"))
-            .unwrap_or_else(|| folio_core::ports::keys::thumbnail(id));
+        let key = match state.document_repo.thumbnail_location(vault, id).await? {
+            Some(ThumbnailLocation::Committed(prefix)) => format!("{prefix}/thumbnail.jpg"),
+            Some(ThumbnailLocation::Legacy) => keys::thumbnail(id),
+            None => return Err(ApiError::not_found("Thumbnail not available")),
+        };
         let bytes = state
             .store
             .get_bytes(&key)

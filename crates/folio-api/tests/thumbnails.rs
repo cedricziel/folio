@@ -391,3 +391,68 @@ async fn text_page_one_serves_the_generated_committed_thumbnail() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn replacement_does_not_serve_previous_revision_previews() {
+    let h = harness().await;
+    let id = document(&h, h.vault).await;
+    let file = Uuid::new_v4();
+    let first = Uuid::new_v4();
+    let replacement = Uuid::new_v4();
+    let run = Uuid::new_v4();
+    let prefix = format!("documents/{id}/processing/{run}/fixture");
+    let vault = h.vault;
+    let folio_infra::Database::Sqlite(pool) = &h.database else {
+        unreachable!()
+    };
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "INSERT INTO document_files (id, document_id, vault_id, role, storage_key, mime_type, verification_state)
+         VALUES ('{file}', '{id}', '{vault}', 'original', 'fixture', 'image/png', 'pending');
+         INSERT INTO document_revisions (id, document_id, vault_id, number, original_file_id, created_at)
+         VALUES ('{first}', '{id}', '{vault}', 1, '{file}', '2026-11-22T00:00:00Z'),
+                ('{replacement}', '{id}', '{vault}', 2, '{file}', '2026-11-22T00:01:00Z');
+         UPDATE documents SET current_revision_id = '{first}' WHERE id = '{id}';
+         INSERT INTO processing_stage_runs (id, document_id, vault_id, revision_id, group_id, stage, state, attempt, queue_attempt, result_prefix, created_at, updated_at)
+         VALUES ('{run}', '{id}', '{vault}', '{first}', '{run}', 'thumbnail', 'completed', 1, 1, '{prefix}', '2026-11-22T00:00:00Z', '2026-11-22T00:00:00Z');"
+    )))
+    .execute(pool)
+    .await
+    .unwrap();
+    h.state
+        .store
+        .put(&keys::thumbnail(id), Bytes::from_static(b"legacy"))
+        .await
+        .unwrap();
+    h.state
+        .store
+        .put(
+            &format!("{prefix}/thumbnail.jpg"),
+            Bytes::from_static(b"first revision"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(text(get(&h, id, None, None).await).await, "first revision");
+
+    sqlx::query("UPDATE documents SET current_revision_id = ? WHERE id = ?")
+        .bind(replacement.to_string())
+        .bind(id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        get(&h, id, None, None).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let page = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("/documents/{id}/page/1/thumbnail"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.headers()[header::CONTENT_TYPE], "image/svg+xml");
+}

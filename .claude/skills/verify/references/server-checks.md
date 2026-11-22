@@ -38,6 +38,10 @@ with its own SQLite database, storage directory, and loopback ports. It keeps
 and receives the final shutdown log through a local OTLP collector.
 
 ## Verify ingestion claims
+Run `cargo test -p folio-core --test ingestion_trigger_catalog` to verify
+labels, applicable condition fields, and action compatibility in the shared
+registry. This check does not exercise workflow delivery or builder selection.
+
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
 with the isolated Cargo settings below. These tests use temporary SQLite databases
@@ -85,6 +89,20 @@ captured actors override ambient dispatcher context without granting private acc
 The shared repository contract also verifies concurrent mutation deduplication,
 separate workflows, distinct mutations sharing a correlation, invalid captured
 identity rejection, and legacy source-event deduplication on both databases.
+For note and comment workflow triggers, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test document_entries --test workflows`
+and `cargo test -p folio-api --test workflows --test openapi`. The repository
+tests dispatch actual entry occurrences on SQLite and PostgreSQL, verify
+body-free delivery and replay deduplication, and fence dispatch and runs after
+a parent move. The web fixture creates an entry workflow with actor and subject
+filters and reads it back through the API.
+
+For the shared trigger catalog, `cargo test -p folio-api --test workflows --test vaults --test openapi`
+checks that the web choices match the API, an editor cannot fetch the catalog,
+and the generated schema describes the same choices. The infrastructure
+workflow suite dispatches a row with both a domain event and legacy projection,
+checks each trigger name in its payload, and replays the row.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run
@@ -137,6 +155,15 @@ On macOS, a `system-configuration` NULL-object panic during HTTP-client
 initialization can indicate blocked OS networking configuration access. Rerun
 with that access while keeping the temporary test state.
 
+## Verify mixed PDF OCR
+
+Run `cargo test -p folio-infra --lib ai::ocr::tests` and
+`cargo test -p folio-infra --test mixed_pdf_ocr` with Poppler, Tesseract, and
+English Tesseract language data installed. The synthetic PDF has four digital
+pages and one scanned page. Verify that only the scanned page reaches the
+OCR engine and that its recognized phrase is searchable after storing the text.
+The literal search check uses a temporary SQLite database.
+
 ## Verify configuration, storage, and provisioning
 
 Run `RUSTC_WRAPPER= cargo test -p folio-infra config::tests --lib` for canonical
@@ -158,6 +185,8 @@ Use the workspace suite when several crates change.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test thumbnails` with isolated build
 storage. The real-router tests cover generated JPEG bytes, unavailable thumbnails,
 store failures, bearer authentication, read scope, and vault/account isolation.
+The replacement regression checks that the API returns 404 and the web preview
+shows its placeholder until the current revision commits a preview.
 The server smoke test in `.claude/skills/verify/scripts/smoke.sh` also retrieves
 the processed fixture's thumbnail and checks its JPEG bytes and private no-store
 headers. Use that skill's disposable instance wrapper, never a user archive.
@@ -225,6 +254,11 @@ PostgreSQL containers; it covers bounded pagination, stable ordering, cursor
 binding, and batched tags with duplicate IDs and vault isolation. Containers are
 removed after the tests. Do not point these tests at an existing archive.
 
+The semantic search contract uses fixed embeddings and each backend's real search
+store. It checks filtered recall beyond the global candidate cutoff, inclusive
+creation start and exclusive end, deterministic score ties, trash exclusion, and
+vault isolation. Run the SQLite and both PostgreSQL configurations.
+
 For paged HTTP browsing, run `cargo test -p folio-api --test vaults browse`.
 The route tests cover bounded continuations, filter/tag enrichment, malformed
 queries, legacy list compatibility, invisible vaults, and membership revocation
@@ -274,6 +308,9 @@ vectors, malformed dimensions, and nonfinite provider output.
 Run `cargo test -p folio-core --test processing_attempts` for retry state, stale
 attempt rejection, terminal immutability, persisted-state restoration, and attempt
 counter exhaustion. These model tests do not verify transactional lease fencing.
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --lib queue::recovery::tests`
+for recovery on SQLite and PostgreSQL. Unreadable-job cases cover dequeue
+quarantine and listings that retain readable jobs without altering damaged rows.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
 
@@ -372,6 +409,10 @@ rollback, terminal-state fencing, inactive queue admission, and legacy upgrades.
 Restore must preserve failed pending runs rather than replay their queued jobs.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test workflows --test vaults` for
 management controls, deleted-workflow history, secret masking, and vault access.
+The workflow page tests check creator and updater identities on active lists,
+Trash lists, and retained history, including system or unknown attribution and
+HTML escaping. Run the `workflows` screen tour, then inspect a retained history
+page on desktop and mobile in both themes. Check long actor labels for wrapping.
 Regenerate OpenAPI after response or route changes. Never verify workflow delivery
 against an existing webhook receiver or user archive.
 
@@ -384,8 +425,25 @@ claim fencing, active-name reuse, restore conflicts, no-op suppression, and atom
 source/outbox rollback. Configured sources remain outside managed lifecycle storage.
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test sources --test vaults` for the
 existing management page, deleted-source listing, restore controls, masked credentials,
-and vault authorization. Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
+and vault authorization. The source suite also checks retained outcomes through
+JSON and HTML, owner-only access, revoked membership, deleted vaults, cross-vault
+denial, and the return link to Trash. Run the screen tour for `sources`, then open
+Outcomes from a source in Trash and return to Trash in the same vault. Inspect
+desktop and mobile layouts in both themes using only the disposable instance.
+The source page tests verify server-recorded creation and update actors on active
+and trashed sources, the explicit system or unknown fallback, and HTML escaping
+of retained actor identifiers. Inspect long actor labels for wrapping and overflow
+in the same screen tour.
+Regenerate OpenAPI and run the isolated Apple package suite in [apple-checks.md](apple-checks.md) when changing source response fields. Never poll an existing folder or mailbox
 while verifying source management.
+
+The `e2e/tests/lifecycle-evidence.spec.ts` Playwright fixture checks source and
+workflow attribution in active lists, Trash, and retained history against its own
+isolated instance. It uses disabled sources and workflows, temporary historical
+records, and a fresh vault per viewport and theme. It captures desktop/mobile screenshots,
+axe results, and clipping checks in `e2e/test-results/lifecycle-evidence`.
+CI uploads `lifecycle-evidence` even when another E2E test fails. Inspect the PNGs
+before merging; passing assertions alone do not verify the rendered labels.
 
 ## Verify classification lifecycle
 
@@ -438,6 +496,12 @@ Inspect its image diffs and update affected baselines before merging.
 
 ## Verify typed metadata fields and options
 
+Run `RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test outbox_replay`
+with isolated build storage. The shared SQLite/PostgreSQL regression checks the
+8 MiB replay boundary using multibyte UTF-8, complete envelopes, equal-time ID
+ordering, and count limits. It must pass on both backends before exposing large
+metadata transitions through the API.
+
 Run `cargo test -p folio-core --lib --features openapi` for complete long-text event
 snapshots, exact serialized-byte limits, and audience/target validation on decode.
 
@@ -450,6 +514,26 @@ claims, pagination, retirement, restore conflicts, no-op suppression, and rollba
 when outbox publication fails, option identity, and select-field integrity. Events are
 vault-visible non-document events. A Docker access failure requires rerunning the
 PostgreSQL case with socket access; a skipped backend is not verified parity.
+
+For field/option JSON routes, run
+`RUSTC_WRAPPER= cargo test -p folio-api --test metadata --test vaults --test personal_tokens --test routes`
+with the same isolated build settings. The metadata fixture uses temporary SQLite
+and test accounts. It covers Editor/Owner management, Viewer/Contributor reads,
+revoked membership, cross-vault IDs, option parent scope, audit attribution,
+validation and lifecycle conflicts, bounded pagination, CSRF, and independent
+bearer read/write scopes. PATCH replaces editable properties through the repository
+transaction. Field name/kind and option label are required; omitted field flags
+become false and omitted option position becomes zero. Do not merge partial PATCH
+properties from an unlocked read before a full repository update.
+
+Run `RUSTC_WRAPPER= UPDATE_OPENAPI=1 cargo test -p folio-api --test openapi`,
+then rerun without `UPDATE_OPENAPI` to check the committed generated contract.
+
+For document assignments, run
+`RUSTC_WRAPPER= FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_values`
+and the API metadata suite. These checks cover exact amounts, false, revision
+conflicts, link scope, retained Trash state, move and purge rules, and atomic
+rollback without a value-change event when a transition exceeds the event budget.
 
 ## Verify SQLite trash contention
 

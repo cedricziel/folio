@@ -14,6 +14,9 @@
 
 ## 3. API and web
 
+- [x] Merge scoped field/option JSON lifecycle and OpenAPI as #521. All nine metadata router tests, workspace CI, end-to-end, fastembed, Paperless, and architecture builds passed.
+- [ ] In progress: expose document metadata reads and atomic revision-checked updates, including retained links and generated OpenAPI.
+
 - [ ] Write failing router tests for manager/editor/viewer permissions, contributor ownership, revoked membership, cross-vault targets, errors, and CSRF; implement documented JSON and HTML routes.
 - [ ] Write failing search tests for canonical equality, bounds, cursor binding, and retired fields; implement exact metadata filtering.
 - [ ] Add web management and typed document forms with retained failed drafts; verify create, edit, retirement, restore, and link navigation through isolated Playwright fixtures.
@@ -45,4 +48,4 @@
 
 - Envelope budget PR #296 merged as d4cdcaecc4d034df020af7fbc22308e020767b1a after its foundation review.
 - Value persistence on `codex/metadata-value-storage`: paired `20261103090000_metadata_values.sql` migrations, `MetadataValueRepository` with SQLite and PostgreSQL adapters, purge clearing of incoming links with system attribution, and the move guard inside both `move_to` implementations. The `metadata_values` contract covers typed round trips, false versus missing, exact amounts, audit actors, case-sensitive uniqueness, uniqueness and kind changes on fields, retired fields and options, vault isolation, trash and purge, moves, concurrent edits, and outbox rollback. Verification runs in CI because local build capacity was exhausted.
-- Before metadata patches are exposed through routes, SSE replay must be scoped to the subscriber's vault or bounded by bytes, because value-change events can reach 1 MiB.
+- PR #520 bounded SSE replay to 8 MiB of complete stored payloads. It merged as b6839736900776dc962423854071634a536835ad after hosted workspace Clippy and tests, required SQLite/PostgreSQL replay regressions, and end-to-end tests passed.

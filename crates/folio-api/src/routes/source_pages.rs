@@ -91,13 +91,31 @@ async fn rows(
         let status = state.ingestion.managed.status(def.id).await?;
         rows.push(Row {
             deleted,
-            lifecycle_summary: def.lifecycle.as_ref().map(|m| match m.deleted_at {
-                Some(at) => format!("Deleted {}", at.format("%Y-%m-%d %H:%M UTC")),
-                None => format!(
-                    "Created {}, updated {}",
+            lifecycle_summary: def.lifecycle.as_ref().map(|m| {
+                let created_by = m
+                    .created_by
+                    .as_ref()
+                    .map(|actor| actor.as_str())
+                    .unwrap_or("System or unknown");
+                let updated_by = m
+                    .updated_by
+                    .as_ref()
+                    .map(|actor| actor.as_str())
+                    .unwrap_or("System or unknown");
+                let history = format!(
+                    "Created {} by {}, updated {} by {}",
                     m.created_at.format("%Y-%m-%d %H:%M UTC"),
-                    m.updated_at.format("%Y-%m-%d %H:%M UTC")
-                ),
+                    created_by,
+                    m.updated_at.format("%Y-%m-%d %H:%M UTC"),
+                    updated_by
+                );
+                match m.deleted_at {
+                    Some(at) => format!(
+                        "{history}, moved to Trash {}",
+                        at.format("%Y-%m-%d %H:%M UTC")
+                    ),
+                    None => history,
+                }
             }),
             id: def.id.to_string(),
             kind: match def.config {
@@ -712,6 +730,7 @@ impl From<folio_core::models::IngestOutcomeRecord> for OutcomeRow {
 #[derive(Template)]
 #[template(path = "source_outcomes.html")]
 struct OutcomesTemplate {
+    deleted: bool,
     sidebar: Sidebar,
     title: String,
     source_name: String,
@@ -735,7 +754,7 @@ async fn outcomes_page(
     if query.before.is_some_and(|id| id <= 0) || !(1..=100).contains(&query.limit) {
         return Err(ApiError::bad_request("Invalid outcome pagination"));
     }
-    let source = find(vault, &state, id).await?;
+    let source = find_retained(vault, &state, id).await?;
     let status = state.ingestion.managed.status(id).await?;
     let retry_path = match query.before {
         Some(before) => format!(
@@ -763,6 +782,10 @@ async fn outcomes_page(
         axum::http::StatusCode::OK
     };
     let html = render(OutcomesTemplate {
+        deleted: source
+            .lifecycle
+            .as_ref()
+            .is_some_and(|lifecycle| lifecycle.deleted_at.is_some()),
         sidebar: Sidebar::load(&state, vault, Nav::Settings).await?,
         title: format!("{} outcomes - Folio", source.name),
         source_name: source.name,

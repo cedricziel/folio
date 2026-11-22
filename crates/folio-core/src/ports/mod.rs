@@ -48,7 +48,7 @@ pub use push::{
 };
 pub use repository::{
     AuditLog, CorrespondentRepository, DocumentRepository, DocumentTypeRepository,
-    MembershipRepository, SettingsRepository, TagRepository, VaultRepository,
+    MembershipRepository, SettingsRepository, TagRepository, ThumbnailLocation, VaultRepository,
 };
 pub use saved_view::{SavedViewAccess, SavedViewRepository};
 pub use storage::{

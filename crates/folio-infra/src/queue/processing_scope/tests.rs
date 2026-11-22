@@ -678,8 +678,119 @@ async fn legacy_purge_requested_claim_cannot_adopt_a_group(db: &Database) {
     assert!(f.queue.context(job.id).await.unwrap().is_none());
 }
 
+fn revision_jobs(
+    document_id: Uuid,
+    revision_id: Uuid,
+) -> [(JobType, &'static str, serde_json::Value); 4] {
+    use folio_core::events::EventOrigin;
+    use serde_json::json;
+
+    [
+        (
+            JobType::ProcessDocumentRevision {
+                document_id,
+                revision_id,
+                force: true,
+            },
+            "process_document_revision",
+            json!({"type": "ProcessDocumentRevision", "data": {
+                "document_id": document_id, "revision_id": revision_id, "force": true
+            }}),
+        ),
+        (
+            JobType::GenerateRevisionThumbnail {
+                document_id,
+                revision_id,
+            },
+            "generate_revision_thumbnail",
+            json!({"type": "GenerateRevisionThumbnail", "data": {
+                "document_id": document_id, "revision_id": revision_id
+            }}),
+        ),
+        (
+            JobType::ExtractRevisionText {
+                document_id,
+                revision_id,
+                force: false,
+            },
+            "extract_revision_text",
+            json!({"type": "ExtractRevisionText", "data": {
+                "document_id": document_id, "revision_id": revision_id
+            }}),
+        ),
+        (
+            JobType::GenerateRevisionEmbedding {
+                document_id,
+                revision_id,
+                origin: EventOrigin::Import,
+            },
+            "generate_revision_embedding",
+            json!({"type": "GenerateRevisionEmbedding", "data": {
+                "document_id": document_id, "revision_id": revision_id, "origin": "import"
+            }}),
+        ),
+    ]
+}
+
+#[test]
+fn revision_job_payloads_are_distinct_from_legacy_jobs() {
+    use serde_json::json;
+
+    let document = Uuid::new_v4();
+    let revision = Uuid::new_v4();
+    for (job, type_name, payload) in revision_jobs(document, revision) {
+        assert_eq!(job.type_name(), type_name);
+        assert_eq!(serde_json::to_value(job).unwrap(), payload);
+        let decoded: JobType = serde_json::from_value(payload.clone()).unwrap();
+        assert_eq!(decoded.document_id(), Some(document));
+        assert_eq!(decoded.revision_id(), Some(revision));
+        assert_eq!(serde_json::to_value(decoded).unwrap(), payload);
+    }
+    let payload = json!({"type": "ProcessDocument", "data": {"document_id": document}});
+    let legacy: JobType = serde_json::from_value(payload.clone()).unwrap();
+    assert_eq!(legacy.document_id(), Some(document));
+    assert_eq!(legacy.revision_id(), None);
+    assert_eq!(serde_json::to_value(legacy).unwrap(), payload);
+
+    let missing_revision =
+        json!({"type": "ProcessDocumentRevision", "data": {"document_id": document}});
+    assert!(serde_json::from_value::<JobType>(missing_revision).is_err());
+}
+
+async fn revision_jobs_cannot_enqueue_or_prepare_until_fenced(db: &Database) {
+    let f = Fixture::new(db).await;
+    let revision = Uuid::new_v4();
+    let (job, _) = f.claim_root().await;
+
+    for (job_type, _, _) in revision_jobs(f.document, revision) {
+        assert!(matches!(
+            f.queue.enqueue(job_type.clone()).await,
+            Err(folio_core::Error::Conflict(_))
+        ));
+        let unsupported = Job {
+            job_type,
+            ..job.clone()
+        };
+        assert!(matches!(
+            prepare_claim(&f.queue, &unsupported).await,
+            Err(folio_core::Error::Conflict(_))
+        ));
+    }
+
+    assert_eq!(count(db, "SELECT COUNT(*) FROM jobs".into()).await, 1);
+    assert_eq!(
+        f.rows(&format!(
+            "group_id = '{}' AND is_current AND revision_id IS NULL",
+            job.id
+        ))
+        .await,
+        3
+    );
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
+    revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;
     legacy_claim_rejects_a_forged_in_memory_document(db).await;
     legacy_claim_rejects_a_forged_in_memory_job_type(db).await;

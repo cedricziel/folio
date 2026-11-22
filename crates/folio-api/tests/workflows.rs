@@ -67,6 +67,9 @@ async fn test_app_with_auth(auth_required: bool) -> TestApp {
         Vec::new(),
     );
     let state = AppState::new(
+        repos.metadata_fields,
+        repos.metadata_options,
+        repos.metadata_values,
         repos.saved_views,
         repos.documents,
         repos.entries,
@@ -491,6 +494,11 @@ async fn pages_render_and_the_form_creates_a_workflow() {
     let (status, html) = send(&app, "GET", "/workflows/new", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(html.contains("document.processed"));
+    for kind in ["note", "comment"] {
+        for transition in ["created", "updated", "deleted"] {
+            assert!(html.contains(&format!("document_{kind}.{transition}")));
+        }
+    }
 
     let form = "name=Home+Assistant&trigger=document.uploaded&enabled=on&mime_type=application%2Fpdf\
                 &webhook_url=http%3A%2F%2F192.168.1.5%3A8123%2Fhook&webhook_secret=s3&webhook_headers=X-A%3A+b";
@@ -722,6 +730,89 @@ async fn the_form_shows_and_edits_every_action() {
 }
 
 #[tokio::test]
+async fn workflow_management_pages_show_retained_actor_attribution_as_text() {
+    use folio_core::{models::UserId, mutation::with_actor};
+
+    let app = test_app().await;
+    let input = serde_json::from_value(workflow_body("http://127.0.0.1:1/unused")).unwrap();
+    let workflow = with_actor(
+        Some(UserId::from("creator<script>")),
+        app.state.workflow_repo.create(app.vault, input),
+    )
+    .await
+    .unwrap();
+    let mut edited = workflow_body("http://127.0.0.1:1/unused");
+    edited["name"] = json!("Edited workflow");
+    with_actor(
+        Some(UserId::from("editor")),
+        app.state.workflow_repo.update(
+            app.vault,
+            workflow.id,
+            serde_json::from_value(edited).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let (status, active) = send(&app, "GET", "/workflows", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        active.contains("by creator&lt;script&gt;")
+            || active.contains("by creator&#60;script&#62;")
+    );
+    assert!(active.contains("by editor"));
+    assert!(!active.contains("by creator<script>"));
+    let history_url = format!("/workflows/{}/history", workflow.id);
+    let (status, history) = send(&app, "GET", &history_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        history.contains("by creator&lt;script&gt;")
+            || history.contains("by creator&#60;script&#62;")
+    );
+    assert!(history.contains("by editor"));
+
+    with_actor(
+        Some(UserId::from("remover")),
+        app.state.workflow_repo.delete(app.vault, workflow.id),
+    )
+    .await
+    .unwrap();
+    let (status, trash) = send(&app, "GET", "/workflows?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        trash.contains("by creator&lt;script&gt;") || trash.contains("by creator&#60;script&#62;")
+    );
+    assert!(trash.contains("by remover"));
+    let (status, history) = send(&app, "GET", &history_url, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        history.contains("by creator&lt;script&gt;")
+            || history.contains("by creator&#60;script&#62;")
+    );
+    assert!(history.contains("by remover"));
+    assert!(history.contains(", deleted "));
+}
+
+#[tokio::test]
+async fn workflow_management_pages_label_unattributed_changes() {
+    let app = test_app().await;
+    let (_, created) = json_request(
+        &app,
+        "POST",
+        "/api/workflows",
+        Some(workflow_body("http://127.0.0.1:1/unused")),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let (status, page) = send(&app, "GET", "/workflows", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page.matches("by System or unknown").count(), 2);
+    let (status, history) = send(&app, "GET", &format!("/workflows/{id}/history"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history.matches("by System or unknown").count(), 2);
+}
+
+#[tokio::test]
 async fn workflow_trash_restore_and_retained_history_are_usable_from_management_pages() {
     let app = test_app().await;
     let mut input = workflow_body("http://127.0.0.1:1/unused");
@@ -811,4 +902,64 @@ async fn typed_event_conditions_survive_api_storage_and_html_edits() {
     let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored["conditions"], conditions);
+}
+
+#[tokio::test]
+async fn web_editor_creates_an_entry_workflow_with_occurrence_filters() {
+    let app = test_app().await;
+    let subject = Uuid::new_v4();
+    let form = format!(
+        "name=Comment+alert&trigger=document_comment.updated&enabled=on&event_actor=user&event_user_id=editor&event_subject_id={subject}&webhook_url=https%3A%2F%2Fexample.com%2Fhook"
+    );
+    let response = app
+        .router
+        .clone()
+        .oneshot(
+            Request::post("/workflows")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let id = response.headers()["location"]
+        .to_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap();
+    let (status, stored) = json_request(&app, "GET", &format!("/api/workflows/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stored["trigger"], "document_comment.updated");
+    assert_eq!(
+        stored["conditions"]["event"],
+        json!({
+            "subject_id": subject, "actor": {"type": "user", "user_id": "editor"}
+        })
+    );
+}
+
+#[tokio::test]
+async fn trigger_catalog_matches_workflow_choices_and_describes_entry_filters() {
+    let app = test_app().await;
+    let (status, json) = json_request(&app, "GET", "/api/workflows/triggers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = json.as_array().unwrap();
+    let (status, html) = send(&app, "GET", "/workflows/new", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(catalog.len(), WorkflowTrigger::ALL.len());
+    for choice in catalog {
+        let event_type = choice["event_type"].as_str().unwrap();
+        assert!(html.contains(&format!(r#"value="{event_type}""#)));
+        assert!(WorkflowTrigger::parse(event_type).is_some());
+        if event_type.starts_with("document_note.") || event_type.starts_with("document_comment.") {
+            assert_eq!(choice["target"], "document");
+            assert!(choice["condition_fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field["key"] == "event.subject_id"));
+        }
+    }
 }

@@ -103,7 +103,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             }
             let outcomes = try page.outcomes.map { row in
                 guard try Self.uuid(row.vaultId) == vaultID, try Self.uuid(row.sourceId) == sourceID,
-                      let result = SourceOutcome.Result(rawValue: row.outcome.rawValue)
+                    let result = SourceOutcome.Result(rawValue: row.outcome.rawValue)
                 else { throw FolioError.unreadableResponse }
                 return try SourceOutcome(
                     id: row.id, itemID: Self.uuid(row.itemId), attemptID: Self.uuid(row.attemptId),
@@ -127,10 +127,42 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 try LenientDateTranscoder().decode(decoder.singleValueContainer().decode(String.self))
             }
             guard let catalog = try? decoder.decode(VaultCatalog.self, from: data),
-                  let defaultID = catalog.defaultVaultID,
-                  catalog.vaults.contains(where: { $0.id == defaultID })
+                let defaultID = catalog.defaultVaultID,
+                catalog.vaults.contains(where: { $0.id == defaultID })
             else { throw FolioError.unreadableResponse }
             return catalog
+        }
+    }
+
+    func managementRequest(
+        path: String, method: String = "GET", body: Data? = nil, vaultID: UUID? = nil
+    ) async throws -> Data {
+        let scoped = LiveFolioService(
+            baseURL: baseURL, tokenProvider: tokenProvider, session: session, telemetry: telemetry,
+            downloadDirectory: downloadDirectory, vaultID: vaultID
+        )
+        return try await scoped.call("management.request") {
+            guard let url = URL(string: path, relativeTo: baseURL.appending(path: "/"))?.absoluteURL else {
+                throw FolioError.invalidServerURL
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = method
+            request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+            let (data, response) = try await scoped.authorizedTransfer(request) { try await session.data(for: $0) }
+            if let http = response as? HTTPURLResponse, http.statusCode == 403,
+                let challenge = http.value(forHTTPHeaderField: "WWW-Authenticate"),
+                challenge.contains("insufficient_scope"), challenge.contains("vaults:manage")
+            {
+                throw FolioError.server(
+                    status: 403,
+                    message:
+                        "Sign out and sign in again to allow this app to manage vaults. If the server does not offer this permission, update it first."
+                )
+            }
+            try scoped.check(response, body: data)
+            return data
         }
     }
 
@@ -201,6 +233,9 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         filters.searchQuery = draft.query.text
         filters.createdAfter = draft.query.filter.createdAfter
         filters.createdBefore = draft.query.filter.createdBefore
+        filters.reviewed = draft.query.filter.reviewed
+        filters.documentDateFrom = draft.query.filter.documentDateFrom?.rawValue
+        filters.documentDateTo = draft.query.filter.documentDateTo?.rawValue
         var query = Components.Schemas.SavedViewQuery(version: 1)
         query.filters = filters
         query.sort = .init(rawValue: draft.query.sort.rawValue)
@@ -212,8 +247,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
 
     private static func savedView(_ value: Components.Schemas.SavedView) throws -> SavedView {
         guard value.query.version == 1,
-              let visibility = SavedView.Visibility(rawValue: value.visibility.rawValue),
-              let presentation = SavedView.Presentation(rawValue: value.presentation.rawValue)
+            let visibility = SavedView.Visibility(rawValue: value.visibility.rawValue),
+            let presentation = SavedView.Presentation(rawValue: value.presentation.rawValue)
         else { throw FolioError.unreadableResponse }
         let filters = value.query.filters ?? .init()
         let query = try DocumentBrowseQuery(
@@ -222,7 +257,9 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 tagIDs: (filters.tagIds ?? []).map(Self.uuid),
                 correspondentID: filters.correspondentId.map(Self.uuid),
                 documentTypeID: filters.documentTypeId.map(Self.uuid),
-                createdAfter: filters.createdAfter, createdBefore: filters.createdBefore
+                createdAfter: filters.createdAfter, createdBefore: filters.createdBefore,
+                reviewed: filters.reviewed, documentDateFrom: Self.documentDate(filters.documentDateFrom),
+                documentDateTo: Self.documentDate(filters.documentDateTo)
             ), sort: .init(rawValue: value.query.sort?.rawValue ?? "newest") ?? .newest
         )
         return try SavedView(
@@ -233,7 +270,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         )
     }
 
-    public func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) async throws -> DocumentEntryPage {
+    public func entryPage(documentID: UUID, kind: DocumentEntryKind, cursor: String?) async throws -> DocumentEntryPage
+    {
         try await call("document_entries.list") {
             let page = try await client.listDocumentEntries(
                 path: .init(id: documentID.uuidString.lowercased()),
@@ -563,12 +601,12 @@ public struct LiveFolioService: FolioService, SourceActivityService {
                 data.append(byte)
             }
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  CGImageSourceGetType(source) as String? == UTType.jpeg.identifier,
-                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
-                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
-                  width > 0, height > 0, width <= 4_000_000 / height,
-                  CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) != nil
+                CGImageSourceGetType(source) as String? == UTType.jpeg.identifier,
+                let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                width > 0, height > 0, width <= 4_000_000 / height,
+                CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary) != nil
             else { throw FolioError.unreadableResponse }
             return data
         }
@@ -587,8 +625,8 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let filename = Self.safeFilename(document.originalFilename, mimeType: document.mimeType)
         let directory =
             downloadDirectory
-                ?? FileManager.default.temporaryDirectory
-                .appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
+            ?? FileManager.default.temporaryDirectory
+            .appending(path: "folio-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let ext = (filename as NSString).pathExtension
         let suffix = !ext.isEmpty && ext.utf8.count <= 32 ? "." + ext : ""
@@ -686,7 +724,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         let token = try await tokenProvider.token()
         let first = try await perform(signed(token))
         guard (first.1 as? HTTPURLResponse)?.statusCode == 401, let token,
-              let fresh = try await tokenProvider.refresh(rejecting: token)
+            let fresh = try await tokenProvider.refresh(rejecting: token)
         else { return first }
         return try await perform(signed(fresh))
     }
@@ -702,7 +740,7 @@ public struct LiveFolioService: FolioService, SourceActivityService {
         if http.statusCode == 401 {
             throw FolioError.signInRequired
         }
-        guard (200 ..< 300).contains(http.statusCode) else {
+        guard (200..<300).contains(http.statusCode) else {
             throw FolioError.server(status: http.statusCode, message: body().flatMap(ErrorMappingMiddleware.message))
         }
     }
@@ -722,13 +760,13 @@ public struct LiveFolioService: FolioService, SourceActivityService {
             return try await work()
         } catch let error as FolioError {
             throw error
-        } catch is URLError {
-            throw FolioError.unreachable
+        } catch let error as URLError {
+            throw FolioError(transport: error)
         } catch let error as ClientError {
             switch error.underlyingError {
             case let folio as FolioError: throw folio
             case let credentials as CredentialStoreError: throw credentials
-            case is URLError: throw FolioError.unreachable
+            case let url as URLError: throw FolioError(transport: url)
             default: throw FolioError.unreadableResponse
             }
         }

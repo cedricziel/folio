@@ -11,8 +11,6 @@ mod ollama_vision;
 mod openai_vision;
 mod tesseract;
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use tracing::{debug, warn};
 
@@ -64,77 +62,77 @@ pub(crate) trait PageEngine: Send + Sync + 'static {
 /// Turns a [`PageEngine`] into an [`OcrService`] that handles images and PDFs
 pub(crate) struct PageOcr<E>(pub E);
 
-#[async_trait]
-impl<E: PageEngine> OcrService for PageOcr<E> {
-    async fn extract(&self, data: &[u8], mime_type: &str) -> Result<OcrOutput> {
-        let engine = self.0.engine_id();
-
-        let images: Vec<(Vec<u8>, &str)> = if mime_type == "application/pdf" {
-            let format = self.0.page_format();
-            pdf::render_pages(data, PDF_RENDER_DPI, format)
-                .await?
-                .into_iter()
-                .map(|img| (img, format.mime_type()))
-                .collect()
-        } else if mime_type.starts_with("image/") {
-            vec![(data.to_vec(), mime_type)]
-        } else {
-            debug!("{engine}: nothing to recognise in {mime_type}");
-            return Ok(OcrOutput {
-                engine: engine.to_string(),
-                ..Default::default()
-            });
+impl<E: PageEngine> PageOcr<E> {
+    async fn extract_pdf(&self, data: &[u8]) -> Result<OcrOutput> {
+        let mut pages = match pdf::text_layer(data).await {
+            Ok(pages) => pages,
+            Err(error) => {
+                warn!("Could not read PDF text layer: {error}");
+                Vec::new()
+            }
         };
-
-        let mut pages = Vec::with_capacity(images.len());
-        let mut confidences = Vec::new();
-        for (image, mime) in &images {
-            let page = self.0.recognize(image, mime).await?;
-            confidences.extend(page.confidence);
-            pages.push(page.text);
+        let needs_ocr = pages
+            .iter()
+            .enumerate()
+            .filter(|(_, page)| !pdf::has_meaningful_text(page))
+            .map(|(index, _)| index as u32 + 1)
+            .collect::<Vec<_>>();
+        let has_page_map = !pages.is_empty();
+        if has_page_map && needs_ocr.is_empty() {
+            return Ok(OcrOutput::from_pages("pdftotext", pages));
         }
 
-        let mut output = OcrOutput::from_pages(engine, pages);
+        let format = self.0.page_format();
+        let images = pdf::render_pages(
+            data,
+            PDF_RENDER_DPI,
+            format,
+            has_page_map.then_some(needs_ocr.as_slice()),
+        )
+        .await?;
+        let mut confidences = Vec::new();
+        for (index, image) in images.into_iter().enumerate() {
+            let page = self.0.recognize(&image, format.mime_type()).await?;
+            confidences.extend(page.confidence);
+            if has_page_map {
+                pages[needs_ocr[index] as usize - 1] = page.text;
+            } else {
+                pages.push(page.text);
+            }
+        }
+
+        let mut output = OcrOutput::from_pages(self.0.engine_id(), pages);
         if !confidences.is_empty() {
             output.confidence = Some(confidences.iter().sum::<f32>() / confidences.len() as f32);
         }
         Ok(output)
     }
-
-    async fn health(&self) -> Result<()> {
-        self.0.health().await
-    }
-}
-
-/// Uses a PDF's embedded text layer when it is substantial, otherwise defers to `inner`
-pub struct TextLayerFirst {
-    inner: Arc<dyn OcrService>,
-}
-
-impl TextLayerFirst {
-    pub fn new(inner: Arc<dyn OcrService>) -> Self {
-        Self { inner }
-    }
 }
 
 #[async_trait]
-impl OcrService for TextLayerFirst {
+impl<E: PageEngine> OcrService for PageOcr<E> {
     async fn extract(&self, data: &[u8], mime_type: &str) -> Result<OcrOutput> {
         if mime_type == "application/pdf" {
-            match pdf::text_layer(data).await {
-                Ok(pages) if pdf::has_meaningful_text(&pages) => {
-                    debug!("Using embedded PDF text layer, skipping OCR");
-                    return Ok(OcrOutput::from_pages("pdftotext", pages));
-                }
-                Ok(_) => {}
-                Err(e) => warn!("Could not read PDF text layer: {e}"),
-            }
+            return self.extract_pdf(data).await;
         }
-        self.inner.extract(data, mime_type).await
+
+        let engine = self.0.engine_id();
+        if mime_type.starts_with("image/") {
+            let page = self.0.recognize(data, mime_type).await?;
+            let mut output = OcrOutput::from_pages(engine, vec![page.text]);
+            output.confidence = page.confidence;
+            return Ok(output);
+        }
+
+        debug!("{engine}: nothing to recognise in {mime_type}");
+        Ok(OcrOutput {
+            engine: engine.to_string(),
+            ..Default::default()
+        })
     }
 
     async fn health(&self) -> Result<()> {
-        self.inner.health().await
+        self.0.health().await
     }
 }
 
@@ -143,12 +141,17 @@ mod tests {
     use super::*;
     use crate::ai::pdf::tests::{tiny_pdf, tool_available};
     use folio_core::error::Error;
+    use std::sync::Arc;
 
     struct Failing;
 
     #[async_trait]
-    impl OcrService for Failing {
-        async fn extract(&self, _: &[u8], _: &str) -> Result<OcrOutput> {
+    impl PageEngine for Failing {
+        fn engine_id(&self) -> &'static str {
+            "failing"
+        }
+
+        async fn recognize(&self, _: &[u8], _: &str) -> Result<PageText> {
             Err(Error::AiService("engine must not run".into()))
         }
         async fn health(&self) -> Result<()> {
@@ -159,13 +162,64 @@ mod tests {
     struct Fixed(&'static str);
 
     #[async_trait]
-    impl OcrService for Fixed {
-        async fn extract(&self, _: &[u8], _: &str) -> Result<OcrOutput> {
-            Ok(OcrOutput::from_pages("fixed", vec![self.0.to_string()]))
+    impl PageEngine for Fixed {
+        fn engine_id(&self) -> &'static str {
+            "fixed"
+        }
+
+        async fn recognize(&self, _: &[u8], _: &str) -> Result<PageText> {
+            Ok(PageText {
+                text: self.0.to_string(),
+                confidence: None,
+            })
         }
         async fn health(&self) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[derive(Default)]
+    struct CountingEngine(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl PageEngine for Arc<CountingEngine> {
+        fn engine_id(&self) -> &'static str {
+            "counting"
+        }
+
+        async fn recognize(&self, _: &[u8], _: &str) -> Result<PageText> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(PageText {
+                text: "scan result".into(),
+                confidence: Some(0.75),
+            })
+        }
+
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_pdf_sends_only_the_scan_to_ocr_in_page_order() {
+        for tool in ["pdftotext", "pdftoppm"] {
+            if !tool_available(tool) {
+                assert!(std::env::var_os("CI").is_none(), "CI must install {tool}");
+                eprintln!("skipping: {tool} not installed");
+                return;
+            }
+        }
+        let engine = Arc::new(CountingEngine::default());
+        let ocr = PageOcr(engine.clone());
+        let pdf = include_bytes!("../../../tests/fixtures/mixed-digital-scan.pdf");
+        let output = ocr.extract(pdf, "application/pdf").await.unwrap();
+        assert_eq!(engine.0.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(output.pages.len(), 5);
+        assert!(output.pages[1].starts_with("Page 2 "));
+        assert_eq!(output.pages[2], "scan result");
+        assert!(output.pages[3].starts_with("Page 4 "));
+        assert_eq!(output.engine, "counting");
+        assert_eq!(output.confidence, Some(0.75));
     }
 
     #[tokio::test]
@@ -174,7 +228,7 @@ mod tests {
             eprintln!("skipping: pdftotext not installed");
             return;
         }
-        let ocr = TextLayerFirst::new(Arc::new(Failing));
+        let ocr = PageOcr(Failing);
         let out = ocr
             .extract(
                 &tiny_pdf("Invoice number 4711 for Folio"),
@@ -188,18 +242,20 @@ mod tests {
 
     #[tokio::test]
     async fn pdf_without_text_falls_through_to_the_engine() {
-        if !tool_available("pdftotext") {
-            eprintln!("skipping: pdftotext not installed");
-            return;
+        for tool in ["pdftotext", "pdftoppm"] {
+            if !tool_available(tool) {
+                eprintln!("skipping: {tool} not installed");
+                return;
+            }
         }
-        let ocr = TextLayerFirst::new(Arc::new(Fixed("scanned")));
+        let ocr = PageOcr(Fixed("scanned"));
         let out = ocr.extract(&tiny_pdf(""), "application/pdf").await.unwrap();
         assert_eq!(out.engine, "fixed");
     }
 
     #[tokio::test]
     async fn non_pdf_goes_straight_to_the_engine() {
-        let ocr = TextLayerFirst::new(Arc::new(Fixed("img")));
+        let ocr = PageOcr(Fixed("img"));
         assert_eq!(ocr.extract_text(b"x", "image/png").await.unwrap(), "img");
     }
 
@@ -217,11 +273,14 @@ mod tests {
         }
         ocr.health().await.unwrap();
         let out = ocr
-            .extract(&tiny_pdf("Folio invoice reference 4711"), "application/pdf")
+            .extract(
+                include_bytes!("../../../tests/fixtures/mixed-digital-scan.pdf"),
+                "application/pdf",
+            )
             .await
             .unwrap();
         assert_eq!(out.engine, "ocrmypdf");
-        assert!(out.text.contains("4711"), "{}", out.text);
+        assert!(out.text.contains("Cobalt Orchard 9716"), "{}", out.text);
         ctx.settings.ocr.languages = "eng+folio_missing_language".into();
         let unavailable = builtin().create("ocrmypdf", &ctx).unwrap();
         assert!(unavailable

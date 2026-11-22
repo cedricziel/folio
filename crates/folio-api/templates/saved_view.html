@@ -5,7 +5,6 @@
 <section class="page">
   <header class="page-head"><h1 class="title">{% if is_saved %}{{ name }}{% else %}Save a view{% endif %}</h1><p class="lede">Keep a search, its filters, and how you prefer to browse.</p></header>
   <p><a href="{{ "/saved-views"|vault_url }}">All saved views</a></p>
-  {% if let Some(message) = query_error %}<p role="alert" class="f-status f-status-failed">{{ message }}. Edit the filters to use this view again.</p>{% endif %}
   {% if can_edit %}
   <details {% if !is_saved %}open{% endif %}>
     <summary>{% if is_saved %}Edit saved view{% else %}View details{% endif %}</summary>
@@ -37,15 +36,19 @@
   {% endif %}
   {% endif %}
   <h2 class="heading">Documents</h2>
+  <div id="saved-view-results" data-controller="live-list" data-action="turbo:before-stream-render@document->live-list#invalidate">
+  {% if let Some(message) = query_error %}<p role="alert" class="f-status f-status-failed">{{ message }}. Edit the filters to use this view again.</p>{% endif %}
   {% if rows.is_empty() && query_error.is_none() %}<p class="lede">No documents match this view.</p>{% endif %}
   <div class="{% if presentation == "grid" %}saved-view-grid{% else %}f-list{% endif %}">
     {% for row in rows %}
-    <a class="f-row" href="{{ "/documents"|vault_url }}/{{ row.id }}" data-turbo-frame="_top">
+    <a id="document-{{ row.id }}"
+       class="f-row" href="{{ row.id|document_href }}" data-turbo-frame="_top">
       {% if presentation == "grid" %}<img loading="lazy" class="saved-view-preview" src="{{ "/documents"|vault_url }}/{{ row.id }}/thumbnail" alt="">{% endif %}
       <div class="row-main"><h3 class="f-row-title">{{ row.title }}</h3><p class="f-row-sub">{{ row.subline() }}</p><span class="f-meta">{{ row.date }}</span></div>
     </a>
     {% endfor %}
   </div>
   {% if is_saved && !next.is_empty() %}<p><a class="f-btn" href="{{ "/saved-views"|vault_url }}/{{ id }}?cursor={{ next }}">More documents</a></p>{% endif %}
+  </div>
 </section>
 {% endblock %}

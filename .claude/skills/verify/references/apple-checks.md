@@ -57,6 +57,8 @@ refreshes. `OAuthRecoveryTests` checks concurrent sessions, failed token persist
 stale writes after sign-out or another sign-in, offline retry, and lost responses.
 `OAuthRefreshLockTests` uses temporary files to verify exclusion, cancellation,
 and lock release after failure.
+`OAuthTransientRefreshTests` checks credential recovery after transient token
+errors, definitive refusals, and multiple callers sharing a stalled refresh.
 
 On an isolated macOS test account, check startup with unavailable credentials,
 retry after access recovers, and reauthentication after expiry. Confirm that
@@ -147,7 +149,7 @@ Lint changed Swift files with `xcrun swift-format lint --strict`. A package test
 
 `EnumerationTests` checks folder deletions, working-set aliases after restart, classification changes, taxonomy renames, unchanged snapshots, expired anchors, and a consistent initial snapshot. It stores fingerprints under a fresh temporary directory and removes it after each test. Production retains at most 32 snapshots per domain/container cache directory.
 
-`DownloadTests` passes the fixture PDF through `fetchContents`, opens it with PDFKit, reopens it, and verifies that missing server contents produce `noSuchItem`. It also cancels a stalled transfer through the returned `Progress`, checks that the request stops and Files receives `NSUserCancelledError`, then opens a fresh copy. `ProviderErrorTests` covers supported error domains. For device-only failures, filter Console for subsystem `com.cedricziel.folio.fileprovider` and category `transfer`; reproduce one open and inspect the phase, HTTP status, and mapped error code. These diagnostics exclude filenames, credentials, and response bodies. Callback tests do not establish that a reported device failure is fixed.
+`DownloadTests` passes the fixture PDF through `fetchContents`, opens it with PDFKit, reopens it, and verifies that missing server contents produce `noSuchItem`. It also cancels a stalled transfer through the returned `Progress`, checks that the request stops and Files receives `NSUserCancelledError`, then opens a fresh copy. `ProviderErrorTests` covers supported error domains. It checks that certificate failures use the File Provider connection code and preserve the cause. For device-only failures, filter Console for subsystem `com.cedricziel.folio.fileprovider` and category `transfer`; reproduce one open and inspect the phase, HTTP status, and mapped error code. These diagnostics exclude filenames, credentials, and response bodies. Callback tests do not establish that a reported device failure is fixed.
 
 ## Verify Apple saved views
 

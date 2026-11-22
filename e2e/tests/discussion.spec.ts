@@ -18,8 +18,8 @@ for (const width of [1280, 390]) {
       const title = uniqueTitle("discussion");
       await uploadViaUi(page, title);
       await page.getByRole("link", { name: new RegExp(title) }).click();
-      await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}$/);
-      const documentID = page.url().split("/").at(-1)!;
+      await expect(page).toHaveURL(/\/documents\/[0-9a-f-]{36}(\?.*)?$/);
+      const documentID = new URL(page.url()).pathname.split("/").at(-1)!;
       await loadDiscussion(page);
       const notes = page.locator("#document-notes");
       await notes.scrollIntoViewIfNeeded();

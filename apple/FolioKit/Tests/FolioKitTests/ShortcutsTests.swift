@@ -438,7 +438,8 @@ struct ShortcutErrorTests {
     @Test(arguments: [
         (FolioError.unreachable as any Error, "Couldn't reach your Folio server. Check the connection and try again."),
         (FolioError.signInRequired, ShortcutError.notSignedIn.message),
-        (FolioError.server(status: 500, message: nil), "The server answered with status 500."),
+        (FolioError.server(status: 503, message: nil), "The server had a problem. Try again later."),
+        (FolioError.server(status: 404, message: nil), "The server answered with status 404."),
         (FolioError.server(status: 400, message: "File too large"), "File too large"),
         (ShortcutFailure.noDocuments, "There are no documents in Folio yet."),
         (ShortcutFailure.unreadableFile("a.pdf"), "Couldn't read a.pdf."),

@@ -8,7 +8,10 @@ use tracing::{debug, error};
 
 use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
-use crate::models::{WebhookDocument, WebhookPayload, WorkflowRun, WorkflowTrigger};
+use crate::models::{
+    WebhookDocument, WebhookEntry, WebhookPayload, WorkflowRun, WorkflowTarget, WorkflowTrigger,
+    WorkflowTriggerRegistry,
+};
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
     WorkflowRepository,
@@ -72,42 +75,90 @@ impl WorkflowEngine {
     /// is returned once all were tried, so the dispatcher retries the event;
     /// runs created in the meantime are not duplicated.
     pub async fn handle(&self, outbox_event: &OutboxEvent) -> Result<Vec<WorkflowRun>> {
-        if outbox_event
+        if matches!(
+            outbox_event.origin,
+            EventOrigin::Workflow | EventOrigin::Import
+        ) || outbox_event
             .envelope
             .as_ref()
             .is_some_and(|envelope| envelope.audience() != &crate::EventAudience::Vault)
         {
             return Ok(Vec::new());
         }
-        let (trigger, document_id, ctx, occurred_at) = if let Some(event) = &outbox_event.event {
-            let Some(trigger) = Self::trigger_for(event) else {
-                return Ok(Vec::new());
-            };
+        let legacy = outbox_event.event.as_ref().and_then(Self::trigger_for);
+        let envelope_type = outbox_event
+            .envelope
+            .as_ref()
+            .map(DomainEventEnvelope::event_type);
+        let candidates = WorkflowTriggerRegistry::built_in()
+            .resolve_candidates(envelope_type, legacy.as_ref().map(WorkflowTrigger::as_str));
+        let mut runs = Vec::new();
+        let mut first_error = None;
+        for definition in candidates {
+            let trigger = WorkflowTrigger::parse(&definition.event_type)
+                .expect("built-in trigger has a wire name");
+            match self
+                .handle_candidate(outbox_event, trigger, legacy == Some(trigger))
+                .await
+            {
+                Ok(candidate_runs) => runs.extend(candidate_runs),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(runs), Err)
+    }
+
+    async fn handle_candidate(
+        &self,
+        outbox_event: &OutboxEvent,
+        trigger: WorkflowTrigger,
+        use_projection: bool,
+    ) -> Result<Vec<WorkflowRun>> {
+        let (document_id, vault, snapshot, occurred_at) = if use_projection {
+            let event = outbox_event
+                .event
+                .as_ref()
+                .expect("legacy trigger has a projection");
+            let ctx = self.load_context(outbox_event, event).await?;
             (
-                trigger,
                 event.document_id(),
-                self.load_context(outbox_event, event).await?,
+                ctx.vault_id,
+                Some(ctx),
                 outbox_event.created_at,
             )
         } else if let Some(envelope) = &outbox_event.envelope {
-            let Some(trigger) = WorkflowTrigger::parse(envelope.event_type()) else {
-                return Ok(Vec::new());
-            };
-            if !matches!(
+            if trigger.entry_transition().is_some() {
+                let Some(document_id) = envelope.document_id() else {
+                    return Ok(Vec::new());
+                };
+                (
+                    document_id,
+                    envelope.vault_id(),
+                    None,
+                    envelope.occurred_at(),
+                )
+            } else if matches!(
                 trigger,
                 WorkflowTrigger::DocumentTitleChanged
                     | WorkflowTrigger::DocumentTagsChanged
                     | WorkflowTrigger::DocumentCorrespondentChanged
                     | WorkflowTrigger::DocumentTypeChanged
             ) {
+                let ctx = Self::metadata_context(envelope)?;
+                (
+                    ctx.document_id,
+                    ctx.vault_id,
+                    Some(ctx),
+                    envelope.occurred_at(),
+                )
+            } else {
                 return Ok(Vec::new());
             }
-            let ctx = Self::metadata_context(envelope)?;
-            (trigger, ctx.document_id, ctx, envelope.occurred_at())
         } else {
             return Ok(Vec::new());
         };
-        let vault = ctx.vault_id;
         if outbox_event
             .envelope
             .as_ref()
@@ -115,7 +166,7 @@ impl WorkflowEngine {
         {
             return Ok(Vec::new());
         }
-        if trigger != WorkflowTrigger::DocumentDeleted
+        if trigger.target() == WorkflowTarget::Document
             && self.documents.locate(document_id).await? != Some(vault)
         {
             debug!(
@@ -130,8 +181,12 @@ impl WorkflowEngine {
         let mut first_error: Option<Error> = None;
         for workflow in candidates {
             let matches = match &outbox_event.envelope {
-                Some(event) => workflow.conditions.matches_occurrence(Some(&ctx), event),
-                None => workflow.conditions.matches_snapshot(&ctx),
+                Some(event) => workflow
+                    .conditions
+                    .matches_occurrence(snapshot.as_ref(), event),
+                None => snapshot
+                    .as_ref()
+                    .is_some_and(|ctx| workflow.conditions.matches_snapshot(ctx)),
             };
             if !matches {
                 continue;
@@ -140,14 +195,20 @@ impl WorkflowEngine {
                 let body = match &payload_json {
                     Some(body) => body.clone(),
                     None => {
-                        let body = self
-                            .build_payload(
-                                trigger,
-                                &ctx,
-                                occurred_at,
-                                outbox_event.envelope.as_ref(),
-                            )
-                            .await?;
+                        let envelope = outbox_event.envelope.as_ref();
+                        let body = if let Some(ctx) = &snapshot {
+                            self.build_payload(trigger, ctx, occurred_at, envelope)
+                                .await?
+                        } else {
+                            let payload = envelope
+                                .and_then(|source| Self::entry_payload(trigger, source))
+                                .ok_or_else(|| {
+                                    Error::Repository("Invalid workflow entry occurrence".into())
+                                })?;
+                            serde_json::to_string(&payload).map_err(|e| {
+                                Error::Repository(format!("Failed to encode payload: {e}"))
+                            })?
+                        };
                         payload_json = Some(body.clone());
                         body
                     }
@@ -181,6 +242,43 @@ impl WorkflowEngine {
             Some(e) => Err(e),
             None => Ok(runs),
         }
+    }
+
+    fn entry_payload(
+        trigger: WorkflowTrigger,
+        source: &DomainEventEnvelope,
+    ) -> Option<WebhookPayload> {
+        let (entry_kind, transition) = trigger.entry_transition()?;
+        let subject = source.subject();
+        let expected_subject = match entry_kind {
+            crate::models::EntryKind::Note => "document_note",
+            crate::models::EntryKind::Comment => "document_comment",
+        };
+        let data = source.data();
+        if subject.subject_type != expected_subject
+            || data["entry_kind"].as_str() != Some(entry_kind.as_str())
+            || data["transition"].as_str() != Some(transition)
+            || data["entry_id"]
+                .as_str()
+                .and_then(|id| uuid::Uuid::parse_str(id).ok())
+                != Some(subject.id)
+        {
+            return None;
+        }
+        Some(WebhookPayload::for_entry(
+            trigger,
+            source.occurred_at(),
+            WebhookEntry {
+                entry_id: subject.id,
+                document_id: source.document_id()?,
+                vault_id: source.vault_id(),
+                entry_kind,
+                transition: transition.into(),
+                actor_id: source.actor_id().cloned(),
+                causation_id: source.causation_id(),
+            },
+            Some(source.into()),
+        ))
     }
 
     fn metadata_context(envelope: &DomainEventEnvelope) -> Result<EventSnapshot> {
@@ -268,9 +366,6 @@ impl WorkflowEngine {
 #[async_trait]
 impl EventConsumer for WorkflowEngine {
     async fn consume(&self, event: &OutboxEvent) -> Result<()> {
-        if matches!(event.origin, EventOrigin::Workflow | EventOrigin::Import) {
-            return Ok(());
-        }
         self.handle(event).await.map(|_| ())
     }
 }
