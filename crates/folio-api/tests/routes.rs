@@ -1227,6 +1227,7 @@ async fn revision_history_lists_metadata_and_downloads_the_original() {
     h.state.document_repo.delete(h.vault, doc.id).await.unwrap();
     let response = h
         .router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(&download)
