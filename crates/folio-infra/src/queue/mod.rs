@@ -370,6 +370,15 @@ impl JobQueue {
         )
     }
 
+    pub(super) async fn repair_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        stage: folio_core::models::ProcessingStage,
+    ) -> Result<bool> {
+        dispatch!(self, repair_current_processing(vault, document_id, stage))
+    }
+
     /// Re-embed documents whose current OCR text is ready, without inheriting the settings trace.
     pub async fn reembed_documents(&self) -> Result<usize> {
         dispatch!(self, reembed_documents())

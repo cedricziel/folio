@@ -1065,8 +1065,31 @@ fn requested_processing_binds_the_current_revision_when_available() {
     ));
 }
 
+async fn repair_enqueues_only_for_live_idle_pending_work(db: &Database) {
+    use folio_core::models::ProcessingStage;
+
+    let f = Fixture::new(db).await;
+    let docs = db.repositories().await.documents;
+    let repair = || {
+        f.queue
+            .repair_current_processing(f.vault, f.document, ProcessingStage::Ocr)
+    };
+    assert!(!repair().await.unwrap());
+    docs.set_file_path(f.vault, f.document, "original")
+        .await
+        .unwrap();
+    assert!(repair().await.unwrap());
+    assert!(!repair().await.unwrap());
+    assert_eq!(f.rows("is_current").await, 3);
+
+    execute(db, format!("UPDATE jobs SET status = 'completed'; UPDATE documents SET ocr_status = 'done' WHERE id = '{}';", f.document)).await;
+    assert!(!repair().await.unwrap());
+    assert_eq!(f.rows("is_current").await, 3);
+}
+
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
+    repair_enqueues_only_for_live_idle_pending_work(db).await;
     revision_jobs_cannot_enqueue_or_prepare_until_fenced(db).await;
     revision_enqueue_plan_seeds_only_the_current_revision(db).await;
     partial_supersession_keeps_the_current_parent_stage_live(db).await;

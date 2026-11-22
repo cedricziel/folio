@@ -203,6 +203,72 @@ impl PostgresJobQueue {
             .await
     }
 
+    pub(super) async fn repair_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        stage: folio_core::models::ProcessingStage,
+    ) -> Result<bool> {
+        use folio_core::models::ProcessingStage;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to repair pending processing"))?;
+        let document = super::processing_scope::postgres::document(&mut tx, document_id).await?;
+        let request = match super::processing_scope::bind_requested_processing(
+            document.as_ref(),
+            vault,
+            document_id,
+            false,
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let ready: bool = sqlx::query_scalar(
+            "SELECT (CASE WHEN $2 THEN d.ocr_status = 'pending' AND d.file_path IS NOT NULL
+                      ELSE d.embed_status = 'pending' AND d.content IS NOT NULL AND d.content <> ''
+                           AND d.ocr_status NOT IN ('pending', 'running')
+                     END)
+                AND NOT EXISTS (
+                    SELECT 1 FROM jobs j
+                    WHERE j.status IN ('pending', 'processing')
+                      AND j.payload->'data'->>'document_id' = d.id::text
+                      AND (j.origin_vault_id IS NULL OR j.origin_vault_id = d.vault_id)
+                )
+             FROM documents d WHERE d.id = $1",
+        )
+        .bind(document_id)
+        .bind(stage == ProcessingStage::Ocr)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err("Failed to repair pending processing"))?;
+        if !ready {
+            return Ok(false);
+        }
+
+        let job = match stage {
+            ProcessingStage::Ocr => request,
+            ProcessingStage::Embed => {
+                JobType::embedding_for_revision(document_id, request.revision_id())
+            }
+        };
+        insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            super::JobTraceContext::current().as_ref(),
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to repair pending processing"))?;
+        Ok(true)
+    }
+
     pub(super) async fn enqueue_current_processing(
         &self,
         vault: folio_core::models::VaultId,
