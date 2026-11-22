@@ -2135,8 +2135,11 @@ dependencies = [
  "folio-core",
  "folio-infra",
  "folio-mcp",
+ "futures",
  "reqwest 0.13.5",
+ "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

@@ -1,12 +1,16 @@
 //! Folio Application - Main entry point
 
 mod healthcheck;
+mod shutdown;
 
+use std::future::IntoFuture;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use folio_api::{create_router, AppState, AuthState, IngestionState};
@@ -191,8 +195,8 @@ async fn main() -> Result<()> {
 
     info!("Services initialized");
 
-    // Create shutdown channel for worker
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut background = JoinSet::new();
 
     // Start background worker
     let worker = Worker::new(
@@ -209,11 +213,10 @@ async fn main() -> Result<()> {
     )
     .with_workflow_runner(workflow_runner);
 
-    // Stops on its own when the shutdown signal flips
-    tokio::spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
+    background.spawn(ingest_scheduler.run(shutdown_tx.subscribe()));
 
     let (sized_documents, sized_store) = (document_repo.clone(), store.clone());
-    tokio::spawn(async move {
+    background.spawn(async move {
         match backfill_file_sizes(sized_documents.as_ref(), sized_store.as_ref(), 200).await {
             Ok(0) => {}
             Ok(recorded) => info!("Recorded the file size of {recorded} documents"),
@@ -228,7 +231,7 @@ async fn main() -> Result<()> {
         }
     });
 
-    let worker_handle = tokio::spawn(async move {
+    background.spawn(async move {
         worker.run(shutdown_rx).await;
     });
 
@@ -310,8 +313,8 @@ async fn main() -> Result<()> {
         ],
         DispatcherConfig::default(),
     ));
-    tokio::spawn(dispatcher.run(shutdown_tx.subscribe()));
-    tokio::spawn(
+    background.spawn(dispatcher.run(shutdown_tx.subscribe()));
+    background.spawn(
         push_sender
             .clone()
             .run(push_wake.clone(), shutdown_tx.subscribe()),
@@ -319,7 +322,8 @@ async fn main() -> Result<()> {
 
     if matches!(mode, Mode::McpStdio) {
         let served = folio_mcp::serve_stdio(library, vault_service.clone()).await;
-        stop_worker(shutdown_tx, worker_handle).await;
+        shutdown_tx.send_replace(true);
+        shutdown::wait_for_background(background).await;
         return served.map_err(|e| anyhow::anyhow!(e));
     }
 
@@ -485,11 +489,18 @@ async fn main() -> Result<()> {
             folio_auth::require_bearer,
         ));
     let upload_tasks = state.upload_tasks.clone();
-    tokio::spawn(sweep_upload_receipts(
+    background.spawn(sweep_upload_receipts(
         state.keyed_uploads.clone(),
         shutdown_tx.subscribe(),
     ));
-    let app = create_router(state, auth.clone()).merge(mcp);
+    let cancellation = CancellationToken::new();
+    let app =
+        create_router(state, auth.clone())
+            .merge(mcp)
+            .layer(axum::middleware::from_fn_with_state(
+                cancellation.clone(),
+                shutdown::close_event_streams,
+            ));
 
     // Start server
     let addr = format!("{}:{}", config.server.host, config.server.port);
@@ -499,30 +510,43 @@ async fn main() -> Result<()> {
 
     info!("🚀 Folio is running at http://{}", addr);
 
-    // Run server with graceful shutdown
     let maintenance = auth.spawn_maintenance();
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal());
+    .with_graceful_shutdown(cancellation.clone().cancelled_owned())
+    .into_future();
+    tokio::pin!(server);
 
-    if let Err(e) = server.await {
+    let result = tokio::select! {
+        result = &mut server => Some(result),
+        () = shutdown_signal() => None,
+    };
+    cancellation.cancel();
+    shutdown_tx.send_replace(true);
+    let result = match result {
+        Some(result) => Some(result),
+        None => shutdown::drain_http(server).await,
+    };
+    if let Some(Err(e)) = result {
         tracing::error!("Server error: {}", e);
     }
 
     maintenance.abort();
-    // Keyed uploads still running finish and record their receipt, so a retry after the restart replays them.
+    let _ = maintenance.await;
+    // Let keyed uploads record their receipts so retries can replay them after a restart.
     upload_tasks.close();
-    if tokio::time::timeout(std::time::Duration::from_secs(30), upload_tasks.wait())
-        .await
-        .is_err()
-    {
-        tracing::warn!(
-            "Stopping with uploads still running; their keys can be retried once they go stale"
-        );
-    }
-    stop_worker(shutdown_tx, worker_handle).await;
+    tokio::join!(shutdown::wait_for_background(background), async {
+        if tokio::time::timeout(Duration::from_secs(30), upload_tasks.wait())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "Stopping with uploads still running; their keys can be retried once they go stale"
+            );
+        }
+    },);
 
     info!("Folio shutdown complete");
 
@@ -536,7 +560,7 @@ async fn sweep_upload_receipts(
     uploads: Arc<folio_core::services::IdempotentUploads>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+    let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
     loop {
         tokio::select! {
             _ = interval.tick() => match uploads.sweep(chrono::Utc::now()).await {
@@ -547,13 +571,6 @@ async fn sweep_upload_receipts(
             _ = shutdown.changed() => return,
         }
     }
-}
-
-/// Signal the background worker to stop and wait for it, with a timeout
-async fn stop_worker(shutdown_tx: watch::Sender<bool>, worker_handle: JoinHandle<()>) {
-    info!("Shutting down background worker...");
-    let _ = shutdown_tx.send(true);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), worker_handle).await;
 }
 
 /// Shutdown signal handler for graceful termination
