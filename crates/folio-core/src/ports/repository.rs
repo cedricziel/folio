@@ -64,6 +64,10 @@ pub trait DocumentRepository: Send + Sync {
         revision_id: Id,
     ) -> Result<Option<DocumentRevision>>;
 
+    /// Latest committed thumbnail prefix in this live document's active vault, including prior runs.
+    /// Returns `None` when only legacy thumbnail storage exists or the document is unavailable.
+    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>>;
+
     /// List all documents with optional filtering
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;
 

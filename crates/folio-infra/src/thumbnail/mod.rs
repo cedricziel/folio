@@ -46,6 +46,34 @@ impl ThumbnailService {
         mime_type: &str,
         text_content: Option<&str>,
     ) -> Result<String> {
+        self.generate_to_key(keys::thumbnail(document_id), data, mime_type, text_content)
+            .await
+    }
+
+    /// Generate a thumbnail beneath an immutable processing-attempt namespace.
+    pub async fn generate_at(
+        &self,
+        prefix: &str,
+        data: &[u8],
+        mime_type: &str,
+        text_content: Option<&str>,
+    ) -> Result<String> {
+        self.generate_to_key(
+            format!("{prefix}/thumbnail.jpg"),
+            data,
+            mime_type,
+            text_content,
+        )
+        .await
+    }
+
+    async fn generate_to_key(
+        &self,
+        key: String,
+        data: &[u8],
+        mime_type: &str,
+        text_content: Option<&str>,
+    ) -> Result<String> {
         let thumbnail_data = if mime_type.starts_with("image/") {
             self.generate_image_thumbnail(data)?
         } else if mime_type == "application/pdf" {
@@ -58,9 +86,7 @@ impl ThumbnailService {
             ));
         };
 
-        let key = keys::thumbnail(document_id);
         self.store.put(&key, thumbnail_data.into()).await?;
-
         debug!("Generated thumbnail: {}", key);
         Ok(key)
     }
@@ -246,6 +272,17 @@ impl ThumbnailService {
     /// Generate a page thumbnail for a PDF on local disk and return its object key
     #[instrument(skip(self, page), fields(page = i64::from(page)))]
     pub async fn generate_page(&self, document_id: Uuid, pdf: &Path, page: u32) -> Result<String> {
+        self.generate_page_to_key(keys::page(document_id, page), pdf, page)
+            .await
+    }
+
+    /// Generate a PDF page beneath an immutable processing-attempt namespace.
+    pub async fn generate_page_at(&self, prefix: &str, pdf: &Path, page: u32) -> Result<String> {
+        self.generate_page_to_key(format!("{prefix}/pages/{page}.jpg"), pdf, page)
+            .await
+    }
+
+    async fn generate_page_to_key(&self, key: String, pdf: &Path, page: u32) -> Result<String> {
         let thumbnail_data = match render_pdf_page(pdf, page, PAGE_WIDTH, PAGE_HEIGHT).await {
             Some(jpeg) => jpeg,
             None => {
@@ -253,9 +290,7 @@ impl ThumbnailService {
             }
         };
 
-        let key = keys::page(document_id, page);
         self.store.put(&key, thumbnail_data.into()).await?;
-
         debug!("Generated page {} thumbnail: {}", page, key);
         Ok(key)
     }

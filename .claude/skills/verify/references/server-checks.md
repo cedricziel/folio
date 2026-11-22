@@ -28,6 +28,15 @@ It covers identity changes on JSON, fetch, and HTML requests, matching-session
 reuse, cookieless session bounds, trusted proxies, shared secrets, repeated
 headers, and bearer-request isolation. Do not use a live gateway or user session.
 
+## Verify server shutdown
+
+Run `cargo test -p folio-app shutdown::tests` to check the HTTP drain deadline
+and completion or cancellation of background tasks. On Unix, run
+`cargo test -p folio-app --test shutdown`. This test starts a child process
+with its own SQLite database, storage directory, and loopback ports. It keeps
+`/events` connected during SIGTERM, checks clean exit and stream completion,
+and receives the final shutdown log through a local OTLP collector.
+
 ## Verify ingestion claims
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
@@ -258,9 +267,10 @@ stale retry and failure, and recovery of processing rows created before leases.
 Run `RUSTC_WRAPPER= cargo test -p folio-infra --lib queue::worker::tests`
 for heartbeat renewal, rejection before expired work starts, cancellation on
 lease loss or renewal timeout, and progress while renewal waits for a connection.
-The worker suite also rejects missing embedding vectors before storing chunks or
-publishing completion. Run `cargo test -p folio-core --test embedding_batch` for
-missing or surplus vectors, malformed dimensions, and nonfinite provider output.
+The worker suite rejects missing vectors and changes to the embedding model or
+dimensions before storing chunks. A consistent retry stores every chunk.
+Run `cargo test -p folio-core --test embedding_batch` for missing or surplus
+vectors, malformed dimensions, and nonfinite provider output.
 Run `cargo test -p folio-core --test processing_attempts` for retry state, stale
 attempt rejection, terminal immutability, persisted-state restoration, and attempt
 counter exhaustion. These model tests do not verify transactional lease fencing.

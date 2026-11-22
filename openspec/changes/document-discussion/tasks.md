@@ -19,7 +19,7 @@
 - [x] Reconcile merged envelope signatures from #265.
 - [ ] Integrate the workflow trigger catalog.
 - [x] Write failing transaction tests for rollback, no-op, idempotent retries, actor attribution, and body-free payloads; implement six durable entry events.
-- [ ] Verify access after revocation and document moves, recursion protection, and trigger selection in web and Apple workflow editors.
+- [ ] Verify that vault-owned workflows continue after creator revocation while the former member loses workflow and run access. Verify document move checks, recursion protection, and trigger selection in web and Apple workflow editors.
 
 ## 4. Usable clients
 - [x] Write failing web regressions for CRUD, failed drafts, pagination, and viewer controls; implement HTML routes and separate note/comment sections.

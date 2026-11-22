@@ -667,6 +667,23 @@ impl DocumentRepository for PostgresDocumentRepository {
         row.map(TryInto::try_into).transpose()
     }
 
+    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>> {
+        sqlx::query_scalar(
+            "SELECT r.result_prefix FROM processing_stage_runs r
+             JOIN documents d ON d.id = r.document_id AND d.vault_id = r.vault_id
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.id = $1 AND d.vault_id = $2 AND d.deleted_at IS NULL
+               AND d.purge_requested_at IS NULL
+               AND r.stage = 'thumbnail' AND r.state = 'completed' AND r.result_prefix IS NOT NULL
+             ORDER BY r.created_at DESC, r.updated_at DESC, r.id DESC LIMIT 1",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(repo_err)
+    }
+
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>> {
         let mut qb = QueryBuilder::<Postgres>::new(select_documents!(
             "WHERE deleted_at IS NULL AND vault_id = "

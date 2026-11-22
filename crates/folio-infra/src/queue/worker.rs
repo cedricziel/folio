@@ -890,6 +890,38 @@ impl Worker {
         Ok(())
     }
 
+    async fn embed_chunks(
+        &self,
+        chunks: &[String],
+        model: &str,
+    ) -> folio_core::Result<Vec<EmbeddedChunk>> {
+        let mut embedded = Vec::with_capacity(chunks.len());
+        let mut dimensions = None;
+        for (batch_no, batch_texts) in chunks.chunks(EMBED_BATCH_SIZE).enumerate() {
+            let texts: Vec<&str> = batch_texts.iter().map(String::as_str).collect();
+            let batch = self.embedding_service.embed(&texts).await?;
+            batch.validate(texts.len())?;
+            if batch.model != model {
+                return Err(folio_core::Error::AiService(
+                    "Embedding model changed during document processing".into(),
+                ));
+            }
+            if *dimensions.get_or_insert(batch.dimensions) != batch.dimensions {
+                return Err(folio_core::Error::AiService(
+                    "Embedding dimensions changed during document processing".into(),
+                ));
+            }
+            for (i, (text, embedding)) in batch_texts.iter().zip(batch.vectors).enumerate() {
+                embedded.push(EmbeddedChunk {
+                    index: (batch_no * EMBED_BATCH_SIZE + i) as u32,
+                    text: text.clone(),
+                    embedding,
+                });
+            }
+        }
+        Ok(embedded)
+    }
+
     /// Process embedding generation
     async fn process_embedding(
         &self,
@@ -918,24 +950,9 @@ impl Worker {
         }
 
         self.track(vault, document_id, ProcessingStage::Embed, async {
-            let active_model = self.embedding_service.model_id().await?;
-            self.search_service.mark_stale_except(&active_model).await?;
-
-            let mut embedded = Vec::with_capacity(chunks.len());
-            let mut model = active_model;
-            for (batch_no, batch_texts) in chunks.chunks(EMBED_BATCH_SIZE).enumerate() {
-                let texts: Vec<&str> = batch_texts.iter().map(String::as_str).collect();
-                let batch = self.embedding_service.embed(&texts).await?;
-                batch.validate(texts.len())?;
-                model = batch.model;
-                for (i, (text, embedding)) in batch_texts.iter().zip(batch.vectors).enumerate() {
-                    embedded.push(EmbeddedChunk {
-                        index: (batch_no * EMBED_BATCH_SIZE + i) as u32,
-                        text: text.clone(),
-                        embedding,
-                    });
-                }
-            }
+            let model = self.embedding_service.model_id().await?;
+            self.search_service.mark_stale_except(&model).await?;
+            let embedded = self.embed_chunks(&chunks, &model).await?;
 
             self.ensure_exists(document_id).await?;
             self.search_service
@@ -1164,6 +1181,93 @@ mod tests {
         async fn health(&self) -> Result<()> {
             Ok(())
         }
+    }
+
+    struct ChangingEmbeddings {
+        calls: std::sync::atomic::AtomicUsize,
+        next_model: &'static str,
+        next_dimensions: usize,
+    }
+
+    #[async_trait]
+    impl EmbeddingService for ChangingEmbeddings {
+        async fn embed(&self, texts: &[&str]) -> Result<EmbeddingBatch> {
+            let mut batch = FixedEmbeddings.embed(texts).await?;
+            if self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                == 1
+            {
+                batch.model = self.next_model.into();
+                batch.dimensions = self.next_dimensions;
+                for vector in &mut batch.vectors {
+                    vector.resize(self.next_dimensions, 0.0);
+                }
+            }
+            Ok(batch)
+        }
+
+        async fn model_id(&self) -> Result<String> {
+            FixedEmbeddings.model_id().await
+        }
+
+        async fn health(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn reject_changed_embedding_batch(model: &'static str, dimensions: usize) {
+        let mut f = fixture("").await;
+        let vault = crate::database::test_vault();
+        f.settings
+            .set("embeddings.provider", "openai")
+            .await
+            .unwrap();
+        f.pipeline.invalidate().await;
+        let text = "A synthetic invoice for embedding consistency. ".repeat(500);
+        f.repo.complete_ocr(vault, f.doc_id, &text).await.unwrap();
+        let expected_chunks = chunk_text(&text, DEFAULT_CHUNK_CHARS, DEFAULT_OVERLAP_CHARS).len();
+        assert!(expected_chunks > EMBED_BATCH_SIZE);
+        f.worker.embedding_service = Arc::new(ChangingEmbeddings {
+            calls: Default::default(),
+            next_model: model,
+            next_dimensions: dimensions,
+        });
+
+        assert!(f
+            .worker
+            .process_embedding(f.doc_id, EventOrigin::User)
+            .await
+            .is_err());
+        let chunks = || async {
+            sqlx::query_as::<_, (String, i64)>(
+                "SELECT model, dimensions FROM document_chunks WHERE document_id = ?",
+            )
+            .bind(f.doc_id.to_string())
+            .fetch_all(&f.pool)
+            .await
+            .unwrap()
+        };
+        assert!(chunks().await.is_empty());
+
+        f.worker
+            .process_embedding(f.doc_id, EventOrigin::User)
+            .await
+            .unwrap();
+        assert_eq!(
+            chunks().await,
+            vec![("test:model".into(), 2); expected_chunks]
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_embedding_model_rejects_document_batch_before_storage() {
+        reject_changed_embedding_batch("test:other", 2).await;
+    }
+
+    #[tokio::test]
+    async fn changed_embedding_dimensions_reject_document_batch_before_storage() {
+        reject_changed_embedding_batch("test:model", 3).await;
     }
 
     struct MissingEmbeddings;
