@@ -97,6 +97,12 @@ body-free delivery and replay deduplication, and fence dispatch and runs after
 a parent move. The web fixture creates an entry workflow with actor and subject
 filters and reads it back through the API.
 
+For the shared trigger catalog, `cargo test -p folio-api --test workflows --test vaults --test openapi`
+checks that the web choices match the API, an editor cannot fetch the catalog,
+and the generated schema describes the same choices. The infrastructure
+workflow suite dispatches a row with both a domain event and legacy projection,
+checks each trigger name in its payload, and replays the row.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run
