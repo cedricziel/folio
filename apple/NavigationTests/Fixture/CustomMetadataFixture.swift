@@ -84,9 +84,10 @@ struct CustomMetadataFixture: View {
     }
 }
 
-@MainActor @Observable
-private final class MetadataWorkflowFixtureService: CustomMetadataWorkflowService {
-    private(set) var saved = false
+@MainActor
+private final class MetadataWorkflowFixtureService: CustomMetadataWorkflowService, WorkflowLifecycleService {
+    let vaultID = UUID()
+    private var created: WorkflowConfigurationSummary?
 
     func customMetadataWorkflowTriggers() async throws -> [CustomMetadataWorkflowTrigger] {
         [
@@ -102,22 +103,35 @@ private final class MetadataWorkflowFixtureService: CustomMetadataWorkflowServic
         guard draft.trigger == "document.metadata.changed",
             draft.after == .decimal("9007199254740993.01"), draft.kind == .decimal, draft.fieldID != nil
         else { throw FolioError.unreadableResponse }
-        saved = true
+        let now = Date()
+        created = .init(
+            id: UUID(), vaultID: vaultID, name: draft.name, enabled: draft.enabled, trigger: draft.trigger,
+            createdAt: now, updatedAt: now
+        )
+    }
+
+    func workflowConfigurations(vaultID: UUID, deleted: Bool) async throws -> [WorkflowConfigurationSummary] {
+        guard vaultID == self.vaultID else { throw FolioError.unreadableResponse }
+        return deleted ? [] : created.map { [$0] } ?? []
+    }
+
+    func workflowHistory(vaultID: UUID, workflowID: UUID) async throws -> [WorkflowExecutionSummary] { [] }
+
+    func deleteWorkflow(vaultID: UUID, workflowID: UUID) async throws { throw FolioError.unreadableResponse }
+
+    func restoreWorkflow(vaultID: UUID, workflowID: UUID) async throws -> WorkflowConfigurationSummary {
+        throw FolioError.unreadableResponse
     }
 }
 
 struct CustomMetadataWorkflowFixture: View {
     @State private var metadata = MetadataFixtureService()
     @State private var workflows = MetadataWorkflowFixtureService()
-    @State private var showing = false
 
     var body: some View {
-        VStack {
-            Button("Open custom field workflow editor") { showing = true }
-            if workflows.saved { Text("Saved exact custom field workflow") }
-        }
-        .sheet(isPresented: $showing) {
-            CustomMetadataWorkflowEditor(workflows: workflows, metadata: metadata)
-        }
+        WorkflowLifecycleView(
+            vaultID: workflows.vaultID, service: workflows, canManage: true,
+            metadata: (definitions: metadata, workflows: workflows)
+        )
     }
 }

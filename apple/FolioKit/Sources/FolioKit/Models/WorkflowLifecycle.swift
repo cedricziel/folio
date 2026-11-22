@@ -55,6 +55,15 @@ public struct WorkflowConfigurationSummary: Identifiable, Decodable, Sendable, E
         case "document.document_type_changed": "When a document type changes"
         case "document.deleted": "When a document is deleted"
         case "ingest.received": "When a file arrives, before import"
+        case "document.metadata.changed": "When custom field values change"
+        case "metadata_field.created": "When a custom field is created"
+        case "metadata_field.updated": "When a custom field changes"
+        case "metadata_field.deleted": "When a custom field is retired"
+        case "metadata_field.restored": "When a custom field is restored"
+        case "metadata_option.created": "When a custom field option is created"
+        case "metadata_option.updated": "When a custom field option changes"
+        case "metadata_option.deleted": "When a custom field option is retired"
+        case "metadata_option.restored": "When a custom field option is restored"
         default: trigger
         }
     }

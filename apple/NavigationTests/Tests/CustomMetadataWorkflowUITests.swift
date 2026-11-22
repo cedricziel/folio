@@ -6,7 +6,9 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--custom-metadata-workflow"]
         app.launch()
-        app.buttons["Open custom field workflow editor"].tap()
+        let create = app.buttons["New custom field workflow"]
+        XCTAssertTrue(create.waitForExistence(timeout: 10))
+        create.tap()
         let trigger = app.buttons["metadata-workflow-trigger"]
         XCTAssertTrue(trigger.waitForExistence(timeout: 10))
         app.textFields["Name"].tap()
@@ -30,6 +32,6 @@ final class CustomMetadataWorkflowUITests: XCTestCase {
         url.tap()
         url.typeText("http://127.0.0.1:9/unused")
         app.buttons["Save workflow"].tap()
-        XCTAssertTrue(app.staticTexts["Saved exact custom field workflow"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Invoice amount"].waitForExistence(timeout: 10))
     }
 }

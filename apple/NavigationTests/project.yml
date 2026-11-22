@@ -26,7 +26,6 @@ targets:
       - "../Folio/Sources/DocumentDetailView.swift"
       - "../Folio/Sources/CustomMetadataView.swift"
       - "../Folio/Sources/CustomFieldsManager.swift"
-      - "../Folio/Sources/CustomMetadataWorkflowEditor.swift"
       - "../Folio/Sources/DocumentClassificationView.swift"
       - "../Folio/Sources/DocumentActivity.swift"
       - "../Folio/Sources/DocumentProcessingView.swift"
