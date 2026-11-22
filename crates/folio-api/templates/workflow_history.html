@@ -15,7 +15,7 @@
             </form>
             {% else %}<a href="{{ "/workflows"|vault_url }}/{{ id }}" class="f-btn">Edit workflow</a>{% endif %}
         </div>
-        <p class="f-meta">{{ lifecycle_summary }}</p>
+        <p class="f-meta lifecycle-meta">{{ lifecycle_summary }}</p>
         {% if deleted %}<p class="lede">Pending runs were stopped when this workflow was deleted. Restoring preserves history and resumes enabled workflows for future events.</p>{% endif %}
     </header>
     {% if runs.is_empty() %}<div class="f-notice"><p>No runs yet.</p></div>{% else %}

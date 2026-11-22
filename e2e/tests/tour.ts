@@ -35,10 +35,34 @@ export const config = tour.loadConfig() as {
   screens: Screen[];
 };
 
+const terminalFailureFixture = `
+import sqlite3, sys
+
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute("BEGIN IMMEDIATE")
+    run = db.execute("""
+        SELECT id, job_id FROM processing_stage_runs
+        WHERE document_id = ? AND stage = 'ocr' AND is_current = 1 AND state = 'waiting_to_retry'
+    """, (sys.argv[2],)).fetchone()
+    if run is None:
+        raise RuntimeError("The isolated fixture did not produce a retryable OCR failure")
+    job = db.execute("""
+        UPDATE jobs SET status = 'failed', completed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ? AND status = 'pending'
+    """, (run[1],))
+    if job.rowcount != 1:
+        raise RuntimeError("The OCR fixture job was no longer waiting")
+    db.execute("""
+        UPDATE processing_stage_runs SET state = 'failed', retry_at = NULL, attempt = 1
+        WHERE id = ?
+    """, (run[0],))
+`;
+
 // A separate instance with auth on, so the shared e2e instance's data
 // (unique titles from other specs) never leaks into screenshots.
 export class TourInstance {
   baseURL = "";
+  verifyDirectory = "";
   private envFile = "";
   private storageState:
     Awaited<ReturnType<BrowserContext["storageState"]>> | undefined;
@@ -56,7 +80,8 @@ export class TourInstance {
         .map((l) => l.split(/=(.*)/s).slice(0, 2)),
     );
     this.baseURL = vars.BASE_URL;
-    tour.useSetupToken(vars.VERIFY_DIR);
+    this.verifyDirectory = vars.VERIFY_DIR;
+    tour.useSetupToken(this.verifyDirectory);
   }
 
   stop() {
@@ -79,7 +104,10 @@ export class TourInstance {
   }
 
   // Creates the owner, signs in and seeds once; safe to call from every test.
-  async ready(browser: Browser, { seeded }: { seeded: boolean }) {
+  async ready(browser: Browser, { seeded, freezeFailedStage = false }: {
+    seeded: boolean;
+    freezeFailedStage?: boolean;
+  }) {
     if (!this.storageState) {
       const context = await browser.newContext({ baseURL: this.baseURL });
       const page = await context.newPage();
@@ -95,7 +123,12 @@ export class TourInstance {
         baseURL: this.baseURL,
         storageState: this.storageState,
       });
-      await seed(context.request);
+      const { brokenId } = await seed(context.request);
+      if (freezeFailedStage && brokenId) {
+        // Only the disposable tour database is reachable here. A real wait would leave
+        // several minutes of retry backoff in a test for the settled screen.
+        execFileSync("python3", ["-c", terminalFailureFixture, path.join(this.verifyDirectory, "folio.db"), brokenId]);
+      }
       await context.close();
       this.seeded = true;
     }

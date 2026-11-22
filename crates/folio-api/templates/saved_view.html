@@ -42,7 +42,7 @@
   <div class="{% if presentation == "grid" %}saved-view-grid{% else %}f-list{% endif %}">
     {% for row in rows %}
     <a id="document-{{ row.id }}"
-       class="f-row" href="{{ "/documents"|vault_url }}/{{ row.id }}" data-turbo-frame="_top">
+       class="f-row" href="{{ row.id|document_href }}" data-turbo-frame="_top">
       {% if presentation == "grid" %}<img loading="lazy" class="saved-view-preview" src="{{ "/documents"|vault_url }}/{{ row.id }}/thumbnail" alt="">{% endif %}
       <div class="row-main"><h3 class="f-row-title">{{ row.title }}</h3><p class="f-row-sub">{{ row.subline() }}</p><span class="f-meta">{{ row.date }}</span></div>
     </a>

@@ -130,3 +130,79 @@ fn review_metadata_uses_nullable_inline_types_for_generated_clients() {
         serde_json::json!(["string", "null"])
     );
 }
+
+#[test]
+fn metadata_definitions_describe_scoped_lifecycle_and_typed_inputs() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let collection = &spec["paths"]["/api/vaults/{vault_id}/metadata-fields"];
+    assert!(collection["get"]["responses"]["200"].is_object());
+    assert!(collection["post"]["responses"]["201"].is_object());
+    let field = &spec["paths"]["/api/vaults/{vault_id}/metadata-fields/{field_id}"];
+    assert!(field["patch"]["responses"]["409"].is_object());
+    assert!(field["delete"]["responses"]["204"].is_object());
+    let restore = &spec["paths"]
+        ["/api/vaults/{vault_id}/metadata-fields/{field_id}/options/{option_id}/restore"];
+    assert!(restore["post"]["responses"]["200"].is_object());
+    assert!(restore["post"]["responses"]["403"].is_object());
+    assert!(restore["post"]["responses"]["404"].is_object());
+    assert_eq!(
+        spec["components"]["schemas"]["MetadataFieldInput"]["additionalProperties"],
+        false
+    );
+    assert!(spec["components"]["schemas"]["MetadataFieldInput"]["properties"]["kind"].is_object());
+    assert_eq!(
+        spec["components"]["schemas"]["MetadataOptionInput"]["additionalProperties"],
+        false
+    );
+}
+
+#[test]
+fn processing_reason_uses_nullable_string_for_generated_clients() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let reason =
+        &spec["components"]["schemas"]["ProcessingStageSummary"]["properties"]["reason_code"];
+    assert_eq!(reason["type"], serde_json::json!(["string", "null"]));
+    assert!(reason.get("oneOf").is_none());
+}
+
+#[test]
+fn document_metadata_updates_require_explicit_nullable_values_and_revision() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let schemas = &spec["components"]["schemas"];
+    assert_eq!(
+        schemas["MetadataChange"]["required"],
+        serde_json::json!(["field_id", "value"])
+    );
+    let alternatives = schemas["MetadataChange"]["properties"]["value"]["oneOf"]
+        .as_array()
+        .unwrap();
+    assert!(alternatives.iter().any(|schema| schema["type"] == "null"));
+    assert_eq!(
+        schemas["PatchDocumentMetadata"]["required"],
+        serde_json::json!(["revision", "changes"])
+    );
+}
+
+#[test]
+fn custom_workflow_conditions_preserve_generated_typed_values() {
+    let spec: serde_json::Value = serde_json::from_str(&openapi::spec_json()).unwrap();
+    let schemas = &spec["components"]["schemas"];
+    for (schema, property, target) in [
+        ("WorkflowConditions", "event", "WorkflowEventConditions"),
+        (
+            "WorkflowEventConditions",
+            "metadata",
+            "WorkflowMetadataConditions",
+        ),
+        ("WorkflowMetadataConditions", "before", "MetadataValue"),
+        ("WorkflowMetadataConditions", "after", "MetadataValue"),
+    ] {
+        assert_eq!(
+            schemas[schema]["properties"][property]["$ref"],
+            format!("#/components/schemas/{target}")
+        );
+        assert!(schemas[schema]["required"]
+            .as_array()
+            .is_none_or(|fields| { fields.iter().all(|field| field != property) }));
+    }
+}

@@ -17,7 +17,6 @@ use folio_core::models::{
     AiSettings, AppleAppId, EmbeddingSettings, OcrSettings, PipelineSettings,
     AI_REQUEST_TIMEOUT_RANGE,
 };
-use folio_infra::JobType;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -466,19 +465,9 @@ async fn reembed_all(
         state.search_service.mark_stale_except(&model).await?;
     }
 
-    let ids = state.document_repo.reset_embedding_status().await?;
-    for document_id in &ids {
-        if let Err(e) = state
-            .job_queue
-            .enqueue_untraced(JobType::generate_embedding(*document_id))
-            .await
-        {
-            error!("Failed to enqueue re-embedding for {}: {}", document_id, e);
-        }
-    }
-
-    info!("Queued {} documents for re-embedding", ids.len());
-    Ok(Redirect::to(&format!("/settings?reembedded={}", ids.len())).into_response())
+    let queued = state.job_queue.reembed_documents().await?;
+    info!("Queued {queued} documents for re-embedding");
+    Ok(Redirect::to(&format!("/settings?reembedded={queued}")).into_response())
 }
 
 /// MCP section form data

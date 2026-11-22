@@ -27,13 +27,23 @@ struct JobRow {
 }
 
 impl JobRow {
-    fn document_id(&self) -> Option<Uuid> {
+    fn origin(&self) -> Result<folio_core::EventOrigin> {
+        Ok(
+            match serde_json::from_str::<JobType>(&self.payload).map_err(repo_err)? {
+                JobType::GenerateEmbedding { origin, .. }
+                | JobType::GenerateRevisionEmbedding { origin, .. } => origin,
+                _ => folio_core::EventOrigin::User,
+            },
+        )
+    }
+
+    fn typed_job(&self) -> Option<JobType> {
         let job = serde_json::from_str::<JobType>(&self.payload).ok()?;
-        if job.type_name() == self.job_type {
-            job.document_id()
-        } else {
-            None
-        }
+        (job.type_name() == self.job_type).then_some(job)
+    }
+
+    fn document_id(&self) -> Option<Uuid> {
+        self.typed_job().and_then(|job| job.document_id())
     }
 }
 
@@ -42,6 +52,7 @@ struct StageRow {
     id: String,
     document_id: String,
     vault_id: String,
+    revision_id: Option<String>,
     stage: String,
     attempt: i64,
     correlation_id: String,
@@ -49,6 +60,15 @@ struct StageRow {
 }
 
 impl StageRow {
+    fn stage(&self) -> Result<ProcessingEventStage> {
+        match self.stage.as_str() {
+            "ocr" => Ok(ProcessingEventStage::Ocr),
+            "embedding" => Ok(ProcessingEventStage::Embedding),
+            "thumbnail" => Ok(ProcessingEventStage::Thumbnail),
+            _ => Err(repo_err("Invalid persisted processing stage")),
+        }
+    }
+
     fn occurrence(&self, decision: &Decision) -> Result<ProcessingOccurrence> {
         let number = u32::try_from(self.attempt).map_err(repo_err)?;
         let mut attempt = ProcessingAttempt::restore(number, StageOutcome::Running)
@@ -63,13 +83,13 @@ impl StageRow {
         }
         Ok(ProcessingOccurrence {
             run_id: self.id.parse().map_err(repo_err)?,
-            revision_id: None,
-            stage: match self.stage.as_str() {
-                "ocr" => ProcessingEventStage::Ocr,
-                "embedding" => ProcessingEventStage::Embedding,
-                "thumbnail" => ProcessingEventStage::Thumbnail,
-                _ => return Err(repo_err("Invalid persisted processing stage")),
-            },
+            revision_id: self
+                .revision_id
+                .as_deref()
+                .map(str::parse)
+                .transpose()
+                .map_err(repo_err)?,
+            stage: self.stage()?,
             attempt: number,
             outcome: match decision.retry_at {
                 Some(retry_at) => ProcessingEventOutcome::RetryScheduled {

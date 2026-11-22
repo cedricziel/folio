@@ -22,6 +22,8 @@ The shared registry exposes labels such as OCR completed, Embedding failed, and 
 
 JSON document detail adds read-only stage run summaries with revision, attempt, state, reason, and retry time. OpenAPI regeneration supplies the Swift client. HTML and native detail display the same states, distinguish Waiting to retry from Failed, and retain existing reprocessing authorization. Styling uses shared design tokens. No generic event dashboard is added.
 
+Current read-only stage summaries use `processing_stage_runs.is_current` and require matching run/document vaults, a live document without a purge request, and an active vault. Pending plans are visible only while a queue job can still start them. This keeps plans left by older workers from hiding legacy status. Thumbnail reads retain the latest completed result prefix in that same scope while a newer run is pending or unsuccessful. Bound stage summaries match the current revision. Legacy summaries remain visible for a document without a revision or with revision one current. Thumbnail reads must also switch to current-revision lookup before replacement is exposed. Preserve nullable revision identity for legacy processing; do not synthesize revision IDs or infer them from result keys.
+
 ## Dependency boundary
 
 Foundation supplies transactional envelope serialization and outbox insertion. Revision owner supplies immutable revision IDs, current-revision fencing, and revision-specific derived storage. Workflow owner supplies registry and builder extension points. Exact Rust signatures and migration numbers are selected from merged implementations rather than duplicated here.
@@ -38,9 +40,9 @@ Integration must preserve scoped personal tokens from PR #251 and the delayed-ev
 
 ## Revision adapter boundary
 
-The revision owner proposes `document_revisions(id, document_id, vault_id, revision_number, original_file_id, created_at, created_by, restored_from_revision_id)` and `documents.current_revision_id`, nullable until finalization. Stage runs may retain a null revision ID for legacy processing until revision persistence lands. Never manufacture a revision or infer identity from a storage key. Once a job has a revision, its run retains that identity through every retry.
+Original file revisions are stored in `document_revisions` with `number` scoped to the document. `documents.current_revision_id` points to the published original. A legacy run may have a null revision ID while the current original is unversioned or is revision one. Once a job carries a revision ID, its run and events retain that identity through every retry.
 
-Preserve legacy `JobType::ProcessDocument` decoding. The revision owner supplies `ProcessDocumentRevision { document_id, revision_id }` and `ProcessingQueue::enqueue_revision_processing(document_id, revision_id)`, including transactional current-revision resolution for legacy enqueue requests. Stage result transactions compare the expected revision, current vault, active run, and job claim before publishing current state or events. The revision owner owns revision rows and dispatch conversion; this slice owns stage transitions.
+The queue decodes the legacy jobs and four revision-aware kinds introduced in PR #532. `JobType::revision_id()` exposes their expected revision. The stage transaction verifies the durable job revision, stage run revision, and current original before writing state or publishing an event. Recovery performs the same comparisons before emitting a retry or terminal failure. An OCR completion requests an embedding child for its own revision. The revision owner supplies dispatch and plan assignment, which stay gated until current-revision search and derived reads are ready.
 
 Merged envelope APIs include `insert_domain_event_with_origin` and `insert_event_with_envelope` in both database adapters. Preserve explicit workflow origin and lineage. Use the combined projection/envelope insertion when a legacy document event is required, rather than emitting a second event that can trigger duplicate effects.
 

@@ -435,6 +435,11 @@ a:not([class]):hover,
   gap: 2px;
   min-width: 0;
 }
+.lifecycle-meta,
+.outcome-explanation {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .row-main .f-status {
   margin-top: var(--space-1);
 }
@@ -447,10 +452,13 @@ a:not([class]):hover,
 }
 @media (max-width: 768px) {
   .trash-row,
-  .source-row {
+  .source-row,
+  .source-outcome-row,
+  .workflow-row {
     grid-template-columns: minmax(0, 1fr);
   }
-  .source-row .form-actions {
+  .source-row .form-actions,
+  .workflow-row .form-actions {
     flex-wrap: wrap;
   }
 }
@@ -803,6 +811,15 @@ fieldset.field {
   display: flex;
   gap: var(--space-2);
 }
+.metadata-form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+.metadata-form .f-field {
+  align-self: stretch;
+}
 .manage-list {
   margin: 0;
   padding: 0;
@@ -1006,6 +1023,29 @@ dialog.palette {
   flex: none;
   white-space: nowrap;
 }
+#custom-fields:not(:has(> *)) {
+  display: none;
+}
+
+.custom-field-form {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  margin-block: var(--space-3);
+}
+
+.custom-field-form .f-field {
+  width: 100%;
+}
+
+.custom-field-value {
+  overflow-wrap: anywhere;
+}
+
+.custom-field-value > span {
+  white-space: pre-wrap;
+}
+
 .f-row-plain .f-row-sub {
   display: flex;
   flex-wrap: wrap;

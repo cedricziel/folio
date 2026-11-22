@@ -550,13 +550,15 @@ fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response
     response
 }
 
-/// Granted to no current OAuth client, so bearer tokens cannot change vault ownership
-pub(crate) const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
+pub(crate) const VAULT_MANAGEMENT_SCOPE: &str = folio_auth::model::VAULT_MANAGEMENT_SCOPE;
 
 /// Vault lifecycle and membership routes; choosing one's own default vault is excluded
 fn manages_vault(path: &str) -> bool {
     let parts: Vec<_> = path.trim_end_matches('/').split('/').collect();
     match parts.as_slice() {
+        ["", "api", "vaults", _, "metadata-fields", ..]
+        | ["", "api", "vaults", _, "documents", _, "metadata"]
+        | ["", "api", "vaults", _, "metadata-search"] => false,
         ["", "api", "vaults", ..] => {
             !matches!(parts.as_slice(), ["", "api", "vaults", _, "default"])
         }
@@ -575,6 +577,38 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
     let classified = match parts.as_slice() {
         ["", "api", "vaults"] => read,
         ["", "api", "vaults", vault, "documents"] if id(vault) => read,
+        ["", "api", "vaults", vault, "metadata-search"] if id(vault) => read,
+        ["", "api", "vaults", vault, "documents", document, "metadata"]
+            if id(vault) && id(document) =>
+        {
+            read || *method == Method::PATCH
+        }
+        ["", "api", "vaults", vault, "metadata-fields"] if id(vault) => {
+            read || *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field] if id(vault) && id(field) => {
+            read || matches!(*method, Method::PATCH | Method::DELETE)
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "restore"]
+            if id(vault) && id(field) =>
+        {
+            *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "options"]
+            if id(vault) && id(field) =>
+        {
+            read || *method == Method::POST
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "options", option]
+            if id(vault) && id(field) && id(option) =>
+        {
+            read || matches!(*method, Method::PATCH | Method::DELETE)
+        }
+        ["", "api", "vaults", vault, "metadata-fields", field, "options", option, "restore"]
+            if id(vault) && id(field) && id(option) =>
+        {
+            *method == Method::POST
+        }
         ["", "api", "documents"] => read || *method == Method::POST,
         ["", "api", "documents", "search"] => read || *method == Method::POST,
         ["", "api", "documents", "browse" | "trash" | "ids"] => read,
@@ -1241,6 +1275,9 @@ fn describe_scope(scope: &str) -> String {
     match scope {
         "documents:read" => "Read your documents".into(),
         "documents:write" => "Change your documents".into(),
+        VAULT_MANAGEMENT_SCOPE => {
+            "Create, rename, delete, restore, and manage access to your vaults".into()
+        }
         other => other.to_string(),
     }
 }
@@ -1248,12 +1285,19 @@ fn describe_scope(scope: &str) -> String {
 fn headline(client: &str, scopes: &[String]) -> String {
     let read = scopes.iter().any(|s| s == "documents:read");
     let write = scopes.iter().any(|s| s == "documents:write");
+    if !read && !write && scopes.iter().any(|scope| scope == VAULT_MANAGEMENT_SCOPE) {
+        return format!("Allow {client} to manage your vaults?");
+    }
     let what = match (read, write) {
         (true, true) => "read and change your documents",
         (false, true) => "change your documents",
         _ => "read your documents",
     };
-    format!("Allow {client} to {what}?")
+    if scopes.iter().any(|scope| scope == VAULT_MANAGEMENT_SCOPE) {
+        format!("Allow {client} to {what} and manage your vaults?")
+    } else {
+        format!("Allow {client} to {what}?")
+    }
 }
 
 fn redirect_host(uri: &str) -> String {

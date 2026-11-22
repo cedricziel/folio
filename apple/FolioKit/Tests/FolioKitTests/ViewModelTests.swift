@@ -254,6 +254,36 @@ extension JSONDecoder {
 }
 
 @MainActor struct DocumentDetailViewModelTests {
+    @Test func listRowsAndDateSavesKeepDetailOnlyStageStates() async throws {
+        let service = MockFolioService()
+        let run = ProcessingStageSummary(
+            runID: UUID(), stage: .ocr, attempt: 2, state: .waitingToRetry, reason: .providerFailed
+        )
+        let listRow = Document(title: "Letter", canEditDocumentDate: true)
+        var detail = listRow
+        detail.updatedAt = listRow.updatedAt.addingTimeInterval(-1)
+        detail.processingStages = [run]
+        let model = DocumentDetailViewModel(document: detail, service: service)
+        await service.setDocuments([listRow])
+
+        model.update(document: listRow, lookups: DocumentLookups())
+        #expect(model.document.processingSummary.first?.status == "Waiting to retry")
+
+        let date = try #require(DocumentDate(rawValue: "2026-11-02"))
+        try await model.saveDocumentDate(date)
+        #expect(model.document.documentDate == date)
+        #expect(model.document.processingStages == [run])
+
+        var finished = listRow
+        finished.documentDate = date
+        finished.processingStages = [
+            .init(runID: run.runID, stage: .ocr, attempt: 3, state: .completed, hasText: true)
+        ]
+        await service.setDocuments([finished])
+        await model.refreshMetadata(after: finished.updatedAt)
+        #expect(model.document.processingSummary.first?.status == "Completed")
+    }
+
     @Test func historyShowsImmutableCreatorSystemUpdatesAndDeletion() {
         let model = DocumentDetailViewModel(
             document: Document(

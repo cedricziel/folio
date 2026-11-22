@@ -260,6 +260,7 @@ async fn managed_sources_can_be_trashed_and_restored_from_the_existing_page() {
     assert_eq!(status, StatusCode::OK);
     assert!(page.contains("Lifecycle folder"));
     assert!(page.contains(&format!("/{id}/restore")));
+    assert!(page.contains("by System or unknown"));
     let (status, _) = send(&h, "POST", &format!("/settings/sources/{id}/restore"), None).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     let (_, restored) = json_request(&h, "GET", &format!("/api/sources/{id}"), None).await;
@@ -355,6 +356,123 @@ async fn source_trash_and_restore_preserve_owner_authorization_and_server_actors
     let body: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(body["updated_by"], "source-owner");
     assert!(body["deleted_at"].is_null());
+}
+
+#[tokio::test]
+async fn source_pages_show_server_recorded_actors_in_active_and_trash_lists() {
+    let h = common::harness_requiring_login().await;
+    let owner = common::vault_session(
+        &h,
+        "source-owner",
+        folio_core::models::VaultRole::Owner,
+        false,
+    )
+    .await;
+    let created = h
+        .app
+        .clone()
+        .oneshot(
+            Request::post("/api/sources")
+                .header("cookie", &owner)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Attributed source",
+                        "created_by": "forged", "updated_by": "forged",
+                        "config": {"type": "folder", "path": "/unused/source"}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let source: Value = serde_json::from_str(&common::text(created).await).unwrap();
+    assert_eq!(source["created_by"], "source-owner");
+    let page = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/settings/sources")
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let page = common::text(page).await;
+    assert!(page.contains("by source-owner"));
+    assert!(!page.contains("by forged"));
+    let removed = h
+        .app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/sources/{}", source["id"].as_str().unwrap()))
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+    let trash = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/settings/sources?deleted=true")
+                .header("cookie", &owner)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(trash.status(), StatusCode::OK);
+    let trash = common::text(trash).await;
+    assert!(trash.contains("by source-owner"));
+    assert!(trash.contains("moved to Trash"));
+    assert!(!trash.contains("by forged"));
+}
+
+#[tokio::test]
+async fn source_pages_escape_retained_actor_identifiers() {
+    use folio_core::{models::UserId, mutation::with_actor};
+
+    let app = test_app(vec![]).await;
+    let input = serde_json::from_value(json!({
+        "name": "Escaped source", "config": {"type": "folder", "path": "/unused/source"}
+    }))
+    .unwrap();
+    let source = with_actor(
+        Some(UserId::from("creator<script>")),
+        app.state.ingestion.managed.create(app.vault, input),
+    )
+    .await
+    .unwrap();
+    let (status, active) = send(&app, "GET", "/settings/sources", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        active.contains("by creator&lt;script&gt;")
+            || active.contains("by creator&#60;script&#62;")
+    );
+    assert!(!active.contains("by creator<script>"));
+
+    with_actor(
+        Some(UserId::from("remover<script>")),
+        app.state.ingestion.managed.delete(app.vault, source.id),
+    )
+    .await
+    .unwrap();
+    let (status, trash) = send(&app, "GET", "/settings/sources?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        trash.contains("by creator&lt;script&gt;") || trash.contains("by creator&#60;script&#62;")
+    );
+    assert!(
+        trash.contains("by remover&lt;script&gt;") || trash.contains("by remover&#60;script&#62;")
+    );
+    assert!(!trash.contains("by remover<script>"));
 }
 
 #[tokio::test]
@@ -476,6 +594,178 @@ async fn seed_outcome(app: &Harness, source: Uuid, result: &str, document: Optio
         .bind(app.vault.to_string()).bind(source.to_string()).bind(item.to_string()).bind(attempt.to_string())
         .bind(Uuid::new_v4().to_string()).bind(result).bind(document.map(|id| id.to_string()))
         .fetch_one(pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn retained_source_outcomes_require_current_owner_and_active_vault() {
+    use folio_core::models::{Principal, UserId, VaultRole};
+    let app = common::harness_requiring_login().await;
+    let owner = common::vault_session(&app, "history-owner", VaultRole::Owner, false).await;
+    let _backup = common::vault_session(&app, "history-backup", VaultRole::Owner, false).await;
+    let viewer = common::vault_session(&app, "history-viewer", VaultRole::Viewer, true).await;
+    let input = serde_json::from_value(json!({"name":"Private history", "enabled":false,
+        "config":{"type":"folder", "path":"/unused/private-history"}}))
+    .unwrap();
+    let source = app
+        .state
+        .ingestion
+        .managed
+        .create(app.vault, input)
+        .await
+        .unwrap();
+    app.state
+        .ingestion
+        .managed
+        .delete(app.vault, source.id)
+        .await
+        .unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let path = format!("{prefix}/{}/outcomes", source.id);
+        let allowed = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(&path)
+                    .header("cookie", &owner)
+                    .header("X-Folio-Vault", app.vault.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        let denied = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(&path)
+                    .header("cookie", &viewer)
+                    .header("X-Folio-Vault", app.vault.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+    app.members
+        .revoke(app.vault, &Principal::User(UserId::from("history-owner")))
+        .await
+        .unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let denied = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/{}/outcomes", source.id))
+                    .header("cookie", &owner)
+                    .header("X-Folio-Vault", app.vault.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+    let vault = app
+        .vault_repository
+        .create(
+            "Deleted history vault",
+            Some(&UserId::from("history-owner")),
+        )
+        .await
+        .unwrap();
+    let input = serde_json::from_value(json!({"name":"Deleted vault source", "enabled":false,
+        "config":{"type":"folder", "path":"/unused/deleted-vault"}}))
+    .unwrap();
+    let source = app
+        .state
+        .ingestion
+        .managed
+        .create(vault.id, input)
+        .await
+        .unwrap();
+    app.state
+        .ingestion
+        .managed
+        .delete(vault.id, source.id)
+        .await
+        .unwrap();
+    app.vault_repository.delete(vault.id).await.unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let denied = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/{}/outcomes", source.id))
+                    .header("cookie", &owner)
+                    .header("X-Folio-Vault", vault.id.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn trashed_source_outcomes_remain_readable_in_their_vault() {
+    let app = test_app(vec![]).await;
+    let (status, source) = json_request(
+        &app,
+        "POST",
+        "/api/sources",
+        Some(json!({
+            "name": "Retained history", "enabled": false,
+            "config": {"type": "folder", "path": "/unused/retained-source"}
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = Uuid::parse_str(source["id"].as_str().unwrap()).unwrap();
+    let outcome = seed_outcome(&app, id, "failed", None).await;
+    let (status, _) = send(&app, "DELETE", &format!("/api/sources/{id}"), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, page) =
+        json_request(&app, "GET", &format!("/api/sources/{id}/outcomes"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["outcomes"][0]["id"], outcome);
+    let (status, page) = send(
+        &app,
+        "GET",
+        &format!("/settings/sources/{id}/outcomes"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Import failed"));
+    assert!(page.contains("This source is in Trash"));
+    assert!(page.contains("/settings/sources?deleted=true"));
+    let (status, trash) = send(&app, "GET", "/settings/sources?deleted=true", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(trash.contains(&format!("/{id}/outcomes")));
+
+    let other = app
+        .vault_repository
+        .create("Other history", None)
+        .await
+        .unwrap();
+    for prefix in ["/api/sources", "/settings/sources"] {
+        let response = app
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("{prefix}/{id}/outcomes"))
+                    .header("X-Folio-Vault", other.id.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
 
 #[tokio::test]

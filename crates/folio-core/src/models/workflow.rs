@@ -32,6 +32,36 @@ pub enum WorkflowTrigger {
     DocumentCorrespondentChanged,
     #[serde(rename = "document.document_type_changed")]
     DocumentTypeChanged,
+    #[serde(rename = "document_note.created")]
+    DocumentNoteCreated,
+    #[serde(rename = "document_note.updated")]
+    DocumentNoteUpdated,
+    #[serde(rename = "document_note.deleted")]
+    DocumentNoteDeleted,
+    #[serde(rename = "document_comment.created")]
+    DocumentCommentCreated,
+    #[serde(rename = "document_comment.updated")]
+    DocumentCommentUpdated,
+    #[serde(rename = "document_comment.deleted")]
+    DocumentCommentDeleted,
+    #[serde(rename = "metadata_field.created")]
+    MetadataFieldCreated,
+    #[serde(rename = "metadata_field.updated")]
+    MetadataFieldUpdated,
+    #[serde(rename = "metadata_field.deleted")]
+    MetadataFieldDeleted,
+    #[serde(rename = "metadata_field.restored")]
+    MetadataFieldRestored,
+    #[serde(rename = "metadata_option.created")]
+    MetadataOptionCreated,
+    #[serde(rename = "metadata_option.updated")]
+    MetadataOptionUpdated,
+    #[serde(rename = "metadata_option.deleted")]
+    MetadataOptionDeleted,
+    #[serde(rename = "metadata_option.restored")]
+    MetadataOptionRestored,
+    #[serde(rename = "document.metadata.changed")]
+    DocumentMetadataChanged,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -39,10 +69,22 @@ pub enum WorkflowTrigger {
     /// to be imported; rules here can discard it
     #[serde(rename = "ingest.received")]
     IngestReceived,
+    #[serde(rename = "ingest.imported")]
+    IngestImported,
+    #[serde(rename = "ingest.skipped")]
+    IngestSkipped,
+    #[serde(rename = "ingest.duplicate")]
+    IngestDuplicate,
+    #[serde(rename = "ingest.failed")]
+    IngestFailed,
+    #[serde(rename = "source.failed")]
+    SourceFailed,
+    #[serde(rename = "source.recovered")]
+    SourceRecovered,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 9] = [
+    pub const ALL: [WorkflowTrigger; 30] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -50,8 +92,29 @@ impl WorkflowTrigger {
         Self::DocumentTagsChanged,
         Self::DocumentCorrespondentChanged,
         Self::DocumentTypeChanged,
+        Self::DocumentNoteCreated,
+        Self::DocumentNoteUpdated,
+        Self::DocumentNoteDeleted,
+        Self::DocumentCommentCreated,
+        Self::DocumentCommentUpdated,
+        Self::DocumentCommentDeleted,
+        Self::MetadataFieldCreated,
+        Self::MetadataFieldUpdated,
+        Self::MetadataFieldDeleted,
+        Self::MetadataFieldRestored,
+        Self::MetadataOptionCreated,
+        Self::MetadataOptionUpdated,
+        Self::MetadataOptionDeleted,
+        Self::MetadataOptionRestored,
+        Self::DocumentMetadataChanged,
         Self::DocumentDeleted,
         Self::IngestReceived,
+        Self::IngestImported,
+        Self::IngestSkipped,
+        Self::IngestDuplicate,
+        Self::IngestFailed,
+        Self::SourceFailed,
+        Self::SourceRecovered,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -64,8 +127,29 @@ impl WorkflowTrigger {
             Self::DocumentTagsChanged => "document.tags_changed",
             Self::DocumentCorrespondentChanged => "document.correspondent_changed",
             Self::DocumentTypeChanged => "document.document_type_changed",
+            Self::DocumentNoteCreated => "document_note.created",
+            Self::DocumentNoteUpdated => "document_note.updated",
+            Self::DocumentNoteDeleted => "document_note.deleted",
+            Self::DocumentCommentCreated => "document_comment.created",
+            Self::DocumentCommentUpdated => "document_comment.updated",
+            Self::DocumentCommentDeleted => "document_comment.deleted",
+            Self::MetadataFieldCreated => "metadata_field.created",
+            Self::MetadataFieldUpdated => "metadata_field.updated",
+            Self::MetadataFieldDeleted => "metadata_field.deleted",
+            Self::MetadataFieldRestored => "metadata_field.restored",
+            Self::MetadataOptionCreated => "metadata_option.created",
+            Self::MetadataOptionUpdated => "metadata_option.updated",
+            Self::MetadataOptionDeleted => "metadata_option.deleted",
+            Self::MetadataOptionRestored => "metadata_option.restored",
+            Self::DocumentMetadataChanged => "document.metadata.changed",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
+            Self::IngestImported => "ingest.imported",
+            Self::IngestSkipped => "ingest.skipped",
+            Self::IngestDuplicate => "ingest.duplicate",
+            Self::IngestFailed => "ingest.failed",
+            Self::SourceFailed => "source.failed",
+            Self::SourceRecovered => "source.recovered",
         }
     }
 
@@ -79,8 +163,29 @@ impl WorkflowTrigger {
             Self::DocumentTagsChanged => "When document tags change",
             Self::DocumentCorrespondentChanged => "When a document correspondent changes",
             Self::DocumentTypeChanged => "When a document type changes",
+            Self::DocumentNoteCreated => "When a note is created",
+            Self::DocumentNoteUpdated => "When a note is updated",
+            Self::DocumentNoteDeleted => "When a note is deleted",
+            Self::DocumentCommentCreated => "When a comment is created",
+            Self::DocumentCommentUpdated => "When a comment is updated",
+            Self::DocumentCommentDeleted => "When a comment is deleted",
+            Self::MetadataFieldCreated => "When a custom field is created",
+            Self::MetadataFieldUpdated => "When a custom field is updated",
+            Self::MetadataFieldDeleted => "When a custom field is retired",
+            Self::MetadataFieldRestored => "When a custom field is restored",
+            Self::MetadataOptionCreated => "When a select option is created",
+            Self::MetadataOptionUpdated => "When a select option is updated",
+            Self::MetadataOptionDeleted => "When a select option is retired",
+            Self::MetadataOptionRestored => "When a select option is restored",
+            Self::DocumentMetadataChanged => "When a document's custom fields change",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
+            Self::IngestImported => "When an item is imported",
+            Self::IngestSkipped => "When a rule skips an item",
+            Self::IngestDuplicate => "When a duplicate item is found",
+            Self::IngestFailed => "When an item import fails",
+            Self::SourceFailed => "When a source becomes unavailable",
+            Self::SourceRecovered => "When a source recovers",
         }
     }
 
@@ -92,9 +197,69 @@ impl WorkflowTrigger {
             | Self::DocumentTitleChanged
             | Self::DocumentTagsChanged
             | Self::DocumentCorrespondentChanged
-            | Self::DocumentTypeChanged => WorkflowTarget::Document,
-            Self::DocumentDeleted => WorkflowTarget::Event,
+            | Self::DocumentTypeChanged
+            | Self::DocumentNoteCreated
+            | Self::DocumentNoteUpdated
+            | Self::DocumentNoteDeleted
+            | Self::DocumentCommentCreated
+            | Self::DocumentCommentUpdated
+            | Self::DocumentCommentDeleted
+            | Self::DocumentMetadataChanged => WorkflowTarget::Document,
+            Self::MetadataFieldCreated
+            | Self::MetadataFieldUpdated
+            | Self::MetadataFieldDeleted
+            | Self::MetadataFieldRestored
+            | Self::MetadataOptionCreated
+            | Self::MetadataOptionUpdated
+            | Self::MetadataOptionDeleted
+            | Self::MetadataOptionRestored
+            | Self::DocumentDeleted
+            | Self::IngestImported
+            | Self::IngestSkipped
+            | Self::IngestDuplicate
+            | Self::IngestFailed
+            | Self::SourceFailed
+            | Self::SourceRecovered => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
+        }
+    }
+
+    pub fn is_ingest_outcome(self) -> bool {
+        matches!(
+            self,
+            Self::IngestImported
+                | Self::IngestSkipped
+                | Self::IngestDuplicate
+                | Self::IngestFailed
+                | Self::SourceFailed
+                | Self::SourceRecovered
+        )
+    }
+
+    pub fn is_custom_metadata(self) -> bool {
+        matches!(
+            self,
+            Self::MetadataFieldCreated
+                | Self::MetadataFieldUpdated
+                | Self::MetadataFieldDeleted
+                | Self::MetadataFieldRestored
+                | Self::MetadataOptionCreated
+                | Self::MetadataOptionUpdated
+                | Self::MetadataOptionDeleted
+                | Self::MetadataOptionRestored
+                | Self::DocumentMetadataChanged
+        )
+    }
+
+    pub fn entry_transition(self) -> Option<(super::EntryKind, &'static str)> {
+        match self {
+            Self::DocumentNoteCreated => Some((super::EntryKind::Note, "created")),
+            Self::DocumentNoteUpdated => Some((super::EntryKind::Note, "updated")),
+            Self::DocumentNoteDeleted => Some((super::EntryKind::Note, "deleted")),
+            Self::DocumentCommentCreated => Some((super::EntryKind::Comment, "created")),
+            Self::DocumentCommentUpdated => Some((super::EntryKind::Comment, "updated")),
+            Self::DocumentCommentDeleted => Some((super::EntryKind::Comment, "deleted")),
+            _ => None,
         }
     }
 
@@ -144,6 +309,7 @@ pub struct WorkflowConditions {
     pub source: SourceConditions,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = WorkflowEventConditions, required = false))]
     pub event: Option<WorkflowEventConditions>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -311,6 +477,26 @@ impl WorkflowConditions {
                 .is_none_or(|id| document_type_id == Some(id))
     }
 
+    fn validate_event_conditions(&self, trigger: WorkflowTrigger) -> Result<()> {
+        if let Some(event) = &self.event {
+            if let Some(ingest) = &event.ingest {
+                ingest.validate_trigger(trigger)?;
+            }
+            if let Some(metadata) = &event.metadata {
+                metadata.validate_trigger(trigger)?;
+            }
+        }
+        for child in self
+            .all
+            .iter()
+            .chain(self.any.iter().flatten())
+            .chain(&self.none)
+        {
+            child.validate_event_conditions(trigger)?;
+        }
+        Ok(())
+    }
+
     fn requires_event_context(&self) -> bool {
         self.event.is_some()
             || self
@@ -456,6 +642,9 @@ pub struct Workflow {
     pub actions: Vec<WorkflowAction>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub revision: i64,
     #[serde(default)]
     pub deleted_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -514,12 +703,19 @@ impl WorkflowInput {
             if !self.trigger.target().accepts(action) {
                 return invalid(if self.trigger == WorkflowTrigger::DocumentDeleted {
                     "Only webhook actions can run when a document is deleted"
+                } else if self.trigger.is_ingest_outcome() {
+                    "Ingestion outcome workflows take only webhook actions"
+                } else if self.trigger.is_custom_metadata()
+                    && self.trigger.target() == WorkflowTarget::Event
+                {
+                    "Custom field and option workflows take only webhook actions"
                 } else {
                     "ingest.received workflows take only skip_import, and skip_import needs that trigger"
                 });
             }
         }
         self.conditions.validate()?;
+        self.conditions.validate_event_conditions(self.trigger)?;
         if self.trigger == WorkflowTrigger::IngestReceived
             && self.conditions.requires_event_context()
         {
@@ -630,6 +826,9 @@ pub struct WorkflowRun {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub source_event_id: Option<i64>,
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub definition_revision: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
 }
@@ -669,9 +868,15 @@ impl WorkflowRun {
             payload,
             actions: Vec::new(),
             source_event_id: None,
+            definition_revision: None,
             created_at: Utc::now(),
             finished_at: None,
         }
+    }
+
+    pub fn with_definition(mut self, workflow: &Workflow) -> Self {
+        self.definition_revision = Some(workflow.revision);
+        self.with_actions(workflow.actions.clone())
     }
 
     /// Freeze the actions to execute
@@ -725,6 +930,7 @@ mod tests {
                 actor: Some(crate::models::WorkflowActorCondition::User {
                     user_id: "editor".into(),
                 }),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -739,6 +945,7 @@ mod tests {
             event: Some(WorkflowEventConditions {
                 subject_id: Some(Id::from_u128(2)),
                 actor: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -764,6 +971,7 @@ mod tests {
             event: Some(WorkflowEventConditions {
                 subject_id: None,
                 actor: Some(crate::models::WorkflowActorCondition::System),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -788,6 +996,7 @@ mod tests {
                     event: Some(WorkflowEventConditions {
                         subject_id: None,
                         actor: Some(crate::models::WorkflowActorCondition::System),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -796,6 +1005,7 @@ mod tests {
                     event: Some(WorkflowEventConditions {
                         subject_id: Some(event.subject().id),
                         actor: None,
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -822,6 +1032,7 @@ mod tests {
             event: Some(WorkflowEventConditions {
                 subject_id: None,
                 actor: Some(crate::models::WorkflowActorCondition::System),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -838,6 +1049,7 @@ mod tests {
                     actor: Some(crate::models::WorkflowActorCondition::User {
                         user_id: "  ".into(),
                     }),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],
@@ -1151,6 +1363,43 @@ mod tests {
         assert_eq!(redact_url("not a url"), "<invalid url>");
         let err = validate_webhook_url("ftp://user:pw@example.com/x").unwrap_err();
         assert!(!err.to_string().contains("pw"));
+    }
+
+    #[test]
+    fn custom_metadata_triggers_use_their_occurrence_targets() {
+        for event in [
+            "metadata_field.created",
+            "metadata_field.updated",
+            "metadata_field.deleted",
+            "metadata_field.restored",
+            "metadata_option.created",
+            "metadata_option.updated",
+            "metadata_option.deleted",
+            "metadata_option.restored",
+            "document.metadata.changed",
+        ] {
+            let trigger = WorkflowTrigger::parse(event).expect(event);
+            let target = if event.starts_with("document.") {
+                WorkflowTarget::Document
+            } else {
+                WorkflowTarget::Event
+            };
+            assert_eq!(trigger.target(), target);
+            let descriptor = super::super::WorkflowTriggerRegistry::built_in()
+                .get(event)
+                .expect(event);
+            assert_eq!(descriptor.target, target);
+            let workflow = input(
+                trigger,
+                vec![WorkflowAction::AddTags {
+                    tag_ids: vec![Id::new_v4()],
+                }],
+            );
+            assert_eq!(
+                workflow.validate().is_ok(),
+                target == WorkflowTarget::Document
+            );
+        }
     }
 
     #[test]

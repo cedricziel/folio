@@ -5150,6 +5150,175 @@
         ]
       }
     },
+    "/api/vaults/{vault_id}/documents/{document_id}/metadata": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "getDocumentMetadata",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained assignments and their revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentMetadata"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "patchDocumentMetadata",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchDocumentMetadata"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Assignments after the atomic update",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentMetadata"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale metadata revision, uniqueness, or lifecycle conflict"
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/vaults/{vault_id}/history": {
       "get": {
         "tags": [
@@ -5340,6 +5509,1340 @@
           },
           "409": {
             "description": "The last direct owner is protected"
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-fields": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "listMetadataFields",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Definitions in stable ID order; pass the last ID as after for the next page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetadataField"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "createMetadataField",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataFieldInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Metadata field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataField"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-fields/{field_id}": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "getMetadataField",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataField"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "deleteMetadataField",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Metadata field"
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "metadata"
+        ],
+        "description": "Replace editable properties. Name and kind are required; omitted required and unique flags become false.",
+        "operationId": "updateMetadataField",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataFieldInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataField"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-fields/{field_id}/options": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "listMetadataOptions",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Options in stable ID order; pass the last ID as after for the next page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetadataOption"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "createMetadataOption",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataOptionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Metadata option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataOption"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-fields/{field_id}/options/{option_id}": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "getMetadataOption",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "option_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataOption"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "deleteMetadataOption",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "option_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Metadata option"
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "metadata"
+        ],
+        "description": "Replace label and position. Label is required; omitted position becomes zero.",
+        "operationId": "updateMetadataOption",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "option_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataOptionInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Metadata option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataOption"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-fields/{field_id}/options/{option_id}/restore": {
+      "post": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "restoreMetadataOption",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "option_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata option",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataOption"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-fields/{field_id}/restore": {
+      "post": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "restoreMetadataField",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataField"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required when enabled"
+          },
+          "403": {
+            "description": "Mutations require an Editor or Owner vault role and write scope"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A resource with the same unique value already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/vaults/{vault_id}/metadata-search": {
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "searchMetadata",
+        "parameters": [
+          {
+            "name": "vault_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "value",
+            "in": "query",
+            "description": "Tagged JSON value, for example {\"kind\":\"decimal\",\"value\":\"12.34\"}.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Continuation from the same vault, field, and canonical value.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching active documents in ID order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request is malformed or fails validation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The credential lacks the required scope or the request is not permitted"
+          },
+          "404": {
+            "description": "The resource does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -5974,6 +7477,58 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "sessionAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/workflows/triggers": {
+      "get": {
+        "tags": [
+          "workflows"
+        ],
+        "summary": "List selectable workflow triggers and their occurrence fields",
+        "operationId": "listWorkflowTriggers",
+        "parameters": [
+          {
+            "name": "X-Folio-Vault",
+            "in": "header",
+            "description": "Optional vault UUID. Omit to use the account default. Unknown or inaccessible vaults return 404; disallowed actions return 403.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Selectable workflow triggers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowTriggerDefinition"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is missing or the credential is invalid, expired, revoked, or issued for another audience"
+          },
+          "403": {
+            "description": "The token scope or vault role does not allow this action"
+          },
+          "404": {
+            "description": "The vault or resource is not visible"
           }
         },
         "security": [
@@ -7461,6 +9016,96 @@
           }
         }
       },
+      "DocumentMetadata": {
+        "type": "object",
+        "description": "All retained values of one logical document, ordered by field ID.",
+        "required": [
+          "document_id",
+          "values"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Compare-and-swap token; `None` until the first metadata change."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentMetadataValue"
+            }
+          }
+        }
+      },
+      "DocumentMetadataValue": {
+        "type": "object",
+        "description": "A retained assignment; a cleared value keeps its lifecycle attribution with `value: None`.",
+        "required": [
+          "field_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "link_target": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetadataLinkTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetadataValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "DocumentReviewRequest": {
         "type": "object",
         "required": [
@@ -7641,6 +9286,17 @@
                   "null"
                 ],
                 "description": "Name of the document type, when one is set"
+              },
+              "processing_stages": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "$ref": "#/components/schemas/ProcessingStageSummary",
+                  "readOnly": true
+                },
+                "description": "Current persisted stage runs on document detail; empty for documents predating stage tracking."
               },
               "reviewed": {
                 "type": "boolean"
@@ -8126,6 +9782,466 @@
         },
         "additionalProperties": false
       },
+      "MetadataChange": {
+        "type": "object",
+        "description": "One explicit replacement (`Some`) or clear (`None`); fields absent from a patch stay unchanged.",
+        "required": [
+          "field_id",
+          "value"
+        ],
+        "properties": {
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MetadataValue",
+                "description": "Required: an explicit `null` clears, so a missing key cannot clear by accident."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "MetadataChangeState": {
+        "type": "string",
+        "enum": [
+          "set",
+          "replaced",
+          "cleared"
+        ]
+      },
+      "MetadataField": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault_id",
+          "name",
+          "kind",
+          "required",
+          "unique",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MetadataKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "unique": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "MetadataFieldInput": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/MetadataKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "unique": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MetadataKind": {
+        "type": "string",
+        "enum": [
+          "text",
+          "long_text",
+          "boolean",
+          "integer",
+          "decimal",
+          "date",
+          "money",
+          "select",
+          "url",
+          "document_link"
+        ]
+      },
+      "MetadataLinkTarget": {
+        "type": "object",
+        "required": [
+          "title",
+          "trashed"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "trashed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MetadataOption": {
+        "type": "object",
+        "required": [
+          "id",
+          "vault_id",
+          "field_id",
+          "label",
+          "position",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "field_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "MetadataOptionInput": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "MetadataSearchHit": {
+        "type": "object",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "MetadataSearchResponse": {
+        "type": "object",
+        "required": [
+          "documents"
+        ],
+        "properties": {
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataSearchHit"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MetadataValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "long_text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "boolean"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "integer"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "decimal"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "money"
+                ]
+              },
+              "value": {
+                "type": "object",
+                "required": [
+                  "amount",
+                  "currency"
+                ],
+                "properties": {
+                  "amount": {
+                    "type": "string"
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "select"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "document_link"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
+      },
       "NamedRef": {
         "type": "object",
         "description": "A related entity, by id and display name",
@@ -8237,6 +10353,30 @@
           "mirror"
         ]
       },
+      "PatchDocumentMetadata": {
+        "type": "object",
+        "required": [
+          "revision",
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataChange"
+            }
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Revision returned by the last read. Send null before the first change."
+          }
+        },
+        "additionalProperties": false
+      },
       "PersonalTokenMetadata": {
         "type": "object",
         "required": [
@@ -8291,6 +10431,71 @@
           "user",
           "group"
         ]
+      },
+      "ProcessingEventStage": {
+        "type": "string",
+        "enum": [
+          "ocr",
+          "embedding",
+          "thumbnail"
+        ]
+      },
+      "ProcessingStageSummary": {
+        "type": "object",
+        "description": "Current persisted stage state; absent legacy runs are never synthesized.",
+        "required": [
+          "run_id",
+          "stage",
+          "attempt",
+          "state"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Counts stage starts within this run; zero means the stage has not started.",
+            "minimum": 0
+          },
+          "has_text": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Set only for completed OCR; `false` is a successful completion with no extracted text."
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Allowlisted reason for a retry, skip, or terminal failure."
+          },
+          "retry_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Absent for runs that started before immutable revision identity was available."
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ProcessingEventStage"
+          },
+          "state": {
+            "$ref": "#/components/schemas/StageOutcome"
+          }
+        }
       },
       "ProcessingStatus": {
         "type": "string",
@@ -8774,6 +10979,17 @@
             "format": "uuid"
           }
         }
+      },
+      "StageOutcome": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "waiting_to_retry",
+          "completed",
+          "failed",
+          "skipped"
+        ]
       },
       "Tag": {
         "type": "object",
@@ -9321,6 +11537,146 @@
           }
         }
       },
+      "WebhookEntry": {
+        "type": "object",
+        "required": [
+          "entry_id",
+          "document_id",
+          "vault_id",
+          "entry_kind",
+          "transition"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entry_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entry_kind": {
+            "$ref": "#/components/schemas/EntryKind"
+          },
+          "transition": {
+            "type": "string"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "WebhookIngest": {
+        "type": "object",
+        "required": [
+          "payload_version",
+          "source_id",
+          "source_kind"
+        ],
+        "properties": {
+          "attempt_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "item_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IngestResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          }
+        }
+      },
+      "WebhookMetadata": {
+        "type": "object",
+        "required": [
+          "vault_id",
+          "subject_id",
+          "data"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "data": {},
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "vault_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "WebhookMethod": {
         "type": "string",
         "description": "HTTP method used for webhook delivery",
@@ -9334,16 +11690,52 @@
         "required": [
           "event",
           "version",
-          "occurred_at",
-          "document"
+          "occurred_at"
         ],
         "properties": {
           "document": {
-            "$ref": "#/components/schemas/WebhookDocument"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "event": {
             "$ref": "#/components/schemas/WorkflowTrigger",
             "description": "Event name, for example `document.uploaded`"
+          },
+          "ingest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookIngest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WebhookMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "occurred_at": {
             "type": "string",
@@ -9621,6 +12013,39 @@
           }
         ]
       },
+      "WorkflowConditionField": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "value_type"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value_type": {
+            "$ref": "#/components/schemas/WorkflowConditionType"
+          }
+        }
+      },
+      "WorkflowConditionType": {
+        "type": "string",
+        "enum": [
+          "text",
+          "boolean",
+          "integer",
+          "decimal",
+          "date",
+          "timestamp",
+          "identifier",
+          "identifier_set",
+          "metadata_value"
+        ]
+      },
       "WorkflowConditions": {
         "type": "object",
         "description": "Conditions a document must meet; every set condition has to match",
@@ -9658,14 +12083,7 @@
             "description": "The document has this document type"
           },
           "event": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/WorkflowEventConditions"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/WorkflowEventConditions"
           },
           "filename_glob": {
             "type": [
@@ -9714,6 +12132,19 @@
               }
             ]
           },
+          "ingest": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowIngestConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/WorkflowMetadataConditions"
+          },
           "subject_id": {
             "type": [
               "string",
@@ -9746,6 +12177,51 @@
           }
         }
       },
+      "WorkflowIngestConditions": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IngestResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryable": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "source_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "source_kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "WorkflowInput": {
         "type": "object",
         "description": "Fields for creating or replacing a workflow",
@@ -9774,6 +12250,31 @@
             "$ref": "#/components/schemas/WorkflowTrigger"
           }
         }
+      },
+      "WorkflowMetadataConditions": {
+        "type": "object",
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/MetadataValue"
+          },
+          "before": {
+            "$ref": "#/components/schemas/MetadataValue"
+          },
+          "field_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MetadataKind"
+          },
+          "state": {
+            "$ref": "#/components/schemas/MetadataChangeState"
+          }
+        },
+        "additionalProperties": false
       },
       "WorkflowRun": {
         "type": "object",
@@ -9855,6 +12356,14 @@
           }
         }
       },
+      "WorkflowTarget": {
+        "type": "string",
+        "enum": [
+          "document",
+          "event",
+          "ingest_candidate"
+        ]
+      },
       "WorkflowTrigger": {
         "type": "string",
         "description": "Events a workflow can listen for",
@@ -9866,9 +12375,60 @@
           "document.tags_changed",
           "document.correspondent_changed",
           "document.document_type_changed",
+          "document_note.created",
+          "document_note.updated",
+          "document_note.deleted",
+          "document_comment.created",
+          "document_comment.updated",
+          "document_comment.deleted",
+          "metadata_field.created",
+          "metadata_field.updated",
+          "metadata_field.deleted",
+          "metadata_field.restored",
+          "metadata_option.created",
+          "metadata_option.updated",
+          "metadata_option.deleted",
+          "metadata_option.restored",
+          "document.metadata.changed",
           "document.deleted",
-          "ingest.received"
+          "ingest.received",
+          "ingest.imported",
+          "ingest.skipped",
+          "ingest.duplicate",
+          "ingest.failed",
+          "source.failed",
+          "source.recovered"
         ]
+      },
+      "WorkflowTriggerDefinition": {
+        "type": "object",
+        "required": [
+          "event_type",
+          "label",
+          "subject_type",
+          "target",
+          "condition_fields"
+        ],
+        "properties": {
+          "condition_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowConditionField"
+            }
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "subject_type": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/WorkflowTarget"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -9898,6 +12458,10 @@
     {
       "name": "documents",
       "description": "Documents and their files"
+    },
+    {
+      "name": "metadata",
+      "description": "Vault custom field definitions and options"
     },
     {
       "name": "tags",

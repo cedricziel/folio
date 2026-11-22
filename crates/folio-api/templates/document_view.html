@@ -7,7 +7,7 @@
 {% block content %}
 <article data-can-edit="{{ document|can_edit_document }}" class="doc-view" data-hotkey-document="{{ document.id }}" data-hotkey-title="{{ document.title }}">
     <header class="doc-head">
-        <a href="{{ "/"|vault_url }}" class="back-link">{{ icons::arrow_left() }} Inbox</a>
+        <a href="{{ back_href }}" class="back-link"{% if back_restores %} data-back-restores{% endif %}>{{ icons::arrow_left() }} {{ back_label }}</a>
         <div class="doc-head-row">
             <div class="doc-head-text">
                 <h1 class="title">{{ document.title }}</h1>
@@ -17,7 +17,7 @@
                 {% if document.file_path.is_some() %}
                 <a data-folio-action="document.download" href="{{ "/api/documents"|vault_url }}/{{ document.id }}/download" class="f-btn" download>{{ icons::download() }} Download</a>
                 {% if document|can_edit_document %}
-                <form data-folio-action="document.reprocess" action="{{ "/documents"|vault_url }}/{{ document.id }}/reprocess" method="post" data-turbo="false">
+                <form data-folio-action="document.reprocess" action="{{ "/documents"|vault_url }}/{{ document.id }}/reprocess" method="post" data-turbo="false">{% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                     <button type="submit" class="f-btn {% if failed %}f-btn-primary{% else %}f-btn-quiet{% endif %}">{{ icons::refresh() }} Read again</button>
                 </form>
                 {% endif %}
@@ -27,6 +27,7 @@
                       data-controller="confirm"
                       data-confirm-message-value="Move '{{ document.title }}' to Trash? You can restore it later."
                       data-action="submit->confirm#confirm">
+                    {% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                     <button type="submit" class="f-btn f-btn-quiet f-btn-danger">{{ icons::trash() }} Move to Trash</button>
                 </form>
                 {% endif %}
@@ -43,7 +44,7 @@
                 <dl class="f-meta-list">
                     <dt>From</dt>
                     <dd>
-                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">
+                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/correspondent" method="post" data-turbo="false">{% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                             <select name="correspondent_id" class="select" aria-label="From" {% if !(document|can_edit_document) %}disabled{% endif %} data-hotkey="edit" onchange="this.form.requestSubmit()">
                                 {% match correspondent %}{% when Some with (corr) %}{% if corr.deleted_at.is_some() %}<option value="{{ corr.id }}" selected disabled>{{ corr.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
@@ -56,7 +57,7 @@
 
                     <dt>Type</dt>
                     <dd>
-                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">
+                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/document_type" method="post" data-turbo="false">{% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                             <select name="document_type_id" class="select" aria-label="Type" {% if !(document|can_edit_document) %}disabled{% endif %} onchange="this.form.requestSubmit()">
                                 {% match document_type %}{% when Some with (dtype) %}{% if dtype.deleted_at.is_some() %}<option value="{{ dtype.id }}" selected disabled>{{ dtype.name }} (deleted)</option>{% endif %}{% when None %}{% endmatch %}
                                 <option value="">Not set</option>
@@ -70,7 +71,7 @@
                     <dt>Document date</dt>
                     <dd>
                         {% if document|can_edit_document %}
-                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">
+                        <form data-folio-action="document.edit" action="{{ "/documents"|vault_url }}/{{ document.id }}/date" method="post" data-turbo="false">{% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                             <input type="date" name="document_date" class="input" aria-label="Document date" min="0001-01-01" max="9999-12-31" value="{% match document.document_date %}{% when Some with (date) %}{{ date }}{% when None %}{% endmatch %}">
                             <button type="submit" class="f-btn f-btn-quiet">Save date</button>
                             <button type="submit" class="f-btn f-btn-quiet" name="clear" value="true">Clear date</button>
@@ -92,6 +93,7 @@
                         {% when None %}<span class="f-meta">Not reviewed</span>{% endmatch %}
                         {% if document|can_edit_document %}
                         <form data-folio-action="document.review" action="{{ "/documents"|vault_url }}/{{ document.id }}/review" method="post" data-turbo="false" data-controller="document-review" data-action="submit->document-review#submit">
+                            {% if !return_to.is_empty() %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
                             <input type="hidden" name="reviewed" value="{{ document.reviewed_at.is_none() }}">
                             <button type="submit" class="f-btn f-btn-quiet" data-document-review-target="button">{% if document.reviewed_at.is_some() %}Mark unreviewed{% else %}Mark reviewed{% endif %}</button>
                             <p role="alert" data-document-review-target="error" hidden></p>
@@ -164,6 +166,7 @@
                 {% include "partials/document_history.html" %}
             </section>
 
+            <turbo-frame id="custom-fields" src="{{ "/documents"|vault_url }}/{{ document.id }}/custom-fields?return_to={{ return_to|urlencode }}"></turbo-frame>
             {% include "partials/document_processing.html" %}
             {% include "partials/document_text.html" %}
             <turbo-frame id="document-notes" data-entry-frame src="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note" loading="lazy"><section class="panel"><h2 class="heading">Notes</h2><p role="status">Loading notes…</p><a href="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note">Load notes</a></section></turbo-frame>
@@ -171,4 +174,12 @@
         </aside>
     </div>
 </article>
+<script>
+document.querySelector("[data-back-restores]")?.addEventListener("click", (event) => {
+  if (!(history.state?.turbo?.restorationIndex > 0)) return;
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button) return;
+  event.preventDefault();
+  history.back();
+});
+</script>
 {% endblock %}

@@ -81,6 +81,51 @@ impl From<&crate::DomainEventEnvelope> for WorkflowEventIdentity {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookEntry {
+    pub entry_id: uuid::Uuid,
+    pub document_id: uuid::Uuid,
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub entry_kind: super::EntryKind,
+    pub transition: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<super::UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookIngest {
+    pub payload_version: u32,
+    pub source_id: uuid::Uuid,
+    pub source_kind: super::SourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt_id: Option<uuid::Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<super::IngestResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct WebhookMetadata {
+    #[cfg_attr(feature = "openapi", schema(value_type = uuid::Uuid))]
+    pub vault_id: VaultId,
+    pub subject_id: uuid::Uuid,
+    pub document_id: Option<uuid::Uuid>,
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
+    pub actor_id: Option<super::UserId>,
+    pub causation_id: Option<uuid::Uuid>,
+    pub data: serde_json::Value,
+}
+
 /// Body of every webhook delivery
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -91,7 +136,14 @@ pub struct WebhookPayload {
     #[cfg_attr(feature = "openapi", schema(example = 1))]
     pub version: u32,
     pub occurred_at: DateTime<Utc>,
-    pub document: WebhookDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<WebhookDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<WebhookEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingest: Option<WebhookIngest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<WebhookMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_event: Option<WorkflowEventIdentity>,
 }
@@ -106,13 +158,147 @@ impl WebhookPayload {
             event,
             version: PAYLOAD_VERSION,
             occurred_at,
-            document,
+            document: Some(document),
+            entry: None,
+            ingest: None,
+            metadata: None,
             source_event: None,
+        }
+    }
+
+    pub fn for_entry(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        entry: WebhookEntry,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: Some(entry),
+            ingest: None,
+            metadata: None,
+            source_event,
+        }
+    }
+
+    pub fn for_ingest(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        ingest: WebhookIngest,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: Some(ingest),
+            metadata: None,
+            source_event,
+        }
+    }
+
+    pub fn for_metadata(
+        event: WorkflowTrigger,
+        occurred_at: DateTime<Utc>,
+        metadata: WebhookMetadata,
+        source_event: Option<WorkflowEventIdentity>,
+    ) -> Self {
+        Self {
+            event,
+            version: PAYLOAD_VERSION,
+            occurred_at,
+            document: None,
+            entry: None,
+            ingest: None,
+            metadata: Some(metadata),
+            source_event,
         }
     }
 
     /// A payload with made-up content, for the "send test" action
     pub fn sample(event: WorkflowTrigger, base_url: &str) -> Self {
+        if event.is_custom_metadata() {
+            let id = Id::nil();
+            let data = match event.as_str().split('.').next() {
+                Some("metadata_field") => serde_json::json!({
+                    "field_id": id, "name": "Approved", "kind": "boolean",
+                    "required": false, "unique": false, "deleted_at": null
+                }),
+                Some("metadata_option") => serde_json::json!({
+                    "option_id": id, "field_id": id, "label": "Pending",
+                    "position": 0, "deleted_at": null
+                }),
+                _ => serde_json::json!({
+                    "revision": id,
+                    "changes": [{
+                        "field_id": id, "kind": "boolean", "before": null,
+                        "after": {"kind": "boolean", "value": false}
+                    }]
+                }),
+            };
+            return Self::for_metadata(
+                event,
+                Utc::now(),
+                WebhookMetadata {
+                    vault_id: VaultId(id),
+                    subject_id: id,
+                    document_id: (event.target() == super::WorkflowTarget::Document).then_some(id),
+                    data,
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
+        if let Some((entry_kind, transition)) = event.entry_transition() {
+            return Self::for_entry(
+                event,
+                Utc::now(),
+                WebhookEntry {
+                    entry_id: Id::nil(),
+                    document_id: Id::nil(),
+                    vault_id: VaultId(Id::nil()),
+                    entry_kind,
+                    transition: transition.into(),
+                    actor_id: None,
+                    causation_id: None,
+                },
+                None,
+            );
+        }
+        if event.is_ingest_outcome() {
+            use super::IngestResult;
+            let outcome = match event {
+                WorkflowTrigger::IngestImported => Some(IngestResult::Imported),
+                WorkflowTrigger::IngestSkipped => Some(IngestResult::Skipped),
+                WorkflowTrigger::IngestDuplicate => Some(IngestResult::Duplicate),
+                WorkflowTrigger::IngestFailed => Some(IngestResult::Failed),
+                _ => None,
+            };
+            let reason_code = outcome.map(IngestResult::reason_code).or_else(|| {
+                (event == WorkflowTrigger::SourceFailed).then_some("source_unavailable")
+            });
+            return Self::for_ingest(
+                event,
+                Utc::now(),
+                WebhookIngest {
+                    payload_version: 1,
+                    source_id: Id::nil(),
+                    source_kind: super::SourceKind::Folder,
+                    item_id: outcome.map(|_| Id::nil()),
+                    attempt_id: outcome.map(|_| Id::nil()),
+                    outcome,
+                    reason_code: reason_code.map(str::to_owned),
+                    retryable: outcome.map(IngestResult::retryable),
+                },
+                None,
+            );
+        }
         let mut doc = Document::new(VaultId::new(), "Sample invoice")
             .with_filename("invoice-2025-03.pdf")
             .with_mime_type("application/pdf");

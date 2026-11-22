@@ -1,6 +1,27 @@
 import XCTest
 
 @MainActor final class NavigationTests: XCTestCase {
+    func testProcessingViewDistinguishesRetryFailureAndSkip() {
+        XCUIDevice.shared.orientation = .portrait
+        let app = XCUIApplication()
+        app.launchArguments = ["--processing-state"]
+        app.launch()
+
+        let ocr = app.descendants(matching: .any)["processing-stage-ocr"].firstMatch
+        XCTAssertTrue(ocr.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(ocr.label.contains("Waiting to retry"))
+        XCTAssertTrue(ocr.label.contains("Attempt 2"))
+        XCTAssertTrue(ocr.label.contains("Retry after"))
+
+        let embedding = app.descendants(matching: .any)["processing-stage-embedding"].firstMatch
+        XCTAssertTrue(embedding.label.contains("Failed"))
+        XCTAssertTrue(embedding.label.contains("The processing service returned an unusable result."))
+
+        let thumbnail = app.descendants(matching: .any)["processing-stage-thumbnail"].firstMatch
+        XCTAssertTrue(thumbnail.label.contains("Skipped"))
+        capture(app, name: "Processing retry, failure and skip")
+    }
+
     func testSavedViewCanBeSavedEditedAndDeleted() {
         XCUIDevice.shared.orientation = .portrait
         let app = XCUIApplication()

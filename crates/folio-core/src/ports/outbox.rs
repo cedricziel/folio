@@ -51,6 +51,9 @@ pub trait OutboxStore: Send + Sync {
     /// The newest recent events that may have been missed after `after_id`.
     ///
     /// Returns up to `limit` events in ID order, including pending events.
+    /// The newest prefix must fit within 8 MiB of complete stored UTF-8 payloads,
+    /// including envelopes and snapshots, before payloads enter application memory.
+    /// An event exceeding that budget stops the prefix, even if it would be first.
     /// Events created before `since` are excluded. Replay can overlap prior
     /// deliveries, so callers must tolerate repeats.
     async fn replay(

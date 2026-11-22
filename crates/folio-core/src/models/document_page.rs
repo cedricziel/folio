@@ -56,8 +56,15 @@ impl DocumentPageQuery {
                 filter.tag_ids = None;
             }
         }
-        let bytes = serde_json::to_vec(&(1, vault, filter, self.sort))
-            .expect("document query contains only serializable scalar values");
+        let bytes = if let Some(mut exact) = filter.metadata_exact.take() {
+            if let Ok(value) = exact.value.clone().validate(exact.value.kind(), false) {
+                exact.value = value;
+            }
+            serde_json::to_vec(&(1, vault, filter, self.sort, exact))
+        } else {
+            serde_json::to_vec(&(1, vault, filter, self.sort))
+        }
+        .expect("document query contains only serializable scalar values");
         hex::encode(Sha256::digest(bytes))
     }
 

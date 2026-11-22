@@ -159,6 +159,66 @@ async fn contract(r: &Repositories, kind: EntryKind, other_kind: EntryKind, pref
     assert!(!serde_json::to_string(&transitions)
         .unwrap()
         .contains("Revised"));
+
+    let engine = folio_core::services::WorkflowEngine::new(
+        r.workflows.clone(),
+        r.documents.clone(),
+        r.correspondents.clone(),
+        r.document_types.clone(),
+        std::sync::Arc::new(folio_infra::StorageFileMetadata::new(std::sync::Arc::new(
+            folio_infra::ObjectStoreDocumentStore::in_memory(),
+        ))),
+        "http://folio.test",
+    );
+    for transition in transitions {
+        use folio_core::models::{
+            WebhookMethod, WorkflowAction, WorkflowEventConditions, WorkflowInput, WorkflowTrigger,
+        };
+
+        let trigger = WorkflowTrigger::parse(transition.event_type()).unwrap();
+        let workflow = r
+            .workflows
+            .create(
+                vault,
+                WorkflowInput {
+                    name: transition.event_type().into(),
+                    enabled: true,
+                    trigger,
+                    conditions: folio_core::models::WorkflowConditions {
+                        event: Some(WorkflowEventConditions {
+                            subject_id: Some(entry.id),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    actions: vec![WorkflowAction::Webhook {
+                        url: "https://example.com/entry".into(),
+                        method: WebhookMethod::Post,
+                        headers: Default::default(),
+                        secret: None,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let event = events
+            .iter()
+            .find(|event| {
+                event
+                    .envelope
+                    .as_ref()
+                    .is_some_and(|source| source.event_id() == transition.event_id())
+            })
+            .unwrap();
+        let runs = engine.handle(event).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].workflow_id, workflow.id);
+        let payload: serde_json::Value = serde_json::from_str(&runs[0].payload).unwrap();
+        assert_eq!(payload["entry"]["entry_id"], entry.id.to_string());
+        assert!(!runs[0].payload.contains("Private text"));
+        assert!(!runs[0].payload.contains("Revised"));
+        assert!(engine.handle(event).await.unwrap().is_empty());
+    }
 }
 
 async fn rollback_and_concurrency_contract(r: &Repositories) {

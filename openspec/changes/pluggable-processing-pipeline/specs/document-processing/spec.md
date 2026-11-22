@@ -65,12 +65,17 @@ A processing job SHALL generate thumbnails and record the page count, then, if `
 
 ### Requirement: OCR through the configured AI provider
 
-OCR SHALL use the provider selected by `ocr.provider` from the registry: `tesseract` (default), `ocrmypdf`, `openai-vision`, `anthropic-vision`, `ollama-vision` or `none`, with `ocr.model` (empty selects the provider default), `ocr.languages` and `ocr.base_url`. For PDFs, an embedded text layer extracted with `pdftotext` SHALL be used instead of the provider when at least 80% of pages contain 20 or more letters or digits. Otherwise pages SHALL be rasterized with `pdftoppm` at 300 DPI and recognised page by page, joined by blank lines; a failing page fails the OCR. Each result SHALL report the engine id and, when available, a confidence.
+OCR SHALL use the provider selected by `ocr.provider` from the registry: `tesseract` (default), `ocrmypdf`, `openai-vision`, `anthropic-vision`, `ollama-vision` or `none`, with `ocr.model` (empty selects the provider default), `ocr.languages` and `ocr.base_url`. For each PDF page, embedded text extracted with `pdftotext` SHALL be used when it contains at least 20 letters or digits. Other pages SHALL be rasterized with `pdftoppm` at 300 DPI and sent to the OCR provider. If the embedded text cannot be extracted, the provider SHALL recognize every page. The extracted and recognized page text SHALL be joined in page order with blank lines. A failing page fails the OCR. Each result SHALL report the engine id and, when available, a confidence.
 
 #### Scenario: PDF with a text layer
 
-- **WHEN** a PDF with a substantial text layer is processed
+- **WHEN** every page of a PDF has at least 20 embedded letters or digits
 - **THEN** the text layer is stored and the OCR provider is not called
+
+#### Scenario: PDF with digital pages and a scanned page
+
+- **WHEN** a five-page PDF has meaningful text on pages one, two, four, and five and a scan on page three
+- **THEN** only page three is sent to the OCR provider and the resulting text is stored between the embedded text of pages two and four
 
 #### Scenario: Scanned PDF with tesseract
 

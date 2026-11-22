@@ -813,7 +813,7 @@ async fn disabled_embedding_skips_text_without_queueing(db: &Database) {
     fixture.finish().await;
 }
 
-async fn superseded_embedding_run_keeps_ocr_result(db: &Database) {
+async fn superseded_embedding_plan_reactivates_for_changed_ocr(db: &Database) {
     let fixture = Fixture::new(db).await;
     let fence = fixture.start().await.unwrap().unwrap();
     fixture
@@ -822,7 +822,6 @@ async fn superseded_embedding_run_keeps_ocr_result(db: &Database) {
             fixture.embedding_run
         ))
         .await;
-    let embed_status = fixture.embedding_state().await.5;
     assert!(fixture
         .complete(&fence, "text racing a re-embed")
         .await
@@ -836,16 +835,190 @@ async fn superseded_embedding_run_keeps_ocr_result(db: &Database) {
             "done".into()
         )
     );
-    assert!(fixture.embedding_jobs().await.is_empty());
+    assert_eq!(fixture.embedding_jobs().await.len(), 1);
     let embedding = fixture.embedding_state().await;
     assert_eq!(embedding.0, "pending");
-    assert_eq!(embedding.5, embed_status);
+    assert_eq!(embedding.5, "pending");
     assert_eq!(fixture.events().await.len(), 2);
+    fixture.finish().await;
+}
+
+async fn changed_ocr_replaces_newer_completed_embedding_plan(db: &Database) {
+    let fixture = Fixture::new(db).await;
+    fixture
+        .update(format!(
+            "UPDATE documents SET content = 'original text' WHERE id = '{}'",
+            fixture.document
+        ))
+        .await;
+    let ocr = fixture.start().await.unwrap().unwrap();
+    let repos = db.repositories().await;
+    repos
+        .jobs
+        .enqueue(JobType::generate_embedding(fixture.document))
+        .await
+        .unwrap();
+    let embedding_job = repos.jobs.dequeue().await.unwrap().unwrap();
+    let embedding = repos
+        .jobs
+        .start_derived(
+            &embedding_job,
+            folio_core::processing_events::ProcessingEventStage::Embedding,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(repos
+        .jobs
+        .complete_embedding(
+            &embedding,
+            "original text",
+            "test-model",
+            &[folio_core::ports::EmbeddedChunk {
+                index: 0,
+                text: "original text".into(),
+                embedding: vec![0.5, 0.25]
+            }]
+        )
+        .await
+        .unwrap());
+    repos.jobs.complete(&embedding_job).await.unwrap();
+    assert_eq!(chunk_count(db, fixture.document).await, 1);
+    assert!(fixture.complete(&ocr, "changed OCR text").await.unwrap());
+    assert_eq!(chunk_count(db, fixture.document).await, 0);
+    assert_eq!(fixture.embedding_jobs().await.len(), 1);
+    assert_eq!(fixture.embedding_state().await.5, "pending");
+    let child = repos.jobs.dequeue().await.unwrap().unwrap();
+    assert!(repos
+        .jobs
+        .start_derived(
+            &child,
+            folio_core::processing_events::ProcessingEventStage::Embedding,
+        )
+        .await
+        .unwrap()
+        .is_some());
+    let events = fixture.events().await;
+    let started = events.last().unwrap().envelope.as_ref().unwrap();
+    assert_eq!(
+        started.event_type(),
+        "document.processing.embedding.started"
+    );
+    assert_eq!(started.data()["run_id"], fixture.embedding_run.to_string());
+    fixture.finish().await;
+}
+
+async fn chunk_count(db: &Database, document: Uuid) -> i64 {
+    match db {
+        Database::Sqlite(pool) => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM document_chunks WHERE document_id = ?")
+                .bind(document.to_string())
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+        Database::Postgres(pool) => {
+            sqlx::query_scalar("SELECT COUNT(*) FROM document_chunks WHERE document_id = $1")
+                .bind(document)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        }
+    }
+}
+
+async fn changed_ocr_content_invalidates_chunks_atomically(db: &Database) {
+    let fixture = Fixture::new(db).await;
+    fixture
+        .update(format!(
+            "UPDATE documents SET content = 'original text' WHERE id = '{}'",
+            fixture.document
+        ))
+        .await;
+    db.repositories()
+        .await
+        .search
+        .store_chunks(
+            fixture.vault,
+            fixture.document,
+            "test-model",
+            &[folio_core::ports::EmbeddedChunk {
+                index: 0,
+                text: "original text".into(),
+                embedding: vec![0.5, 0.25],
+            }],
+        )
+        .await
+        .unwrap();
+    let fence = fixture.start().await.unwrap().unwrap();
+    execute(db,
+        "CREATE TRIGGER refuse_ocr_outbox BEFORE INSERT ON outbox_events BEGIN SELECT RAISE(ABORT, 'refused'); END",
+        "CREATE FUNCTION refuse_ocr_outbox() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$ LANGUAGE plpgsql; CREATE TRIGGER refuse_ocr_outbox BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION refuse_ocr_outbox()"
+    ).await;
+    assert!(fixture.complete(&fence, "changed text").await.is_err());
+    assert_eq!(chunk_count(db, fixture.document).await, 1);
+    execute(
+        db,
+        "DROP TRIGGER refuse_ocr_outbox",
+        "DROP TRIGGER refuse_ocr_outbox ON outbox_events; DROP FUNCTION refuse_ocr_outbox()",
+    )
+    .await;
+    let expiry_trigger = format!("CREATE TRIGGER expire_ocr_claim BEFORE INSERT ON outbox_events BEGIN UPDATE jobs SET lease_expires_at = 0 WHERE id = '{}'; END", fixture.job.id);
+    let pg_expiry_trigger = format!("CREATE FUNCTION expire_ocr_claim() RETURNS trigger AS $$ BEGIN UPDATE jobs SET lease_expires_at = 0 WHERE id = '{}'; RETURN NEW; END $$ LANGUAGE plpgsql; CREATE TRIGGER expire_ocr_claim BEFORE INSERT ON outbox_events FOR EACH ROW EXECUTE FUNCTION expire_ocr_claim()", fixture.job.id);
+    execute(db, &expiry_trigger, &pg_expiry_trigger).await;
+    assert!(!fixture.complete(&fence, "changed text").await.unwrap());
+    assert_eq!(chunk_count(db, fixture.document).await, 1);
+    assert_eq!(fixture.state().await.2.as_deref(), Some("original text"));
+    execute(
+        db,
+        "DROP TRIGGER expire_ocr_claim",
+        "DROP TRIGGER expire_ocr_claim ON outbox_events; DROP FUNCTION expire_ocr_claim()",
+    )
+    .await;
+    assert!(fixture.complete(&fence, "changed text").await.unwrap());
+    assert_eq!(chunk_count(db, fixture.document).await, 0);
+    fixture.finish().await;
+}
+
+async fn unchanged_ocr_content_retains_chunks(db: &Database) {
+    let fixture = Fixture::new(db).await;
+    fixture
+        .update(format!(
+            "UPDATE documents SET content = 'original text' WHERE id = '{}'",
+            fixture.document
+        ))
+        .await;
+    let repos = db.repositories().await;
+    repos
+        .search
+        .store_chunks(
+            fixture.vault,
+            fixture.document,
+            "test-model",
+            &[folio_core::ports::EmbeddedChunk {
+                index: 0,
+                text: "original text".into(),
+                embedding: vec![0.5, 0.25],
+            }],
+        )
+        .await
+        .unwrap();
+    let fence = fixture.start().await.unwrap().unwrap();
+    assert!(fixture.complete(&fence, "original text").await.unwrap());
+    assert_eq!(chunk_count(db, fixture.document).await, 1);
+    assert!(!fixture
+        .complete(&fence, "stale changed text")
+        .await
+        .unwrap());
+    assert_eq!(chunk_count(db, fixture.document).await, 1);
     fixture.finish().await;
 }
 
 async fn contract(db: &Database) {
     db.migrate().await.unwrap();
+    Box::pin(changed_ocr_replaces_newer_completed_embedding_plan(db)).await;
+    Box::pin(changed_ocr_content_invalidates_chunks_atomically(db)).await;
+    Box::pin(unchanged_ocr_content_retains_chunks(db)).await;
     Box::pin(duplicate_empty_completion_is_one_combined_event(db)).await;
     Box::pin(outbox_rejection_rolls_back_start_and_completion(db)).await;
     Box::pin(embedding_enqueue_failure_rolls_back_ocr_and_events(db)).await;
@@ -853,7 +1026,7 @@ async fn contract(db: &Database) {
     Box::pin(embedding_skip_outbox_failure_rolls_back_ocr_completion(db)).await;
     Box::pin(disabled_ocr_preserves_content_and_assigns_embedding(db)).await;
     Box::pin(disabled_embedding_skips_text_without_queueing(db)).await;
-    Box::pin(superseded_embedding_run_keeps_ocr_result(db)).await;
+    Box::pin(superseded_embedding_plan_reactivates_for_changed_ocr(db)).await;
     Box::pin(expired_and_replaced_claims_cannot_publish(db)).await;
     Box::pin(moved_and_trashed_documents_cannot_publish(db)).await;
     Box::pin(deleted_vaults_cannot_start_or_publish(db)).await;

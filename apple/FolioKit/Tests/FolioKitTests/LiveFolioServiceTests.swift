@@ -75,6 +75,28 @@ private let documentJSON = """
     """
 
 @Suite(.serialized) struct LiveFolioServiceTests {
+    @Test func documentDetailMapsPersistedStageStateAndRunIdentity() async throws {
+        StubURLProtocol.handler = { _, _ in
+            let stages = """
+                "processing_stages":[{
+                    "run_id":"11111111-2222-4333-8444-555555555555",
+                    "revision_id":null,"stage":"embedding","attempt":2,
+                    "state":"waiting_to_retry","reason_code":"provider_failed",
+                    "retry_at":"2027-01-15T08:00:00Z","has_text":null
+                }],"title":
+                """
+            return .init(body: Data(documentJSON.replacingOccurrences(of: "\"title\":", with: stages).utf8))
+        }
+        let document = try await makeService().document(id: UUID())
+        #expect(document.processingStages.count == 1)
+        #expect(document.processingStages[0].runID == UUID(uuidString: "11111111-2222-4333-8444-555555555555"))
+        #expect(document.processingStages[0].revisionID == nil)
+        #expect(document.processingStages[0].state == .waitingToRetry)
+        #expect(document.processingStages[0].reason == .providerFailed)
+        #expect(document.processingStages[0].retryAt == Date(timeIntervalSince1970: 1_800_000_000))
+        #expect(document.processingSummary[1].status == "Waiting to retry")
+    }
+
     @Test func reviewMutationUsesSelectedVaultAndMapsExplicitState() async throws {
         let vault = UUID()
         let id = UUID(uuidString: "3f2c1b2e-5b0a-4c53-9d6e-0a1b2c3d4e5f")!
@@ -103,6 +125,7 @@ private let documentJSON = """
         StubURLProtocol.handler = { _, _ in .init(body: Data(documentJSON.utf8)) }
         let doc = try await makeService().document(id: UUID())
         #expect(doc.reviewed == nil)
+        #expect(doc.processingStages.isEmpty)
         #expect(!doc.canReviewDocument)
         StubURLProtocol.handler = { _, _ in
             .init(body: Data("{\"documents\":[],\"count\":0}".utf8))
@@ -172,7 +195,7 @@ private let documentJSON = """
         {"id":"00000000-0000-0000-0000-000000000001",
         "vault_id":"00000000-0000-0000-0000-000000000002","owner_id":"alice",
         "name":"Invoices","visibility":"private","presentation":"grid",
-        "query":{"version":1,"filters":{"search_query":"paid","tag_ids":["00000000-0000-0000-0000-000000000003"]},"sort":"title"},
+        "query":{"version":1,"filters":{"reviewed":false,"document_date_from":"2026-01-01","document_date_to":"2026-01-31","search_query":"paid","tag_ids":["00000000-0000-0000-0000-000000000003"]},"sort":"title"},
         "created_at":"2026-11-02T00:00:00Z","updated_at":"2026-11-02T00:00:00Z",
         "deleted_at":null,"created_by":"alice","updated_by":"alice"}
         """
@@ -192,6 +215,9 @@ private let documentJSON = """
         #expect(view.query.text == "paid")
         #expect(view.query.sort == .title)
         #expect(view.query.filter.tagIDs.count == 1)
+        #expect(view.query.filter.reviewed == false)
+        #expect(view.query.filter.documentDateFrom?.rawValue == "2026-01-01")
+        #expect(view.query.filter.documentDateTo?.rawValue == "2026-01-31")
         #expect(view.presentation == .grid)
         #expect(view.ownerID == "alice")
     }
@@ -208,10 +234,21 @@ private let documentJSON = """
             let query = object?["query"] as? [String: Any]
             #expect(query?["version"] as? Int == 1)
             #expect(query?["sort"] as? String == "title")
+            let filters = query?["filters"] as? [String: Any]
+            #expect(filters?["reviewed"] as? Bool == false)
+            #expect(filters?["document_date_from"] as? String == "2026-01-01")
+            #expect(filters?["document_date_to"] as? String == "2026-01-31")
             return .init(status: 201, body: response)
         }
         _ = try await makeService().scoped(to: vault).saveView(
-            .init(name: "Invoices", query: .init(text: "paid", sort: .title)))
+            .init(
+                name: "Invoices",
+                query: .init(
+                    text: "paid",
+                    filter: .init(
+                        reviewed: false, documentDateFrom: DocumentDate(rawValue: "2026-01-01"),
+                        documentDateTo: DocumentDate(rawValue: "2026-01-31")
+                    ), sort: .title)))
     }
 
     @Test func renamingViewOmitsUnchangedQuery() async throws {

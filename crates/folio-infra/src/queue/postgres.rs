@@ -6,12 +6,15 @@
 
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{PgConnection, PgPool};
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use folio_core::error::{Error, Result};
 
-use super::{FailOutcome, Job, JobClass, JobStatus, JobType, DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS};
+use super::{
+    damaged_row_message, payload_problem, FailOutcome, Job, JobClass, JobStatus, JobType,
+    DEFAULT_MAX_ATTEMPTS, LEASE_SECONDS, MAX_UNREADABLE_PER_DEQUEUE,
+};
 
 /// Insert a pending job; pass a transaction to commit it together with other writes
 pub(crate) async fn insert_job(
@@ -21,6 +24,7 @@ pub(crate) async fn insert_job(
     max_attempts: i32,
     trace: Option<&super::JobTraceContext>,
 ) -> Result<Uuid> {
+    job_type.ensure_dispatchable()?;
     let plan =
         super::processing_scope::postgres::prepare_enqueue(conn, &job_type, Uuid::new_v4()).await?;
     if plan.existing {
@@ -66,6 +70,50 @@ pub(crate) async fn insert_job(
     Ok(id)
 }
 
+async fn current_processing_job(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    force: bool,
+) -> Result<JobType> {
+    let document = super::processing_scope::postgres::document(conn, document_id).await?;
+    super::processing_scope::bind_requested_processing(
+        document.as_ref(),
+        vault,
+        document_id,
+        force,
+        super::REVISION_DISPATCH_ENABLED,
+    )
+}
+
+pub(crate) async fn insert_current_processing(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    force: bool,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let job = current_processing_job(conn, vault, document_id, force).await?;
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
+}
+
+pub(crate) async fn insert_current_thumbnail(
+    conn: &mut PgConnection,
+    vault: folio_core::models::VaultId,
+    document_id: Uuid,
+    trace: Option<&super::JobTraceContext>,
+) -> Result<Uuid> {
+    let current = current_processing_job(conn, vault, document_id, false).await?;
+    let job = match current.revision_id() {
+        Some(revision_id) => JobType::GenerateRevisionThumbnail {
+            document_id,
+            revision_id,
+        },
+        None => JobType::GenerateThumbnail { document_id },
+    };
+    insert_job(conn, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, trace).await
+}
+
 #[derive(Clone)]
 pub struct PostgresJobQueue {
     pool: PgPool,
@@ -98,27 +146,26 @@ macro_rules! job_columns {
     };
 }
 
-impl TryFrom<JobRow> for Job {
-    type Error = Error;
-
-    fn try_from(row: JobRow) -> Result<Self> {
-        let job_type: JobType = serde_json::from_str(&row.payload)
-            .map_err(|e| Error::Repository(format!("Failed to deserialize job: {}", e)))?;
+impl JobRow {
+    /// Build the job, or say in plain words which field could not be read
+    fn into_job(self) -> std::result::Result<Job, &'static str> {
+        let job_type: JobType =
+            serde_json::from_str(&self.payload).map_err(|e| payload_problem(&e))?;
         Ok(Job {
-            id: row.id,
+            id: self.id,
             job_type,
-            status: JobStatus::from(row.status),
-            attempts: row.attempts,
-            max_attempts: row.max_attempts,
-            error: row.error,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-            scheduled_at: row.scheduled_at,
-            started_at: row.started_at,
-            completed_at: row.completed_at,
-            claim_id: row.claim_id,
-            lease_expires_at: row.lease_expires_at,
-            trace: super::JobTraceContext::from_columns(row.trace_parent, row.trace_state),
+            status: JobStatus::from(self.status),
+            attempts: self.attempts,
+            max_attempts: self.max_attempts,
+            error: self.error,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            scheduled_at: self.scheduled_at,
+            started_at: self.started_at,
+            completed_at: self.completed_at,
+            claim_id: self.claim_id,
+            lease_expires_at: self.lease_expires_at,
+            trace: super::JobTraceContext::from_columns(self.trace_parent, self.trace_state),
         })
     }
 }
@@ -156,6 +203,92 @@ impl PostgresJobQueue {
             .await
     }
 
+    pub(super) async fn repair_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        stage: folio_core::models::ProcessingStage,
+    ) -> Result<bool> {
+        use folio_core::models::ProcessingStage;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to repair pending processing"))?;
+        let document = super::processing_scope::postgres::document(&mut tx, document_id).await?;
+        let request = match super::processing_scope::bind_requested_processing(
+            document.as_ref(),
+            vault,
+            document_id,
+            false,
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let ready: bool = sqlx::query_scalar(
+            "SELECT (CASE WHEN $2 THEN d.ocr_status = 'pending' AND d.file_path IS NOT NULL
+                      ELSE d.embed_status = 'pending' AND d.content IS NOT NULL AND d.content <> ''
+                           AND d.ocr_status NOT IN ('pending', 'running')
+                     END)
+                AND NOT EXISTS (
+                    SELECT 1 FROM jobs j
+                    WHERE j.status IN ('pending', 'processing')
+                      AND j.payload->'data'->>'document_id' = d.id::text
+                      AND (j.origin_vault_id IS NULL OR j.origin_vault_id = d.vault_id)
+                )
+             FROM documents d WHERE d.id = $1",
+        )
+        .bind(document_id)
+        .bind(stage == ProcessingStage::Ocr)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(repo_err("Failed to repair pending processing"))?;
+        if !ready {
+            return Ok(false);
+        }
+
+        let job = match stage {
+            ProcessingStage::Ocr => request,
+            ProcessingStage::Embed => {
+                JobType::embedding_for_revision(document_id, request.revision_id())
+            }
+        };
+        insert_job(
+            &mut tx,
+            job,
+            Utc::now(),
+            DEFAULT_MAX_ATTEMPTS,
+            super::JobTraceContext::current().as_ref(),
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to repair pending processing"))?;
+        Ok(true)
+    }
+
+    pub(super) async fn enqueue_current_processing(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+        force: bool,
+        trace: Option<super::JobTraceContext>,
+    ) -> Result<Uuid> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to schedule current processing"))?;
+        let id =
+            insert_current_processing(&mut tx, vault, document_id, force, trace.as_ref()).await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to schedule current processing"))?;
+        Ok(id)
+    }
+
     #[instrument(skip(self, trace))]
     pub async fn enqueue_with_max_attempts(
         &self,
@@ -183,7 +316,92 @@ impl PostgresJobQueue {
         Ok(id)
     }
 
+    pub(super) async fn reembed_documents(&self) -> Result<usize> {
+        let candidates: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "SELECT d.id, d.vault_id FROM documents d
+             JOIN vaults v ON v.id = d.vault_id AND v.deleted_at IS NULL
+             WHERE d.deleted_at IS NULL AND d.purge_requested_at IS NULL
+               AND d.ocr_status NOT IN ('pending', 'running')
+               AND d.content IS NOT NULL AND d.content <> ''",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        let mut queued = 0;
+        for (document_id, vault) in candidates {
+            let vault = folio_core::models::VaultId(vault);
+            match self.reembed_current_document(vault, document_id).await {
+                Ok(true) => queued += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%document_id, %error, "Failed to enqueue re-embedding")
+                }
+            }
+        }
+        Ok(queued)
+    }
+
+    async fn reembed_current_document(
+        &self,
+        vault: folio_core::models::VaultId,
+        document_id: Uuid,
+    ) -> Result<bool> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        let scope = super::processing_scope::postgres::document(&mut tx, document_id).await?;
+        let current = match super::processing_scope::bind_requested_processing(
+            scope.as_ref(),
+            vault,
+            document_id,
+            false,
+            super::REVISION_DISPATCH_ENABLED,
+        ) {
+            Ok(job) => job,
+            Err(Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let updated = sqlx::query(
+            "UPDATE documents SET embed_status = 'pending'
+             WHERE id = $1 AND vault_id = $2 AND deleted_at IS NULL
+               AND purge_requested_at IS NULL AND ocr_status NOT IN ('pending', 'running')
+               AND content IS NOT NULL AND content <> ''
+               AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)",
+        )
+        .bind(document_id).bind(vault.0)
+        .execute(&mut *tx)
+        .await
+        .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        if updated.rows_affected() != 1 {
+            return Ok(false);
+        }
+        let job = JobType::embedding_for_revision(document_id, current.revision_id());
+        insert_job(&mut tx, job, Utc::now(), DEFAULT_MAX_ATTEMPTS, None).await?;
+        tx.commit()
+            .await
+            .map_err(repo_err("Failed to enqueue re-embedding"))?;
+        Ok(true)
+    }
+
+    /// Claim the next job; a row that cannot be read is marked failed and skipped
     pub async fn dequeue(&self, class: Option<JobClass>) -> Result<Option<Job>> {
+        for _ in 0..MAX_UNREADABLE_PER_DEQUEUE {
+            let Some(row) = self.claim_next(class).await? else {
+                return Ok(None);
+            };
+            let (id, claim_id) = (row.id, row.claim_id);
+            match row.into_job() {
+                Ok(job) => return Ok(Some(job)),
+                Err(problem) => self.quarantine(id, claim_id, problem).await?,
+            }
+        }
+        warn!("Set aside {MAX_UNREADABLE_PER_DEQUEUE} unreadable job rows in one call, pausing");
+        Ok(None)
+    }
+
+    async fn claim_next(&self, class: Option<JobClass>) -> Result<Option<JobRow>> {
         let now = Utc::now();
         let class_filter = class.map_or("TRUE", JobClass::condition);
 
@@ -207,8 +425,22 @@ impl PostgresJobQueue {
         .fetch_optional(&self.pool)
         .await
         .map_err(repo_err("Failed to dequeue job"))?;
+        Ok(row)
+    }
 
-        row.map(TryInto::try_into).transpose()
+    /// Take an unreadable row out of circulation, keeping it for an operator to inspect
+    async fn quarantine(&self, id: Uuid, claim_id: Option<Uuid>, problem: &str) -> Result<()> {
+        warn!(job_id = %id, field = "payload", "Skipping job row with an unreadable field");
+        sqlx::query(
+            "UPDATE jobs SET status = 'failed', error = $1, updated_at = now(), completed_at = now(), claim_id = NULL, lease_expires_at = NULL WHERE id = $2 AND claim_id = $3",
+        )
+        .bind(damaged_row_message("payload", problem))
+        .bind(id)
+        .bind(claim_id)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err("Failed to quarantine job"))?;
+        Ok(())
     }
 
     pub async fn complete(&self, job: &Job) -> Result<bool> {
@@ -317,7 +549,19 @@ impl PostgresJobQueue {
         .await
         .map_err(repo_err("Failed to find jobs for document"))?;
 
-        rows.into_iter().map(TryInto::try_into).collect()
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = row.id;
+                match row.into_job() {
+                    Ok(job) => Some(job),
+                    Err(_) => {
+                        warn!(job_id = %id, field = "payload", "Ignoring job row with an unreadable field");
+                        None
+                    }
+                }
+            })
+            .collect())
     }
 
     pub async fn latest_purge_job(&self, document_id: Uuid) -> Result<Option<JobType>> {

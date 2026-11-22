@@ -10,13 +10,16 @@
 
 - [x] Write failing `metadata_validation` tests for exact decimals, false/null, date validity, currency, URL, and type mismatches; implement domain types and validation. All 22 regressions and 46 existing core tests pass with the openapi feature. Workspace make lint and make format also pass.
 - [x] Write failing shared `metadata_repository_contract` tests for audit actors, live uniqueness, option identity, atomic patches, concurrent edits, vault isolation, trash/purge, and move rejection; implement new SQLite/PostgreSQL migrations and adapters.
-- [ ] Run relevant checks and commit the independently usable persistence unit.
+- [x] Merge the independently usable typed persistence in #310. Shared SQLite and PostgreSQL contracts cover transactional writes, vault scope, move guards, and purge clearing.
 
 ## 3. API and web
 
+- [x] Merge scoped field/option JSON lifecycle and OpenAPI as #521. All nine metadata router tests, workspace CI, end-to-end, fastembed, Paperless, and architecture builds passed.
+- [x] Merge scoped document metadata reads and atomic revision-checked updates in #528. Local API, vault, token, SQLite and required PostgreSQL tests passed. Hosted workspace CI confirmed explicit-null OpenAPI, E2E and architecture builds.
+
 - [ ] Write failing router tests for manager/editor/viewer permissions, contributor ownership, revoked membership, cross-vault targets, errors, and CSRF; implement documented JSON and HTML routes.
-- [ ] Write failing search tests for canonical equality, bounds, cursor binding, and retired fields; implement exact metadata filtering.
-- [ ] Add web management and typed document forms with retained failed drafts; verify create, edit, retirement, restore, and link navigation through isolated Playwright fixtures.
+- [x] Merge exact metadata search as #531. Both required backend regressions, the metadata router and OpenAPI suites, workspace CI, end-to-end tests, and both architecture builds passed.
+- [x] Merge web field management and typed document editing in #535 and #539. Verify option paging, retained drafts, Viewer access, exact decimal strings, and logical link navigation in disposable router and browser fixtures.
 - [ ] Regenerate OpenAPI and verify MCP compatibility using the existing protocol suite.
 
 ## 4. Apple
@@ -36,13 +39,13 @@
 
 ## 6. Workflow event amendment
 
-- [ ] Align event envelope and trigger dependency contracts with foundation and workflow slices.
+- [x] Align and merge the event budget, bounded replay, and workflow dispatch in #296, #520, and #543.
 - [ ] Write failing outbox contract tests for committed metadata transitions, no-op suppression, rollback, retry identity, purge clearing, vault scope, and causation; publish events in mutation transactions.
-- [ ] Verify metadata triggers and typed conditions are selectable in web and Apple workflows; reject document-only actions for field/option events.
+- [ ] In progress: verify metadata triggers and typed conditions are selectable in web and Apple workflows; reject document-only actions for field/option events.
 - [ ] Include event integration, CI, and merged PR verification in completion criteria.
 
 ## Current verification checkpoint
 
 - Envelope budget PR #296 merged as d4cdcaecc4d034df020af7fbc22308e020767b1a after its foundation review.
 - Value persistence on `codex/metadata-value-storage`: paired `20261103090000_metadata_values.sql` migrations, `MetadataValueRepository` with SQLite and PostgreSQL adapters, purge clearing of incoming links with system attribution, and the move guard inside both `move_to` implementations. The `metadata_values` contract covers typed round trips, false versus missing, exact amounts, audit actors, case-sensitive uniqueness, uniqueness and kind changes on fields, retired fields and options, vault isolation, trash and purge, moves, concurrent edits, and outbox rollback. Verification runs in CI because local build capacity was exhausted.
-- Before metadata patches are exposed through routes, SSE replay must be scoped to the subscriber's vault or bounded by bytes, because value-change events can reach 1 MiB.
+- PR #520 bounded SSE replay to 8 MiB of complete stored payloads. It merged as b6839736900776dc962423854071634a536835ad after hosted workspace Clippy and tests, required SQLite/PostgreSQL replay regressions, and end-to-end tests passed.

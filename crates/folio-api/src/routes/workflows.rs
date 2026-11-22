@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use folio_core::models::{
     redact_url, WebhookPayload, Workflow, WorkflowAction, WorkflowInput, WorkflowRun,
-    WorkflowTrigger,
+    WorkflowTrigger, WorkflowTriggerDefinition, WorkflowTriggerRegistry,
 };
 use folio_core::ports::WorkflowRepository;
 use folio_infra::{workflow::WebhookRequest, WebhookClient};
@@ -35,6 +35,7 @@ const MAX_RUN_LIMIT: u32 = 200;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_workflows).post(create_workflow))
+        .route("/triggers", get(list_triggers))
         .route(
             "/{id}",
             get(get_workflow)
@@ -137,6 +138,20 @@ pub(crate) struct WorkflowListQuery {
     /// List retained workflows in trash instead of active workflows.
     #[serde(default)]
     pub deleted: bool,
+}
+
+/// List selectable workflow triggers and their occurrence fields
+#[utoipa::path(
+    get,
+    path = "/api/workflows/triggers",
+    operation_id = "listWorkflowTriggers",
+    tag = "workflows",
+    responses((status = 200, description = "Selectable workflow triggers", body = Vec<WorkflowTriggerDefinition>))
+)]
+pub(crate) async fn list_triggers(
+    DefaultVault(_vault): DefaultVault,
+) -> Json<&'static [WorkflowTriggerDefinition]> {
+    Json(WorkflowTriggerRegistry::built_in().definitions())
 }
 
 /// List all workflows

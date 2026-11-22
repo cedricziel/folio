@@ -69,8 +69,12 @@ public struct OAuthSignIn: Sendable {
             )
         } catch OAuthFailure.invalidGrant {
             throw FolioError.signInFailed("The sign-in code was refused. Try again.")
-        } catch let failure as OAuthFailure {
-            throw FolioError.signInFailed("The server refused the sign-in: \(failure).")
+        } catch OAuthFailure.transient(let error) {
+            throw error
+        } catch let OAuthFailure.refused(code, description) {
+            throw FolioError.signInFailed(
+                description.map { "The server refused the sign-in: \($0)" }
+                    ?? "The server refused the sign-in (\(code)).")
         }
         let credentials = OAuthCredentials(
             serverURL: server, clientID: clientID, tokenEndpoint: metadata.tokenEndpoint,

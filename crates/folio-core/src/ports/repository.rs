@@ -12,6 +12,13 @@ use crate::models::{
     VaultMember, VaultRole,
 };
 
+/// Storage source for a thumbnail served for the document's current original.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ThumbnailLocation {
+    Legacy,
+    Committed(String),
+}
+
 /// Repository for document operations
 ///
 /// Every method that addresses a document or vocabulary entry takes the vault
@@ -46,9 +53,18 @@ pub trait DocumentRepository: Send + Sync {
     /// Find a document by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
 
-    /// Latest committed thumbnail prefix in this live document's active vault, including prior runs.
-    /// Returns `None` when only legacy thumbnail storage exists or the document is unavailable.
-    async fn thumbnail_result_prefix(&self, vault: VaultId, id: Id) -> Result<Option<String>>;
+    /// Current persisted stage runs for a live document in an active vault, ordered by stage.
+    /// Missing, trashed, wrong-vault, and legacy documents return an empty list.
+    async fn processing_stage_summaries(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<Vec<crate::models::ProcessingStageSummary>>;
+
+    /// Latest committed thumbnail for the current original. Legacy keys apply only to the first version.
+    /// Returns `None` for an unavailable document or a replacement without a committed preview.
+    async fn thumbnail_location(&self, vault: VaultId, id: Id)
+        -> Result<Option<ThumbnailLocation>>;
 
     /// List all documents with optional filtering
     async fn list(&self, vault: VaultId, filter: Option<DocumentFilter>) -> Result<Vec<Document>>;
@@ -153,6 +169,20 @@ pub trait DocumentRepository: Send + Sync {
         identity: &FileIdentity,
     ) -> Result<bool>;
 
+    /// Append a verified original or restore a verified historical original in the live vault.
+    /// A receipt replays before checking the expected pointer. The new revision, changed projection,
+    /// scoped processing job and events commit together.
+    async fn publish_revision(
+        &self,
+        vault: VaultId,
+        id: Id,
+        publication: &crate::models::RevisionPublication,
+    ) -> Result<crate::models::RevisionPublicationResult>;
+
+    /// Whether a staged original still belongs to a committed revision after publication returned.
+    /// This storage cleanup check spans vaults so a move cannot hide an owned original.
+    async fn retains_revision_original(&self, document: Id, candidate: Id) -> Result<bool>;
+
     /// Update the file path for a document; a new path forgets the recorded size
     async fn set_file_path(&self, vault: VaultId, id: Id, file_path: &str) -> Result<()>;
 
@@ -192,6 +222,9 @@ pub trait DocumentRepository: Send + Sync {
         stage: ProcessingStage,
         status: ProcessingStatus,
     ) -> Result<()>;
+
+    /// Skip a pending embedding only if the live document still has terminal OCR with no text.
+    async fn skip_empty_embedding(&self, vault: VaultId, id: Id) -> Result<bool>;
 
     /// Store OCR output and atomically announce completion, including empty output.
     /// Repeating an unchanged successful result is a no-op.

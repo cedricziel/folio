@@ -15,6 +15,7 @@ pub(super) struct ProcessingScope {
     pub group_id: Uuid,
     pub document_id: Uuid,
     pub vault_id: VaultId,
+    pub revision_id: Option<Uuid>,
     pub parent_job_id: Uuid,
     pub claim_id: Uuid,
     pub queue_attempt: i32,
@@ -31,27 +32,104 @@ pub(super) async fn with_scope<T>(
     PROCESSING_SCOPE.scope(scope, work).await
 }
 
-fn child_scope(job: &JobType) -> Option<ProcessingScope> {
+fn child_scope(job: &JobType) -> Result<Option<ProcessingScope>> {
     if !matches!(
         job,
-        JobType::ExtractText { .. } | JobType::GenerateEmbedding { .. }
+        JobType::ExtractText { .. }
+            | JobType::ExtractRevisionText { .. }
+            | JobType::GenerateEmbedding { .. }
+            | JobType::GenerateRevisionEmbedding { .. }
     ) {
-        return None;
+        return Ok(None);
     }
-    PROCESSING_SCOPE
+    let scope = PROCESSING_SCOPE
         .try_with(|scope| *scope)
         .ok()
         .flatten()
-        .filter(|scope| Some(scope.document_id) == job.document_id())
+        .filter(|scope| Some(scope.document_id) == job.document_id());
+    if scope.is_some_and(|scope| scope.revision_id != job.revision_id()) {
+        return Err(stale_parent());
+    }
+    Ok(scope)
 }
 
 fn stages(job: &JobType) -> &'static [&'static str] {
     match job {
-        JobType::ProcessDocument { .. } => &["thumbnail", "ocr", "embedding"],
-        JobType::ExtractText { .. } => &["ocr", "embedding"],
-        JobType::GenerateThumbnail { .. } => &["thumbnail"],
-        JobType::GenerateEmbedding { .. } => &["embedding"],
+        JobType::ProcessDocument { .. } | JobType::ProcessDocumentRevision { .. } => {
+            &["thumbnail", "ocr", "embedding"]
+        }
+        JobType::ExtractText { .. } | JobType::ExtractRevisionText { .. } => &["ocr", "embedding"],
+        JobType::GenerateThumbnail { .. } | JobType::GenerateRevisionThumbnail { .. } => {
+            &["thumbnail"]
+        }
+        JobType::GenerateEmbedding { .. } | JobType::GenerateRevisionEmbedding { .. } => {
+            &["embedding"]
+        }
         JobType::PurgeDocument { .. } | JobType::ExecuteWorkflowRun { .. } => &[],
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub(super) struct DocumentScope {
+    vault_id: String,
+    unavailable: bool,
+    revision_id: Option<String>,
+    legacy_current: bool,
+}
+
+impl DocumentScope {
+    fn accepts_revision(&self, revision_id: Option<Uuid>) -> bool {
+        match revision_id {
+            Some(id) => self.revision_id.as_deref() == Some(id.to_string().as_str()),
+            None => self.legacy_current,
+        }
+    }
+}
+
+pub(super) fn bind_requested_processing(
+    document: Option<&DocumentScope>,
+    vault: VaultId,
+    document_id: Uuid,
+    force: bool,
+    revision_dispatch: bool,
+) -> Result<JobType> {
+    let document = document
+        .filter(|document| !document.unavailable && vault.to_string() == document.vault_id)
+        .ok_or_else(|| Error::NotFound {
+            entity_type: "Document",
+            id: document_id.to_string(),
+        })?;
+    let revision = document
+        .revision_id
+        .as_deref()
+        .filter(|_| revision_dispatch || !document.legacy_current)
+        .map(str::parse)
+        .transpose()
+        .map_err(repo_err)?;
+    match revision {
+        Some(revision_id) => Ok(JobType::ProcessDocumentRevision {
+            document_id,
+            revision_id,
+            force,
+        }),
+        None if document.legacy_current => Ok(JobType::ProcessDocument { document_id, force }),
+        None => Err(Error::Conflict(
+            "Processing revision is no longer current".into(),
+        )),
+    }
+}
+
+fn validate_enqueue(document: Option<&DocumentScope>, job: &JobType) -> Result<()> {
+    if stages(job).is_empty() {
+        return Ok(());
+    }
+    let revision = job.revision_id();
+    match document.filter(|document| !document.unavailable) {
+        Some(document) if document.accepts_revision(revision) => Ok(()),
+        None if revision.is_none() => Ok(()),
+        _ => Err(Error::Conflict(
+            "Processing revision is no longer current".into(),
+        )),
     }
 }
 
@@ -73,6 +151,7 @@ pub(super) enum ClaimPreparation {
 }
 
 pub(super) async fn prepare_claim(queue: &JobQueue, job: &Job) -> Result<ClaimPreparation> {
+    job.job_type.ensure_dispatchable()?;
     if stages(&job.job_type).is_empty() {
         return Ok(ClaimPreparation::Ready(None));
     }
@@ -86,8 +165,14 @@ fn repo_err(error: impl std::fmt::Display) -> Error {
     Error::Repository(error.to_string())
 }
 
+const STALE_PARENT: &str = "processing parent claim or group is no longer current";
+
+pub(super) fn is_stale_parent(error: &Error) -> bool {
+    matches!(error, Error::Conflict(reason) if reason == STALE_PARENT)
+}
+
 fn stale_parent() -> Error {
-    Error::Conflict("processing parent claim or group is no longer current".into())
+    Error::Conflict(STALE_PARENT.into())
 }
 
 fn payload_type(job: &JobType) -> Result<String> {

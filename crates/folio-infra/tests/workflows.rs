@@ -123,6 +123,7 @@ struct Harness {
     vault: folio_core::models::VaultId,
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
+    entries: Arc<dyn folio_core::ports::DocumentEntryRepository>,
     tags: Arc<dyn TagRepository>,
     document_types: Arc<dyn DocumentTypeRepository>,
     vaults: Arc<dyn VaultRepository>,
@@ -182,6 +183,7 @@ impl Harness {
             workflows,
             documents,
             tags,
+            entries: repos.entries,
             document_types: repos.document_types,
             vaults: repos.vaults,
             correspondents,
@@ -1195,7 +1197,7 @@ async fn one_failing_workflow_does_not_skip_the_others() {
 }
 
 #[tokio::test]
-async fn editing_a_workflow_does_not_change_queued_runs() {
+async fn editing_a_workflow_cancels_queued_runs_and_retains_their_inputs() {
     let h = Harness::new().await;
     let server = TestServer::start().await;
     let workflow = h.webhook_workflow(server.url("before"), None).await;
@@ -1222,10 +1224,19 @@ async fn editing_a_workflow_does_not_change_queued_runs() {
         .unwrap();
     assert_eq!(
         h.runner.execute(runs[0].id).await.unwrap(),
-        RunOutcome::Succeeded
+        RunOutcome::Failed
     );
 
-    assert_eq!(server.hits("before"), 1);
+    let retained = h.run(runs[0].id).await;
+    assert_eq!(retained.status, RunStatus::Failed);
+    assert_eq!(
+        retained.last_error.as_deref(),
+        Some("Workflow definition changed")
+    );
+    assert_eq!(retained.attempts, 0);
+    assert_eq!(retained.actions, runs[0].actions);
+    assert_eq!(retained.payload, runs[0].payload);
+    assert_eq!(server.hits("before"), 0);
     assert_eq!(server.hits("after"), 0);
 }
 
@@ -2057,6 +2068,7 @@ async fn event_actor_filters_use_the_producer_context_without_granting_private_a
                     actor: Some(WorkflowActorCondition::User {
                         user_id: "editor".into(),
                     }),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
@@ -2284,4 +2296,241 @@ async fn imports_and_mirror_syncs_start_no_workflows_but_user_changes_do() {
         .unwrap();
     consume_pending(&h).await;
     assert_eq!(workflow_runs(&h, &tags_changed).await, 1);
+}
+
+#[tokio::test]
+async fn entry_workflow_requires_an_active_parent_in_its_originating_vault() {
+    use folio_core::models::{EntryBody, EntryKind};
+    use folio_core::mutation::with_actor;
+
+    let h = Harness::new().await;
+    let doc = h.document("discussion.pdf", "application/pdf").await;
+    let trigger = WorkflowTrigger::DocumentCommentCreated;
+    h.workflow(trigger, Default::default(), unreachable_hook())
+        .await;
+
+    with_actor(
+        Some("entry-author".into()),
+        h.entries.create(
+            h.vault,
+            doc.id,
+            EntryKind::Comment,
+            EntryBody::parse("private discussion text".into()).unwrap(),
+            Uuid::new_v4(),
+        ),
+    )
+    .await
+    .unwrap();
+    let event = h
+        .pending_events()
+        .await
+        .into_iter()
+        .find(|event| {
+            event
+                .envelope
+                .as_ref()
+                .is_some_and(|source| source.event_type() == trigger.as_str())
+        })
+        .expect("committed producer occurrence");
+
+    for origin in [EventOrigin::Workflow, EventOrigin::Import] {
+        assert!(h
+            .engine
+            .handle(&OutboxEvent {
+                origin,
+                ..event.clone()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+    let runs = h.engine.handle(&event).await.unwrap();
+    assert_eq!(runs.len(), 1);
+
+    let delayed = h
+        .workflow(trigger, Default::default(), unreachable_hook())
+        .await;
+    let destination = h.vaults.create("entry destination", None).await.unwrap().id;
+    h.documents
+        .move_to(doc.id, h.vault, destination, None)
+        .await
+        .unwrap();
+
+    assert!(h.engine.handle(&event).await.unwrap().is_empty());
+    assert!(h
+        .workflows
+        .list_runs(h.vault, delayed.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        h.runner.execute(runs[0].id).await.unwrap(),
+        RunOutcome::Failed
+    );
+}
+
+#[tokio::test]
+async fn a_domain_and_compatibility_projection_each_keep_their_selected_trigger() {
+    let h = Harness::new().await;
+    let doc = h.document("before.pdf", "application/pdf").await;
+    let precise = h
+        .workflow(
+            WorkflowTrigger::DocumentTitleChanged,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let compatibility = h
+        .workflow(
+            WorkflowTrigger::DocumentUpdated,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    h.documents
+        .update(
+            h.vault,
+            doc.id,
+            UpdateDocument {
+                title: Some("after".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let events = h.pending_events().await;
+    let mut combined = events.iter().find(|event| {
+        matches!(&event.event, Some(DocumentEvent::Updated { document_id }) if *document_id == doc.id)
+    }).unwrap().clone();
+    combined.envelope = events
+        .into_iter()
+        .filter_map(|event| event.envelope)
+        .find(|event| event.event_type() == "document.title_changed");
+    assert!(combined.envelope.is_some());
+
+    let runs = h.engine.handle(&combined).await.unwrap();
+    assert_eq!(runs.len(), 2);
+    for (workflow, trigger) in [precise, compatibility].into_iter().zip([
+        WorkflowTrigger::DocumentTitleChanged,
+        WorkflowTrigger::DocumentUpdated,
+    ]) {
+        let run = runs
+            .iter()
+            .find(|run| run.workflow_id == workflow.id)
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&run.payload).unwrap();
+        assert_eq!(run.event, trigger);
+        assert_eq!(payload["event"], trigger.as_str());
+        assert_eq!(payload["document"]["title"], "after");
+    }
+    assert!(h.engine.handle(&combined).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn metadata_workflows_use_the_committed_occurrence_and_run_once() {
+    use folio_core::models::{MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue};
+    use folio_core::ports::{MetadataFieldRepository, MetadataValueRepository};
+    use folio_infra::database::sqlite::{
+        SqliteMetadataFieldRepository, SqliteMetadataValueRepository,
+    };
+    use serde_json::json;
+
+    let h = Harness::new().await;
+    let doc = h.document("invoice.pdf", "application/pdf").await;
+    let fields = SqliteMetadataFieldRepository::new(h.pool.clone());
+    let values = SqliteMetadataValueRepository::new(h.pool.clone());
+    let field_workflow = h
+        .workflow(
+            WorkflowTrigger::MetadataFieldCreated,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let value_workflow = h
+        .workflow(
+            WorkflowTrigger::DocumentMetadataChanged,
+            Default::default(),
+            unreachable_hook(),
+        )
+        .await;
+    let field = fields
+        .create(
+            h.vault,
+            MetadataFieldInput {
+                name: "Amount".into(),
+                kind: MetadataKind::Decimal,
+                required: false,
+                unique: false,
+            },
+        )
+        .await
+        .unwrap();
+    let updated = values
+        .patch(
+            h.vault,
+            doc.id,
+            None,
+            vec![MetadataChange {
+                field_id: field.id,
+                value: Some(MetadataValue::Decimal("9007199254740993.010".into())),
+            }],
+        )
+        .await
+        .unwrap();
+    values
+        .patch(
+            h.vault,
+            doc.id,
+            updated.revision,
+            vec![MetadataChange {
+                field_id: field.id,
+                value: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let events = h.pending_events().await;
+    let occurrence = |name: &str| {
+        events
+            .iter()
+            .find(|item| {
+                item.envelope
+                    .as_ref()
+                    .is_some_and(|event| event.event_type() == name)
+            })
+            .expect("committed metadata occurrence")
+    };
+    let created = occurrence("metadata_field.created");
+    let changed = occurrence("document.metadata.changed");
+    let field_run = h.engine.handle(created).await.unwrap().remove(0);
+    assert_eq!(field_run.workflow_id, field_workflow.id);
+    assert_eq!(field_run.document_id, None);
+
+    let value_run = h.engine.handle(changed).await.unwrap().remove(0);
+    assert_eq!(value_run.workflow_id, value_workflow.id);
+    assert_eq!(value_run.document_id, Some(doc.id));
+    let payload: serde_json::Value = serde_json::from_str(&value_run.payload).unwrap();
+    assert_eq!(
+        payload["metadata"]["data"]["changes"][0]["after"],
+        json!({
+            "kind": "decimal", "value": "9007199254740993.01"
+        })
+    );
+    assert_eq!(
+        payload["source_event"]["event_id"],
+        json!(changed.envelope.as_ref().unwrap().event_id())
+    );
+    assert!(h.engine.handle(changed).await.unwrap().is_empty());
+    assert!(h.engine.handle(created).await.unwrap().is_empty());
+    assert!(h
+        .engine
+        .handle(&OutboxEvent {
+            origin: EventOrigin::Workflow,
+            ..changed.clone()
+        })
+        .await
+        .unwrap()
+        .is_empty());
 }

@@ -5,16 +5,17 @@ use async_trait::async_trait;
 use chrono::{DateTime, SubsecRound, Utc};
 use folio_core::domain_event::{DomainEventEnvelope, DomainEventSubject, EventAudience};
 use folio_core::models::{
-    DocumentMetadata, DocumentMetadataValue, Id, MetadataChange, MetadataValue, UserId, VaultId,
+    DocumentMetadata, DocumentMetadataValue, Id, MetadataChange, MetadataLinkTarget,
+    MetadataSearchHit, MetadataSearchPage, MetadataSearchQuery, MetadataValue, UserId, VaultId,
 };
 use folio_core::ports::MetadataValueRepository;
 use folio_core::{Error, Result};
-use sqlx::{PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder};
 use tokio::sync::Notify;
 
 use crate::database::metadata_value::{canonical_key, change, parse_kind, Columns};
 
-const VALUE_COLS: &str = "field_id, kind, text_value, boolean_value, integer_value, decimal_value, date_value, currency, option_id, target_document_id, created_at, updated_at, deleted_at, created_by, updated_by";
+const VALUE_COLS: &str = "value.field_id, value.kind, value.text_value, value.boolean_value, value.integer_value, value.decimal_value, value.date_value, value.currency, value.option_id, value.target_document_id, value.created_at, value.updated_at, value.deleted_at, value.created_by, value.updated_by";
 
 #[derive(Clone)]
 pub struct PostgresMetadataValueRepository {
@@ -52,6 +53,10 @@ struct ValueRow {
     deleted_at: Option<DateTime<Utc>>,
     created_by: Option<String>,
     updated_by: Option<String>,
+    #[sqlx(default)]
+    target_title: Option<String>,
+    #[sqlx(default)]
+    target_trashed: bool,
 }
 
 impl TryFrom<ValueRow> for DocumentMetadataValue {
@@ -72,6 +77,10 @@ impl TryFrom<ValueRow> for DocumentMetadataValue {
         Ok(Self {
             field_id: row.field_id,
             value,
+            link_target: row.target_title.map(|title| MetadataLinkTarget {
+                title,
+                trashed: row.target_trashed,
+            }),
             created_at: row.created_at,
             updated_at: row.updated_at,
             deleted_at: row.deleted_at,
@@ -139,7 +148,11 @@ async fn load(conn: &mut PgConnection, vault: VaultId, document: Id) -> Result<D
     }
     let revision = current_revision(conn, vault, document).await?;
     let rows: Vec<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {VALUE_COLS} FROM metadata_values WHERE vault_id = $1 AND document_id = $2 ORDER BY field_id"
+        "SELECT {VALUE_COLS}, target.title AS target_title,
+                target.deleted_at IS NOT NULL OR target.purge_requested_at IS NOT NULL AS target_trashed
+             FROM metadata_values value
+             LEFT JOIN documents target ON target.vault_id = value.vault_id AND target.id = value.target_document_id
+             WHERE value.vault_id = $1 AND value.document_id = $2 ORDER BY value.field_id"
     )))
     .bind(vault.0)
     .bind(document)
@@ -462,8 +475,85 @@ pub(crate) async fn prepare_move(
     Ok(())
 }
 
+pub(super) fn push_exact_value(
+    qb: &mut QueryBuilder<Postgres>,
+    value: &MetadataValue,
+) -> Result<()> {
+    let columns = Columns::from_value(Some(value))?;
+    qb.push(" AND mv.kind = ")
+        .push_bind(value.kind().as_str())
+        .push(" AND mv.canonical_key = ")
+        .push_bind(canonical_key(value)?);
+    qb.push(" AND mv.text_value COLLATE \"C\" IS NOT DISTINCT FROM ")
+        .push_bind(columns.text);
+    qb.push(" AND mv.boolean_value IS NOT DISTINCT FROM ")
+        .push_bind(columns.boolean);
+    qb.push(" AND mv.integer_value IS NOT DISTINCT FROM ")
+        .push_bind(columns.integer);
+    qb.push(" AND mv.decimal_value COLLATE \"C\" IS NOT DISTINCT FROM ")
+        .push_bind(columns.decimal);
+    qb.push(" AND mv.date_value COLLATE \"C\" IS NOT DISTINCT FROM ")
+        .push_bind(columns.date);
+    qb.push(" AND mv.currency COLLATE \"C\" IS NOT DISTINCT FROM ")
+        .push_bind(columns.currency);
+    qb.push(" AND mv.option_id IS NOT DISTINCT FROM ")
+        .push_bind(columns.option);
+    qb.push(" AND mv.target_document_id IS NOT DISTINCT FROM ")
+        .push_bind(columns.target);
+    Ok(())
+}
+
 #[async_trait]
 impl MetadataValueRepository for PostgresMetadataValueRepository {
+    async fn search_exact(
+        &self,
+        vault: VaultId,
+        query: MetadataSearchQuery,
+    ) -> Result<MetadataSearchPage> {
+        query.validate_limit()?;
+        let mut tx = self.pool.begin().await.map_err(db_error)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+        let kind: String = sqlx::query_scalar(
+            "SELECT kind FROM metadata_fields WHERE vault_id = $1 AND id = $2 AND deleted_at IS NULL",
+        )
+        .bind(vault.0)
+        .bind(query.filter.field_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| not_found("Metadata field", query.filter.field_id))?;
+        let value = query.canonical_value(vault, parse_kind(&kind)?)?;
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "SELECT doc.id, doc.title FROM metadata_values mv
+             JOIN documents doc ON doc.vault_id = mv.vault_id AND doc.id = mv.document_id
+             WHERE mv.deleted_at IS NULL AND doc.deleted_at IS NULL
+               AND doc.purge_requested_at IS NULL AND NOT doc.upload_pending AND mv.vault_id = ",
+        );
+        qb.push_bind(vault.0)
+            .push(" AND mv.field_id = ")
+            .push_bind(query.filter.field_id);
+        if let Some(cursor) = &query.cursor {
+            qb.push(" AND mv.document_id > ").push_bind(cursor.after);
+        }
+        push_exact_value(&mut qb, &value)?;
+        qb.push(" ORDER BY mv.document_id LIMIT ")
+            .push_bind(i64::from(query.limit) + 1);
+        let rows: Vec<(Id, String)> = qb
+            .build_query_as()
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        let documents = rows
+            .into_iter()
+            .map(|(id, title)| MetadataSearchHit { id, title })
+            .collect();
+        query.finish(vault, &value, documents)
+    }
+
     async fn get(&self, vault: VaultId, document: Id) -> Result<DocumentMetadata> {
         let mut tx = self.pool.begin().await.map_err(db_error)?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -515,7 +605,7 @@ impl MetadataValueRepository for PostgresMetadataValueRepository {
             } = field_for_write(&mut tx, vault, field_id).await?;
             let kind = parse_kind(&kind_name)?;
             let existing: Option<ValueRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-                "SELECT {VALUE_COLS} FROM metadata_values WHERE vault_id = $1 AND document_id = $2 AND field_id = $3"
+                "SELECT {VALUE_COLS} FROM metadata_values value WHERE value.vault_id = $1 AND value.document_id = $2 AND field_id = $3"
             )))
             .bind(vault.0)
             .bind(document)

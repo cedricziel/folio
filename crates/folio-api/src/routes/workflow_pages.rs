@@ -14,8 +14,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use folio_core::models::{
-    Id, RunStatus, SourceConditions, SourceKind, TextMatch, WebhookMethod, Workflow,
-    WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
+    Id, MetadataChangeState, MetadataKind, MetadataValue, RunStatus, SourceConditions, SourceKind,
+    TextMatch, UserId, WebhookMethod, Workflow, WorkflowAction, WorkflowActorCondition,
+    WorkflowEventConditions, WorkflowIngestConditions, WorkflowInput, WorkflowMetadataConditions,
+    WorkflowRun, WorkflowTrigger, WorkflowTriggerRegistry,
 };
 
 use super::workflows::{find, find_retained, send_test, WorkflowListQuery, SECRET_MASK};
@@ -139,14 +141,25 @@ async fn list_page(
 }
 
 fn lifecycle_summary(workflow: &Workflow) -> String {
-    match workflow.deleted_at {
-        Some(at) => format!("Deleted {}", at.format("%Y-%m-%d %H:%M UTC")),
-        None => format!(
-            "Created {}, updated {}",
-            workflow.created_at.format("%Y-%m-%d %H:%M UTC"),
-            workflow.updated_at.format("%Y-%m-%d %H:%M UTC")
-        ),
+    let created_by = workflow
+        .created_by
+        .as_ref()
+        .map(|actor| format!(" by {actor}"))
+        .unwrap_or_else(|| " by System or unknown".into());
+    let updated_by = workflow
+        .updated_by
+        .as_ref()
+        .map(|actor| format!(" by {actor}"))
+        .unwrap_or_else(|| " by System or unknown".into());
+    let mut summary = format!(
+        "Created {}{created_by}, updated {}{updated_by}",
+        workflow.created_at.format("%Y-%m-%d %H:%M UTC"),
+        workflow.updated_at.format("%Y-%m-%d %H:%M UTC")
+    );
+    if let Some(at) = workflow.deleted_at {
+        summary.push_str(&format!(", deleted {}", at.format("%Y-%m-%d %H:%M UTC")));
     }
+    summary
 }
 
 #[derive(Template)]
@@ -203,6 +216,22 @@ struct FormValues {
     correspondent_id: String,
     document_type_id: String,
     filename_glob: String,
+    event_subject_id: String,
+    event_actor: Option<String>,
+    event_user_id: String,
+    ingest_source_id: String,
+    ingest_source_kind: Option<String>,
+    ingest_reason: String,
+    ingest_retryable: String,
+    metadata_field_id: String,
+    metadata_kind: String,
+    metadata_state: String,
+    metadata_before_enabled: Option<String>,
+    metadata_before: String,
+    metadata_before_currency: String,
+    metadata_after_enabled: Option<String>,
+    metadata_after: String,
+    metadata_after_currency: String,
     source_kind: String,
     folder_path_glob: String,
     email_from_mode: String,
@@ -226,7 +255,135 @@ struct FormValues {
 
 const TAG_FIELD: &str = "action_tag_";
 
+const METADATA_KINDS: [(MetadataKind, &str); 10] = [
+    (MetadataKind::Text, "Text"),
+    (MetadataKind::LongText, "Long text"),
+    (MetadataKind::Boolean, "Yes or no"),
+    (MetadataKind::Integer, "Whole number"),
+    (MetadataKind::Decimal, "Decimal"),
+    (MetadataKind::Date, "Date"),
+    (MetadataKind::Money, "Money"),
+    (MetadataKind::Select, "Select"),
+    (MetadataKind::Url, "URL"),
+    (MetadataKind::DocumentLink, "Document link"),
+];
+
+fn metadata_value_text(value: Option<&MetadataValue>) -> (String, String) {
+    match value {
+        Some(MetadataValue::Money { amount, currency }) => (amount.clone(), currency.clone()),
+        Some(MetadataValue::Boolean(value)) => (value.to_string(), String::new()),
+        Some(MetadataValue::Select(id) | MetadataValue::DocumentLink(id)) => {
+            (id.to_string(), String::new())
+        }
+        Some(
+            MetadataValue::Text(value)
+            | MetadataValue::LongText(value)
+            | MetadataValue::Integer(value)
+            | MetadataValue::Decimal(value)
+            | MetadataValue::Date(value)
+            | MetadataValue::Url(value),
+        ) => (value.clone(), String::new()),
+        None => (String::new(), String::new()),
+    }
+}
+
+fn metadata_value(
+    enabled: bool,
+    kind: Option<MetadataKind>,
+    value: &str,
+    currency: &str,
+) -> Result<Option<MetadataValue>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    let kind = kind.ok_or("Choose the field type for an exact value comparison.")?;
+    let parse_id =
+        || Uuid::parse_str(value.trim()).map_err(|_| "Enter a valid value ID.".to_string());
+    let value = match kind {
+        MetadataKind::Text => MetadataValue::Text(value.into()),
+        MetadataKind::LongText => MetadataValue::LongText(value.into()),
+        MetadataKind::Boolean => match value.trim() {
+            "true" | "yes" => MetadataValue::Boolean(true),
+            "false" | "no" => MetadataValue::Boolean(false),
+            _ => return Err("Enter yes or no.".into()),
+        },
+        MetadataKind::Integer => MetadataValue::Integer(value.into()),
+        MetadataKind::Decimal => MetadataValue::Decimal(value.into()),
+        MetadataKind::Date => MetadataValue::Date(value.into()),
+        MetadataKind::Money => MetadataValue::Money {
+            amount: value.into(),
+            currency: currency.into(),
+        },
+        MetadataKind::Select => MetadataValue::Select(parse_id()?),
+        MetadataKind::Url => MetadataValue::Url(value.into()),
+        MetadataKind::DocumentLink => MetadataValue::DocumentLink(parse_id()?),
+    };
+    value
+        .validate(kind, false)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn metadata_condition(
+    form: &FormValues,
+    trigger: WorkflowTrigger,
+) -> Result<Option<WorkflowMetadataConditions>, String> {
+    if !trigger.is_custom_metadata() {
+        return Ok(None);
+    }
+    let field_id = match form.metadata_field_id.as_str() {
+        "" => None,
+        id => Some(Uuid::parse_str(id).map_err(|_| "Choose a custom field.")?),
+    };
+    let kind = match form.metadata_kind.as_str() {
+        "" => None,
+        value => Some(
+            METADATA_KINDS
+                .iter()
+                .find_map(|(kind, _)| (kind.as_str() == value).then_some(*kind))
+                .ok_or("Choose a field type.")?,
+        ),
+    };
+    let state = match form.metadata_state.as_str() {
+        "" => None,
+        "set" => Some(MetadataChangeState::Set),
+        "replaced" => Some(MetadataChangeState::Replaced),
+        "cleared" => Some(MetadataChangeState::Cleared),
+        _ => return Err("Choose a change.".into()),
+    };
+    let conditions = WorkflowMetadataConditions {
+        field_id,
+        kind,
+        state,
+        before: metadata_value(
+            form.metadata_before_enabled.is_some(),
+            kind,
+            &form.metadata_before,
+            &form.metadata_before_currency,
+        )?,
+        after: metadata_value(
+            form.metadata_after_enabled.is_some(),
+            kind,
+            &form.metadata_after,
+            &form.metadata_after_currency,
+        )?,
+    };
+    Ok((conditions != WorkflowMetadataConditions::default()).then_some(conditions))
+}
+
 impl FormValues {
+    fn ingest_kind_is(&self, kind: &str) -> bool {
+        self.ingest_source_kind.as_deref() == Some(kind)
+    }
+
+    fn is_system_actor(&self) -> bool {
+        self.event_actor.as_deref() == Some("system")
+    }
+
+    fn is_user_actor(&self) -> bool {
+        self.event_actor.as_deref() == Some("user")
+    }
+
     fn action_tag_ids(&self) -> Vec<Id> {
         self.checkboxes
             .keys()
@@ -245,6 +402,14 @@ impl FormValues {
 
     fn from_workflow(workflow: &Workflow) -> Self {
         let c = &workflow.conditions;
+        let (event_actor, event_user_id) =
+            match c.event.as_ref().and_then(|event| event.actor.as_ref()) {
+                Some(WorkflowActorCondition::System) => ("system", String::new()),
+                Some(WorkflowActorCondition::User { user_id }) => {
+                    ("user", user_id.as_str().to_owned())
+                }
+                None => ("", String::new()),
+            };
         let (webhook_url, webhook_headers) = match first_webhook(&workflow.actions) {
             Some((_, WorkflowAction::Webhook { url, headers, .. })) => (
                 url.clone(),
@@ -277,6 +442,11 @@ impl FormValues {
                 WorkflowAction::Webhook { .. } | WorkflowAction::SkipImport => {}
             }
         }
+        let metadata = c.event.as_ref().and_then(|event| event.metadata.as_ref());
+        let before = metadata.and_then(|metadata| metadata.before.as_ref());
+        let after = metadata.and_then(|metadata| metadata.after.as_ref());
+        let (metadata_before, metadata_before_currency) = metadata_value_text(before);
+        let (metadata_after, metadata_after_currency) = metadata_value_text(after);
         Self {
             checkboxes,
             action_correspondent_id,
@@ -295,6 +465,59 @@ impl FormValues {
                 .map(|i| i.to_string())
                 .unwrap_or_default(),
             filename_glob: c.filename_glob.clone().unwrap_or_default(),
+            event_subject_id: c
+                .event
+                .as_ref()
+                .and_then(|event| event.subject_id)
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            event_actor: Some(event_actor.into()),
+            event_user_id,
+            ingest_source_id: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.source_id)
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            ingest_source_kind: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.source_kind)
+                .map(|kind| kind.as_str().into()),
+            ingest_reason: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.reason_code.clone())
+                .unwrap_or_default(),
+            ingest_retryable: c
+                .event
+                .as_ref()
+                .and_then(|event| event.ingest.as_ref())
+                .and_then(|ingest| ingest.retryable)
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            metadata_field_id: metadata
+                .and_then(|value| value.field_id)
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+            metadata_kind: metadata
+                .and_then(|value| value.kind)
+                .or_else(|| before.or(after).map(MetadataValue::kind))
+                .map(|kind| kind.as_str().into())
+                .unwrap_or_default(),
+            metadata_state: metadata
+                .and_then(|value| value.state)
+                .map(|state| state.as_str().into())
+                .unwrap_or_default(),
+            metadata_before_enabled: before.map(|_| "on".into()),
+            metadata_before,
+            metadata_before_currency,
+            metadata_after_enabled: after.map(|_| "on".into()),
+            metadata_after,
+            metadata_after_currency,
             source_kind: c
                 .source
                 .kind
@@ -324,13 +547,76 @@ impl FormValues {
                 .map(|v| Uuid::parse_str(&v).map_err(|_| format!("The {what} is not valid.")))
                 .transpose()
         };
-        let conditions = WorkflowConditions {
-            mime_type: optional(&self.mime_type),
-            tag_id: id(&self.tag_id, "tag")?,
-            correspondent_id: id(&self.correspondent_id, "correspondent")?,
-            document_type_id: id(&self.document_type_id, "document type")?,
-            filename_glob: optional(&self.filename_glob),
-            source: SourceConditions {
+        let event = match self.event_actor.as_deref() {
+            None if trigger == WorkflowTrigger::IngestReceived => None,
+            None => existing.and_then(|workflow| workflow.conditions.event.clone()),
+            Some(mode) => {
+                let subject_id = id(&self.event_subject_id, "event subject ID")?;
+                let actor = match mode {
+                    "" => None,
+                    "system" => Some(WorkflowActorCondition::System),
+                    "user" => Some(WorkflowActorCondition::User {
+                        user_id: UserId::from(
+                            optional(&self.event_user_id)
+                                .as_deref()
+                                .ok_or("Enter a user ID.")?,
+                        ),
+                    }),
+                    _ => return Err("Choose an event actor.".into()),
+                };
+                let previous_ingest = existing
+                    .and_then(|workflow| workflow.conditions.event.as_ref())
+                    .and_then(|event| event.ingest.as_ref());
+                let ingest = if !trigger.is_ingest_outcome() {
+                    None
+                } else if let Some(kind) = self.ingest_source_kind.as_deref() {
+                    let source_kind = match kind {
+                        "" => None,
+                        "folder" => Some(SourceKind::Folder),
+                        "email" => Some(SourceKind::Email),
+                        _ => return Err("Choose an ingestion source kind.".into()),
+                    };
+                    let retryable = match self.ingest_retryable.as_str() {
+                        "" => None,
+                        "true" => Some(true),
+                        "false" => Some(false),
+                        _ => return Err("Choose a retry setting.".into()),
+                    };
+                    let filters = WorkflowIngestConditions {
+                        source_id: id(&self.ingest_source_id, "source ID")?,
+                        source_kind,
+                        outcome: previous_ingest.and_then(|ingest| ingest.outcome),
+                        reason_code: optional(&self.ingest_reason),
+                        retryable,
+                    };
+                    (filters != WorkflowIngestConditions::default()).then_some(filters)
+                } else {
+                    previous_ingest.cloned()
+                };
+                let metadata = metadata_condition(&self, trigger)?;
+                (subject_id.is_some() || actor.is_some() || ingest.is_some() || metadata.is_some())
+                    .then_some(WorkflowEventConditions {
+                        subject_id,
+                        actor,
+                        ingest,
+                        metadata,
+                    })
+            }
+        };
+        let mut conditions = existing
+            .map(|workflow| workflow.conditions.clone())
+            .unwrap_or_default();
+        conditions.event = event;
+        if trigger.entry_transition().is_none()
+            && !trigger.is_ingest_outcome()
+            && !trigger.is_custom_metadata()
+        {
+            conditions.mime_type = optional(&self.mime_type);
+            conditions.tag_id = id(&self.tag_id, "tag")?;
+            conditions.correspondent_id = id(&self.correspondent_id, "correspondent")?;
+            conditions.document_type_id = id(&self.document_type_id, "document type")?;
+            conditions.filename_glob = optional(&self.filename_glob);
+            conditions.source = SourceConditions {
                 kind: optional(&self.source_kind).map(|k| SourceKind::parse(&k)),
                 folder_path_glob: optional(&self.folder_path_glob),
                 email_from: text_match(&self.email_from_mode, &self.email_from),
@@ -338,11 +624,19 @@ impl FormValues {
                 email_subject: text_match(&self.email_subject_mode, &self.email_subject),
                 email_attachment_glob: optional(&self.email_attachment_glob),
                 email_mailbox_glob: optional(&self.email_mailbox_glob),
-            },
-            ..existing
-                .map(|workflow| workflow.conditions.clone())
-                .unwrap_or_default()
-        };
+            };
+        } else if existing.is_some_and(|workflow| {
+            workflow.trigger.entry_transition().is_none()
+                && !workflow.trigger.is_ingest_outcome()
+                && !workflow.trigger.is_custom_metadata()
+        }) {
+            conditions.mime_type = None;
+            conditions.tag_id = None;
+            conditions.correspondent_id = None;
+            conditions.document_type_id = None;
+            conditions.filename_glob = None;
+            conditions.source = SourceConditions::default();
+        }
 
         if trigger == WorkflowTrigger::IngestReceived {
             return Ok(WorkflowInput {
@@ -505,6 +799,9 @@ struct FormTemplate {
     has_secret: bool,
     secret_mask: &'static str,
     triggers: Vec<Choice>,
+    metadata_fields: Vec<Choice>,
+    metadata_kinds: Vec<Choice>,
+    metadata_states: Vec<Choice>,
     tags: Vec<Choice>,
     correspondents: Vec<Choice>,
     document_types: Vec<Choice>,
@@ -545,6 +842,15 @@ async fn build_form(
     let tags = state.tag_repo.list(vault).await?;
     let correspondents = state.correspondent_repo.list(vault).await?;
     let document_types = state.document_type_repo.list(vault).await?;
+    let mut metadata_fields = state.metadata_fields.list(vault, false, None, 100).await?;
+    if let Ok(selected) = Uuid::parse_str(&values.metadata_field_id) {
+        if !metadata_fields.iter().any(|field| field.id == selected) {
+            if let Some(field) = state.metadata_fields.find(vault, selected).await? {
+                metadata_fields.push(field);
+            }
+        }
+    }
+    metadata_fields.sort_by(|a, b| a.name.cmp(&b.name));
     let runs = match workflow {
         Some(w) => state
             .workflow_repo
@@ -573,11 +879,44 @@ async fn build_form(
         ),
         workflow_id: workflow.map(|w| w.id.to_string()),
         triggers: choices(
-            WorkflowTrigger::ALL
+            WorkflowTriggerRegistry::built_in()
+                .definitions()
                 .iter()
-                .map(|t| (t.as_str().to_string(), t.label().to_string()))
+                .map(|trigger| (trigger.event_type.clone(), trigger.label.clone()))
                 .collect(),
             &values.trigger,
+        ),
+        metadata_fields: choices(
+            metadata_fields
+                .into_iter()
+                .map(|field| {
+                    let label = if field.deleted_at.is_some() {
+                        format!("{} (retired)", field.name)
+                    } else {
+                        field.name
+                    };
+                    (field.id.to_string(), label)
+                })
+                .collect(),
+            &values.metadata_field_id,
+        ),
+        metadata_kinds: choices(
+            METADATA_KINDS
+                .into_iter()
+                .map(|(kind, label)| (kind.as_str().into(), label.into()))
+                .collect(),
+            &values.metadata_kind,
+        ),
+        metadata_states: choices(
+            [
+                ("set", "Set for the first time"),
+                ("replaced", "Value replaced"),
+                ("cleared", "Value cleared"),
+            ]
+            .into_iter()
+            .map(|(state, label)| (state.into(), label.into()))
+            .collect(),
+            &values.metadata_state,
         ),
         source_kinds: choices(
             [

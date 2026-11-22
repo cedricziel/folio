@@ -13,6 +13,7 @@ use folio_core::ports::{EmbeddedChunk, SearchResult, SearchService};
 
 use super::document_repo::push_filter;
 use crate::ai::cosine_similarity;
+use crate::database::{LEGACY_CHUNK_REVISION, LIVE_CHUNK_DOCUMENT};
 
 fn db_error(e: sqlx::Error) -> Error {
     Error::Repository(e.to_string())
@@ -47,21 +48,39 @@ impl SearchService for SqliteSearchService {
         model: &str,
         chunks: &[EmbeddedChunk],
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(db_error)?;
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(db_error)?;
+        let mut document = QueryBuilder::<Sqlite>::new("SELECT ");
+        document
+            .push(LEGACY_CHUNK_REVISION)
+            .push(" FROM documents d WHERE ")
+            .push(LIVE_CHUNK_DOCUMENT)
+            .push(" AND d.id = ")
+            .push_bind(document_id.to_string())
+            .push(" AND d.vault_id = ")
+            .push_bind(vault.to_string());
 
-        let in_vault: Option<(i64,)> = sqlx::query_as(
-            "SELECT 1 FROM documents WHERE deleted_at IS NULL AND id = ? AND vault_id = ?",
-        )
-        .bind(document_id.to_string())
-        .bind(vault.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db_error)?;
-        if in_vault.is_none() {
-            return Err(Error::NotFound {
-                entity_type: "Document",
-                id: document_id.to_string(),
-            });
+        match document
+            .build_query_scalar::<bool>()
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?
+        {
+            Some(true) => {}
+            Some(false) => {
+                return Err(Error::Conflict(
+                    "Revision-bound indexing is required".into(),
+                ))
+            }
+            None => {
+                return Err(Error::NotFound {
+                    entity_type: "Document",
+                    id: document_id.to_string(),
+                })
+            }
         }
 
         sqlx::query("DELETE FROM document_chunks WHERE document_id = ?")
@@ -93,15 +112,19 @@ impl SearchService for SqliteSearchService {
     }
 
     async fn delete_embedding(&self, vault: VaultId, document_id: Id) -> Result<()> {
-        sqlx::query(
-            "DELETE FROM document_chunks WHERE document_id = ?
-               AND document_id IN (SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ?)",
-        )
-        .bind(document_id.to_string())
-        .bind(vault.to_string())
-        .execute(&self.pool)
-        .await
-        .map_err(db_error)?;
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "DELETE FROM document_chunks WHERE document_id IN (SELECT d.id FROM documents d WHERE ",
+        );
+        query
+            .push(LIVE_CHUNK_DOCUMENT)
+            .push(" AND ")
+            .push(LEGACY_CHUNK_REVISION)
+            .push(" AND d.id = ")
+            .push_bind(document_id.to_string())
+            .push(" AND d.vault_id = ")
+            .push_bind(vault.to_string())
+            .push(")");
+        query.build().execute(&self.pool).await.map_err(db_error)?;
         Ok(())
     }
 
@@ -138,15 +161,19 @@ impl SearchService for SqliteSearchService {
         let mut query = QueryBuilder::<Sqlite>::new(
             "SELECT c.document_id, c.text, c.embedding
              FROM document_chunks c JOIN (
-                 SELECT id FROM documents WHERE deleted_at IS NULL AND vault_id = ",
+                 SELECT id, vault_id, current_revision_id FROM documents d WHERE ",
         );
+        query.push(LIVE_CHUNK_DOCUMENT).push(" AND d.vault_id = ");
         query.push_bind(vault.to_string());
         if let Some(filter) = filter {
-            push_filter(&mut query, filter)?;
+            push_filter(&mut query, vault, filter)?;
         }
         query
             .push(") d ON d.id = c.document_id WHERE c.model = ")
             .push_bind(model)
+            .push(" AND (c.revision_id = d.current_revision_id OR (c.revision_id IS NULL AND ")
+            .push(LEGACY_CHUNK_REVISION)
+            .push("))")
             .push(" AND c.stale = 0");
         let rows: Vec<(String, String, Vec<u8>)> = query
             .build_query_as()

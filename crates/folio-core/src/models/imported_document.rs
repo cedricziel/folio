@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{DocumentDate, EntryBody, Id, MetadataValue, ProcessingStatus};
+use super::{DocumentDate, EntryBody, FileIdentity, Id, MetadataValue, ProcessingStatus};
 
 /// A document system Folio imports from
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,10 +38,19 @@ pub struct ImportedNote {
     pub created_at: DateTime<Utc>,
 }
 
+/// A retained archival derivative of an imported original.
+#[derive(Debug, Clone)]
+pub struct ImportedArchive {
+    pub id: Id,
+    pub filename: Option<String>,
+    pub identity: FileIdentity,
+}
+
 /// Everything written for one imported document, in one transaction
 ///
-/// The file must already be stored at `file_path`. The document is created
-/// by the current actor, never runs OCR, and is filed unless `in_inbox`.
+/// The caller must store the original at `file_path` without replacing bytes
+/// and measure its hash and size before invoking the repository. The document
+/// never runs OCR and is filed unless `in_inbox`.
 #[derive(Debug, Clone)]
 pub struct ImportedDocument {
     /// Derived from the vault and `external_ref`, so every retry agrees on it
@@ -55,6 +64,8 @@ pub struct ImportedDocument {
     pub file_path: String,
     /// Lowercase hex SHA-256 of the stored original
     pub content_sha256: String,
+    pub file_size: u64,
+    pub archive: Option<ImportedArchive>,
     pub document_date: Option<DocumentDate>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -71,6 +82,31 @@ pub struct ImportedDocument {
 impl ImportedDocument {
     /// Reject what the database would only report mid-transaction
     pub fn validate(&self) -> crate::Result<()> {
+        if self.file_path.is_empty() || !valid_sha256(&self.content_sha256) {
+            return Err(crate::Error::Validation(
+                "Imported original must have a key and a lowercase SHA-256".into(),
+            ));
+        }
+        if i64::try_from(self.file_size).is_err() {
+            return Err(crate::Error::Validation(
+                "Original byte size exceeds database range".into(),
+            ));
+        }
+        if let Some(archive) = &self.archive {
+            let identity = &archive.identity;
+            if archive.id == self.id
+                || archive.id.is_nil()
+                || identity.storage_key
+                    != crate::ports::keys::revision_artifact(self.id, self.id, archive.id)
+                || identity.mime_type.is_empty()
+                || !valid_sha256(&identity.sha256)
+                || i64::try_from(identity.byte_size).is_err()
+            {
+                return Err(crate::Error::Validation(
+                    "Invalid imported archive identity".into(),
+                ));
+            }
+        }
         let mut seen = std::collections::HashSet::new();
         if !self.notes.iter().all(|note| seen.insert(&note.external_id)) {
             return Err(crate::Error::Validation(
@@ -78,6 +114,20 @@ impl ImportedDocument {
             ));
         }
         Ok(())
+    }
+
+    pub fn original_identity(&self) -> FileIdentity {
+        FileIdentity {
+            sha256: self.content_sha256.clone(),
+            byte_size: self.file_size,
+            storage_key: self.file_path.clone(),
+            mime_type: self
+                .mime_type
+                .as_deref()
+                .filter(|mime_type| !mime_type.is_empty())
+                .unwrap_or("application/octet-stream")
+                .to_owned(),
+        }
     }
 
     /// Embeddings run only for documents that have text
@@ -92,4 +142,11 @@ impl ImportedDocument {
             ProcessingStatus::Skipped
         }
     }
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
