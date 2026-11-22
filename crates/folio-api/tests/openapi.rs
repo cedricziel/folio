@@ -22,6 +22,26 @@ fn committed_spec_matches_generated_spec() {
     }
 
     let committed = std::fs::read_to_string(&path).unwrap_or_default();
+
+    if committed != generated {
+        let mut section_indent = None;
+        for line in generated.lines() {
+            if (line.starts_with("    \"/api/") && line.contains("/revisions"))
+                || line.starts_with("      \"Revision")
+            {
+                section_indent = Some(line.len() - line.trim_start().len());
+            }
+            if let Some(indent) = section_indent {
+                eprintln!("FOLIO_REVISION_OPENAPI|{line}");
+                if line.len() - line.trim_start().len() == indent
+                    && line.trim_start().starts_with('}')
+                {
+                    section_indent = None;
+                }
+            }
+        }
+    }
+
     assert!(
         committed == generated,
         "openapi/openapi.json is out of date. Regenerate it with:\n\n    \
