@@ -8,12 +8,22 @@
         <dd>
             {% if revision.is_current %}<span class="f-meta">Current</span>{% endif %}
             {% if let Some(filename) = revision.original.filename %}<div>{{ filename }}</div>{% endif %}
-            <time class="f-meta" datetime="{{ revision.created_at.to_rfc3339() }}">{{ revision.created_at.format("%Y-%m-%d %H:%M UTC") }}</time>
+            <div class="f-meta">
+                {{ revision.original.mime_type }}{% if let Some(size) = revision.original.byte_size %} · {{ size }} bytes{% endif %}
+            </div>
+            <div class="f-meta">
+                <time datetime="{{ revision.created_at.to_rfc3339() }}">{{ revision.created_at.format("%Y-%m-%d %H:%M UTC") }}</time>{% if let Some(actor) = revision.created_by %} · {{ actor }}{% endif %}
+            </div>
+            {% if revision.restored_from_revision_id.is_some() %}
+            <div class="hint">Restored from an earlier revision</div>
+            {% endif %}
             {% if revision.original.verification == OriginalVerification::Unavailable %}
             <div class="hint">Original unavailable</div>
             {% else %}
             {% if revision.original.verification == OriginalVerification::Pending %}
             <div class="hint">Verification pending</div>
+            {% else %}
+            <div class="hint">Verified original</div>
             {% endif %}
             <div><a href="{{ "/api/documents"|vault_url }}/{{ document_id }}/revisions/{{ revision.id }}/download" download data-turbo="false">Download original</a></div>
             {% endif %}
