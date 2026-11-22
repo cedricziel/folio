@@ -25,3 +25,11 @@ impl FileIdentity {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnverifiedOriginal {
+    pub id: super::Id,
+    pub vault_id: super::VaultId,
+    pub storage_key: String,
+    pub mime_type: String,
+}

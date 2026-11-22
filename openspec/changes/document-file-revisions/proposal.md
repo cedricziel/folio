@@ -19,4 +19,4 @@ A document currently identifies one mutable storage location. Replacement must p
 
 ## Impact
 
-Touches folio-core models/ports/importer, folio-infra storage/database/queue/search adapters, folio-api HTML and JSON routes, MCP resources, OpenAPI, and Apple. Add `20261102161100_document_file_revisions.sql` in both migration directories after date/review and lifecycle foundations merge. Backfill each stored legacy original as revision 1 without rewriting bytes; compute identities through a resumable verifier. No settings change. Never edit old migrations.
+Touches folio-core models/ports/importer, folio-infra storage/database/queue/search adapters, folio-api HTML and JSON routes, MCP resources, OpenAPI, and Apple. Add `20261122190000_document_revisions.sql` in both migration directories after date/review and lifecycle foundations merge. Backfill each stored legacy original as revision 1 without rewriting bytes; compute identities through a resumable verifier. No settings change. Never edit old migrations.

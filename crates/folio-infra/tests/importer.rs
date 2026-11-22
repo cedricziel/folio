@@ -110,14 +110,83 @@ fn upload() -> NewUpload {
 }
 
 #[tokio::test]
-async fn imports_record_the_size_of_the_original() {
-    let (_db, r, vault) = fixture().await;
-    let store: Arc<dyn DocumentStore> = Arc::new(ObjectStoreDocumentStore::in_memory());
-    let importer = Importer::new(r.documents.clone(), store, Arc::new(r.jobs.clone()));
+async fn import_publishes_verified_original_and_correlated_revision_event() {
+    let (db, r, vault) = fixture().await;
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    let store = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
 
     let document = importer.import(vault, upload()).await.unwrap();
 
-    assert_eq!(document.file_size, Some(b"uploaded document".len() as u64));
+    let path = document.file_path.as_deref().unwrap();
+    let bytes = store.get_bytes(path).await.unwrap();
+    let expected = folio_core::models::FileIdentity::from_bytes(path, "application/pdf", &bytes);
+    assert_eq!(document.file_size, Some(expected.byte_size));
+    let (sha256, byte_size): (String, i64) = sqlx::query_as(
+        "SELECT f.sha256, f.byte_size FROM documents d
+         JOIN document_revisions r ON r.id = d.current_revision_id
+         JOIN document_files f ON f.id = r.original_file_id
+         WHERE d.id = ? AND r.number = 1 AND f.verification_state = 'verified'
+           AND f.storage_key = d.file_path",
+    )
+    .bind(document.id.to_string())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (sha256, byte_size),
+        (expected.sha256.clone(), expected.byte_size as i64)
+    );
+
+    let events = r
+        .outbox
+        .replay(0, chrono::Utc::now() - chrono::Duration::days(1), 100)
+        .await
+        .unwrap();
+    let created = events
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .find(|event| event.event_type() == "document.created")
+        .unwrap();
+    let revision = events
+        .iter()
+        .filter_map(|event| event.envelope.as_ref())
+        .find(|event| event.event_type() == "document.revision_created")
+        .unwrap();
+    assert_eq!(revision.correlation_id(), created.correlation_id());
+    assert_eq!(revision.mutation_id(), created.mutation_id());
+    assert_eq!(revision.data()["sha256"], expected.sha256);
+    assert!(revision.data().get("storage_key").is_none());
+}
+
+#[tokio::test]
+async fn resumed_upload_with_different_stored_bytes_leaves_the_document_unpublished() {
+    let (_db, r, vault) = fixture().await;
+    let store = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let importer = Importer::new(r.documents.clone(), store.clone(), Arc::new(r.jobs.clone()));
+    let id = uuid::Uuid::new_v4();
+    let key = folio_core::ports::keys::original(id);
+    importer.begin_as(vault, id, &upload()).await.unwrap();
+    store
+        .put(&key, b"another upload".as_slice().into())
+        .await
+        .unwrap();
+
+    let result = importer.import_as(vault, id, upload()).await;
+
+    assert!(matches!(result, Err(Error::Conflict(_))), "{result:?}");
+    assert_eq!(store.get_bytes(&key).await.unwrap(), b"another upload");
+    assert!(r
+        .documents
+        .find_by_id(vault, id)
+        .await
+        .unwrap()
+        .unwrap()
+        .file_path
+        .is_none());
+    assert!(created_events(&r).await.is_empty());
 }
 
 #[tokio::test]
@@ -249,6 +318,44 @@ async fn failed_file_path_update_keeps_cleanup_intent_for_the_stored_object() {
 }
 
 #[tokio::test]
+async fn failed_revision_event_rolls_back_the_original_and_both_events() {
+    let (db, r, vault) = fixture().await;
+    let Database::Sqlite(pool) = &db else {
+        unreachable!()
+    };
+    sqlx::query(
+        "CREATE TRIGGER refuse_revision_event BEFORE INSERT ON outbox_events
+         WHEN NEW.type = 'document.revision_created' BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let store = Arc::new(ObjectStoreDocumentStore::in_memory());
+    let importer = Importer::new(r.documents.clone(), store, Arc::new(r.jobs.clone()));
+    let id = uuid::Uuid::new_v4();
+    assert!(importer.import_as(vault, id, upload()).await.is_err());
+    assert!(r
+        .documents
+        .find_by_id(vault, id)
+        .await
+        .unwrap()
+        .unwrap()
+        .file_path
+        .is_none());
+    let file_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM document_files")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let revision_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM document_revisions")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!((file_count, revision_count), (0, 0));
+    assert!(created_events(&r).await.is_empty());
+}
+
+#[tokio::test]
 async fn failed_processing_enqueue_keeps_the_successfully_stored_upload() {
     let (db, r, vault) = fixture().await;
     let Database::Sqlite(pool) = &db else {
@@ -338,6 +445,11 @@ impl DocumentStore for PausedPutStore {
         self.started.notify_one();
         self.release.notified().await;
         self.inner.put(key, data).await
+    }
+    async fn put_if_absent(&self, key: &str, data: bytes::Bytes) -> Result<bool> {
+        self.started.notify_one();
+        self.release.notified().await;
+        self.inner.put_if_absent(key, data).await
     }
     async fn get(&self, key: &str) -> Result<StoredObject> {
         self.inner.get(key).await

@@ -328,6 +328,16 @@ impl DocumentStore for GatedStore {
         }
         self.inner.put(key, data).await
     }
+    async fn put_if_absent(&self, key: &str, data: bytes::Bytes) -> Result<bool> {
+        if take(&self.gate.gated) {
+            self.gate.started.notify_one();
+            self.gate.release.notified().await;
+        }
+        if take(&self.gate.failing) {
+            return Err(Error::Storage("object storage unavailable".into()));
+        }
+        self.inner.put_if_absent(key, data).await
+    }
     async fn get(&self, key: &str) -> Result<StoredObject> {
         self.inner.get(key).await
     }
