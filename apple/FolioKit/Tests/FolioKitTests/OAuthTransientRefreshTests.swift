@@ -4,7 +4,7 @@ import Testing
 @testable import FolioKit
 
 private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
-    enum Outcome {
+    enum Outcome: Sendable {
         case reply(status: Int, body: String)
         case failure(URLError.Code)
     }
@@ -12,10 +12,12 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var outcome = Outcome.reply(status: 200, body: "")
     nonisolated(unsafe) private static var count = 0
+    nonisolated(unsafe) private static var beforeReply: (@Sendable () async -> Void)?
 
-    static func reset(_ outcome: Outcome) {
+    static func reset(_ outcome: Outcome, beforeReply: (@Sendable () async -> Void)? = nil) {
         lock.withLock {
             Self.outcome = outcome
+            Self.beforeReply = beforeReply
             count = 0
         }
     }
@@ -25,10 +27,21 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let outcome = Self.lock.withLock {
+        let (outcome, beforeReply) = Self.lock.withLock {
             Self.count += 1
-            return Self.outcome
+            return (Self.outcome, Self.beforeReply)
         }
+        if let beforeReply {
+            Task { @Sendable [self] in
+                await beforeReply()
+                complete(outcome)
+            }
+        } else {
+            complete(outcome)
+        }
+    }
+
+    private func complete(_ outcome: Outcome) {
         switch outcome {
         case let .failure(code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
@@ -40,6 +53,20 @@ private final class TokenEndpointURLProtocol: URLProtocol, @unchecked Sendable {
         }
     }
     override func stopLoading() {}
+}
+
+private struct PendingReadStore: CredentialStore {
+    let base: InMemoryCredentialStore
+    let pendingRead: AsyncStream<Void>.Continuation
+
+    func load() -> OAuthCredentials? {
+        let credentials = base.load()
+        if credentials?.refreshPending == true { pendingRead.yield(()) }
+        return credentials
+    }
+
+    func save(_ credentials: OAuthCredentials) { base.save(credentials) }
+    func clear() { base.clear() }
 }
 
 private final class RestoreFailingStore: CredentialStore, @unchecked Sendable {
@@ -156,17 +183,27 @@ private final class RestoreFailingStore: CredentialStore, @unchecked Sendable {
     }
 
     @Test func concurrentCallersShareOneTransientOutcome() async throws {
-        TokenEndpointURLProtocol.reset(.reply(status: 503, body: ""))
+        let (transferStarted, signalStarted) = AsyncStream<Void>.makeStream()
+        let (pendingReads, signalRead) = AsyncStream<Void>.makeStream()
+        defer {
+            signalStarted.finish()
+            signalRead.finish()
+        }
+        TokenEndpointURLProtocol.reset(.reply(status: 503, body: "")) {
+            signalStarted.yield(())
+            for await _ in pendingReads.prefix(3) {}
+        }
         let store = InMemoryCredentialStore(credentials())
-        let oauth = oauth(store)
-        let outcomes = await withTaskGroup(of: Bool.self) { group in
-            for _ in 0..<4 {
-                group.addTask {
-                    do { _ = try await oauth.token(); return false } catch {
-                        return error as? FolioError == .server(status: 503, message: nil)
-                    }
-                }
+        let oauth = oauth(PendingReadStore(base: store, pendingRead: signalRead))
+        let readToken: @Sendable () async -> Bool = {
+            do { _ = try await oauth.token(); return false } catch {
+                return error as? FolioError == .server(status: 503, message: nil)
             }
+        }
+        let outcomes = await withTaskGroup(of: Bool.self) { group in
+            group.addTask(operation: readToken)
+            for await _ in transferStarted.prefix(1) {}
+            for _ in 0..<3 { group.addTask(operation: readToken) }
             return await group.reduce(into: []) { $0.append($1) }
         }
         #expect(outcomes.allSatisfy { $0 })

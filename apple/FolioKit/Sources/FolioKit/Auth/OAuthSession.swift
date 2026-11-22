@@ -176,7 +176,7 @@ public actor OAuthSession: BearerTokenProvider {
         let request = OAuthRequests.refresh(
             endpoint: credentials.tokenEndpoint, clientID: credentials.clientID, refreshToken: refreshToken)
         var updated = credentials
-        // A lost response or failed save must never let another process replay a consumed token.
+        // Keep the marker across process exits while a rotation is unconfirmed.
         updated.refreshPending = true
         try store.save(updated)
         let baseline = updated
