@@ -23,6 +23,13 @@ The `archival` and `text` values are null when those entries are absent.
 Queued, failed, skipped, superseded, or older-revision attempts contribute no
 file. The manifest may contain private document and ingestion details.
 
+`document.source` and `document.created_at` describe the document's original
+ingestion history. They are not the provenance or arrival time of the current
+file revision: replacing a file preserves those document-level fields.
+`source_revision_id` identifies the exported revision, and the payload checksum
+identifies its exact bytes. Version 1 does not export revision creation time or
+full replacement history.
+
 Folio verifies each binary against its recorded identity and finishes the
 bundle before sending it. Retry a `409` to export the current revision or
 archival copy. A missing or corrupt object with a recorded verified identity
