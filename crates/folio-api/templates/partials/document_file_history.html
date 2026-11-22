@@ -1,0 +1,30 @@
+<turbo-frame id="document-file-history">
+    {% if revisions.is_empty() %}
+    <p class="hint">No file revisions yet.</p>
+    {% else %}
+    <dl class="f-meta-list">
+        {% for revision in revisions %}
+        <dt>Revision {{ revision.number }}</dt>
+        <dd>
+            {% if revision.is_current %}<span class="f-meta">Current</span>{% endif %}
+            {% if let Some(filename) = revision.original.filename %}<div>{{ filename }}</div>{% endif %}
+            <time class="f-meta" datetime="{{ revision.created_at.to_rfc3339() }}">{{ revision.created_at.format("%Y-%m-%d %H:%M UTC") }}</time>
+            {% if revision.original.verification == OriginalVerification::Unavailable %}
+            <div class="hint">Original unavailable</div>
+            {% else %}
+            {% if revision.original.verification == OriginalVerification::Pending %}
+            <div class="hint">Verification pending</div>
+            {% endif %}
+            <div><a href="{{ "/api/documents"|vault_url }}/{{ document_id }}/revisions/{{ revision.id }}/download" download data-turbo="false">Download original</a></div>
+            {% endif %}
+        </dd>
+        {% endfor %}
+    </dl>
+    {% endif %}
+    {% if show_latest %}
+    <a href="{{ "/documents"|vault_url }}/{{ document_id }}/file-history">Latest revisions</a>
+    {% endif %}
+    {% if let Some(before) = next_before %}
+    <a href="{{ "/documents"|vault_url }}/{{ document_id }}/file-history?before={{ before }}">Older revisions</a>
+    {% endif %}
+</turbo-frame>

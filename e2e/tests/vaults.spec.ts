@@ -278,6 +278,11 @@ test("viewer controls stay read-only and upload destinations stay writable", asy
   await expect(page.locator(".vault-context > .f-meta")).toHaveText("Viewer");
   await expect(page.getByLabel("From", { exact: true })).toBeDisabled();
   await expect(page.getByLabel("Type", { exact: true })).toBeDisabled();
+  await page.getByText("File history", { exact: true }).click();
+  await expect(page.locator("#document-file-history")).toContainText("No file revisions yet.");
+  expect(
+    (await page.request.get(`/vaults/${reference.id}/documents/${personalDocument.id}/file-history`)).status(),
+  ).toBe(404);
   await expect(
     page
       .locator(".doc-actions")

@@ -41,6 +41,10 @@ pub fn router() -> Router<AppState> {
         // Parameterized routes come last
         .route("/documents/{id}", get(document_detail))
         .route("/documents/{id}/archive", post(request_archive))
+        .route(
+            "/documents/{id}/file-history",
+            get(super::document_revisions::panel),
+        )
         .route("/documents/{id}/thumbnail", get(document_thumbnail))
         .route(
             "/documents/{id}/page/{page}/thumbnail",
