@@ -559,6 +559,11 @@ drafts, read-only access, and active and trashed logical links. Run
 instance to verify exact decimal editing and same-vault link search and navigation
 at a narrow viewport.
 
+Run `cargo test -p folio-infra --test workflows metadata_workflows_use_the_committed_occurrence_and_run_once`
+for metadata workflow delivery. The test commits a field and document values
+before dispatch, then checks that delivery uses the earlier occurrence values,
+records its outbox identity, deduplicates retries, and skips workflow-origin events.
+
 ## Verify SQLite trash contention
 
 Run `cargo test -p folio-infra --test trash_lock` with an isolated target.
