@@ -321,6 +321,15 @@ quarantine and listings that retain readable jobs without altering damaged rows.
 Run the repository contract as well after changes to queue method signatures.
 These tests use temporary or in-memory data.
 
+For processing results, run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ocr_stage_transactions --test derived_stage_transactions --test processing_summaries`.
+These fixtures cover atomic artifacts and events, duplicate or expired claims,
+superseded inputs, retry lineage, and current stage reads on both databases.
+Run `cargo test -p folio-api --test processing_summaries --test thumbnails` and
+`cargo test -p folio-api --lib processing_tests` for access control, committed
+preview reads, retry copy, and legacy fallback. Regenerate the API description
+with `make openapi`. Run the document Playwright tests against the disposable
+instance to check that an open document shows a retry schedule without navigating.
+
 ## Verify document trash
 
 Run `cargo test -p folio-api --test trash --test vaults --test live` for default
@@ -545,6 +554,24 @@ rollback without a value-change event when a transition exceeds the event budget
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_search`
 and the API metadata suite for exact filtering. Verify canonical amounts, false
 versus missing, unavailable fields, vault isolation, and cursor binding.
+
+Run `cargo test -p folio-api --test web field_management_forms` for the Fields
+forms. The isolated fixture checks retained form drafts after a name conflict
+and restoration of the same option ID and position. Run `npx playwright test
+metadata-fields.spec.ts` from `e2e/` against the disposable Folio instance to
+check field and option management at a narrow viewport.
+
+Run `cargo test -p folio-api --test web --test vaults custom_field` for the
+document editor. Check false and empty states, retained invalid and conflicting
+drafts, read-only access, and active and trashed logical links. Run
+`npx playwright test metadata-document.spec.ts` from `e2e/` on the disposable
+instance to verify exact decimal editing and same-vault link search and navigation
+at a narrow viewport.
+
+Run `cargo test -p folio-infra --test workflows metadata_workflows_use_the_committed_occurrence_and_run_once`
+for metadata workflow delivery. The test commits a field and document values
+before dispatch, then checks that delivery uses the earlier occurrence values,
+records its outbox identity, deduplicates retries, and skips workflow-origin events.
 
 ## Verify SQLite trash contention
 

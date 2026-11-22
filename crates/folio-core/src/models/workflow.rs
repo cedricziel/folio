@@ -44,6 +44,24 @@ pub enum WorkflowTrigger {
     DocumentCommentUpdated,
     #[serde(rename = "document_comment.deleted")]
     DocumentCommentDeleted,
+    #[serde(rename = "metadata_field.created")]
+    MetadataFieldCreated,
+    #[serde(rename = "metadata_field.updated")]
+    MetadataFieldUpdated,
+    #[serde(rename = "metadata_field.deleted")]
+    MetadataFieldDeleted,
+    #[serde(rename = "metadata_field.restored")]
+    MetadataFieldRestored,
+    #[serde(rename = "metadata_option.created")]
+    MetadataOptionCreated,
+    #[serde(rename = "metadata_option.updated")]
+    MetadataOptionUpdated,
+    #[serde(rename = "metadata_option.deleted")]
+    MetadataOptionDeleted,
+    #[serde(rename = "metadata_option.restored")]
+    MetadataOptionRestored,
+    #[serde(rename = "document.metadata.changed")]
+    DocumentMetadataChanged,
     /// A document was deleted
     #[serde(rename = "document.deleted")]
     DocumentDeleted,
@@ -66,7 +84,7 @@ pub enum WorkflowTrigger {
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 21] = [
+    pub const ALL: [WorkflowTrigger; 30] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -80,6 +98,15 @@ impl WorkflowTrigger {
         Self::DocumentCommentCreated,
         Self::DocumentCommentUpdated,
         Self::DocumentCommentDeleted,
+        Self::MetadataFieldCreated,
+        Self::MetadataFieldUpdated,
+        Self::MetadataFieldDeleted,
+        Self::MetadataFieldRestored,
+        Self::MetadataOptionCreated,
+        Self::MetadataOptionUpdated,
+        Self::MetadataOptionDeleted,
+        Self::MetadataOptionRestored,
+        Self::DocumentMetadataChanged,
         Self::DocumentDeleted,
         Self::IngestReceived,
         Self::IngestImported,
@@ -106,6 +133,15 @@ impl WorkflowTrigger {
             Self::DocumentCommentCreated => "document_comment.created",
             Self::DocumentCommentUpdated => "document_comment.updated",
             Self::DocumentCommentDeleted => "document_comment.deleted",
+            Self::MetadataFieldCreated => "metadata_field.created",
+            Self::MetadataFieldUpdated => "metadata_field.updated",
+            Self::MetadataFieldDeleted => "metadata_field.deleted",
+            Self::MetadataFieldRestored => "metadata_field.restored",
+            Self::MetadataOptionCreated => "metadata_option.created",
+            Self::MetadataOptionUpdated => "metadata_option.updated",
+            Self::MetadataOptionDeleted => "metadata_option.deleted",
+            Self::MetadataOptionRestored => "metadata_option.restored",
+            Self::DocumentMetadataChanged => "document.metadata.changed",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
             Self::IngestImported => "ingest.imported",
@@ -133,6 +169,15 @@ impl WorkflowTrigger {
             Self::DocumentCommentCreated => "When a comment is created",
             Self::DocumentCommentUpdated => "When a comment is updated",
             Self::DocumentCommentDeleted => "When a comment is deleted",
+            Self::MetadataFieldCreated => "When a custom field is created",
+            Self::MetadataFieldUpdated => "When a custom field is updated",
+            Self::MetadataFieldDeleted => "When a custom field is retired",
+            Self::MetadataFieldRestored => "When a custom field is restored",
+            Self::MetadataOptionCreated => "When a select option is created",
+            Self::MetadataOptionUpdated => "When a select option is updated",
+            Self::MetadataOptionDeleted => "When a select option is retired",
+            Self::MetadataOptionRestored => "When a select option is restored",
+            Self::DocumentMetadataChanged => "When a document's custom fields change",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
             Self::IngestImported => "When an item is imported",
@@ -158,8 +203,17 @@ impl WorkflowTrigger {
             | Self::DocumentNoteDeleted
             | Self::DocumentCommentCreated
             | Self::DocumentCommentUpdated
-            | Self::DocumentCommentDeleted => WorkflowTarget::Document,
-            Self::DocumentDeleted
+            | Self::DocumentCommentDeleted
+            | Self::DocumentMetadataChanged => WorkflowTarget::Document,
+            Self::MetadataFieldCreated
+            | Self::MetadataFieldUpdated
+            | Self::MetadataFieldDeleted
+            | Self::MetadataFieldRestored
+            | Self::MetadataOptionCreated
+            | Self::MetadataOptionUpdated
+            | Self::MetadataOptionDeleted
+            | Self::MetadataOptionRestored
+            | Self::DocumentDeleted
             | Self::IngestImported
             | Self::IngestSkipped
             | Self::IngestDuplicate
@@ -179,6 +233,21 @@ impl WorkflowTrigger {
                 | Self::IngestFailed
                 | Self::SourceFailed
                 | Self::SourceRecovered
+        )
+    }
+
+    pub fn is_custom_metadata(self) -> bool {
+        matches!(
+            self,
+            Self::MetadataFieldCreated
+                | Self::MetadataFieldUpdated
+                | Self::MetadataFieldDeleted
+                | Self::MetadataFieldRestored
+                | Self::MetadataOptionCreated
+                | Self::MetadataOptionUpdated
+                | Self::MetadataOptionDeleted
+                | Self::MetadataOptionRestored
+                | Self::DocumentMetadataChanged
         )
     }
 
@@ -627,6 +696,10 @@ impl WorkflowInput {
                     "Only webhook actions can run when a document is deleted"
                 } else if self.trigger.is_ingest_outcome() {
                     "Ingestion outcome workflows take only webhook actions"
+                } else if self.trigger.is_custom_metadata()
+                    && self.trigger.target() == WorkflowTarget::Event
+                {
+                    "Custom field and option workflows take only webhook actions"
                 } else {
                     "ingest.received workflows take only skip_import, and skip_import needs that trigger"
                 });
@@ -1272,6 +1345,43 @@ mod tests {
         assert_eq!(redact_url("not a url"), "<invalid url>");
         let err = validate_webhook_url("ftp://user:pw@example.com/x").unwrap_err();
         assert!(!err.to_string().contains("pw"));
+    }
+
+    #[test]
+    fn custom_metadata_triggers_use_their_occurrence_targets() {
+        for event in [
+            "metadata_field.created",
+            "metadata_field.updated",
+            "metadata_field.deleted",
+            "metadata_field.restored",
+            "metadata_option.created",
+            "metadata_option.updated",
+            "metadata_option.deleted",
+            "metadata_option.restored",
+            "document.metadata.changed",
+        ] {
+            let trigger = WorkflowTrigger::parse(event).expect(event);
+            let target = if event.starts_with("document.") {
+                WorkflowTarget::Document
+            } else {
+                WorkflowTarget::Event
+            };
+            assert_eq!(trigger.target(), target);
+            let descriptor = super::super::WorkflowTriggerRegistry::built_in()
+                .get(event)
+                .expect(event);
+            assert_eq!(descriptor.target, target);
+            let workflow = input(
+                trigger,
+                vec![WorkflowAction::AddTags {
+                    tag_ids: vec![Id::new_v4()],
+                }],
+            );
+            assert_eq!(
+                workflow.validate().is_ok(),
+                target == WorkflowTarget::Document
+            );
+        }
     }
 
     #[test]

@@ -100,6 +100,7 @@ public final class DocumentDetailViewModel {
         if row.updatedAt > document.updatedAt {
             var merged = row
             if merged.tags.isEmpty { merged.tags = document.tags }
+            merged.processingStages = document.processingStages
             document = merged
         }
         rebuildFields()
@@ -158,7 +159,7 @@ public final class DocumentDetailViewModel {
         do {
             let updated = try await service.setDocumentReview(reviewed, for: document.id)
             metadataWrites += 1
-            applyMetadata(updated)
+            applyMetadata(updated, preservesProcessingStages: true)
         } catch {
             reviewFailure = error.localizedDescription
             throw error
@@ -168,7 +169,7 @@ public final class DocumentDetailViewModel {
     public func saveDocumentDate(_ date: DocumentDate?) async throws {
         let updated = try await service.setDocumentDate(date, for: document.id)
         metadataWrites += 1
-        applyMetadata(updated)
+        applyMetadata(updated, preservesProcessingStages: true)
     }
 
     /// The server grants classification with the same edit permission it reports for the document date.
@@ -267,10 +268,15 @@ public final class DocumentDetailViewModel {
         }
     }
 
-    private func applyMetadata(_ updated: Document) {
+    private func applyMetadata(_ updated: Document, preservesProcessingStages: Bool = false) {
         guard updated.updatedAt >= document.updatedAt else { return }
-        fetchedVersion = updated.updatedAt
-        document = updated
+        var merged = updated
+        if preservesProcessingStages {
+            merged.processingStages = document.processingStages
+        } else {
+            fetchedVersion = updated.updatedAt
+        }
+        document = merged
         rebuildFields()
     }
 

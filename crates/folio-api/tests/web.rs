@@ -722,3 +722,285 @@ async fn long_pdfs_offer_only_the_pages_that_have_previews() {
     let beyond = h.app.clone().oneshot(thumbnail(pages)).await.unwrap();
     assert_eq!(beyond.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn field_management_forms_preserve_invalid_drafts_and_restore_options() {
+    use axum::{body::Body, http::Request};
+
+    let h = harness().await;
+    let form = |path: &str, body: Body| {
+        Request::post(path)
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(body)
+            .unwrap()
+    };
+    let index = "/manage/fields";
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(
+            index,
+            Body::from("name=Phase&kind=select&required=true"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    let field = result.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let page = text(h.app.clone().oneshot(get(&field)).await.unwrap()).await;
+    assert!(page.contains("<h1 class=\"title\">Phase</h1>"));
+    assert!(page.contains("Retire field"));
+
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(index, Body::from("name=PHASE&kind=select")))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let page = text(result).await;
+    assert!(page.contains("role=\"alert\""));
+    assert!(page.contains("value=\"PHASE\""));
+
+    let options = format!("{field}/options");
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(&options, Body::from("label=Pending&position=4")))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::SEE_OTHER);
+    let field_record = h
+        .state
+        .metadata_fields
+        .list(h.vault, false, None, 10)
+        .await
+        .unwrap()
+        .remove(0);
+    let option = h
+        .state
+        .metadata_options
+        .list(h.vault, field_record.id, false, None, 10)
+        .await
+        .unwrap()
+        .remove(0);
+
+    let retired = h
+        .app
+        .clone()
+        .oneshot(form(
+            &format!("{options}/{}/retire", option.id),
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(retired.status(), StatusCode::SEE_OTHER);
+    let page = text(h.app.clone().oneshot(get(&field)).await.unwrap()).await;
+    assert!(page.contains("Restore option"));
+    let restored = h
+        .app
+        .clone()
+        .oneshot(form(
+            &format!("{options}/{}/restore", option.id),
+            Body::empty(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(restored.status(), StatusCode::SEE_OTHER);
+    let current = h
+        .state
+        .metadata_options
+        .find(h.vault, field_record.id, option.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.label, "Pending");
+    assert_eq!(current.position, 4);
+    assert!(current.deleted_at.is_none());
+
+    for number in 0..50 {
+        h.state
+            .metadata_options
+            .create(
+                h.vault,
+                field_record.id,
+                folio_core::models::MetadataOptionInput {
+                    label: format!("Option {number}"),
+                    position: number,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let ordered = h
+        .state
+        .metadata_options
+        .list(h.vault, field_record.id, false, None, 51)
+        .await
+        .unwrap();
+    let after = ordered[49].id;
+    let last = &ordered[50];
+    let conflict = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("label", &ordered[0].label)
+        .append_pair("position", "987")
+        .finish();
+    let editor = format!("{options}/{}?after={after}", last.id);
+    let page = text(
+        h.app
+            .clone()
+            .oneshot(get(&format!("{field}?after={after}")))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(page.contains(&format!("action=\"{editor}\"")));
+    let result = h
+        .app
+        .clone()
+        .oneshot(form(&editor, Body::from(conflict)))
+        .await
+        .unwrap();
+    assert_eq!(result.status(), StatusCode::CONFLICT);
+    let page = text(result).await;
+    assert!(page.contains(&format!("action=\"{editor}\"")));
+    assert!(page.contains("value=\"987\""));
+}
+
+#[tokio::test]
+async fn custom_field_editor_keeps_invalid_exact_drafts_and_lists_live_links() {
+    use axum::{body::Body, http::Request};
+    use folio_core::models::{
+        CreateDocument, MetadataChange, MetadataFieldInput, MetadataKind, MetadataValue,
+    };
+
+    let h = harness().await;
+    let head = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "Invoice".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let target = h
+        .state
+        .document_repo
+        .create(
+            h.vault,
+            CreateDocument {
+                title: "Receipt".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let make = |kind, name: &str| MetadataFieldInput {
+        kind,
+        name: name.into(),
+        required: false,
+        unique: false,
+    };
+    let amount = h
+        .state
+        .metadata_fields
+        .create(h.vault, make(MetadataKind::Decimal, "Amount"))
+        .await
+        .unwrap();
+    let paid = h
+        .state
+        .metadata_fields
+        .create(h.vault, make(MetadataKind::Boolean, "Paid"))
+        .await
+        .unwrap();
+    let link = h
+        .state
+        .metadata_fields
+        .create(h.vault, make(MetadataKind::DocumentLink, "Receipt link"))
+        .await
+        .unwrap();
+    let initial = h
+        .state
+        .metadata_values
+        .patch(
+            h.vault,
+            head.id,
+            None,
+            vec![
+                MetadataChange {
+                    field_id: link.id,
+                    value: Some(MetadataValue::DocumentLink(target.id)),
+                },
+                MetadataChange {
+                    field_id: paid.id,
+                    value: Some(MetadataValue::Boolean(false)),
+                },
+            ],
+        )
+        .await
+        .unwrap();
+    let revision = initial.revision.unwrap();
+    let panel = format!("/documents/{}/custom-fields", head.id);
+    let editor = format!("{panel}/{}", amount.id);
+    let submit = |value: &str| {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("revision", &revision.to_string())
+            .append_pair("operation", "save")
+            .append_pair("value", value)
+            .finish();
+        Request::post(&editor)
+            .header(header::HOST, "localhost")
+            .header(header::ORIGIN, "http://localhost")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let page = text(h.app.clone().oneshot(get(&panel)).await.unwrap()).await;
+    assert!(page.contains("Custom fields"));
+    assert!(page.contains("<span>No</span>"));
+    assert!(page.contains(&format!("/documents/{}", target.id)));
+    assert!(page.contains("Not set"));
+
+    let invalid = h.app.clone().oneshot(submit("1e3")).await.unwrap();
+    assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let failed = text(invalid).await;
+    assert!(failed.contains("role=\"alert\""));
+    assert!(failed.contains("value=\"1e3\""));
+
+    let saved = h
+        .app
+        .clone()
+        .oneshot(submit("9007199254740993.010"))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    let saved = text(h.app.clone().oneshot(get(&panel)).await.unwrap()).await;
+    assert!(saved.contains("9007199254740993.01"));
+
+    let stale = h
+        .app
+        .clone()
+        .oneshot(submit("9007199254740993.02"))
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let draft = text(stale).await;
+    assert!(draft.contains("value=\"9007199254740993.02\""));
+    assert!(draft.contains("Reload the current value"));
+
+    h.state
+        .document_repo
+        .delete(h.vault, target.id)
+        .await
+        .unwrap();
+    let trashed = text(h.app.clone().oneshot(get(&panel)).await.unwrap()).await;
+    assert!(trashed.contains("Receipt (in Trash)"));
+    assert!(!trashed.contains(&format!("/documents/{}", target.id)));
+}

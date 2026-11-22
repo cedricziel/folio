@@ -53,6 +53,14 @@ pub trait DocumentRepository: Send + Sync {
     /// Find a document by ID
     async fn find_by_id(&self, vault: VaultId, id: Id) -> Result<Option<Document>>;
 
+    /// Current persisted stage runs for a live document in an active vault, ordered by stage.
+    /// Missing, trashed, wrong-vault, and legacy documents return an empty list.
+    async fn processing_stage_summaries(
+        &self,
+        vault: VaultId,
+        id: Id,
+    ) -> Result<Vec<crate::models::ProcessingStageSummary>>;
+
     /// Latest committed thumbnail for the current original. Legacy keys apply only to the first version.
     /// Returns `None` for an unavailable document or a replacement without a committed preview.
     async fn thumbnail_location(&self, vault: VaultId, id: Id)
@@ -200,6 +208,9 @@ pub trait DocumentRepository: Send + Sync {
         stage: ProcessingStage,
         status: ProcessingStatus,
     ) -> Result<()>;
+
+    /// Skip a pending embedding only if the live document still has terminal OCR with no text.
+    async fn skip_empty_embedding(&self, vault: VaultId, id: Id) -> Result<bool>;
 
     /// Store OCR output and atomically announce completion, including empty output.
     /// Repeating an unchanged successful result is a no-op.

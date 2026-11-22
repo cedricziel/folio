@@ -19,6 +19,7 @@ mod metadata;
 mod metadata_field;
 mod metadata_value;
 mod processing_attempt;
+mod processing_summary;
 mod push;
 mod revision_publication;
 mod saved_view;
@@ -75,6 +76,7 @@ pub use metadata_value::{
     MetadataSearchQuery,
 };
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
+pub use processing_summary::ProcessingStageSummary;
 pub use push::{
     valid_push_token, DevicePlatform, DeviceRegistration, DocumentOutcome, NotificationKind,
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
@@ -95,8 +97,8 @@ pub use vault::{
     VaultMember, VaultRole,
 };
 pub use webhook::{
-    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookPayload, WebhookUrls,
-    WorkflowEventIdentity, PAYLOAD_VERSION,
+    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookMetadata, WebhookPayload,
+    WebhookUrls, WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,

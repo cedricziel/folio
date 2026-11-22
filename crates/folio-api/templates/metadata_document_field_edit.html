@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block screen %}document{% endblock %}
+{% block title %}Edit {{ field.name }} - Folio{% endblock %}
+{% block content %}
+<section class="page">
+    <header class="page-head">
+        <nav class="f-crumbs" aria-label="Breadcrumb">
+            <ol><li><a href="{{ back }}">{{ document.title }}</a></li><li aria-current="page">{{ field.name }}</li></ol>
+        </nav>
+        <h1 class="title">{{ field.name }}</h1>
+        {% if field.deleted_at.is_some() %}<p class="lede">Retired field</p>{% endif %}
+    </header>
+    <section class="panel" aria-labelledby="edit-custom-field">
+        <h2 class="heading" id="edit-custom-field">Custom field value</h2>
+        <p class="lede">Current value: {{ current }}</p>
+        {% if let Some(message) = error %}<p class="f-notice f-notice-danger" role="alert">{{ message }}</p>{% endif %}
+        {% if stale %}
+        <p>Your draft was kept below. <a href="{{ action }}">Reload the current value</a> before saving again.</p>
+        {% endif %}
+        {% if field.deleted_at.is_none() && field.kind.as_str() == "document_link" %}
+        <form action="{{ "/documents"|vault_url }}/{{ document.id }}/custom-fields/{{ field.id }}" method="get" class="custom-field-form" data-turbo="false">
+            <input type="hidden" name="return_to" value="{{ return_to }}">
+            <label class="f-field" for="target-search">
+                <span class="f-field-label">Search this vault for a document</span>
+                <input id="target-search" class="f-input" type="search" name="q" value="{{ search }}" maxlength="256">
+            </label>
+            <button class="f-btn" type="submit">Search documents</button>
+        </form>
+        {% endif %}
+        {% if field.deleted_at.is_none() || can_clear %}
+        <form action="{{ action }}" method="post" class="custom-field-form" data-turbo="false">
+            {% if let Some(user) = sidebar.user %}<input type="hidden" name="csrf" value="{{ user.csrf }}">{% endif %}
+            <input type="hidden" name="revision" value="{{ revision }}">
+            {% if field.deleted_at.is_none() %}
+            <label class="f-field" for="custom-field-value">
+                <span class="f-field-label">{% if field.kind.as_str() == "money" %}Amount{% else %}Value{% endif %}{% if field.required %} (required){% endif %}</span>
+                {% if field.kind.as_str() == "long_text" %}
+                <textarea id="custom-field-value" class="f-input" name="value" rows="6">{{ value }}</textarea>
+                {% else if field.kind.as_str() == "boolean" %}
+                <select id="custom-field-value" class="f-input" name="value" required>
+                    <option value="">Choose Yes or No</option>
+                    <option value="true"{% if value == "true" %} selected{% endif %}>Yes</option>
+                    <option value="false"{% if value == "false" %} selected{% endif %}>No</option>
+                </select>
+                {% else if field.kind.as_str() == "select" || field.kind.as_str() == "document_link" %}
+                <select id="custom-field-value" class="f-input" name="value" required>
+                    <option value="">Choose a value</option>
+                    {% for choice in choices %}<option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}
+                </select>
+                {% else if field.kind.as_str() == "date" %}
+                <input id="custom-field-value" class="f-input" type="date" name="value" value="{{ value }}" required>
+                {% else if field.kind.as_str() == "url" %}
+                <input id="custom-field-value" class="f-input" type="url" name="value" value="{{ value }}" required>
+                {% else %}
+                <input id="custom-field-value" class="f-input" type="text" name="value" value="{{ value }}"{% if field.kind.as_str() == "decimal" || field.kind.as_str() == "money" %} inputmode="decimal" required{% else if field.kind.as_str() == "integer" %} inputmode="text" required{% endif %}>
+                {% endif %}
+            </label>
+            {% if field.kind.as_str() == "money" %}
+            <label class="f-field" for="custom-field-currency">
+                <span class="f-field-label">Currency code</span>
+                <input id="custom-field-currency" class="f-input" name="currency" value="{{ currency }}" maxlength="3" autocapitalize="characters" required>
+            </label>
+            {% endif %}
+            <button class="f-btn f-btn-primary" type="submit" name="operation" value="save"{% if stale %} disabled{% endif %}>Save value</button>
+            {% endif %}
+            {% if can_clear %}
+            <button class="f-btn f-btn-quiet" type="submit" name="operation" value="clear" formnovalidate{% if stale %} disabled{% endif %}>Clear value</button>
+            {% endif %}
+        </form>
+        {% endif %}
+        <a class="f-btn f-btn-quiet" href="{{ back }}">Back to document</a>
+    </section>
+</section>
+{% endblock %}

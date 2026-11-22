@@ -18,6 +18,16 @@ struct DocumentProcessingView: View {
                     Text(stage.status)
                         .font(FolioTheme.Typography.body)
                         .foregroundStyle(Color.ink)
+                    if let attempt = stage.attempt {
+                        Text("Attempt \(attempt)")
+                            .font(FolioTheme.Typography.label)
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    if let retryAt = stage.retryAt {
+                        Text("Retry after \(retryAt.formatted(date: .abbreviated, time: .shortened))")
+                            .font(FolioTheme.Typography.body)
+                            .foregroundStyle(Color.inkMuted)
+                    }
                     if let detail = stage.detail {
                         Text(detail)
                             .font(FolioTheme.Typography.body)
@@ -25,6 +35,7 @@ struct DocumentProcessingView: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("processing-stage-\(stage.id)")
             }
         }
     }
