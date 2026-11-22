@@ -42,15 +42,6 @@ struct WorkspaceView: View {
                         vaultPicker
                     }
                 }
-                if workspace.selectedVault?.role == .owner, service is any SourceActivityService {
-                    Section("Sources") {
-                        Button {
-                            activityVault = workspace.selectedVault
-                        } label: {
-                            Label("Ingestion activity", systemImage: "tray.and.arrow.down")
-                        }
-                    }
-                }
                 Section("Library") {
                     ForEach(WorkspaceDestination.allCases, id: \.self) { destination in
                         NavigationLink(value: destination) {
@@ -222,6 +213,13 @@ struct WorkspaceView: View {
                 showTaxonomy = true
             } label: {
                 Label("Classifications", systemImage: "tag")
+            }
+            if workspace.selectedVault?.role == .owner, service is any SourceActivityService {
+                Button {
+                    activityVault = workspace.selectedVault
+                } label: {
+                    Label("Ingestion activity", systemImage: "tray.and.arrow.down")
+                }
             }
         }
     }
