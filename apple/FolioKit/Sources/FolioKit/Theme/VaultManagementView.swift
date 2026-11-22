@@ -222,6 +222,7 @@ private struct VaultManagementDetail: View {
         }
         .confirmationDialog("Restore this vault?", isPresented: $confirmRestore, titleVisibility: .visible) {
             Button("Restore vault") { Task { _ = await model.restore(id: id) } }
+                .accessibilityIdentifier("vault-restore-confirmation")
         } message: {
             Text("Previous members regain access. Past ingestion and workflow runs will not be replayed.")
         }

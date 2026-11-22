@@ -41,16 +41,7 @@ import XCTest
         let restore = app.buttons["Restore vault"].firstMatch
         XCTAssertTrue(restore.waitForExistence(timeout: 5), app.debugDescription)
         restore.tap()
-        #if os(macOS)
-            let dialog = app.popovers.firstMatch
-        #else
-            let dialog = app.sheets.firstMatch
-        #endif
-        guard dialog.waitForExistence(timeout: 5) else {
-            XCTFail("The restore confirmation did not appear.\n\(app.debugDescription)")
-            return
-        }
-        let confirmation = dialog.buttons["Restore vault"]
+        let confirmation = app.buttons["vault-restore-confirmation"]
         guard confirmation.waitForExistence(timeout: 5) else {
             XCTFail("The restore confirmation action is missing.\n\(app.debugDescription)")
             return
