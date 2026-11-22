@@ -558,7 +558,8 @@ fn manages_vault(path: &str) -> bool {
     let parts: Vec<_> = path.trim_end_matches('/').split('/').collect();
     match parts.as_slice() {
         ["", "api", "vaults", _, "metadata-fields", ..]
-        | ["", "api", "vaults", _, "documents", _, "metadata"] => false,
+        | ["", "api", "vaults", _, "documents", _, "metadata"]
+        | ["", "api", "vaults", _, "metadata-search"] => false,
         ["", "api", "vaults", ..] => {
             !matches!(parts.as_slice(), ["", "api", "vaults", _, "default"])
         }
@@ -577,6 +578,7 @@ fn personal_token_scope(method: &Method, path: &str) -> Option<&'static str> {
     let classified = match parts.as_slice() {
         ["", "api", "vaults"] => read,
         ["", "api", "vaults", vault, "documents"] if id(vault) => read,
+        ["", "api", "vaults", vault, "metadata-search"] if id(vault) => read,
         ["", "api", "vaults", vault, "documents", document, "metadata"]
             if id(vault) && id(document) =>
         {

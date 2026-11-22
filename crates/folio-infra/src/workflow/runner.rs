@@ -7,11 +7,12 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WorkflowAction, WorkflowRun,
-    WorkflowTarget,
+    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WebhookPayload, WorkflowAction,
+    WorkflowRun, WorkflowTarget,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
+use folio_core::services::IngestWorkflowAccess;
 
 use super::webhook::{WebhookClient, WebhookRequest};
 
@@ -47,6 +48,7 @@ pub struct WorkflowRunner {
     workflows: Arc<dyn WorkflowRepository>,
     documents: Arc<dyn DocumentRepository>,
     client: WebhookClient,
+    ingest_access: Option<Arc<IngestWorkflowAccess>>,
 }
 
 impl WorkflowRunner {
@@ -59,7 +61,13 @@ impl WorkflowRunner {
             workflows,
             documents,
             client,
+            ingest_access: None,
         }
+    }
+
+    pub fn with_ingest_access(mut self, access: Arc<IngestWorkflowAccess>) -> Self {
+        self.ingest_access = Some(access);
+        self
     }
 
     /// Make one attempt at a run
@@ -90,6 +98,23 @@ impl WorkflowRunner {
             return Ok(RunOutcome::Failed);
         };
 
+        let ingest = if run.event.is_ingest_outcome() {
+            let payload: WebhookPayload = serde_json::from_str(&run.payload).map_err(|error| {
+                Error::Repository(format!("Invalid ingestion workflow payload: {error}"))
+            })?;
+            let Some(ingest) = payload.ingest.filter(|_| payload.event == run.event) else {
+                self.finish(
+                    &mut run,
+                    RunStatus::Failed,
+                    Some("Missing ingestion workflow context".into()),
+                )
+                .await?;
+                return Ok(RunOutcome::Failed);
+            };
+            Some(ingest)
+        } else {
+            None
+        };
         let lineage = run.source_identity()?.map(|source| MutationLineage {
             correlation_id: source.correlation_id,
             causation_id: Some(source.event_id),
@@ -128,6 +153,34 @@ impl WorkflowRunner {
                         .await?;
                         return Ok(RunOutcome::Failed);
                     }
+                }
+            }
+            if let Some(ingest) = &ingest {
+                let allowed = if let Some(access) = &self.ingest_access {
+                    access
+                        .permits(vault, ingest.source_id, ingest.source_kind)
+                        .await?
+                        && self
+                            .workflows
+                            .find_by_id(vault, run.workflow_id)
+                            .await?
+                            .is_some_and(|workflow| {
+                                workflow.enabled
+                                    && workflow.trigger == run.event
+                                    && workflow.actions == run.actions
+                            })
+                        && run.event.target().accepts(action)
+                } else {
+                    false
+                };
+                if !allowed {
+                    self.finish(
+                        &mut run,
+                        RunStatus::Failed,
+                        Some("Source or workflow is no longer authorized".into()),
+                    )
+                    .await?;
+                    return Ok(RunOutcome::Failed);
                 }
             }
             match with_actor(

@@ -71,7 +71,9 @@ pub use metadata_field::{
     MetadataOptionInput,
 };
 pub use metadata_value::{
-    DocumentMetadata, DocumentMetadataValue, MetadataChange, MetadataLinkTarget,
+    DocumentMetadata, DocumentMetadataValue, MetadataChange, MetadataExactFilter,
+    MetadataLinkTarget, MetadataSearchCursor, MetadataSearchHit, MetadataSearchPage,
+    MetadataSearchQuery,
 };
 pub use processing_attempt::{AttemptOutcome, ProcessingAttempt, StageOutcome};
 pub use push::{
@@ -93,15 +95,17 @@ pub use vault::{
     VaultMember, VaultRole,
 };
 pub use webhook::{
-    NamedRef, WebhookDocument, WebhookEntry, WebhookPayload, WebhookUrls, WorkflowEventIdentity,
-    PAYLOAD_VERSION,
+    NamedRef, WebhookDocument, WebhookEntry, WebhookIngest, WebhookPayload, WebhookUrls,
+    WorkflowEventIdentity, PAYLOAD_VERSION,
 };
 pub use workflow::{
     glob_match, redact_url, validate_webhook_url, RunStatus, WebhookMethod, Workflow,
     WorkflowAction, WorkflowConditions, WorkflowInput, WorkflowRun, WorkflowTrigger,
 };
 
-pub use workflow_event_conditions::{WorkflowActorCondition, WorkflowEventConditions};
+pub use workflow_event_conditions::{
+    WorkflowActorCondition, WorkflowEventConditions, WorkflowIngestConditions,
+};
 pub use workflow_trigger::{
     WorkflowConditionField, WorkflowConditionType, WorkflowTarget, WorkflowTriggerDefinition,
     WorkflowTriggerRegistry,

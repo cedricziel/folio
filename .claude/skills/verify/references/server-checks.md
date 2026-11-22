@@ -103,6 +103,13 @@ and the generated schema describes the same choices. The infrastructure
 workflow suite dispatches a row with both a domain event and legacy projection,
 checks each trigger name in its payload, and replays the row.
 
+For owners-audience ingestion workflows, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_source_scope --test workflows`
+and `cargo test -p folio-api --test workflows --test openapi`. The shared
+database fixture dispatches distinct failed attempts and a source health
+transition, replays them, and checks that source trash fences queued delivery.
+The API fixture confirms typed source and retry filters survive the web form.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run
@@ -534,6 +541,23 @@ For document assignments, run
 and the API metadata suite. These checks cover exact amounts, false, revision
 conflicts, link scope, retained Trash state, move and purge rules, and atomic
 rollback without a value-change event when a transition exceeds the event budget.
+
+Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test metadata_search`
+and the API metadata suite for exact filtering. Verify canonical amounts, false
+versus missing, unavailable fields, vault isolation, and cursor binding.
+
+Run `cargo test -p folio-api --test web field_management_forms` for the Fields
+forms. The isolated fixture checks retained form drafts after a name conflict
+and restoration of the same option ID and position. Run `npx playwright test
+metadata-fields.spec.ts` from `e2e/` against the disposable Folio instance to
+check field and option management at a narrow viewport.
+
+Run `cargo test -p folio-api --test web --test vaults custom_field` for the
+document editor. Check false and empty states, retained invalid and conflicting
+drafts, read-only access, and active and trashed logical links. Run
+`npx playwright test metadata-document.spec.ts` from `e2e/` on the disposable
+instance to verify exact decimal editing and same-vault link search and navigation
+at a narrow viewport.
 
 ## Verify SQLite trash contention
 

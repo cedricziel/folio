@@ -166,6 +166,7 @@
                 {% include "partials/document_history.html" %}
             </section>
 
+            <turbo-frame id="custom-fields" src="{{ "/documents"|vault_url }}/{{ document.id }}/custom-fields?return_to={{ return_to|urlencode }}"></turbo-frame>
             {% include "partials/document_processing.html" %}
             {% include "partials/document_text.html" %}
             <turbo-frame id="document-notes" data-entry-frame src="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note" loading="lazy"><section class="panel"><h2 class="heading">Notes</h2><p role="status">Loading notes…</p><a href="{{ "/documents"|vault_url }}/{{ document.id }}/entries?kind=note">Load notes</a></section></turbo-frame>

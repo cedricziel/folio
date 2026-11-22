@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::models::{
     DocumentMetadata, Id, MetadataChange, MetadataField, MetadataFieldInput, MetadataOption,
-    MetadataOptionInput, VaultId,
+    MetadataOptionInput, MetadataSearchPage, MetadataSearchQuery, VaultId,
 };
 use crate::Result;
 
@@ -74,6 +74,13 @@ pub trait MetadataOptionRepository: Send + Sync {
 /// Callers authorize document access; references never resolve outside the supplied vault.
 #[async_trait]
 pub trait MetadataValueRepository: Send + Sync {
+    /// Read a page of active documents matching a live field and exact canonical value.
+    async fn search_exact(
+        &self,
+        vault: VaultId,
+        query: MetadataSearchQuery,
+    ) -> Result<MetadataSearchPage>;
+
     /// Read retained values, including cleared ones, of a document in the vault.
     async fn get(&self, vault: VaultId, document: Id) -> Result<DocumentMetadata>;
     /// Apply all changes atomically when `revision` still matches, or fail as a whole.

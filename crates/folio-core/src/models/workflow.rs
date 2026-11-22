@@ -51,10 +51,22 @@ pub enum WorkflowTrigger {
     /// to be imported; rules here can discard it
     #[serde(rename = "ingest.received")]
     IngestReceived,
+    #[serde(rename = "ingest.imported")]
+    IngestImported,
+    #[serde(rename = "ingest.skipped")]
+    IngestSkipped,
+    #[serde(rename = "ingest.duplicate")]
+    IngestDuplicate,
+    #[serde(rename = "ingest.failed")]
+    IngestFailed,
+    #[serde(rename = "source.failed")]
+    SourceFailed,
+    #[serde(rename = "source.recovered")]
+    SourceRecovered,
 }
 
 impl WorkflowTrigger {
-    pub const ALL: [WorkflowTrigger; 15] = [
+    pub const ALL: [WorkflowTrigger; 21] = [
         Self::DocumentUploaded,
         Self::DocumentProcessed,
         Self::DocumentUpdated,
@@ -70,6 +82,12 @@ impl WorkflowTrigger {
         Self::DocumentCommentDeleted,
         Self::DocumentDeleted,
         Self::IngestReceived,
+        Self::IngestImported,
+        Self::IngestSkipped,
+        Self::IngestDuplicate,
+        Self::IngestFailed,
+        Self::SourceFailed,
+        Self::SourceRecovered,
     ];
 
     /// The wire name, as used in payloads and the database
@@ -90,6 +108,12 @@ impl WorkflowTrigger {
             Self::DocumentCommentDeleted => "document_comment.deleted",
             Self::DocumentDeleted => "document.deleted",
             Self::IngestReceived => "ingest.received",
+            Self::IngestImported => "ingest.imported",
+            Self::IngestSkipped => "ingest.skipped",
+            Self::IngestDuplicate => "ingest.duplicate",
+            Self::IngestFailed => "ingest.failed",
+            Self::SourceFailed => "source.failed",
+            Self::SourceRecovered => "source.recovered",
         }
     }
 
@@ -111,6 +135,12 @@ impl WorkflowTrigger {
             Self::DocumentCommentDeleted => "When a comment is deleted",
             Self::DocumentDeleted => "When a document is deleted",
             Self::IngestReceived => "When a file arrives, before import",
+            Self::IngestImported => "When an item is imported",
+            Self::IngestSkipped => "When a rule skips an item",
+            Self::IngestDuplicate => "When a duplicate item is found",
+            Self::IngestFailed => "When an item import fails",
+            Self::SourceFailed => "When a source becomes unavailable",
+            Self::SourceRecovered => "When a source recovers",
         }
     }
 
@@ -129,9 +159,27 @@ impl WorkflowTrigger {
             | Self::DocumentCommentCreated
             | Self::DocumentCommentUpdated
             | Self::DocumentCommentDeleted => WorkflowTarget::Document,
-            Self::DocumentDeleted => WorkflowTarget::Event,
+            Self::DocumentDeleted
+            | Self::IngestImported
+            | Self::IngestSkipped
+            | Self::IngestDuplicate
+            | Self::IngestFailed
+            | Self::SourceFailed
+            | Self::SourceRecovered => WorkflowTarget::Event,
             Self::IngestReceived => WorkflowTarget::IngestCandidate,
         }
+    }
+
+    pub fn is_ingest_outcome(self) -> bool {
+        matches!(
+            self,
+            Self::IngestImported
+                | Self::IngestSkipped
+                | Self::IngestDuplicate
+                | Self::IngestFailed
+                | Self::SourceFailed
+                | Self::SourceRecovered
+        )
     }
 
     pub fn entry_transition(self) -> Option<(super::EntryKind, &'static str)> {
@@ -359,6 +407,21 @@ impl WorkflowConditions {
                 .is_none_or(|id| document_type_id == Some(id))
     }
 
+    fn validate_ingest_conditions(&self, trigger: WorkflowTrigger) -> Result<()> {
+        if let Some(ingest) = self.event.as_ref().and_then(|event| event.ingest.as_ref()) {
+            ingest.validate_trigger(trigger)?;
+        }
+        for child in self
+            .all
+            .iter()
+            .chain(self.any.iter().flatten())
+            .chain(&self.none)
+        {
+            child.validate_ingest_conditions(trigger)?;
+        }
+        Ok(())
+    }
+
     fn requires_event_context(&self) -> bool {
         self.event.is_some()
             || self
@@ -562,12 +625,15 @@ impl WorkflowInput {
             if !self.trigger.target().accepts(action) {
                 return invalid(if self.trigger == WorkflowTrigger::DocumentDeleted {
                     "Only webhook actions can run when a document is deleted"
+                } else if self.trigger.is_ingest_outcome() {
+                    "Ingestion outcome workflows take only webhook actions"
                 } else {
                     "ingest.received workflows take only skip_import, and skip_import needs that trigger"
                 });
             }
         }
         self.conditions.validate()?;
+        self.conditions.validate_ingest_conditions(self.trigger)?;
         if self.trigger == WorkflowTrigger::IngestReceived
             && self.conditions.requires_event_context()
         {
@@ -773,6 +839,7 @@ mod tests {
                 actor: Some(crate::models::WorkflowActorCondition::User {
                     user_id: "editor".into(),
                 }),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -787,6 +854,7 @@ mod tests {
             event: Some(WorkflowEventConditions {
                 subject_id: Some(Id::from_u128(2)),
                 actor: None,
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -812,6 +880,7 @@ mod tests {
             event: Some(WorkflowEventConditions {
                 subject_id: None,
                 actor: Some(crate::models::WorkflowActorCondition::System),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -836,6 +905,7 @@ mod tests {
                     event: Some(WorkflowEventConditions {
                         subject_id: None,
                         actor: Some(crate::models::WorkflowActorCondition::System),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -844,6 +914,7 @@ mod tests {
                     event: Some(WorkflowEventConditions {
                         subject_id: Some(event.subject().id),
                         actor: None,
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -870,6 +941,7 @@ mod tests {
             event: Some(WorkflowEventConditions {
                 subject_id: None,
                 actor: Some(crate::models::WorkflowActorCondition::System),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -886,6 +958,7 @@ mod tests {
                     actor: Some(crate::models::WorkflowActorCondition::User {
                         user_id: "  ".into(),
                     }),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],

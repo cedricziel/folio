@@ -6,17 +6,18 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tracing::{debug, error};
 
+use super::IngestWorkflowAccess;
 use crate::error::{Error, Result};
 use crate::events::{DocumentEvent, EventOrigin, EventSnapshot, OutboxEvent};
 use crate::models::{
-    WebhookDocument, WebhookEntry, WebhookPayload, WorkflowRun, WorkflowTarget, WorkflowTrigger,
-    WorkflowTriggerRegistry,
+    WebhookDocument, WebhookEntry, WebhookIngest, WebhookPayload, WorkflowRun, WorkflowTarget,
+    WorkflowTrigger, WorkflowTriggerRegistry,
 };
 use crate::ports::{
     CorrespondentRepository, DocumentRepository, DocumentTypeRepository, FileMetadata,
     WorkflowRepository,
 };
-use crate::DomainEventEnvelope;
+use crate::{DomainEventEnvelope, EventAudience};
 
 use super::outbox_dispatcher::EventConsumer;
 
@@ -33,6 +34,7 @@ pub struct WorkflowEngine {
     document_types: Arc<dyn DocumentTypeRepository>,
     files: Arc<dyn FileMetadata>,
     public_url: String,
+    ingest_access: Option<Arc<IngestWorkflowAccess>>,
 }
 
 impl WorkflowEngine {
@@ -51,7 +53,13 @@ impl WorkflowEngine {
             document_types,
             files,
             public_url: public_url.into(),
+            ingest_access: None,
         }
+    }
+
+    pub fn with_ingest_access(mut self, access: Arc<IngestWorkflowAccess>) -> Self {
+        self.ingest_access = Some(access);
+        self
     }
 
     /// The trigger an event maps to; internal progress events map to none
@@ -78,12 +86,17 @@ impl WorkflowEngine {
         if matches!(
             outbox_event.origin,
             EventOrigin::Workflow | EventOrigin::Import
-        ) || outbox_event
-            .envelope
-            .as_ref()
-            .is_some_and(|envelope| envelope.audience() != &crate::EventAudience::Vault)
-        {
+        ) {
             return Ok(Vec::new());
+        }
+        if let Some(envelope) = &outbox_event.envelope {
+            match envelope.audience() {
+                EventAudience::Owners => {
+                    return self.handle_ingest_outcome(outbox_event.id, envelope).await
+                }
+                EventAudience::User { .. } => return Ok(Vec::new()),
+                EventAudience::Vault => {}
+            }
         }
         let legacy = outbox_event.event.as_ref().and_then(Self::trigger_for);
         let envelope_type = outbox_event
@@ -102,6 +115,81 @@ impl WorkflowEngine {
                 .await
             {
                 Ok(candidate_runs) => runs.extend(candidate_runs),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(runs), Err)
+    }
+
+    async fn handle_ingest_outcome(
+        &self,
+        outbox_id: i64,
+        envelope: &DomainEventEnvelope,
+    ) -> Result<Vec<WorkflowRun>> {
+        let (Some(access), Some(trigger)) = (
+            &self.ingest_access,
+            WorkflowTrigger::parse(envelope.event_type())
+                .filter(|trigger| trigger.is_ingest_outcome()),
+        ) else {
+            return Ok(Vec::new());
+        };
+        let ingest: WebhookIngest = serde_json::from_value(envelope.data().clone())
+            .map_err(|error| Error::Repository(format!("Invalid ingestion occurrence: {error}")))?;
+        let valid_subject = match ingest.outcome {
+            Some(outcome) => {
+                outcome.event_type() == envelope.event_type()
+                    && ingest.item_id == Some(envelope.subject().id)
+                    && ingest.attempt_id == Some(envelope.mutation_id())
+                    && ingest.reason_code.as_deref() == Some(outcome.reason_code())
+                    && ingest.retryable == Some(outcome.retryable())
+            }
+            None => {
+                ingest.source_id == envelope.subject().id
+                    && envelope.subject().subject_type == "source"
+                    && ingest.item_id.is_none()
+                    && ingest.attempt_id.is_none()
+                    && ingest.retryable.is_none()
+                    && ingest.reason_code.as_deref()
+                        == (trigger == WorkflowTrigger::SourceFailed)
+                            .then_some("source_unavailable")
+            }
+        };
+        let vault = envelope.vault_id();
+        if !valid_subject
+            || ingest.payload_version != 1
+            || envelope.document_id().is_some()
+            || !access
+                .permits(vault, ingest.source_id, ingest.source_kind)
+                .await?
+        {
+            return Ok(Vec::new());
+        }
+        let body = serde_json::to_string(&WebhookPayload::for_ingest(
+            trigger,
+            envelope.occurred_at(),
+            ingest,
+            Some(envelope.into()),
+        ))
+        .map_err(|error| Error::Repository(format!("Failed to encode payload: {error}")))?;
+        let mut runs = Vec::new();
+        let mut first_error = None;
+        for workflow in self.workflows.list_enabled(vault, trigger).await? {
+            if !workflow
+                .actions
+                .iter()
+                .all(|action| trigger.target().accepts(action))
+                || !workflow.conditions.matches_occurrence(None, envelope)
+            {
+                continue;
+            }
+            let run = WorkflowRun::new(vault, workflow.id, trigger, None, body.clone())
+                .with_actions(workflow.actions.clone())
+                .with_source_event(outbox_id);
+            match self.workflows.create_run(&run).await {
+                Ok(true) => runs.push(run),
+                Ok(false) => {}
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
