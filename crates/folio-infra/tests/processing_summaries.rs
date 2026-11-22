@@ -49,8 +49,8 @@ async fn insert(db: &Database, document: Id, vault: VaultId, summary: &Processin
 
 async fn summary_contract(db: &Database) {
     let repos = db.repositories().await;
+    let other = repos.vaults.create("Default", None).await.unwrap().id;
     let vault = repos.vaults.create("Stages", None).await.unwrap().id;
-    let other = repos.vaults.create("Other stages", None).await.unwrap().id;
     let doc = repos
         .documents
         .create(
