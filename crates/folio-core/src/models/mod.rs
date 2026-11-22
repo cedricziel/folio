@@ -82,7 +82,9 @@ pub use push::{
     NotificationPreferences, NotificationScope, PendingNotification, PushDevice, PushDeviceState,
     PushEnvironment, PushToken, PushTokenKind, VaultSelection,
 };
-pub use revision_publication::{RevisionPublication, RevisionPublicationSource};
+pub use revision_publication::{
+    RevisionPublication, RevisionPublicationResult, RevisionPublicationSource,
+};
 pub use saved_view::{SavedView, SavedViewInput, SavedViewQuery, ViewPresentation, ViewVisibility};
 pub use settings::{
     AiSettings, EmbeddingSettings, OcrSettings, PipelineSettings, ProcessingSettings, Setting,

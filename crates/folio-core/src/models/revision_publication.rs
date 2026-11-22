@@ -9,6 +9,12 @@ pub struct RevisionPublication {
     pub source: RevisionPublicationSource,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RevisionPublicationResult {
+    pub revision_id: Id,
+    pub created: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RevisionPublicationSource {
     Replacement {
