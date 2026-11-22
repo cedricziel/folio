@@ -12,7 +12,7 @@
 - [x] Generate OpenAPI from the four entry operations; five schema tests pass.
 - [x] Verify generated Swift client compilation: isolated FolioKit build and 42 focused tests pass.
 
-- [ ] Write failing request regressions for lost responses, concurrent matching keys, conflicting payloads, revoked access, and deleted-entry retries; persist creation receipts atomically and retain draft keys in both clients.
+- [x] Verify atomic creation receipts with concurrent matching keys on SQLite and PostgreSQL, request tests for conflicting payloads, revoked access and deleted-entry retries, and lost-response draft recovery in both clients.
 
 ## 3. Workflow events
 - [x] Align the design with foundation DomainEventEnvelope v1 and transaction-scoped append API.
@@ -25,7 +25,7 @@
 - [x] Write failing web regressions for CRUD, failed drafts, pagination, and viewer controls; implement HTML routes and separate note/comment sections.
 - [x] Verify lost-response creation retries, CRUD, and accessibility at desktop/mobile widths in the disposable browser fixture.
 - [x] Write failing native state/service tests for CRUD, permission capabilities, failed drafts, and pagination; implement Apple discussion UI.
-- [ ] In progress: verify native app and navigation CI, including discussion CRUD and lost-response recovery; web accessibility passes.
+- [x] Verify native app and navigation CI, including discussion CRUD and lost-response recovery. Both discussion navigation tests passed before [#292](https://github.com/cedricziel/folio/pull/292) merged ([Apple CI](https://github.com/cedricziel/folio/actions/runs/41648702209/job/125960794843)).
 
 ## 5. Delivery
 - [ ] Run make format, make lint, make test, isolated Apple checks, and the project verify skill; update verification guidance.
