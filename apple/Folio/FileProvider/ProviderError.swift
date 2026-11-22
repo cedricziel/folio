@@ -16,9 +16,9 @@ extension Error {
         case let folio? where folio.isConnectionFailure && folio.isRetryable:
             return NSFileProviderError(.serverUnreachable)
         case let folio? where folio.isConnectionFailure:
-            // A certificate or address problem stays the same on every attempt, so it must not use the retry path.
+            // File Provider automatically retries generic errors. This code waits for the user to retry.
             return NSError(
-                domain: NSCocoaErrorDomain, code: NSXPCConnectionReplyInvalid,
+                domain: NSFileProviderErrorDomain, code: NSFileProviderError.serverUnreachable.rawValue,
                 userInfo: [NSLocalizedDescriptionKey: folio.localizedDescription, NSUnderlyingErrorKey: folio])
         case .server(status: 404, message: _):
             return NSFileProviderError(.noSuchItem)
