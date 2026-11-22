@@ -449,6 +449,21 @@ impl PostgresDocumentRepository {
 /// Append the `WHERE` conditions of a document filter to a query ending in `WHERE ...`
 pub(super) fn push_filter(qb: &mut QueryBuilder<Postgres>, filter: DocumentFilter) -> Result<()> {
     filter.validate()?;
+    if let Some(filter) = filter.metadata_exact {
+        let kind = filter.value.kind();
+        let value = filter.value.validate(kind, false)?;
+        qb.push(
+            " AND documents.purge_requested_at IS NULL AND NOT documents.upload_pending
+              AND EXISTS (
+                SELECT 1 FROM metadata_values mv
+                JOIN metadata_fields mf ON mf.vault_id = mv.vault_id AND mf.id = mv.field_id AND mf.kind = mv.kind
+                WHERE mv.document_id = documents.id AND mv.vault_id = documents.vault_id
+                  AND mv.deleted_at IS NULL AND mf.deleted_at IS NULL AND mv.field_id = ",
+        )
+        .push_bind(filter.field_id);
+        super::metadata_value_repo::push_exact_value(qb, &value)?;
+        qb.push(")");
+    }
     if let Some(reviewed) = filter.reviewed {
         qb.push(if reviewed {
             " AND reviewed_at IS NOT NULL"
