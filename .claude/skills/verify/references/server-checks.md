@@ -38,6 +38,10 @@ with its own SQLite database, storage directory, and loopback ports. It keeps
 and receives the final shutdown log through a local OTLP collector.
 
 ## Verify ingestion claims
+Run `cargo test -p folio-core --test ingestion_trigger_catalog` to verify
+labels, applicable condition fields, and action compatibility in the shared
+registry. This check does not exercise workflow delivery or builder selection.
+
 
 Run `FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test ingest_outcomes --test ingest_health --test ingest_source_scope`
 with the isolated Cargo settings below. These tests use temporary SQLite databases
