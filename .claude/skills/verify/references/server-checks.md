@@ -35,6 +35,8 @@ with the isolated Cargo settings below. These tests use temporary SQLite databas
 and disposable PostgreSQL containers. They cover atomic outcome/ledger/outbox
 rollback, concurrent replay, stale attempts, changed skip decisions, bounded
 pagination, managed-source ownership, and source failure/recovery transitions.
+The source scope contract also trashes an enabled source during a poll and
+checks that new claims, pending completion, and status writes are rejected.
 Upgrade cases preserve existing ledger rows and emit no historical outcomes.
 Do not treat an unavailable PostgreSQL fixture as a passing parity check.
 

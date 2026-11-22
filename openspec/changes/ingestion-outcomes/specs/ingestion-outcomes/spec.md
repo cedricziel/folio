@@ -19,6 +19,10 @@ The system SHALL publish imported, skipped, duplicate, and failed outcomes from 
 - **WHEN** a failed import is retried under a new fenced claim
 - **THEN** it retains the item identity, creates a new attempt identity, and cannot be completed by the stale attempt
 
+#### Scenario: Managed source is trashed during a poll
+- **WHEN** a managed source is trashed while a poll is in progress
+- **THEN** new claims, pending completions, and status writes for that source are rejected while it is in trash
+
 ### Requirement: Preserve synchronous import veto
 The system SHALL evaluate SkipImport synchronously before importing bytes. Durable outcome workflows SHALL NOT claim to veto or undo an import.
 
