@@ -1709,6 +1709,23 @@ impl DocumentRepository for PostgresDocumentRepository {
         Ok(())
     }
 
+    async fn skip_empty_embedding(&self, vault: VaultId, id: Id) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE documents SET embed_status = 'skipped'
+             WHERE id = $1 AND vault_id = $2
+               AND deleted_at IS NULL AND purge_requested_at IS NULL
+               AND embed_status = 'pending' AND ocr_status NOT IN ('pending', 'running')
+               AND (content IS NULL OR content = '')
+               AND EXISTS (SELECT 1 FROM vaults v WHERE v.id = documents.vault_id AND v.deleted_at IS NULL)",
+        )
+        .bind(id)
+        .bind(vault.0)
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()> {
         let mut tx = self.pool.begin().await.map_err(repo_err)?;
         require_document(&mut tx, vault, id).await?;

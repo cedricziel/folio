@@ -3076,6 +3076,76 @@ async fn upload_finalization_contract(db: &Database) {
     );
 }
 
+async fn empty_embedding_repair_contract(r: &Repositories) {
+    use folio_core::models::ProcessingStatus;
+
+    let vault = r
+        .vaults
+        .create("Embedding repair contract", None)
+        .await
+        .unwrap()
+        .id;
+    let document = r
+        .documents
+        .create(
+            vault,
+            CreateDocument {
+                title: "Pending OCR".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!r
+        .documents
+        .skip_empty_embedding(vault, document.id)
+        .await
+        .unwrap());
+
+    r.documents
+        .complete_ocr(vault, document.id, "New OCR text")
+        .await
+        .unwrap();
+    assert!(!r
+        .documents
+        .skip_empty_embedding(vault, document.id)
+        .await
+        .unwrap());
+    assert_eq!(
+        r.documents
+            .find_by_id(vault, document.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .embed_status,
+        ProcessingStatus::Pending
+    );
+
+    r.documents
+        .complete_ocr(vault, document.id, "")
+        .await
+        .unwrap();
+    assert!(r
+        .documents
+        .skip_empty_embedding(vault, document.id)
+        .await
+        .unwrap());
+    assert!(!r
+        .documents
+        .skip_empty_embedding(vault, document.id)
+        .await
+        .unwrap());
+    assert_eq!(
+        r.documents
+            .find_by_id(vault, document.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .embed_status,
+        ProcessingStatus::Skipped
+    );
+}
+
 async fn ocr_completion_contract(db: &Database) {
     let r = db.repositories().await;
     let vault = r.vaults.instance_default().await.unwrap();
@@ -4353,6 +4423,7 @@ async fn run_contract(db: &Database) {
     file_size_contract(db).await;
     outbox_contract(db).await;
     ocr_completion_contract(db).await;
+    empty_embedding_repair_contract(&repos).await;
     run_atomicity_contract(db).await;
     auth_contract(&repos).await;
     mfa_contract(&repos).await;

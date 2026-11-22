@@ -209,6 +209,9 @@ pub trait DocumentRepository: Send + Sync {
         status: ProcessingStatus,
     ) -> Result<()>;
 
+    /// Skip a pending embedding only if the live document still has terminal OCR with no text.
+    async fn skip_empty_embedding(&self, vault: VaultId, id: Id) -> Result<bool>;
+
     /// Store OCR output and atomically announce completion, including empty output.
     /// Repeating an unchanged successful result is a no-op.
     async fn complete_ocr(&self, vault: VaultId, id: Id, content: &str) -> Result<()>;
