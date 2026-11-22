@@ -110,6 +110,12 @@ database fixture dispatches distinct failed attempts and a source health
 transition, replays them, and checks that source trash fences queued delivery.
 The API fixture confirms typed source and retry filters survive the web form.
 
+For workflow revision checks, run
+`FOLIO_REQUIRE_DOCKER=1 cargo test -p folio-infra --test workflow_lifecycle --test workflows --test ingest_source_scope`.
+On SQLite and PostgreSQL, the lifecycle tests cover migration of retained runs,
+stale matches after editing or re-enabling, no-op edits, and rollback. The workflow
+suite checks that history retains the captured actions and edited runs send no webhooks.
+
 For precise metadata transitions, `cargo test -p folio-infra --test workflows`
 checks actual producer dispatch, delayed snapshots, replay deduplication, and
 system-actor lineage after source-outbox deletion. Run

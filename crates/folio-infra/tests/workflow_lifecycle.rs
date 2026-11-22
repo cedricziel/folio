@@ -48,6 +48,7 @@ async fn contract(db: Database) {
     .await
     .unwrap();
     assert_eq!(unchanged.updated_at, workflow.updated_at);
+    assert_eq!(unchanged.revision, workflow.revision);
     assert_eq!(unchanged.updated_by, workflow.updated_by);
     let changed = with_actor(
         Some(UserId::from("bob")),
@@ -58,6 +59,16 @@ async fn contract(db: Database) {
     .unwrap();
     assert_eq!(changed.created_at, workflow.created_at);
     assert_eq!(changed.updated_by, Some(UserId::from("bob")));
+    let stale = WorkflowRun::new(
+        vault,
+        workflow.id,
+        workflow.trigger,
+        Some(uuid::Uuid::new_v4()),
+        "{}".into(),
+    )
+    .with_definition(&workflow);
+    assert!(!r.workflows.create_run(&stale).await.unwrap());
+    assert!(r.workflows.find_run(stale.id).await.unwrap().is_none());
     let run = WorkflowRun::new(
         vault,
         workflow.id,
@@ -65,8 +76,18 @@ async fn contract(db: Database) {
         Some(uuid::Uuid::new_v4()),
         r#"{"note":"retained event facts"}"#.into(),
     )
-    .with_actions(workflow.actions.clone());
+    .with_definition(&changed);
     assert!(r.workflows.create_run(&run).await.unwrap());
+    let unchanged = r
+        .workflows
+        .update(vault, workflow.id, input("Changed workflow"))
+        .await
+        .unwrap();
+    assert_eq!(unchanged.revision, changed.revision);
+    assert_eq!(
+        r.workflows.find_run(run.id).await.unwrap().unwrap().status,
+        RunStatus::Pending
+    );
     let mut succeeded = WorkflowRun::new(
         vault,
         workflow.id,
@@ -74,7 +95,7 @@ async fn contract(db: Database) {
         Some(uuid::Uuid::new_v4()),
         r#"{"note":"successful event"}"#.into(),
     )
-    .with_actions(workflow.actions.clone());
+    .with_definition(&changed);
     r.workflows.create_run(&succeeded).await.unwrap();
     succeeded.status = RunStatus::Succeeded;
     succeeded.finished_at = Some(Utc::now());
@@ -117,6 +138,7 @@ async fn contract(db: Database) {
     assert!(retained.finished_at.is_some());
     assert_eq!(retained.actions, run.actions);
     assert_eq!(retained.payload, run.payload);
+    assert_eq!(retained.definition_revision, Some(changed.revision));
     assert_eq!(
         r.workflows
             .find_run(succeeded.id)
@@ -236,6 +258,33 @@ async fn contract(db: Database) {
         events[0].data(),
         &serde_json::json!({"name":"Retained workflow", "enabled":true, "trigger":"document.uploaded"})
     );
+    let toggle = r
+        .workflows
+        .create(vault, input("Pause and resume"))
+        .await
+        .unwrap();
+    let captured = WorkflowRun::new(vault, toggle.id, toggle.trigger, None, "{}".into())
+        .with_definition(&toggle);
+    let disabling = WorkflowInput {
+        enabled: false,
+        ..input("Pause and resume")
+    };
+    let disabled = r
+        .workflows
+        .update(vault, toggle.id, disabling)
+        .await
+        .unwrap();
+    assert!(!r.workflows.create_run(&captured).await.unwrap());
+    let resumed = r
+        .workflows
+        .update(vault, toggle.id, input("Pause and resume"))
+        .await
+        .unwrap();
+    assert!(resumed.revision > disabled.revision);
+    assert!(!r.workflows.create_run(&captured).await.unwrap());
+    assert!(r.workflows.find_run(captured.id).await.unwrap().is_none());
+    r.workflows.delete(vault, toggle.id).await.unwrap();
+
     let rollback_restore = r
         .workflows
         .create(vault, input("Rollback restore"))
@@ -266,6 +315,7 @@ async fn contract(db: Database) {
         .unwrap();
     assert_eq!(after.name, restored.name);
     assert_eq!(after.updated_at, restored.updated_at);
+    assert_eq!(after.revision, restored.revision);
     assert_eq!(
         r.workflows
             .find_run(future.id)
@@ -335,7 +385,7 @@ async fn upgrade_contract(db: Database) {
     let old = Migrator {
         migrations: Cow::Owned(
             all.iter()
-                .filter(|m| m.version < 20261102200300)
+                .filter(|m| m.version < 20261102200300 && m.version != 20261102165100)
                 .cloned()
                 .collect(),
         ),
@@ -391,7 +441,12 @@ async fn upgrade_contract(db: Database) {
     assert_ne!(edited.updated_at, created);
     assert_eq!(edited.updated_by, Some(UserId::from("legacy-editor")));
     let run = r.workflows.find_run(run_id).await.unwrap().unwrap();
-    assert_eq!(run.status, RunStatus::Pending);
+    assert_eq!(run.status, RunStatus::Failed);
+    assert_eq!(
+        run.last_error.as_deref(),
+        Some("Workflow definition changed")
+    );
+    assert_eq!(run.definition_revision, None);
     assert_eq!(run.payload, "retained payload");
 }
 

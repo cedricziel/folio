@@ -7,8 +7,8 @@ use tracing::{info, warn};
 
 use folio_core::error::Error;
 use folio_core::models::{
-    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WebhookPayload, WorkflowAction,
-    WorkflowRun, WorkflowTarget,
+    validate_webhook_url, Id, RunStatus, UpdateDocument, VaultId, WebhookPayload, Workflow,
+    WorkflowAction, WorkflowRun, WorkflowTarget,
 };
 use folio_core::mutation::{with_actor, with_lineage, MutationLineage};
 use folio_core::ports::{DocumentRepository, WorkflowRepository};
@@ -83,20 +83,16 @@ impl WorkflowRunner {
             });
         }
 
-        let vault = self.workflows.locate(run.workflow_id).await?;
-        let workflow = match vault {
-            Some(vault) => self.workflows.find_by_id(vault, run.workflow_id).await?,
-            None => None,
-        };
-        let (Some(vault), Some(_workflow)) = (vault, workflow) else {
+        let vault = run.vault_id;
+        if self.active_definition(&run).await?.is_none() {
             self.finish(
                 &mut run,
                 RunStatus::Failed,
-                Some("Workflow no longer exists".into()),
+                Some("Workflow definition is no longer active".into()),
             )
             .await?;
             return Ok(RunOutcome::Failed);
-        };
+        }
 
         let ingest = if run.event.is_ingest_outcome() {
             let payload: WebhookPayload = serde_json::from_str(&run.payload).map_err(|error| {
@@ -133,15 +129,15 @@ impl WorkflowRunner {
                     RunOutcome::Failed
                 });
             }
-            if self.workflows.locate(run.workflow_id).await? != Some(vault) {
+            let Some(workflow) = self.active_definition(&run).await? else {
                 self.finish(
                     &mut run,
                     RunStatus::Failed,
-                    Some("Workflow vault is no longer active".into()),
+                    Some("Workflow definition is no longer active".into()),
                 )
                 .await?;
                 return Ok(RunOutcome::Failed);
-            }
+            };
             if run.event.target() == WorkflowTarget::Document {
                 if let Some(document_id) = run.document_id {
                     if self.documents.locate(document_id).await? != Some(vault) {
@@ -160,15 +156,8 @@ impl WorkflowRunner {
                     access
                         .permits(vault, ingest.source_id, ingest.source_kind)
                         .await?
-                        && self
-                            .workflows
-                            .find_by_id(vault, run.workflow_id)
-                            .await?
-                            .is_some_and(|workflow| {
-                                workflow.enabled
-                                    && workflow.trigger == run.event
-                                    && workflow.actions == run.actions
-                            })
+                        && workflow.trigger == run.event
+                        && workflow.actions == run.actions
                         && run.event.target().accepts(action)
                 } else {
                     false
@@ -213,7 +202,9 @@ impl WorkflowRunner {
             }
         }
 
-        self.finish(&mut run, RunStatus::Succeeded, None).await?;
+        if !self.finish(&mut run, RunStatus::Succeeded, None).await? {
+            return Ok(RunOutcome::Failed);
+        }
         info!(
             "Workflow run {} succeeded after {} attempt(s)",
             run.id, run.attempts
@@ -231,7 +222,22 @@ impl WorkflowRunner {
         }
         // Keep the action's own error if there is one; it says more than the job's.
         let error = run.last_error.take().unwrap_or_else(|| reason.to_string());
-        self.finish(&mut run, RunStatus::Failed, Some(error)).await
+        self.finish(&mut run, RunStatus::Failed, Some(error))
+            .await
+            .map(|_| ())
+    }
+
+    async fn active_definition(&self, run: &WorkflowRun) -> folio_core::Result<Option<Workflow>> {
+        Ok(self
+            .workflows
+            .find_by_id(run.vault_id, run.workflow_id)
+            .await?
+            .filter(|workflow| {
+                workflow.enabled
+                    && run
+                        .definition_revision
+                        .is_none_or(|revision| revision == workflow.revision)
+            }))
     }
 
     async fn finish(
@@ -239,11 +245,11 @@ impl WorkflowRunner {
         run: &mut WorkflowRun,
         status: RunStatus,
         error: Option<String>,
-    ) -> folio_core::Result<()> {
+    ) -> folio_core::Result<bool> {
         run.status = status;
         run.last_error = error;
         run.finished_at = Some(Utc::now());
-        self.save(run).await.map(|_| ())
+        self.save(run).await
     }
 
     /// Persists progress; false when the run was stopped elsewhere, such as by deleting its workflow
