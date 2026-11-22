@@ -20,6 +20,14 @@ external identifier parsing.
 Run both the package suite and native provider tests in [apple-checks.md](apple-checks.md) after these changes.
 These tests do not establish system integration in Files or Finder.
 
+## Verify vault-management OAuth consent
+
+Run `cargo test -p folio-api --test auth_flow` against its temporary SQLite
+fixtures. The vault-management cases cover explicit API consent, successful
+vault creation, rejection for the MCP resource, document-only registration
+defaults, unknown scopes, and refresh requests that attempt to widen a grant.
+Inspect the consent screen with authentication enabled using the screen tour.
+
 ## Verify forward authentication
 
 Run `RUSTC_WRAPPER= cargo test -p folio-api --test auth_flow forward::`.

@@ -550,8 +550,7 @@ fn api_unauthorized(validator: &TokenValidator, headers: &HeaderMap) -> Response
     response
 }
 
-/// Granted to no current OAuth client, so bearer tokens cannot change vault ownership
-pub(crate) const VAULT_MANAGEMENT_SCOPE: &str = "vaults:manage";
+pub(crate) const VAULT_MANAGEMENT_SCOPE: &str = folio_auth::model::VAULT_MANAGEMENT_SCOPE;
 
 /// Vault lifecycle and membership routes; choosing one's own default vault is excluded
 fn manages_vault(path: &str) -> bool {
@@ -1276,6 +1275,9 @@ fn describe_scope(scope: &str) -> String {
     match scope {
         "documents:read" => "Read your documents".into(),
         "documents:write" => "Change your documents".into(),
+        VAULT_MANAGEMENT_SCOPE => {
+            "Create, rename, delete, restore, and manage access to your vaults".into()
+        }
         other => other.to_string(),
     }
 }
@@ -1283,12 +1285,19 @@ fn describe_scope(scope: &str) -> String {
 fn headline(client: &str, scopes: &[String]) -> String {
     let read = scopes.iter().any(|s| s == "documents:read");
     let write = scopes.iter().any(|s| s == "documents:write");
+    if !read && !write && scopes.iter().any(|scope| scope == VAULT_MANAGEMENT_SCOPE) {
+        return format!("Allow {client} to manage your vaults?");
+    }
     let what = match (read, write) {
         (true, true) => "read and change your documents",
         (false, true) => "change your documents",
         _ => "read your documents",
     };
-    format!("Allow {client} to {what}?")
+    if scopes.iter().any(|scope| scope == VAULT_MANAGEMENT_SCOPE) {
+        format!("Allow {client} to {what} and manage your vaults?")
+    } else {
+        format!("Allow {client} to {what}?")
+    }
 }
 
 fn redirect_host(uri: &str) -> String {

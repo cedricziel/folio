@@ -89,6 +89,13 @@
       "wait": "Allow"
     },
     {
+      "name": "consent-vaults",
+      "path": "{consent:documents:read documents:write vaults:manage}",
+      "phase": "seeded",
+      "auth": "on",
+      "wait": "manage your vaults"
+    },
+    {
       "name": "oauth-error",
       "path": "/oauth/authorize?client_id=unknown",
       "phase": "seeded",
