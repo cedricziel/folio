@@ -168,4 +168,4 @@ It covers explicit vault scoping, configured-source restrictions, masked setting
 trash and restore conflicts, retained outcomes, and failed requests.
 Run `SourceLifecycleUITests` in the ClassificationTests fixture with temporary
 simulator state. Its `--source-lifecycle` launch mode uses in-memory services
-and exercises owner controls, read-only access, retry, conflicts, and large text.
+and exercises owner controls, read-only access, retry, and conflicts.
